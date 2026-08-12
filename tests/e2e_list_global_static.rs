@@ -327,3 +327,13 @@ echo $counter->next(), '|', $counter->next();
         "1|2"
     );
 }
+
+#[test]
+fn test_destructuring_assignment_is_value_producing_and_allows_skips() {
+    assert_eq!(
+        run_php(
+            "<?php if ([$first, , $third] = ['a', 'ignored', 'c']) { echo $first . $third . ':' . implode(',', [$first, $third]); }"
+        ),
+        "ac:a,c"
+    );
+}

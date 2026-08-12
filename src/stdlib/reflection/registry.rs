@@ -15,16 +15,17 @@ use super::generic_parameters::{
     generic_variance_cases, is_generic, type_parameter_reference_parameter,
 };
 use super::{
-    class_construct, class_file_name, class_get_attributes, class_get_parent, class_new_lazy_ghost,
+    class_construct, class_file_name, class_get_attributes, class_get_parent, class_get_properties,
+    class_is_internal, class_new_instance_without_constructor, class_new_lazy_ghost,
     function_construct, function_get_closure_called_class, function_get_closure_this,
     function_get_parameters, function_is_anonymous, generic_arguments, generic_runtime_modes,
     method_construct, object_construct, parameter_allows_null, parameter_get_attributes,
     parameter_get_declaring_class, parameter_get_default_value, parameter_get_name,
     parameter_get_type, parameter_is_default_available, parameter_is_variadic, property_construct,
-    property_get_value, property_is_initialized, property_set_value, reflection_compound_types,
-    reflection_type_allows_null, reflection_type_generic_arguments,
-    reflection_type_has_generic_arguments, reflection_type_is_builtin, reflection_type_name,
-    reflection_type_to_string,
+    property_get_modifiers, property_get_value, property_is_initialized, property_is_readonly,
+    property_is_static, property_set_value, reflection_compound_types, reflection_type_allows_null,
+    reflection_type_generic_arguments, reflection_type_has_generic_arguments,
+    reflection_type_is_builtin, reflection_type_name, reflection_type_to_string,
 };
 use crate::compiler::compile::{ClassConstantDefinition, ClassDef, PropertyDefinition};
 use crate::compiler::make_internal_method;
@@ -446,6 +447,15 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         0,
         []
     );
+    register_method!("ReflectionClass", "isinternal", class_is_internal, 1, 0, []);
+    register_method!(
+        "ReflectionClass",
+        "getproperties",
+        class_get_properties,
+        2,
+        0,
+        ["filter"]
+    );
     register_method!(
         "ReflectionClass",
         "newlazyghost",
@@ -453,6 +463,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         3,
         1,
         ["initializer", "options"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "newinstancewithoutconstructor",
+        class_new_instance_without_constructor,
+        1,
+        0,
+        []
     );
     register_method!(
         "ReflectionMethod",
@@ -477,6 +495,30 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         2,
         0,
         ["object"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "getmodifiers",
+        property_get_modifiers,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
+        "isstatic",
+        property_is_static,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
+        "isreadonly",
+        property_is_readonly,
+        1,
+        0,
+        []
     );
     register_method!(
         "ReflectionProperty",

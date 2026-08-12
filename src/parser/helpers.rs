@@ -622,7 +622,11 @@ impl Parser {
     fn is_variable_like(expr: &Expr) -> bool {
         matches!(
             expr,
-            Expr::Variable(_) | Expr::ArrayAccess { .. } | Expr::PropertyAccess { .. }
+            Expr::Variable(_)
+                | Expr::ArrayAccess { .. }
+                | Expr::PropertyAccess { .. }
+                | Expr::DynamicPropertyAccess { .. }
+                | Expr::StaticProperty { .. }
         )
     }
 

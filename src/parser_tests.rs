@@ -165,6 +165,13 @@ fn test_parse_reference_returning_arrow_and_reference_call_assignment() {
 }
 
 #[test]
+fn test_parse_reference_returning_named_function_and_methods() {
+    let source = "<?php function &globalReference() { static $value; return $value; } class ReferenceMethods { public function &value() { static $value; return $value; } } interface ReferenceContract { public function &value(); } trait ReferenceTrait { public function &value() { static $value; return $value; } } enum ReferenceEnum { public function &value() { static $value; return $value; } } $anonymous = new class { public function &value() { static $value; return $value; } };";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_reference_assignment_to_dynamic_property() {
     let tokens = Lexer::new("<?php $object->$name = &$value;")
         .tokenize()

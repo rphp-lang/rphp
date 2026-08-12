@@ -200,6 +200,11 @@ pub enum Expr {
         target: Box<Expr>,
         expr: Box<Expr>,
     },
+    ListAssign {
+        // [$first, , $third] = expression used inside a larger expression.
+        targets: Vec<ListTarget>,
+        expr: Box<Expr>,
+    },
     DynamicCall {
         // $var(args) — variable function call / closure call
         callable: Box<Expr>,
@@ -285,6 +290,7 @@ impl Expr {
             Expr::AssignTarget { target, expr } => {
                 target.contains_yield() || expr.contains_yield()
             }
+            Expr::ListAssign { expr, .. } => expr.contains_yield(),
             Expr::CompoundAssignExpression { target, expr, .. } => {
                 target.contains_yield() || expr.contains_yield()
             }
@@ -648,6 +654,120 @@ pub enum Stmt {
         is_require: bool,
         is_once: bool,
     },
+}
+
+impl Stmt {
+    /// Whether executing this statement can suspend the current function.
+    /// Nested function, method, closure and class bodies own independent
+    /// suspension contexts and are therefore deliberately not traversed.
+    pub(crate) fn contains_yield(&self) -> bool {
+        match self {
+            Stmt::Echo(expressions) | Stmt::Unset(expressions) => {
+                expressions.iter().any(Expr::contains_yield)
+            }
+            Stmt::Assign { expr, .. }
+            | Stmt::ArrayPush { expr, .. }
+            | Stmt::Throw(expr)
+            | Stmt::ExprStmt(expr)
+            | Stmt::Include { path: expr, .. }
+            | Stmt::Const { value: expr, .. } => expr.contains_yield(),
+            Stmt::CoalesceAssign { target, expr }
+            | Stmt::CompoundAssign { target, expr, .. }
+            | Stmt::ArrayAppend { target, expr }
+            | Stmt::AssignProp {
+                object: target,
+                expr,
+                ..
+            } => target.contains_yield() || expr.contains_yield(),
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                condition.contains_yield()
+                    || then_body.iter().any(Stmt::contains_yield)
+                    || else_body.iter().any(Stmt::contains_yield)
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                condition.contains_yield() || body.iter().any(Stmt::contains_yield)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.iter().any(Stmt::contains_yield)
+                    || condition.iter().any(Expr::contains_yield)
+                    || update.iter().any(Expr::contains_yield)
+                    || body.iter().any(Stmt::contains_yield)
+            }
+            Stmt::Switch { expr, cases } => {
+                expr.contains_yield()
+                    || cases.iter().any(|case| {
+                        case.value.as_ref().is_some_and(Expr::contains_yield)
+                            || case.body.iter().any(Stmt::contains_yield)
+                    })
+            }
+            Stmt::Return(expr) => expr.as_ref().is_some_and(Expr::contains_yield),
+            Stmt::ArrayAssign { index, expr, .. } => {
+                index.contains_yield() || expr.contains_yield()
+            }
+            Stmt::NestedArrayAssign {
+                root,
+                indices,
+                expr,
+            } => {
+                root.contains_yield()
+                    || indices.iter().any(Expr::contains_yield)
+                    || expr.contains_yield()
+            }
+            Stmt::BindArrayAppendReference { target, .. } => target.contains_yield(),
+            Stmt::Foreach { array, body, .. } => {
+                array.contains_yield() || body.iter().any(Stmt::contains_yield)
+            }
+            Stmt::TryCatch {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                try_body.iter().any(Stmt::contains_yield)
+                    || catches
+                        .iter()
+                        .any(|catch| catch.body.iter().any(Stmt::contains_yield))
+                    || finally_body
+                        .as_ref()
+                        .is_some_and(|body| body.iter().any(Stmt::contains_yield))
+            }
+            Stmt::AssignStaticProp { expr, .. } => expr.contains_yield(),
+            Stmt::AssignObjArrayDim {
+                object,
+                index,
+                expr,
+                ..
+            } => {
+                object.contains_yield() || index.contains_yield() || expr.contains_yield()
+            }
+            Stmt::Namespace { body, .. } => body.iter().any(Stmt::contains_yield),
+            Stmt::ListAssign { expr, .. } => expr.contains_yield(),
+            Stmt::StaticVar { vars } => vars
+                .iter()
+                .any(|(_, value)| value.as_ref().is_some_and(Expr::contains_yield)),
+            Stmt::Noop
+            | Stmt::Label(_)
+            | Stmt::Goto(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::Function { .. }
+            | Stmt::Class { .. }
+            | Stmt::Interface { .. }
+            | Stmt::Trait { .. }
+            | Stmt::Declare { .. }
+            | Stmt::UseDecl { .. }
+            | Stmt::Global(_)
+            | Stmt::Enum { .. } => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -488,6 +488,25 @@ var_dump(class_alias('OriginalClass', 'aliasclass'));
 }
 
 #[test]
+fn class_alias_exposes_trait_static_methods_with_late_static_returns() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait AliasFactory {
+    public static function make(): static { return new static(); }
+}
+class AliasedProduct {
+    use AliasFactory;
+}
+class_alias('AliasedProduct', 'ProductAlias');
+echo ProductAlias::make() instanceof AliasedProduct ? 'ok' : 'fail';
+"#,
+        ),
+        "ok"
+    );
+}
+
+#[test]
 fn class_alias_autoloads_original_and_supports_alias_chains() {
     let dir = TempPhpDir::new();
     let class_file = dir.write(

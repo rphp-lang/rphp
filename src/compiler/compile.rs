@@ -4920,6 +4920,20 @@ impl Compiler {
                     }
                 }
             }
+            Expr::ListAssign { targets, expr } => {
+                let (rhs, rhs_type) = self.compile_expr(expr);
+                let retained = self.alloc_tmp();
+                let mut assign = Instruction::new(OpCode::AssignCv);
+                assign.op1 = retained;
+                assign.op1_type = OpType::Tmp;
+                assign.op2 = rhs;
+                assign.op2_type = rhs_type;
+                self.instructions.push(assign);
+                if let Err(error) = self.compile_list_targets(targets, retained, OpType::Tmp, 0) {
+                    self.deferred_error = Some(error);
+                }
+                (retained, OpType::Tmp)
+            }
             Expr::FirstClassCallable(callable) => {
                 let (callable, callable_type) = self.compile_expr(callable);
                 let result = self.alloc_tmp();

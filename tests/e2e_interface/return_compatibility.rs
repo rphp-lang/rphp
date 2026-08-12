@@ -23,6 +23,27 @@ echo $c->make() instanceof A ? "ok" : "fail";
 }
 
 #[test]
+fn test_interface_return_static_from_trait_is_covariant_with_object() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface Initializable {
+    public function initialize(): object;
+}
+trait LazyInitializer {
+    public function initialize(): static { return $this; }
+}
+class LazyService implements Initializable {
+    use LazyInitializer;
+}
+echo (new LazyService())->initialize() instanceof LazyService ? "ok" : "fail";
+"#
+        ),
+        "ok"
+    );
+}
+
+#[test]
 fn test_interface_return_widening_rejected() {
     // Interface returns B, implementation returns A (parent) → rejected (too wide)
     let result = std::panic::catch_unwind(|| {

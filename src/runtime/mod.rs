@@ -270,6 +270,9 @@ pub struct ExecutorGlobals {
     pub(crate) autoload: Option<Box<AutoloadState>>,
     /// Monotonically increasing counter for class IDs
     next_class_id: u32,
+    /// Highest class ID installed by stdlib registration. User declarations
+    /// are linked afterwards and therefore always receive a larger ID.
+    internal_class_id_limit: u32,
     /// Stable boxed ClassDef pointers indexed by class ID. Slot zero is
     /// reserved for dynamic/unknown classes.
     class_by_id: Vec<*const ClassDef>,
@@ -340,7 +343,10 @@ impl ExecutorGlobals {
     /// normal executors avoid repeated hash-table growth while installing the
     /// fixed built-in class and function set.
     pub(crate) fn reserve_stdlib_capacity(&mut self) {
-        self.function_table.reserve(256);
+        // The all-features registry includes the complete Reflection and
+        // generic runtime surfaces. Reserve the next hash-table envelope so
+        // installing that fixed set never rehashes stored function pointers.
+        self.function_table.reserve(512);
         self.class_table.reserve(64);
         self.method_declaring_class.reserve(160);
         self.class_by_id.reserve(64);
@@ -408,6 +414,7 @@ impl ExecutorGlobals {
             included_functions: Vec::new(),
             autoload: None,
             next_class_id: 1,
+            internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
             static_property_slots_by_class: vec![Box::new([])],
@@ -475,6 +482,7 @@ impl ExecutorGlobals {
             included_functions: Vec::new(),
             autoload: None,
             next_class_id: 1,
+            internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
             static_property_slots_by_class: vec![Box::new([])],
@@ -1546,6 +1554,16 @@ impl ExecutorGlobals {
         false
     }
 
+    pub(crate) fn seal_internal_class_ids(&mut self) {
+        self.internal_class_id_limit = self.next_class_id.saturating_sub(1);
+    }
+
+    pub(crate) fn class_is_internal(&self, class_name: &str) -> bool {
+        self.find_class(class_name).is_some_and(|class| {
+            class.class_id != 0 && class.class_id <= self.internal_class_id_limit
+        })
+    }
+
     /// Find a class-like symbol without allocating a normalized name. Exact
     /// declarations and aliases hit the hash table directly; unusual caller
     /// casing falls back to the cold case-insensitive scan required by PHP.
@@ -1590,13 +1608,25 @@ impl ExecutorGlobals {
             .map(|(_, class)| class.clone())
             .ok_or_else(|| format!("Class \"{}\" not found", original))?;
 
-        for (method_name, _, _, _, function) in &class.methods {
-            if !class.is_interface && class.method_is_abstract(method_name) {
-                continue;
-            }
-            let function_name = format!("{}::{}", alias, method_name).to_lowercase();
-            self.function_table
-                .insert(function_name, &function.common as *const FunctionCommon);
+        // Registration has already flattened inherited and trait-composed
+        // methods under the canonical class prefix. Alias that effective
+        // table, not only the methods physically declared in `class.methods`,
+        // so trait factories and inherited APIs remain callable via an alias.
+        let canonical_prefix = format!("{}::", class.name).to_ascii_lowercase();
+        let methods: Vec<(String, *const FunctionCommon)> = self
+            .function_table
+            .iter()
+            .filter_map(|(registered, function)| {
+                registered
+                    .strip_prefix(&canonical_prefix)
+                    .map(|method| (method.to_string(), *function))
+            })
+            .collect();
+        for (method, function) in methods {
+            self.function_table.insert(
+                format!("{}::{}", alias, method).to_ascii_lowercase(),
+                function,
+            );
         }
         self.class_table.insert(alias.to_string(), class);
         Ok(())
@@ -2120,6 +2150,13 @@ impl ExecutorGlobals {
         // Class name covariance
         match (impl_hint, iface_hint) {
             (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
+                // Every class-like return type, including the late-static
+                // pseudo-type, is a subtype of PHP's built-in `object` type.
+                // This is what permits a trait method returning `static` to
+                // implement an interface method returning `object`.
+                if iface_class.eq_ignore_ascii_case("object") {
+                    return true;
+                }
                 return self.class_is_a(impl_class, iface_class);
             }
             _ => {}

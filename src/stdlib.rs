@@ -421,6 +421,17 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // --- String functions ---
     reg_direct!("strlen", fn_strlen, direct_strlen, 1, 1, "string");
     reg!("substr", fn_substr, 3, 2, "string", "offset", "length");
+    reg!(
+        "substr_compare",
+        fn_substr_compare,
+        5,
+        3,
+        "haystack",
+        "needle",
+        "offset",
+        "length",
+        "case_insensitive"
+    );
     reg!("strpos", fn_strpos, 2, 2, "haystack", "needle");
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
     reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
@@ -1128,6 +1139,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     #[cfg(target_vendor = "apple")]
     streams::register_extensions(eg, &mut funcs);
 
+    eg.seal_internal_class_ids();
     funcs
 }
 
@@ -2760,6 +2772,67 @@ fn fn_substr(
             Value::string(String::from_utf8_lossy(&bytes[start..end]).into_owned())
         );
     }
+}
+
+fn fn_substr_compare(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let haystack = arg_str!(ed, 0);
+    let needle = arg_str!(ed, 1);
+    let haystack_bytes = haystack.as_bytes();
+    let offset = arg_long!(ed, 2);
+    let start = if offset < 0 {
+        Some(
+            haystack_bytes
+                .len()
+                .saturating_sub(offset.unsigned_abs() as usize),
+        )
+    } else {
+        usize::try_from(offset)
+            .ok()
+            .filter(|offset| *offset <= haystack_bytes.len())
+    };
+    let Some(start) = start else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($haystack)",
+        ));
+        return Ok(());
+    };
+
+    let available = haystack_bytes.len() - start;
+    let length = arg_opt!(ed, 3)
+        .filter(|value| !matches!(value.value_type(), ValueType::Null | ValueType::Undef))
+        .map(Value::to_long_val);
+    if length.is_some_and(|length| length <= 0) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "substr_compare(): Argument #4 ($length) must be greater than 0",
+        ));
+        return Ok(());
+    }
+    let compared_length = length
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or(available)
+        .min(available);
+    let mut left = haystack_bytes[start..start + compared_length].to_vec();
+    let mut right = needle.as_bytes()[..length
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or(needle.len())
+        .min(needle.len())]
+        .to_vec();
+    if arg_opt!(ed, 4).is_some_and(Value::is_truthy) {
+        left.make_ascii_lowercase();
+        right.make_ascii_lowercase();
+    }
+    let result = match left.cmp(&right) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    };
+    ret!(rv, Value::long(result));
 }
 
 fn fn_strpos(

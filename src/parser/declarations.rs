@@ -35,6 +35,14 @@ impl Parser {
             let modifiers = self.parse_member_modifiers();
             if self.peek() == Token::Function {
                 self.advance();
+                // PHP permits functions and methods to declare a reference
+                // return with an ampersand before the name. The runtime's
+                // return-reference contract is a separate compatibility
+                // slice, but retaining the declaration as an ordinary method
+                // keeps unexercised library helpers loadable.
+                if self.peek() == Token::Ampersand {
+                    self.advance();
+                }
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
                     .ok_or_else(|| format!("Expected method name, got {token:?}"))?;
@@ -290,6 +298,9 @@ impl Parser {
             if self.peek() == Token::Function {
                 // Method
                 self.advance(); // consume 'function'
+                if self.peek() == Token::Ampersand {
+                    self.advance();
+                }
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
                     .ok_or_else(|| format!("Expected method name, got {:?}", token))?;
@@ -452,6 +463,9 @@ impl Parser {
 
             if self.peek() == Token::Function {
                 self.advance();
+                if self.peek() == Token::Ampersand {
+                    self.advance();
+                }
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
                     .ok_or_else(|| format!("Expected method name, got {:?}", token))?;
@@ -557,6 +571,9 @@ impl Parser {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, true)?);
             } else if self.peek() == Token::Function {
                 self.advance(); // consume 'function'
+                if self.peek() == Token::Ampersand {
+                    self.advance();
+                }
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
                     .ok_or_else(|| format!("Expected method name, got {:?}", token))?;
@@ -658,6 +675,9 @@ impl Parser {
                     constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
                 } else if self.peek() == Token::Function {
                     self.advance();
+                    if self.peek() == Token::Ampersand {
+                        self.advance();
+                    }
                     let token = self.advance();
                     let method_name = Self::token_as_named_arg_label(&token)
                         .ok_or_else(|| format!("Expected method name, got {:?}", token))?;
@@ -998,6 +1018,7 @@ impl Parser {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);
             }
+            Expr::ListAssign { expr, .. } => Self::collect_free_vars(expr, bound, out),
             Expr::CompoundAssignExpression { target, expr, .. } => {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);

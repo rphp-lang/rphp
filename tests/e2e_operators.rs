@@ -409,6 +409,26 @@ echo $object->$dynamic;
 }
 
 #[test]
+fn test_e2e_isset_accepts_dynamic_object_and_static_array_targets() {
+    assert_eq!(
+        run_php(
+            "<?php class IssetTargets { public static array $shared = ['ready' => true]; public $value = 'yes'; } $object = new IssetTargets(); $property = 'value'; echo isset($object->$property) ? 'dynamic:' : 'missing:'; echo isset(IssetTargets::$shared['ready']) ? 'static' : 'missing';"
+        ),
+        "dynamic:static"
+    );
+}
+
+#[test]
+fn test_e2e_unset_accepts_a_dynamic_object_property() {
+    assert_eq!(
+        run_php(
+            "<?php class DynamicUnset { public $value = 'set'; } $object = new DynamicUnset(); $property = 'value'; unset($object->$property); echo isset($object->$property) ? 'set' : 'unset';"
+        ),
+        "unset"
+    );
+}
+
+#[test]
 fn test_e2e_property_and_array_assignment_expressions_produce_values() {
     assert_eq!(
         run_php(

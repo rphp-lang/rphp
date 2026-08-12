@@ -25,6 +25,57 @@ var_dump($result);
 }
 
 #[test]
+fn reflection_class_creates_an_instance_without_running_its_constructor() {
+    let out = run_php(
+        r#"<?php
+class ConstructorProbe {
+    public int $value = 7;
+    public function __construct() { $this->value = 99; }
+}
+$object = (new ReflectionClass(ConstructorProbe::class))->newInstanceWithoutConstructor();
+echo get_class($object) . ':' . $object->value;
+"#,
+    );
+    assert_eq!(out, "ConstructorProbe:7");
+}
+
+#[test]
+fn reflection_class_distinguishes_user_and_internal_classes() {
+    let out = run_php(
+        r#"<?php
+class UserDefinedReflectionProbe {}
+echo (new ReflectionClass(UserDefinedReflectionProbe::class))->isInternal() ? 'bad' : 'user';
+echo ':';
+echo (new ReflectionClass(stdClass::class))->isInternal() ? 'internal' : 'bad';
+"#,
+    );
+    assert_eq!(out, "user:internal");
+}
+
+#[test]
+fn reflection_class_lists_property_metadata_and_filters_private_properties() {
+    let out = run_php(
+        r#"<?php
+class ReflectedPropertyParent { private int $hidden = 1; }
+class ReflectedPropertyChild extends ReflectedPropertyParent {
+    public static string $shared = 'x';
+    protected readonly int $locked;
+}
+$properties = (new ReflectionClass(ReflectedPropertyChild::class))->getProperties();
+foreach ($properties as $property) {
+    echo $property->name . ':' . $property->class . ':' . $property->getModifiers() . ':';
+    echo ($property->isStatic() ? 's' : '-') . ($property->isReadOnly() ? 'r' : '-') . '|';
+}
+echo count((new ReflectionClass(ReflectedPropertyParent::class))->getProperties(ReflectionProperty::IS_PRIVATE));
+"#,
+    );
+    assert_eq!(
+        out,
+        "locked:ReflectedPropertyChild:130:-r|shared:ReflectedPropertyChild:17:s-|1"
+    );
+}
+
+#[test]
 fn test_class_exists_true() {
     let out = run_php(
         r#"<?php

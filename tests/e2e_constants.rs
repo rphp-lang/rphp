@@ -1085,6 +1085,16 @@ fn test_error_constants_are_available_in_property_defaults() {
 }
 
 #[test]
+fn property_default_resolves_a_constant_from_its_own_class() {
+    assert_eq!(
+        run_php(
+            "<?php class Status { public const INITIAL = 1; public int $value = self::INITIAL; } echo (new Status())->value;"
+        ),
+        "1"
+    );
+}
+
+#[test]
 fn included_property_default_resolves_an_imported_class_constant() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

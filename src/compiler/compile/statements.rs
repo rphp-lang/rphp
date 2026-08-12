@@ -867,45 +867,65 @@ impl Compiler {
                 then_body,
                 else_body,
             } => {
-                // Compile condition
-                let (cond_op, cond_type) = self.compile_expr(condition);
-
-                // JmpZ condition, <then_end>
-                let jmpz_idx = self.instructions.len();
-                let mut jmpz = Instruction::new(OpCode::JmpZ);
-                jmpz.op1 = cond_op;
-                jmpz.op1_type = cond_type;
-                jmpz.op2 = 0; // placeholder, will be patched
-                self.instructions.push(jmpz);
-
-                // Compile then body
-                for s in then_body {
-                    self.compile_stmt(s)?;
-                }
-
-                if else_body.is_empty() {
-                    // Patch JmpZ to jump past then body
-                    let after_then = self.instructions.len() as u16;
-                    self.instructions[jmpz_idx].op2 = after_then;
+                // A source-level constant condition has no runtime side
+                // effects. Compile only its live branch so mutually exclusive
+                // conditional declarations retain PHP's runtime identity
+                // instead of being registered eagerly as duplicates.
+                let branch_contains_yield = then_body.iter().any(Stmt::contains_yield)
+                    || else_body.iter().any(Stmt::contains_yield);
+                if !branch_contains_yield
+                    && let Ok(value) =
+                        self.eval_const_expr_in_source(condition, &self.known_constants)
+                {
+                    let body = if value.is_truthy() {
+                        then_body
+                    } else {
+                        else_body
+                    };
+                    for statement in body {
+                        self.compile_stmt(statement)?;
+                    }
                 } else {
-                    // Jmp <after_else> (skip else body when then completes)
-                    let jmp_idx = self.instructions.len();
-                    let mut jmp = Instruction::new(OpCode::Jmp);
-                    jmp.op1 = 0; // placeholder
-                    self.instructions.push(jmp);
+                    // Compile condition
+                    let (cond_op, cond_type) = self.compile_expr(condition);
 
-                    // Patch JmpZ to jump to else body
-                    let else_start = self.instructions.len() as u16;
-                    self.instructions[jmpz_idx].op2 = else_start;
+                    // JmpZ condition, <then_end>
+                    let jmpz_idx = self.instructions.len();
+                    let mut jmpz = Instruction::new(OpCode::JmpZ);
+                    jmpz.op1 = cond_op;
+                    jmpz.op1_type = cond_type;
+                    jmpz.op2 = 0; // placeholder, will be patched
+                    self.instructions.push(jmpz);
 
-                    // Compile else body
-                    for s in else_body {
+                    // Compile then body
+                    for s in then_body {
                         self.compile_stmt(s)?;
                     }
 
-                    // Patch Jmp to jump past else body
-                    let after_else = self.instructions.len() as u16;
-                    self.instructions[jmp_idx].op1 = after_else;
+                    if else_body.is_empty() {
+                        // Patch JmpZ to jump past then body
+                        let after_then = self.instructions.len() as u16;
+                        self.instructions[jmpz_idx].op2 = after_then;
+                    } else {
+                        // Jmp <after_else> (skip else body when then completes)
+                        let jmp_idx = self.instructions.len();
+                        let mut jmp = Instruction::new(OpCode::Jmp);
+                        jmp.op1 = 0; // placeholder
+                        self.instructions.push(jmp);
+
+                        // Patch JmpZ to jump to else body
+                        let else_start = self.instructions.len() as u16;
+                        self.instructions[jmpz_idx].op2 = else_start;
+
+                        // Compile else body
+                        for s in else_body {
+                            self.compile_stmt(s)?;
+                        }
+
+                        // Patch Jmp to jump past else body
+                        let after_else = self.instructions.len() as u16;
+                        self.instructions[jmp_idx].op1 = after_else;
+                    }
                 }
             }
             Stmt::Function {
@@ -1558,6 +1578,20 @@ impl Compiler {
                             unset.op2_type = OpType::Const;
                             self.instructions.push(unset);
                         }
+                        Expr::DynamicPropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                        } => {
+                            let (object, object_type) = self.compile_expr(object);
+                            let (property, property_type) = self.compile_expr(property);
+                            let mut unset = Instruction::new(OpCode::UnsetObj);
+                            unset.op1 = object;
+                            unset.op1_type = object_type;
+                            unset.op2 = property;
+                            unset.op2_type = property_type;
+                            self.instructions.push(unset);
+                        }
                         _ => return Err("unset() requires a variable".into()),
                     }
                 }
@@ -2055,6 +2089,38 @@ impl Compiler {
                     ));
                 }
 
+                // Resolve the class constants before property defaults. PHP
+                // allows a property declared in the same class to use
+                // `self::CONSTANT`, even though the class itself is not linked
+                // until the complete declaration has been compiled.
+                let compiled_constants = self.compile_class_constants(
+                    &resolved_class,
+                    resolved_parent.as_deref(),
+                    constants,
+                )?;
+                let mut property_constants = self.known_constants.clone();
+                property_constants.insert(
+                    "self::class".to_string(),
+                    Value::string(resolved_class.clone()),
+                );
+                for constant in &compiled_constants {
+                    property_constants.insert(
+                        format!("self::{}", constant.name),
+                        constant.value.clone(),
+                    );
+                }
+                if let Some(parent) = &resolved_parent {
+                    property_constants
+                        .insert("parent::class".to_string(), Value::string(parent.clone()));
+                    let prefix = format!("{}::", parent);
+                    for (constant, value) in &self.known_constants {
+                        if let Some(name) = constant.strip_prefix(&prefix) {
+                            property_constants
+                                .insert(format!("parent::{name}"), value.clone());
+                        }
+                    }
+                }
+
                 // Evaluate property defaults (constant expressions only)
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
@@ -2072,7 +2138,7 @@ impl Compiler {
                         resolved_parent.as_deref(),
                     );
                     let default = match &prop.default {
-                        Some(expr) => Some(self.eval_const_expr_in_source(expr, &self.known_constants).map_err(|e| {
+                        Some(expr) => Some(self.eval_const_expr_in_source(expr, &property_constants).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
@@ -2141,11 +2207,6 @@ impl Compiler {
                         visibility: adaptation.visibility,
                     })
                     .collect();
-                let compiled_constants = self.compile_class_constants(
-                    &resolved_class,
-                    resolved_parent.as_deref(),
-                    constants,
-                )?;
                 self.class_defs.push(ClassDef {
                     name: resolved_class,
                     source_file: (!self.source_file.is_empty())

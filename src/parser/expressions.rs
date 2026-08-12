@@ -917,6 +917,17 @@ impl Parser {
             }
             Token::LBracket => {
                 // Short array syntax: [1, 2, 'a' => 3]
+                if self.is_short_list_assign() {
+                    self.advance();
+                    let targets = self.parse_list_targets(&Token::RBracket)?;
+                    self.expect(&Token::RBracket)?;
+                    self.expect(&Token::Assign)?;
+                    let expr = self.parse_expr()?;
+                    return Ok(Expr::ListAssign {
+                        targets,
+                        expr: Box::new(expr),
+                    });
+                }
                 self.advance(); // consume '['
                 let elements = self.parse_array_elements(Token::RBracket)?;
                 self.expect(&Token::RBracket)?;

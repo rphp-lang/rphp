@@ -361,6 +361,16 @@ fn get_debug_type_reports_scalar_and_object_names() {
 }
 
 #[test]
+fn substr_compare_supports_offsets_lengths_and_case_folding() {
+    assert_eq!(
+        run_php(
+            "<?php echo substr_compare('FrameworkBundle', 'workbench', 5, 4), ':'; echo substr_compare('Symfony', 'SYMFONY', 0, null, true), ':'; echo substr_compare('abc', 'abd', 0), ':'; echo substr_compare('abc', 'a', -4);"
+        ),
+        "0:0:-1:1"
+    );
+}
+
+#[test]
 fn array_diff_key_preserves_missing_keys_and_values() {
     assert_eq!(
         run_php(

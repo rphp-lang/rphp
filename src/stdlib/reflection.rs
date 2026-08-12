@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use ancestry::reflected_arguments;
 use functions::reflection_function_target;
 
+use crate::compiler::compile::PropertyDefinition;
 use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities};
+use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, PhpObject, Value, make_error_value};
 use crate::vm::execute::VmError;
@@ -546,6 +548,98 @@ fn class_get_parent(
     )
 }
 
+fn class_is_internal(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::bool(false));
+    }
+    return_value(rv, Value::bool(eg.class_is_internal(&owner)))
+}
+
+fn property_modifiers(property: &PropertyDefinition, is_static: bool) -> i64 {
+    let visibility = match property.visibility {
+        Visibility::Public => 1,
+        Visibility::Protected => 2,
+        Visibility::Private => 4,
+    };
+    visibility | if is_static { 16 } else { 0 } | if property.is_readonly { 128 } else { 0 }
+}
+
+fn reflected_property_value(property: &PropertyDefinition, is_static: bool) -> Value {
+    let declaring_class = property.declaring_class.clone();
+    object_value(
+        "ReflectionProperty",
+        [
+            (
+                "__reflection_target",
+                Value::string(declaring_class.clone()),
+            ),
+            (
+                "__reflection_property",
+                Value::string(property.name.clone()),
+            ),
+            (
+                "__reflection_modifiers",
+                Value::long(property_modifiers(property, is_static)),
+            ),
+            ("name", Value::string(property.name.clone())),
+            ("class", Value::string(declaring_class)),
+        ],
+    )
+}
+
+fn class_get_properties(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::array(PhpArray::new()));
+    }
+    let Some(class) = eg.find_class(&owner) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let filter = with_argument(ed, 1, |value| value.as_long());
+    let mut properties =
+        PhpArray::with_packed_capacity(class.properties.len() + class.static_properties.len());
+    for (property, is_static) in class
+        .properties
+        .iter()
+        .map(|property| (property, false))
+        .chain(
+            class
+                .static_properties
+                .iter()
+                .map(|property| (property, true)),
+        )
+    {
+        if property.visibility == Visibility::Private
+            && !property.declaring_class.eq_ignore_ascii_case(&class.name)
+        {
+            continue;
+        }
+        let modifiers = property_modifiers(property, is_static);
+        if filter.is_some_and(|filter| modifiers & filter == 0) {
+            continue;
+        }
+        properties.push(reflected_property_value(property, is_static));
+    }
+    return_value(rv, Value::array(properties))
+}
+
 fn class_new_lazy_ghost(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -586,6 +680,41 @@ fn class_new_lazy_ghost(
     return_value(rv, ghost)
 }
 
+fn class_new_instance_without_constructor(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return Err(VmError::Fatal(
+            "ReflectionClass::newInstanceWithoutConstructor() requires a reflected class".into(),
+        ));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return Err(VmError::Fatal(format!("Class {owner} does not exist")));
+    }
+    let class = eg
+        .find_class(&owner)
+        .ok_or_else(|| VmError::Fatal(format!("Class {owner} does not exist")))?;
+    if class.is_interface || class.is_trait || class.is_abstract || class.is_enum {
+        return Err(VmError::Fatal(format!(
+            "Class {owner} cannot be instantiated without invoking its constructor"
+        )));
+    }
+    let object = if class.class_id == 0 {
+        PhpObject::dynamic(class.name.clone(), 0, HashMap::new())
+    } else {
+        PhpObject::with_layout(
+            class.class_id,
+            class.property_layout.clone(),
+            class.property_defaults.as_ref().to_vec(),
+        )
+    };
+    return_value(rv, Value::object(object))
+}
+
 fn object_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,
@@ -608,17 +737,84 @@ fn object_construct(
 fn property_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let target = with_argument(ed, 1, Clone::clone);
     let name = argument_string(ed, 2);
+    let class_name = target
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .or_else(|| target.as_str().map(str::to_string));
+    let metadata = class_name.as_deref().and_then(|class_name| {
+        let class = eg.find_class(class_name)?;
+        class
+            .properties
+            .iter()
+            .find(|property| property.name == name)
+            .map(|property| {
+                (
+                    property.declaring_class.clone(),
+                    property_modifiers(property, false),
+                )
+            })
+            .or_else(|| {
+                class
+                    .static_properties
+                    .iter()
+                    .find(|property| property.name == name)
+                    .map(|property| {
+                        (
+                            property.declaring_class.clone(),
+                            property_modifiers(property, true),
+                        )
+                    })
+            })
+    });
     with_argument(ed, 0, |value| {
         if let Some(mut object) = value.as_object_mut() {
             object.set_property("__reflection_target", target);
-            object.set_property("__reflection_property", Value::string(name));
+            object.set_property("__reflection_property", Value::string(name.clone()));
+            object.set_property("name", Value::string(name));
+            if let Some((declaring_class, modifiers)) = metadata {
+                object.set_property("class", Value::string(declaring_class));
+                object.set_property("__reflection_modifiers", Value::long(modifiers));
+            }
         }
     });
     Ok(())
+}
+
+fn property_get_modifiers(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_property(ed, "__reflection_modifiers").unwrap_or_else(|| Value::long(0)),
+    )
+}
+
+fn property_is_static(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let modifiers = reflected_property(ed, "__reflection_modifiers")
+        .and_then(|value| value.as_long())
+        .unwrap_or(0);
+    return_value(rv, Value::bool(modifiers & 16 != 0))
+}
+
+fn property_is_readonly(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let modifiers = reflected_property(ed, "__reflection_modifiers")
+        .and_then(|value| value.as_long())
+        .unwrap_or(0);
+    return_value(rv, Value::bool(modifiers & 128 != 0))
 }
 
 fn reflected_property_target(ed: *mut ExecuteData) -> Option<(Value, String)> {
@@ -644,13 +840,22 @@ fn reflected_property_object(ed: *mut ExecuteData, index: u32) -> Option<Value> 
     })
 }
 
-fn reflection_property_key(eg: &ExecutorGlobals, object: &PhpObject, property: &str) -> String {
+fn reflection_property_key(
+    eg: &ExecutorGlobals,
+    object: &PhpObject,
+    reflected_scope: Option<&str>,
+    property: &str,
+) -> String {
     crate::runtime::resolve_property_key(
         eg,
         object.class_name.as_ref(),
         property,
-        Some(object.class_name.as_ref()),
+        Some(reflected_scope.unwrap_or(object.class_name.as_ref())),
     )
+}
+
+fn reflected_property_scope(ed: *mut ExecuteData) -> Option<String> {
+    reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned))
 }
 
 fn property_is_initialized(
@@ -661,11 +866,12 @@ fn property_is_initialized(
     let Some((_, property)) = reflected_property_target(ed) else {
         return return_value(rv, Value::bool(false));
     };
+    let reflected_scope = reflected_property_scope(ed);
     let initialized = reflected_property_object(ed, 1).is_some_and(|target| {
         let Some(object) = target.as_object() else {
             return false;
         };
-        let key = reflection_property_key(eg, &object, &property);
+        let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
         object
             .get_property(&key)
             .is_some_and(|value| !value.is_undef())
@@ -681,10 +887,11 @@ fn property_get_value(
     let Some((_, property)) = reflected_property_target(ed) else {
         return return_value(rv, Value::null());
     };
+    let reflected_scope = reflected_property_scope(ed);
     let value = reflected_property_object(ed, 1)
         .and_then(|target| {
             let object = target.as_object()?;
-            let key = reflection_property_key(eg, &object, &property);
+            let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
             object.get_property(&key).cloned()
         })
         .unwrap_or_else(Value::null);
@@ -699,11 +906,12 @@ fn property_set_value(
     let Some((_, property)) = reflected_property_target(ed) else {
         return Ok(());
     };
+    let reflected_scope = reflected_property_scope(ed);
     let value = with_argument(ed, 2, Clone::clone);
     if let Some(target) = reflected_property_object(ed, 1)
         && let Some(mut object) = target.as_object_mut()
     {
-        let key = reflection_property_key(eg, &object, &property);
+        let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
         object.set_property(&key, value);
     }
     Ok(())
