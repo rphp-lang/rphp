@@ -433,6 +433,16 @@ fn test_strspn_and_strcspn_with_ranges() {
 }
 
 #[test]
+fn test_strpbrk_returns_suffix_or_false() {
+    assert_eq!(
+        run_php(
+            "<?php echo strpbrk('route/{slug}', '?<:{'), '|'; var_dump(strpbrk('route', '?<:'));"
+        ),
+        "{slug}|bool(false)\n"
+    );
+}
+
+#[test]
 fn test_html_entity_decode_named_numeric_and_utf8() {
     assert_eq!(
         run_php("<?php echo html_entity_decode('a&amp;b&#x21;&#33; ž');"),

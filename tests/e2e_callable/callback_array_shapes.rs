@@ -337,6 +337,20 @@ echo implode(',', array_map($formatter->format(...), ['a', 'b']));
 }
 
 #[test]
+fn test_first_class_static_method_callable_works_with_array_map() {
+    let out = run_php(
+        r#"<?php
+class StaticFormatter {
+    public static function format($value) { return strtoupper($value); }
+    public static function run() { return array_map(self::format(...), ['a', 'b']); }
+}
+echo implode(',', StaticFormatter::run());
+"#,
+    );
+    assert_eq!(out, "A,B");
+}
+
+#[test]
 fn test_dynamic_class_name_static_method_call() {
     let out = run_php(
         r#"<?php
@@ -348,4 +362,36 @@ echo $class::create('dynamic');
 "#,
     );
     assert_eq!(out, "DYNAMIC");
+}
+
+#[test]
+fn test_dynamic_static_call_preserves_late_static_scope() {
+    let out = run_php(
+        r#"<?php
+class DynamicBase {
+    public const VALUE = 'base';
+    public static function value() { return static::VALUE; }
+}
+class DynamicChild extends DynamicBase { public const VALUE = 'child'; }
+$class = DynamicChild::class;
+echo $class::value();
+"#,
+    );
+    assert_eq!(out, "child");
+}
+
+#[test]
+fn test_forwarding_self_call_preserves_late_static_scope() {
+    let out = run_php(
+        r#"<?php
+class ForwardingBase {
+    public const VALUE = 'base';
+    public static function outer() { return self::inner(); }
+    private static function inner() { return static::VALUE; }
+}
+class ForwardingChild extends ForwardingBase { public const VALUE = 'child'; }
+echo ForwardingChild::outer();
+"#,
+    );
+    assert_eq!(out, "child");
 }

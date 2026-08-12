@@ -150,6 +150,16 @@ fn test_e2e_trim() {
     assert_eq!(run_php("<?php echo trim('  hello  ');"), "hello");
 }
 
+#[test]
+fn test_e2e_trim_character_mask_and_range() {
+    assert_eq!(
+        run_php(
+            "<?php echo ltrim('/route/', '/'), '|', rtrim('/route/', '/'), '|', trim('012abc210', '0..2');"
+        ),
+        "route/|/route|abc"
+    );
+}
+
 // === explode / implode ===
 
 #[test]
@@ -540,5 +550,14 @@ fn test_e2e_gmdate_formats_http_date_in_utc() {
     assert_eq!(
         run_php("<?php echo gmdate('D, d M Y H:i:s T', 0);"),
         "Thu, 01 Jan 1970 00:00:00 GMT"
+    );
+}
+#[test]
+fn test_error_handler_api_is_available_for_warning_guards() {
+    assert_eq!(
+        run_php(
+            "<?php function handleWarning($type, $message) { return true; } var_dump(set_error_handler('handleWarning')); var_dump(restore_error_handler());"
+        ),
+        "NULL\nbool(true)\n"
     );
 }

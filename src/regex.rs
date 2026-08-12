@@ -48,6 +48,7 @@ enum Node {
         min: usize,
         max: Option<usize>,
         greedy: bool,
+        possessive: bool,
     },
     Backreference(usize),
     NamedBackreference(String),
@@ -59,6 +60,9 @@ enum Node {
         positive: bool,
         inner: Box<Node>,
     },
+    /// PCRE `(*MARK:name)` / `(*:name)`: publish the last successful mark as
+    /// the synthetic named capture `MARK` without consuming input.
+    Mark(String),
     WordBoundary(bool), // true = \b, false = \B
 }
 
@@ -197,6 +201,7 @@ pub struct Captures {
     groups: Vec<Option<Match>>,
     /// Named group name → group index
     named_groups: HashMap<String, usize>,
+    mark: Option<String>,
 }
 
 impl Captures {
@@ -215,6 +220,10 @@ impl Captures {
     pub fn len(&self) -> usize {
         self.groups.len()
     }
+
+    pub fn mark(&self) -> Option<&str> {
+        self.mark.as_deref()
+    }
 }
 
 /// Borrowed capture view used by consumers that can process each match before
@@ -224,6 +233,7 @@ impl Captures {
 pub(crate) struct CaptureView<'a> {
     groups: &'a [Option<Match>],
     named_groups: &'a HashMap<String, usize>,
+    mark: Option<&'a str>,
 }
 
 impl CaptureView<'_> {
@@ -237,6 +247,10 @@ impl CaptureView<'_> {
 
     pub(crate) fn len(&self) -> usize {
         self.groups.len()
+    }
+
+    pub(crate) fn mark(&self) -> Option<&str> {
+        self.mark
     }
 }
 
@@ -277,7 +291,6 @@ impl Regex {
         } else {
             Vec::new()
         };
-
         let mut start = 0;
         while start <= chars.len() {
             if let Some(literal) = self.start_literal {
@@ -289,12 +302,14 @@ impl Regex {
                 start += relative_start;
             }
             groups.fill(None);
+            let mut mark = None;
             let mut ctx = MatchCtx {
                 chars: &chars,
                 metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
                 named_groups: &self.named_groups,
+                mark: &mut mark,
             };
             if match_seq_from(&self.ast, &[], start, &mut ctx).is_some() {
                 return true;
@@ -322,6 +337,7 @@ impl Regex {
                 }
             }
             groups.fill(None);
+            let mut mark = None;
             let end = {
                 let mut ctx = MatchCtx {
                     chars: &chars,
@@ -329,6 +345,7 @@ impl Regex {
                     flags: self.flags,
                     groups: &mut groups,
                     named_groups: &self.named_groups,
+                    mark: &mut mark,
                 };
                 match_seq_from(&self.ast, &[], start, &mut ctx)
             };
@@ -340,6 +357,7 @@ impl Regex {
                 return Some(Captures {
                     groups,
                     named_groups: self.named_groups.clone(),
+                    mark,
                 });
             }
         }
@@ -358,12 +376,14 @@ impl Regex {
 
         while pos <= chars.len() {
             let mut groups = vec![None; self.num_groups + 1];
+            let mut mark = None;
             let mut ctx = MatchCtx {
                 chars: &chars,
                 metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
                 named_groups: &self.named_groups,
+                mark: &mut mark,
             };
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
                 let match_start = byte_offsets.get(pos);
@@ -458,6 +478,7 @@ impl Regex {
                 pos += relative_pos;
             }
             groups.fill(None);
+            let mut mark = None;
             let end = {
                 let mut ctx = MatchCtx {
                     chars: &chars,
@@ -465,6 +486,7 @@ impl Regex {
                     flags: self.flags,
                     groups: &mut groups,
                     named_groups: &self.named_groups,
+                    mark: &mut mark,
                 };
                 match_seq_from(&self.ast, &[], pos, &mut ctx)
             };
@@ -479,6 +501,7 @@ impl Regex {
                 let keep_scanning = visitor(CaptureView {
                     groups: &groups,
                     named_groups: &self.named_groups,
+                    mark: mark.as_deref(),
                 })?;
                 if !keep_scanning {
                     break;
@@ -503,6 +526,7 @@ impl Regex {
                 results.push(Captures {
                     groups: captures.groups.to_vec(),
                     named_groups: captures.named_groups.clone(),
+                    mark: captures.mark.map(str::to_string),
                 });
                 Ok(true)
             });
@@ -531,12 +555,14 @@ impl Regex {
             let mut found = false;
             for try_start in scan..=chars.len() {
                 let mut groups = vec![None; self.num_groups + 1];
+                let mut mark = None;
                 let mut ctx = MatchCtx {
                     chars: &chars,
                     metadata: &metadata,
                     flags: self.flags,
                     groups: &mut groups,
                     named_groups: &self.named_groups,
+                    mark: &mut mark,
                 };
                 if let Some(end) = match_seq_from(&self.ast, &[], try_start, &mut ctx) {
                     let match_start_byte = byte_offsets.get(try_start);
@@ -579,12 +605,14 @@ impl Regex {
 
         while pos <= chars.len() {
             let mut groups = vec![None; self.num_groups + 1];
+            let mut mark = None;
             let mut ctx = MatchCtx {
                 chars: &chars,
                 metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
                 named_groups: &self.named_groups,
+                mark: &mut mark,
             };
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
                 let match_start = byte_offsets.get(pos);
@@ -598,6 +626,7 @@ impl Regex {
                 let caps = Captures {
                     groups: groups.clone(),
                     named_groups: self.named_groups.clone(),
+                    mark: mark.clone(),
                 };
                 result.push_str(&replacer(&caps, subject));
 
@@ -633,7 +662,8 @@ fn required_start_literal(node: &Node) -> Option<char> {
                     Node::Anchor(_)
                     | Node::WordBoundary(_)
                     | Node::Lookahead { .. }
-                    | Node::Lookbehind { .. } => continue,
+                    | Node::Lookbehind { .. }
+                    | Node::Mark(_) => continue,
                     _ => return required_start_literal(node),
                 }
             }
@@ -778,6 +808,7 @@ struct MatchCtx<'a> {
     flags: RegexFlags,
     groups: &'a mut Vec<Option<Match>>,
     named_groups: &'a HashMap<String, usize>,
+    mark: &'a mut Option<String>,
 }
 
 // ── Core matching (backtracking with continuation) ──────────────────────────
@@ -883,10 +914,12 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
         Node::Alternation(branches) => {
             for branch in branches {
                 let saved_groups = ctx.groups.clone();
+                let saved_mark = ctx.mark.clone();
                 if let Some(end) = match_seq_from(branch, rest, pos, ctx) {
                     return Some(end);
                 }
                 *ctx.groups = saved_groups;
+                *ctx.mark = saved_mark;
             }
             None
         }
@@ -913,7 +946,8 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             min,
             max,
             greedy,
-        } => match_quantifier(inner, *min, *max, *greedy, rest, pos, ctx),
+            possessive,
+        } => match_quantifier(inner, *min, *max, *greedy, *possessive, rest, pos, ctx),
         Node::Backreference(n) => match_backref_by_index(*n, rest, pos, ctx),
         Node::NamedBackreference(name) => {
             if let Some(&idx) = ctx.named_groups.get(name.as_str()) {
@@ -924,6 +958,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
         }
         Node::Lookahead { positive, inner } => {
             let saved = ctx.groups.clone();
+            let saved_mark = ctx.mark.clone();
             // Use empty rest — lookahead doesn't consume input, just checks
             let result = match_seq_from(inner, &[], pos, ctx);
             if *positive {
@@ -932,14 +967,17 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
                     match_rest(rest, pos, ctx)
                 } else {
                     *ctx.groups = saved;
+                    *ctx.mark = saved_mark;
                     None
                 }
             } else {
                 if result.is_none() {
                     *ctx.groups = saved;
+                    *ctx.mark = saved_mark;
                     match_rest(rest, pos, ctx)
                 } else {
                     *ctx.groups = saved;
+                    *ctx.mark = saved_mark;
                     None
                 }
             }
@@ -948,11 +986,13 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             // Try matching inner ending at `pos`.
             let found = (0..=pos).rev().any(|start| {
                 let saved = ctx.groups.clone();
+                let saved_mark = ctx.mark.clone();
                 let result = match_seq_from(inner, &[], start, ctx);
                 if result == Some(pos) {
                     true
                 } else {
                     *ctx.groups = saved;
+                    *ctx.mark = saved_mark;
                     false
                 }
             });
@@ -961,6 +1001,15 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             } else {
                 None
             }
+        }
+        Node::Mark(name) => {
+            let saved = ctx.mark.clone();
+            *ctx.mark = Some(name.clone());
+            let result = match_rest(rest, pos, ctx);
+            if result.is_none() {
+                *ctx.mark = saved;
+            }
+            result
         }
     }
 }
@@ -1059,6 +1108,7 @@ fn collect_match_positions_inner(
             min,
             max,
             greedy,
+            possessive,
         } => {
             let mut reps_positions: Vec<(usize, usize)> = Vec::new(); // (reps, pos)
             // Collect all possible repetition counts
@@ -1092,6 +1142,9 @@ fn collect_match_positions_inner(
                 reps_positions.sort_by(|a, b| b.0.cmp(&a.0)); // most reps first
             } else {
                 reps_positions.sort_by(|a, b| a.0.cmp(&b.0)); // fewest reps first
+            }
+            if *possessive {
+                reps_positions.truncate(1);
             }
             for (_, p) in reps_positions {
                 if !out.contains(&p) {
@@ -1180,6 +1233,7 @@ fn match_quantifier(
     min: usize,
     max: Option<usize>,
     greedy: bool,
+    possessive: bool,
     rest: &[Node],
     pos: usize,
     ctx: &mut MatchCtx,
@@ -1279,7 +1333,14 @@ fn match_quantifier(
 
     // collect_states records states in increasing repetition order, so the
     // greedy path can iterate backwards without sorting.
-    if greedy {
+    if possessive {
+        if let Some((_, end_pos, saved_groups)) = states.pop() {
+            if let Some(saved_groups) = saved_groups {
+                *ctx.groups = saved_groups;
+            }
+            return match_rest(rest, end_pos, ctx);
+        }
+    } else if greedy {
         for (_, end_pos, saved_groups) in states.into_iter().rev() {
             if let Some(saved_groups) = saved_groups {
                 *ctx.groups = saved_groups;
@@ -1583,10 +1644,65 @@ impl Parser {
     fn parse_group(&mut self) -> Result<Node, String> {
         self.advance(); // consume '('
 
+        // PCRE MARK control verb. Symfony's compiled route matcher uses the
+        // short `(*:id)` spelling to identify the successful route branch.
+        if self.peek() == Some('*') {
+            self.advance();
+            let mut verb = String::new();
+            while let Some(c) = self.peek() {
+                if c == ':' || c == ')' {
+                    break;
+                }
+                verb.push(c);
+                self.advance();
+            }
+            if !verb.is_empty() && !verb.eq_ignore_ascii_case("MARK") {
+                return Err(format!("Unsupported PCRE control verb (*{verb})"));
+            }
+            if self.advance() != Some(':') {
+                return Err("Expected ':' in PCRE MARK".into());
+            }
+            let mut name = String::new();
+            while let Some(c) = self.peek() {
+                if c == ')' {
+                    self.advance();
+                    return Ok(Node::Mark(name));
+                }
+                name.push(c);
+                self.advance();
+            }
+            return Err("Unterminated PCRE MARK".into());
+        }
+
         // Check for special group types
         if self.peek() == Some('?') {
             self.advance(); // consume '?'
             match self.peek() {
+                Some('|') => {
+                    // Branch-reset group (?|...): capture numbering restarts
+                    // at the same base for every alternative and continues
+                    // after the largest branch number.
+                    self.advance();
+                    let base_group_count = self.group_count;
+                    let mut max_group_count = base_group_count;
+                    let mut branches = Vec::new();
+                    loop {
+                        self.group_count = base_group_count;
+                        branches.push(self.parse_sequence()?);
+                        max_group_count = max_group_count.max(self.group_count);
+                        match self.advance() {
+                            Some('|') => continue,
+                            Some(')') => break,
+                            _ => return Err("Unterminated branch-reset group".into()),
+                        }
+                    }
+                    self.group_count = max_group_count;
+                    if branches.len() == 1 {
+                        Ok(branches.pop().unwrap())
+                    } else {
+                        Ok(Node::Alternation(branches))
+                    }
+                }
                 Some(':') => {
                     // Non-capturing group (?:...)
                     self.advance();
@@ -1744,7 +1860,8 @@ impl Parser {
             Node::Anchor(_)
             | Node::WordBoundary(_)
             | Node::Lookahead { .. }
-            | Node::Lookbehind { .. } => {
+            | Node::Lookbehind { .. }
+            | Node::Mark(_) => {
                 return Ok(atom);
             }
             _ => {}
@@ -1755,32 +1872,35 @@ impl Parser {
         match self.peek() {
             Some('*') => {
                 self.advance();
-                let greedy = self.check_lazy(default_greedy);
+                let (greedy, possessive) = self.quantifier_mode(default_greedy);
                 Ok(Node::Quantifier {
                     inner: Box::new(atom),
                     min: 0,
                     max: None,
                     greedy,
+                    possessive,
                 })
             }
             Some('+') => {
                 self.advance();
-                let greedy = self.check_lazy(default_greedy);
+                let (greedy, possessive) = self.quantifier_mode(default_greedy);
                 Ok(Node::Quantifier {
                     inner: Box::new(atom),
                     min: 1,
                     max: None,
                     greedy,
+                    possessive,
                 })
             }
             Some('?') => {
                 self.advance();
-                let greedy = self.check_lazy(default_greedy);
+                let (greedy, possessive) = self.quantifier_mode(default_greedy);
                 Ok(Node::Quantifier {
                     inner: Box::new(atom),
                     min: 0,
                     max: Some(1),
                     greedy,
+                    possessive,
                 })
             }
             Some('{') => {
@@ -1788,12 +1908,13 @@ impl Parser {
                 self.advance();
                 match self.parse_counted_quantifier() {
                     Ok((min, max)) => {
-                        let greedy = self.check_lazy(default_greedy);
+                        let (greedy, possessive) = self.quantifier_mode(default_greedy);
                         Ok(Node::Quantifier {
                             inner: Box::new(atom),
                             min,
                             max,
                             greedy,
+                            possessive,
                         })
                     }
                     Err(_) => {
@@ -1807,12 +1928,15 @@ impl Parser {
         }
     }
 
-    fn check_lazy(&mut self, default_greedy: bool) -> bool {
+    fn quantifier_mode(&mut self, default_greedy: bool) -> (bool, bool) {
         if self.peek() == Some('?') {
             self.advance();
-            !default_greedy // flip
+            (!default_greedy, false)
+        } else if self.peek() == Some('+') {
+            self.advance();
+            (true, true)
         } else {
-            default_greedy
+            (default_greedy, false)
         }
     }
 
@@ -1905,6 +2029,10 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
             's' => flags.dotall = true,
             'x' => flags.extended = true,
             'U' => flags.ungreedy = true,
+            // The engine's `$` anchor is already strict, which is precisely
+            // PCRE_DOLLAR_ENDONLY semantics. Accept the modifier so generated
+            // framework patterns can state that requirement explicitly.
+            'D' => {}
             _ => return Err(format!("Unknown modifier '{}'", ch)),
         }
     }

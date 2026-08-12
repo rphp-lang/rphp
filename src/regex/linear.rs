@@ -87,6 +87,7 @@ where
             if !visitor(CaptureView {
                 groups: &groups,
                 named_groups: &regex.named_groups,
+                mark: None,
             })? {
                 break;
             }
@@ -133,6 +134,7 @@ fn match_no_capture(node: &Node, pos: usize, chars: &[char], flags: RegexFlags) 
                         min,
                         max,
                         greedy,
+                        ..
                     } => match_terminal_quantifier(
                         inner, *min, *max, *greedy, current, chars, flags,
                     )?,
@@ -146,6 +148,7 @@ fn match_no_capture(node: &Node, pos: usize, chars: &[char], flags: RegexFlags) 
             min,
             max,
             greedy,
+            ..
         } => match_terminal_quantifier(inner, *min, *max, *greedy, pos, chars, flags),
         _ => match_atom(node, pos, chars, flags),
     }

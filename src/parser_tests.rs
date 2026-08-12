@@ -55,7 +55,7 @@ fn test_parse_foreach_value_reference() {
         .unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let Stmt::Foreach {
-        value_var,
+        value,
         key_var,
         by_ref,
         ..
@@ -63,9 +63,29 @@ fn test_parse_foreach_value_reference() {
     else {
         panic!("expected foreach statement");
     };
-    assert_eq!(value_var, "value");
+    assert_eq!(value, &ForeachTarget::Variable("value".into()));
     assert_eq!(key_var.as_deref(), Some("key"));
     assert!(*by_ref);
+}
+
+#[test]
+fn test_parse_foreach_destructuring_target() {
+    let tokens = Lexer::new("<?php foreach ($rows as $key => [$left, $right]) {}")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &stmts[0],
+        Stmt::Foreach {
+            key_var: Some(key),
+            value: ForeachTarget::Destructure(targets),
+            by_ref: false,
+            ..
+        } if key == "key" && targets == &vec![
+            ListTarget::Variable("left".into()),
+            ListTarget::Variable("right".into()),
+        ]
+    ));
 }
 
 #[test]
@@ -131,6 +151,21 @@ fn test_parse_first_class_callable_and_argument_unpack() {
 }
 
 #[test]
+fn test_parse_static_first_class_callable() {
+    let tokens = Lexer::new("<?php $callable = self::handleError(...);")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &stmts[0],
+        Stmt::Assign {
+            expr: Expr::FirstClassCallable(_),
+            ..
+        }
+    ));
+}
+
+#[test]
 fn test_parse_error_control_operator() {
     let tokens = Lexer::new("<?php @trigger_error('hidden');")
         .tokenize()
@@ -141,6 +176,28 @@ fn test_parse_error_control_operator() {
         Stmt::ExprStmt(Expr::ErrorSuppress(inner))
             if matches!(inner.as_ref(), Expr::FunctionCall { name, .. } if name == "trigger_error")
     ));
+}
+
+#[test]
+fn test_parse_keyword_method_name() {
+    let tokens = Lexer::new("<?php $matcher->match('/health');")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &stmts[0],
+        Stmt::ExprStmt(Expr::MethodCall { method, .. }) if method == "match"
+    ));
+}
+
+#[test]
+fn test_parse_keyword_method_declaration() {
+    let tokens = Lexer::new(
+        "<?php class Matcher { public function match(string $path): array { return []; } }",
+    )
+    .tokenize()
+    .unwrap();
+    Parser::new(tokens).parse().unwrap();
 }
 
 #[test]

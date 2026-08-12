@@ -459,3 +459,13 @@ fn array_replace_overwrites_string_and_integer_keys_across_inputs() {
         "final:one"
     );
 }
+
+#[test]
+fn foreach_destructures_values_with_optional_keys() {
+    assert_eq!(
+        run_php(
+            "<?php foreach ([[1, 2], [3, 4]] as $key => [$left, $right]) { echo $key, ':', $left + $right, '|'; }"
+        ),
+        "0:3|1:7|"
+    );
+}

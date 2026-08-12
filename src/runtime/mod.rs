@@ -979,6 +979,11 @@ impl ExecutorGlobals {
         let id = self.next_class_id;
         self.next_class_id += 1;
         class_def.class_id = id;
+        let own_property_names = class_def
+            .properties
+            .iter()
+            .map(|property| property.name.clone())
+            .collect::<std::collections::HashSet<_>>();
         let own_static_names = class_def
             .static_properties
             .iter()
@@ -1068,6 +1073,7 @@ impl ExecutorGlobals {
         // Must happen after parent inheritance so trait methods override inherited ones
         // (matching PHP semantics: trait > parent, class > trait).
         let trait_names = class_def.uses.clone();
+        let mut composed_trait_property_names = std::collections::HashSet::new();
         let mut composed_static_trait_names = std::collections::HashSet::new();
         for trait_name in &trait_names {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
@@ -1082,6 +1088,8 @@ impl ExecutorGlobals {
                     &trait_def.properties,
                     &class_name,
                     trait_name,
+                    &own_property_names,
+                    &mut composed_trait_property_names,
                 )?;
                 merge_trait_static_property_definitions(
                     &mut class_def.static_properties,

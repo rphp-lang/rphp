@@ -274,6 +274,16 @@ echo '|', $fallback, '|', $box->value;
 }
 
 #[test]
+fn test_e2e_null_coalescing_assignment_in_ternary_arms() {
+    assert_eq!(
+        run_php(
+            "<?php $left = null; $right = null; echo true ? $left ??= 3 : 9, '|', false ? 1 : $right ??= 2, '|', $left, '|', $right;"
+        ),
+        "3|2|3|2"
+    );
+}
+
+#[test]
 fn test_e2e_property_and_array_assignment_expressions_produce_values() {
     assert_eq!(
         run_php(

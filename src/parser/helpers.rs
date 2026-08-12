@@ -611,7 +611,10 @@ impl Parser {
 
     /// Check if an expression is a variable-like target (valid for isset/empty/unset).
     fn is_variable_like(expr: &Expr) -> bool {
-        matches!(expr, Expr::Variable(_) | Expr::ArrayAccess { .. })
+        matches!(
+            expr,
+            Expr::Variable(_) | Expr::ArrayAccess { .. } | Expr::PropertyAccess { .. }
+        )
     }
 
     fn is_isset_target(expr: &Expr) -> bool {
@@ -705,7 +708,10 @@ impl Parser {
 
     /// Parse comma-separated list targets (variables, skips, nested brackets).
     /// `end_token` is `)` for list() or `]` for short syntax.
-    fn parse_list_targets(&mut self, end_token: &Token) -> Result<Vec<ListTarget>, String> {
+    pub(super) fn parse_list_targets(
+        &mut self,
+        end_token: &Token,
+    ) -> Result<Vec<ListTarget>, String> {
         let mut targets = Vec::new();
         while self.peek() != *end_token && !self.at_eof() {
             if self.peek() == Token::Comma {

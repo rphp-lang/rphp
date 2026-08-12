@@ -1,0 +1,16 @@
+{
+    "name": "rphp/symfony-routing-fixture",
+    "version": "1.0.0",
+    "description": "Pinned Symfony 7.4 compiled Routing compatibility gate",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2",
+        "symfony/routing": "7.4.15"
+    },
+    "config": {
+        "platform": {
+            "php": "8.2.0"
+        },
+        "sort-packages": true
+    }
+}

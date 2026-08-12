@@ -108,6 +108,27 @@ echo $u->name;
     assert_eq!(out, "default\nAlice");
 }
 
+#[test]
+fn private_trait_properties_use_the_consuming_class_scope() {
+    let out = run_php(
+        r#"<?php
+trait PrivateTraitState {
+    private $value = "trait";
+    private static $shared = "static";
+    public function readFromTrait() { return $this->value . ":" . self::$shared; }
+}
+class PrivateTraitConsumer {
+    use PrivateTraitState;
+    public function writeFromClass($value) { $this->value = $value; self::$shared = "class"; }
+}
+$consumer = new PrivateTraitConsumer();
+$consumer->writeFromClass("instance");
+echo $consumer->readFromTrait();
+"#,
+    );
+    assert_eq!(out, "instance:class");
+}
+
 // ─── Class method overrides trait ─────────────────────────────────
 
 #[test]

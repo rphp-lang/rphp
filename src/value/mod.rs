@@ -506,6 +506,40 @@ impl DynamicPropertyMap {
         }
     }
 
+    pub(crate) fn remove(&mut self, key: &str) -> bool {
+        match &mut self.storage {
+            DynamicPropertyStorage::Small(small) => {
+                let Some(position) = small.find(key) else {
+                    return false;
+                };
+                let len = small.len();
+                for index in position..len - 1 {
+                    small.entries[index] = small.entries[index + 1].take();
+                }
+                small.entries[len - 1] = None;
+            }
+            DynamicPropertyStorage::Linear(linear) => {
+                let Some(position) = linear.find(key) else {
+                    return false;
+                };
+                linear.entries.remove(position);
+            }
+            DynamicPropertyStorage::Indexed(indexed) => {
+                let Some(position) = indexed.find(key) else {
+                    return false;
+                };
+                indexed.entries.remove(position);
+                indexed.index.remove(key);
+                for new_position in position..indexed.entries.len() {
+                    indexed
+                        .index
+                        .insert(indexed.entries[new_position].0.clone(), new_position);
+                }
+            }
+        }
+        true
+    }
+
     #[inline]
     pub(crate) fn contains_key(&self, key: &str) -> bool {
         self.get(key).is_some()
@@ -719,6 +753,18 @@ impl PhpObject {
                 .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(1)))
                 .insert(key, value);
             None
+        }
+    }
+
+    /// Unset a declared property or remove a dynamic property.
+    pub fn unset_property(&mut self, key: &str) -> bool {
+        if let Some(slot) = self.property_layout.slot(key) {
+            self.property_values[slot] = Value::undef();
+            true
+        } else {
+            self.dynamic_properties
+                .as_mut()
+                .is_some_and(|properties| properties.remove(key))
         }
     }
 
@@ -3809,6 +3855,10 @@ impl Value {
         match self.value_type() {
             ValueType::Long => Some(unsafe { self.data.long } as f64),
             ValueType::Double => Some(unsafe { self.data.double }),
+            ValueType::True => Some(1.0),
+            ValueType::False | ValueType::Null | ValueType::Undef => Some(0.0),
+            ValueType::String => self.as_str().unwrap().trim().parse::<f64>().ok(),
+            ValueType::Resource => Some(self.as_resource_id().unwrap() as f64),
             _ => None,
         }
     }
@@ -4108,6 +4158,18 @@ impl Value {
             (*(self.data.ptr as *const UnsafeCell<Value>)).get()
         } else {
             self.data.ptr as *mut Value
+        }
+    }
+
+    /// Follow a PHP reference while tying the shared borrow to this value.
+    #[inline]
+    pub fn dereferenced(&self) -> &Value {
+        if self.is_reference() {
+            // SAFETY: both reference representations keep their target live
+            // for at least as long as the Value through which it is reached.
+            unsafe { &*self.as_ref_ptr() }
+        } else {
+            self
         }
     }
 

@@ -9972,6 +9972,37 @@ responses, output/header transport, or a real HTTP adapter. S1 now advances to
 compiled Routing and then a small prebuilt DependencyInjection container; the
 broader request/response and repeated-worker contract remains the S4 gate.
 
+#### Symfony compiled Routing S1 gate (2026-08-12)
+
+The third S1 component gate now passes with unmodified vendor sources. The
+repository fixture pins `symfony/routing` v7.4.15 at
+`80c0a93d3f8e7499f716204a1fb38ead942a7a2b` and
+`symfony/deprecation-contracts` v3.7.1 at
+`f3202fa1b5097b0af062dc978b32ecf63404e31d`. Reference PHP performs a clean
+install from that exact lock with the checksum-pinned Composer 2.8.12 PHAR;
+the generated autoloader and vendor sources then run unchanged under RPHP.
+
+The fixture builds a static health route and a constrained dynamic article
+route, obtains the real `CompiledUrlMatcherDumper` table and executes
+`CompiledUrlMatcher`. PHP and RPHP must both print exactly
+`health|article_show:rphp-8:html|405:GET,HEAD|404`, covering successful static
+and dynamic matches, parameter/default extraction, method rejection and a
+missing route. The local entry point is `scripts/test-symfony-routing-s1.sh`;
+CI owns the matching `Symfony Routing S1` job.
+
+The compatibility work closes shared PHP paths rather than recognizing
+Symfony symbols. It includes general expression/parser coverage, trait-private
+property composition, object casts and unsets, destructuring writes, goto,
+late-static callback scope, typed by-reference arguments, PHP arithmetic
+coercion, the core exception constructor contract and PCRE possessive,
+branch-reset, MARK and `D` behavior. Focused parser, runtime, regex and E2E
+regressions retain these contracts independently of the fixture.
+
+This is a bounded admission of the exercised compiled matching path. It does
+not yet claim URL generation, route loader formats, localized or host routes,
+expression-language conditions or the S3 cold route-cache build. S1 now
+advances to a small prebuilt DependencyInjection container.
+
 ### S1/S3 blockers: language and object model
 
 Close these source-level gaps against focused PHPT cases before treating a

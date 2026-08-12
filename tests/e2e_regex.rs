@@ -227,6 +227,26 @@ fn test_preg_match_named_group_in_matches() {
     );
 }
 
+#[test]
+fn test_preg_match_branch_reset_and_mark_capture() {
+    assert_eq!(
+        run_php(
+            r#"<?php preg_match('{^(?|/a/([a-z]+)(*:28)|/b/([0-9]+)(*:42))$}D', '/b/12', $m); echo $m[1], ':', $m['MARK'];"#
+        ),
+        "12:42"
+    );
+}
+
+#[test]
+fn test_preg_match_all_publishes_branch_marks() {
+    assert_eq!(
+        run_php(
+            r#"<?php preg_match_all('{(?|/a/([a-z]+)(*:28)|/b/([0-9]+)(*:42))}D', '/a/x /b/12', $m); echo $m[1][0], ':', $m[1][1], ':', $m['MARK'][0], ':', $m['MARK'][1];"#
+        ),
+        "x:12:28:42"
+    );
+}
+
 // === Named backreferences ===
 
 #[test]
@@ -427,5 +447,14 @@ fn test_preg_quote_escapes_regex_metacharacters_and_delimiter() {
     assert_eq!(
         run_php("<?php echo preg_quote('a.b/c+', '/');"),
         "a\\.b\\/c\\+"
+    );
+}
+#[test]
+fn test_preg_match_all_offset_capture_set_order() {
+    assert_eq!(
+        run_php(
+            "<?php preg_match_all('/\\{(!)?(\\w+)\\}/', '/a/{id}/{!slug}', $matches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER); foreach ($matches as $match) { echo $match[0][0] . ':' . $match[0][1] . ':' . $match[1][1] . ':' . $match[2][0] . '|'; }"
+        ),
+        "{id}:3:-1:id|{!slug}:8:9:slug|"
     );
 }

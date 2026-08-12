@@ -30,6 +30,25 @@ fn test_quantifier_star() {
 }
 
 #[test]
+fn test_possessive_quantifier_does_not_backtrack() {
+    let ordinary = Regex::new("a+a", RegexFlags::default()).unwrap();
+    let possessive = Regex::new("a++a", RegexFlags::default()).unwrap();
+    assert!(ordinary.captures("aa").is_some());
+    assert!(possessive.captures("aa").is_none());
+
+    let symfony_group = Regex::new(r"\?P<([^>]++)>", RegexFlags::default()).unwrap();
+    assert_eq!(
+        symfony_group
+            .captures("?P<slug>")
+            .unwrap()
+            .get(1)
+            .unwrap()
+            .as_str("?P<slug>"),
+        "slug"
+    );
+}
+
+#[test]
 fn test_terminal_quantifier_greedy_lazy_and_minimum() {
     let greedy = Regex::new("a+", RegexFlags::default()).unwrap();
     let lazy = Regex::new("a+?", RegexFlags::default()).unwrap();

@@ -356,7 +356,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::Add_CvTmp => {
                 let base = frame as *const Value;
                 let cv_ptr = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
-                let op1 = if cv_ptr.is_reference() { unsafe { &*cv_ptr.as_ref_ptr() } } else { cv_ptr };
+                let op1 = cv_ptr.dereferenced();
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
@@ -377,7 +377,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Sub_CvConst => {
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op1 = op1_cv.dereferenced();
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     // Peek ahead: if next instruction is SendVal consuming our TMP result,
@@ -937,6 +937,30 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 let mut arr = PhpArray::new();
                                 arr.push(val.clone());
                                 Value::array(arr)
+                            }
+                        }
+                    }
+                    5 => {                                   // (object)
+                        match val.value_type() {
+                            ValueType::Object => val.clone(),
+                            ValueType::Array => {
+                                let mut object = PhpObject::std_class(HashMap::new());
+                                for (key, value) in val.as_array().unwrap().iter() {
+                                    let key = match key {
+                                        ArrayKey::Int(key) => key.to_string(),
+                                        ArrayKey::String(key) => key,
+                                    };
+                                    object.set_property(&key, value.clone());
+                                }
+                                Value::object(object)
+                            }
+                            ValueType::Null | ValueType::Undef => {
+                                Value::object(PhpObject::std_class(HashMap::new()))
+                            }
+                            _ => {
+                                let mut properties = HashMap::with_capacity(1);
+                                properties.insert("scalar".to_string(), val.clone());
+                                Value::object(PhpObject::std_class(properties))
                             }
                         }
                     }
@@ -2118,6 +2142,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         Some(v) => Value::long(v),
                         None => Value::double(n as f64 + 1.0),
                     }
+                } else if matches!(old.value_type(), ValueType::Null | ValueType::Undef) {
+                    Value::long(1)
+                } else if matches!(old.value_type(), ValueType::True | ValueType::False) {
+                    // PHP 8 leaves booleans unchanged for increment/decrement.
+                    old.clone()
                 } else if let Some(d) = old.to_double() {
                     Value::double(d + 1.0)
                 } else {
@@ -2143,6 +2172,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         unsafe { slot_set(result_ptr, new_val.clone()) };
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
+                } else if matches!(
+                    old.value_type(),
+                    ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False
+                ) {
+                    // PHP 8 leaves null and booleans unchanged on decrement.
+                    if opline.result_type != OpType::Unused {
+                        // SAFETY: a used decrement result names a compiler-owned,
+                        // initialized slot in the live frame.
+                        let result_ptr = unsafe {
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                        };
+                        unsafe { slot_set(result_ptr, old.clone()) };
+                    }
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
@@ -2151,7 +2193,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
                 } else {
-                    // PHP: null-- has no effect, value stays null
+                    // Non-numeric values retain the legacy no-effect path.
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                         unsafe { slot_set(result_ptr, Value::null()) };
@@ -2168,6 +2210,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         Some(v) => Value::long(v),
                         None => Value::double(n as f64 + 1.0),
                     }
+                } else if matches!(old.value_type(), ValueType::Null | ValueType::Undef) {
+                    Value::long(1)
+                } else if matches!(old.value_type(), ValueType::True | ValueType::False) {
+                    old.clone()
                 } else if let Some(d) = old.to_double() {
                     Value::double(d + 1.0)
                 } else {
@@ -2193,6 +2239,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         unsafe { slot_set(result_ptr, old.clone()) };
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
+                } else if matches!(
+                    old.value_type(),
+                    ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False
+                ) {
+                    if opline.result_type != OpType::Unused {
+                        // SAFETY: a used decrement result names a compiler-owned,
+                        // initialized slot in the live frame.
+                        let result_ptr = unsafe {
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                        };
+                        unsafe { slot_set(result_ptr, old.clone()) };
+                    }
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
@@ -2201,7 +2259,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
                 } else {
-                    // PHP: null-- has no effect, value stays null
+                    // Non-numeric values retain the legacy no-effect path.
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                         unsafe { slot_set(result_ptr, Value::null()) };
@@ -2217,7 +2275,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else {
                     PhpArray::with_packed_capacity(capacity)
                 };
-                unsafe { slot_set(result_ptr, Value::array(array)) };
+                // SAFETY: InitArray's result is a compiler-owned TMP in this
+                // live frame; frame_tmp_set records its heap ownership.
+                unsafe { frame_tmp_set(frame, result_ptr, Value::array(array)) };
             }
 
             OpCode::AddArrayElement => {
@@ -2476,6 +2536,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
                 _ => {}
             },
+
+            OpCode::UnsetObj => {
+                // SAFETY: the compiler validated both operand descriptors;
+                // `frame` and `op_array` stay live for this dispatch step.
+                let object = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                if object.value_type() == ValueType::Object {
+                    let property = unsafe {
+                        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+                    }
+                    .as_str()
+                    .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?;
+                    object.as_object_mut().unwrap().unset_property(property);
+                }
+            }
 
             OpCode::AssignObjProp => {
                 // ── Cache-hit fast path for public, non-enum, non-readonly properties ──
@@ -3175,7 +3251,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::InitDynamicCall => {
-                op_init_dynamic_call(eg, frame, op_array, opline)?;
+                match op_init_dynamic_call(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::CheckGenericArgs => {

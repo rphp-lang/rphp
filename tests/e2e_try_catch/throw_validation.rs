@@ -120,11 +120,12 @@ try {
 
 #[test]
 fn test_new_exception_extra_args_too_many() {
-    // Exception("msg", "extra") — only 1 public arg ($message), so 2 is too many
+    // Exception accepts message, code and previous; a fourth public argument
+    // must still fail the internal-function arity check.
     let err = run_php_expect_error(
         r#"<?php
 try {
-    throw new Exception("msg", "extra");
+    throw new Exception("msg", 1, null, "extra");
 } catch (Exception $e) {
     echo $e->getMessage();
 }

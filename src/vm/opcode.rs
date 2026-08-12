@@ -165,6 +165,8 @@ pub enum OpCode {
     /// Test one object property without materializing it or emitting ordinary
     /// missing/non-object read diagnostics.
     IssetObj = 146,
+    /// Unset one object property: op1=object, op2=CONST property name.
+    UnsetObj = 147,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

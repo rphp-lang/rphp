@@ -397,6 +397,7 @@ fn check_type_hint(
     strict: bool,
     callee_class: Option<&str>,
 ) -> bool {
+    let val = val.dereferenced();
     check_type_hint_in_scopes(val, hint, eg, strict, callee_class, callee_class)
 }
 
@@ -2029,15 +2030,19 @@ fn execute_full_call<'a>(
                 break;
             }
             let cv_idx = func_common.sig.param_cv_index(i as u32);
-            let val = unsafe { &*(*call).cv(cv_idx) };
+            // SAFETY: `call` is the live callee frame and `param_cv_index`
+            // maps this present public argument to an initialized CV slot.
+            let val = unsafe { &*(*call).cv(cv_idx) }.dereferenced();
             if val.is_undef() {
                 continue;
             }
             if !check_type_hint(val, hint, eg, op_array.strict_types, callee_class_ref) {
+                let function_name = registered_function_name(eg, unsafe { (*call).func });
                 type_error = Some(make_error_value(
                     "TypeError",
                     &format!(
-                        "Argument #{} must be of type {}, {} given",
+                        "{}(): Argument #{} must be of type {}, {} given",
+                        function_name,
                         i + 1,
                         hint.display_name(),
                         val.type_name()

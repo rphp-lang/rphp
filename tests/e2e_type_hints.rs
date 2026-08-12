@@ -34,3 +34,13 @@ include!("e2e_type_hints/string_plans.rs");
 include!("e2e_type_hints/object_plans.rs");
 include!("e2e_type_hints/static_property_hints.rs");
 include!("e2e_type_hints/instance_property_hints.rs");
+
+#[test]
+fn typed_by_reference_parameter_checks_the_referenced_value() {
+    assert_eq!(
+        run_php(
+            "<?php function appendValue(array &$values): void { $values[] = 42; } $values = []; appendValue($values); echo $values[0];"
+        ),
+        "42"
+    );
+}

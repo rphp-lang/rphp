@@ -7,17 +7,18 @@ impl Parser {
         }
 
         let expr = self.parse_ternary()?;
+        self.finish_assignment_tail(expr)
+    }
 
+    fn finish_assignment_tail(&mut self, expr: Expr) -> Result<Expr, String> {
         if self.peek() == Token::QuestionQuestionAssign {
-            return self.finish_coalesce_assignment_expression(expr);
+            self.finish_coalesce_assignment_expression(expr)
+        } else if self.peek() == Token::Assign {
+            // Handle assignment as expression: $var = expr
+            self.finish_assignment_expression(expr)
+        } else {
+            Ok(expr)
         }
-
-        // Handle assignment as expression: $var = expr
-        if self.peek() == Token::Assign {
-            return self.finish_assignment_expression(expr);
-        }
-
-        Ok(expr)
     }
 
     fn finish_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
@@ -127,9 +128,15 @@ impl Parser {
                 return Ok(result);
             }
 
+            // PHP parses the middle arm as a complete expression. In
+            // particular, assignments such as `$value ??= fallback()` are
+            // valid here even though assignment binds below the ternary
+            // operator in the surrounding expression.
             let then_expr = self.parse_ternary()?;
+            let then_expr = self.finish_assignment_tail(then_expr)?;
             self.expect(&Token::Colon)?;
             let else_expr = self.parse_null_coalesce()?;
+            let else_expr = self.finish_assignment_tail(else_expr)?;
 
             if self.peek() == Token::Question {
                 return Err("Unparenthesized `a ? b : c ? d : e` is not supported. Use explicit parentheses.".into());
@@ -445,7 +452,7 @@ impl Parser {
                 Ok(Expr::Clone(Box::new(expr)))
             }
             Token::LParen => {
-                // Check for type cast: (int), (string), (float), (bool), (array)
+                // Check for type cast: (int), (string), (float), (bool), (array), (object)
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
                 let cast_type = match &next {
                     Token::Identifier(name) => match name.as_str() {
@@ -453,6 +460,7 @@ impl Parser {
                         "float" | "double" | "real" => Some(CastType::Float),
                         "string" => Some(CastType::String),
                         "bool" | "boolean" => Some(CastType::Bool),
+                        "object" => Some(CastType::Object),
                         _ => None,
                     },
                     Token::ArrayKw => Some(CastType::Array),

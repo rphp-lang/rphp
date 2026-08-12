@@ -43,6 +43,26 @@ impl Parser {
         }
 
         self.advance();
+        if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+            if !generic_args.is_empty() {
+                return Err("Generic first-class static callables are not supported yet".into());
+            }
+            self.advance();
+            self.advance();
+            return Ok(Expr::FirstClassCallable(Box::new(Expr::ArrayLiteral(vec![
+                ArrayElement {
+                    key: None,
+                    value: Expr::ClassConstant {
+                        class_name,
+                        constant: "class".to_string(),
+                    },
+                },
+                ArrayElement {
+                    key: None,
+                    value: Expr::StringLiteral(member),
+                },
+            ]))));
+        }
         let args = self.parse_call_args()?;
         Ok(Expr::StaticCall {
             class_name,
@@ -140,16 +160,14 @@ impl Parser {
                 Token::Arrow | Token::NullSafe => {
                     let nullsafe = matches!(self.peek(), Token::NullSafe);
                     self.advance();
-                    let member = match self.advance() {
-                        Token::Identifier(name) => name,
-                        other => {
-                            return Err(format!(
-                                "Expected property/method name after {}, got {:?}",
-                                if nullsafe { "?->" } else { "->" },
-                                other
-                            ));
-                        }
-                    };
+                    let token = self.advance();
+                    let member = Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                        format!(
+                            "Expected property/method name after {}, got {:?}",
+                            if nullsafe { "?->" } else { "->" },
+                            token
+                        )
+                    })?;
                     let generic_args = self.parse_optional_turbofish()?;
                     if self.peek() == Token::LParen {
                         self.advance();

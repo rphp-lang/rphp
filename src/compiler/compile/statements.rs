@@ -657,6 +657,8 @@ impl Compiler {
         }
         match stmt {
             Stmt::Noop => {}
+            Stmt::Label(name) => self.define_label(name)?,
+            Stmt::Goto(name) => self.emit_goto(name),
             Stmt::Echo(expressions) => {
                 for expr in expressions {
                     let (operand, op_type) = self.compile_expr(expr);
@@ -826,6 +828,7 @@ impl Compiler {
                 for s in body {
                     func_compiler.compile_stmt(s)?;
                 }
+                func_compiler.finalize_gotos()?;
                 let null_idx = func_compiler.add_literal(Value::null());
                 let mut ret = Instruction::new(OpCode::Return);
                 ret.op1_type = OpType::Const;
@@ -1005,7 +1008,11 @@ impl Compiler {
                 // Loop start: compile condition (or always true)
                 let loop_start = self.instructions.len();
 
-                let jmpz_idx = if let Some(cond) = condition {
+                let jmpz_idx = if let Some((cond, preceding)) = condition.split_last() {
+                    for expression in preceding {
+                        let (result, result_type) = self.compile_expr(expression);
+                        self.discard_unused_expr_result(result, result_type);
+                    }
                     let (cond_op, cond_type) = self.compile_expr(cond);
                     let idx = self.instructions.len();
                     let mut jmpz = Instruction::new(OpCode::JmpZ);
@@ -1038,7 +1045,7 @@ impl Compiler {
                 }
 
                 // Compile update expression (discard result)
-                if let Some(upd) = update {
+                for upd in update {
                     let (result, result_type) = self.compile_expr(upd);
                     self.discard_unused_expr_result(result, result_type);
                 }
@@ -1279,7 +1286,7 @@ impl Compiler {
             }
             Stmt::Foreach {
                 array,
-                value_var,
+                value,
                 key_var,
                 by_ref,
                 body,
@@ -1309,7 +1316,13 @@ impl Compiler {
 
                 // Loop start: ForeachNext fetches key/value, jumps if done
                 let loop_start = self.instructions.len();
-                let val_cv = self.resolve_cv(value_var);
+                let (val_cv, destructure) = match value {
+                    ForeachTarget::Variable(value_var) => (self.resolve_cv(value_var), None),
+                    ForeachTarget::Destructure(targets) => {
+                        let name = format!("\0foreach_destructure_{foreach_init_idx}");
+                        (self.resolve_cv(&name), Some(targets))
+                    }
+                };
                 let key_cv = key_var.as_ref().map(|k| self.resolve_cv(k));
 
                 let done_tmp = self.alloc_tmp();
@@ -1340,6 +1353,10 @@ impl Compiler {
                 jmpz.op1_type = OpType::Tmp;
                 jmpz.op2 = 0; // placeholder: after loop
                 self.instructions.push(jmpz);
+
+                if let Some(targets) = destructure {
+                    self.compile_list_targets(targets, val_cv, OpType::Cv, 0)?;
+                }
 
                 // Push loop context — continue jumps to loop_start (ForeachNext)
                 self.loop_stack.push(LoopContext {
@@ -1416,6 +1433,20 @@ impl Compiler {
                             self.instructions.push(unset);
                             self.rebuild_mutable_array_path(&path);
                             self.write_back_mutable_array_root(&path);
+                        }
+                        Expr::PropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                        } => {
+                            let (object, object_type) = self.compile_expr(object);
+                            let property = self.add_literal(Value::string(property.clone()));
+                            let mut unset = Instruction::new(OpCode::UnsetObj);
+                            unset.op1 = object;
+                            unset.op1_type = object_type;
+                            unset.op2 = property;
+                            unset.op2_type = OpType::Const;
+                            self.instructions.push(unset);
                         }
                         _ => return Err("unset() requires a variable".into()),
                     }
@@ -1676,7 +1707,7 @@ impl Compiler {
                 assign.op2 = rhs_op;
                 self.instructions.push(assign);
                 // For each target, emit FetchDimR + AssignCv
-                self.compile_list_targets(targets, rhs_tmp, 0)?;
+                self.compile_list_targets(targets, rhs_tmp, OpType::Tmp, 0)?;
             }
             Stmt::Global(vars) => {
                 for var_name in vars {
@@ -1835,6 +1866,7 @@ impl Compiler {
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
+                    func_compiler.finalize_gotos()?;
                     let null_idx = func_compiler.add_literal(Value::null());
                     let mut ret = Instruction::new(OpCode::Return);
                     ret.op1_type = OpType::Const;
@@ -2212,6 +2244,7 @@ impl Compiler {
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
+                    func_compiler.finalize_gotos()?;
                     let null_idx = func_compiler.add_literal(Value::null());
                     let mut ret = Instruction::new(OpCode::Return);
                     ret.op1_type = OpType::Const;
@@ -2394,6 +2427,7 @@ impl Compiler {
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
+                    func_compiler.finalize_gotos()?;
                     let null_idx = func_compiler.add_literal(Value::null());
                     let mut ret = Instruction::new(OpCode::Return);
                     ret.op1_type = OpType::Const;

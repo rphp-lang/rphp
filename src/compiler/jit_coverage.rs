@@ -119,7 +119,8 @@ pub(super) fn loop_miss_reason(
             | OpCode::Instanceof
             | OpCode::AssignObjDim
             | OpCode::NullSafeCheck
-            | OpCode::CloneObj => has_object_shape = true,
+            | OpCode::CloneObj
+            | OpCode::UnsetObj => has_object_shape = true,
 
             OpCode::InitFcall
             | OpCode::DoFcall

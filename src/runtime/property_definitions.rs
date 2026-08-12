@@ -265,7 +265,11 @@ fn merge_trait_static_property_definitions(
         }
 
         let mut definition = property.clone();
-        definition.declaring_class = trait_name.to_string();
+        // PHP composes a trait property into each consuming class. The class
+        // is therefore the declaring scope for visibility and the private
+        // storage key; the trait name is only relevant while validating the
+        // composition above.
+        definition.declaring_class = class_name.to_string();
         definition.type_scope = class_name.to_string();
         if let Some(index) = existing {
             // A first trait declaration in this class overrides inherited
@@ -288,16 +292,21 @@ fn merge_trait_property_definitions(
     source: &[PropertyDefinition],
     class_name: &str,
     trait_name: &str,
+    own_names: &std::collections::HashSet<String>,
+    composed_names: &mut std::collections::HashSet<String>,
 ) -> Result<(), String> {
-    let mut additions = Vec::new();
     for property in source {
-        if let Some(existing_property) = target
+        let existing = target
             .iter()
-            .find(|candidate| candidate.name == property.name)
-        {
-            if existing_property.declaring_class == class_name {
-                continue;
-            }
+            .position(|candidate| candidate.name == property.name);
+        if own_names.contains(&property.name) {
+            // Preserve the existing class-over-trait behavior. Compatibility
+            // of an explicit class declaration is handled by the declaration
+            // validation path.
+            continue;
+        }
+        if composed_names.contains(&property.name) {
+            let existing_property = &target[existing.expect("composed trait property")];
             let compatible = property_definitions_are_compatible(existing_property, property);
             if !compatible {
                 return Err(format!(
@@ -308,11 +317,18 @@ fn merge_trait_property_definitions(
             }
             continue;
         }
+
         let mut addition = property.clone();
-        addition.declaring_class = trait_name.to_string();
+        addition.declaring_class = class_name.to_string();
         addition.type_scope = class_name.to_string();
-        additions.push(addition);
+        if let Some(index) = existing {
+            // The first trait declaration in this class replaces inherited
+            // metadata, just as the static-property composition path does.
+            target[index] = addition;
+        } else {
+            target.push(addition);
+        }
+        composed_names.insert(property.name.clone());
     }
-    target.extend(additions);
     Ok(())
 }

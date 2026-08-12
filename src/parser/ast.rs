@@ -8,6 +8,12 @@ pub enum ListTarget {
     KeyedVariable { key: Expr, var: String }, // explicit key: [0 => $a, 2 => $c]
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForeachTarget {
+    Variable(String),
+    Destructure(Vec<ListTarget>),
+}
+
 /// A call-site argument: either positional or named (PHP 8).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallArg {
@@ -297,6 +303,7 @@ pub enum CastType {
     String = 2,
     Bool = 3,
     Array = 4,
+    Object = 5,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -403,6 +410,8 @@ pub enum UseKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Noop,
+    Label(String),
+    Goto(String),
     Echo(Vec<Expr>),
     Assign {
         var: String,
@@ -428,8 +437,8 @@ pub enum Stmt {
     },
     For {
         init: Vec<Stmt>,
-        condition: Option<Expr>,
-        update: Option<Expr>,
+        condition: Vec<Expr>,
+        update: Vec<Expr>,
         body: Vec<Stmt>,
     },
     Function {
@@ -480,7 +489,7 @@ pub enum Stmt {
     },
     Foreach {
         array: Expr,
-        value_var: String,
+        value: ForeachTarget,
         key_var: Option<String>,
         by_ref: bool,
         body: Vec<Stmt>,

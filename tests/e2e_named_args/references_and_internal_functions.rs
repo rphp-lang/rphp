@@ -103,6 +103,20 @@ echo $e->getMessage();
 }
 
 #[test]
+fn test_exception_constructor_code_and_previous() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$previous = new Exception("first", 7);
+$error = new RuntimeException("second", 42, $previous);
+echo $error->getMessage(), ':', $error->getCode(), ':', $error->getPrevious()->getMessage();
+"#
+        ),
+        "second:42:first"
+    );
+}
+
+#[test]
 fn test_named_args_str_replace_internal() {
     assert_eq!(
         run_php(

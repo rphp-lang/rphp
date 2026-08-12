@@ -21,6 +21,22 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
+        if let Token::Identifier(name) = self.peek() {
+            if self.peek_at(1) == Token::Colon {
+                self.advance();
+                self.advance();
+                return Ok(Stmt::Label(name));
+            }
+            if name.eq_ignore_ascii_case("goto") {
+                self.advance();
+                let label = match self.advance() {
+                    Token::Identifier(label) => label,
+                    token => return Err(format!("Expected label after goto, got {token:?}")),
+                };
+                self.expect(&Token::Semicolon)?;
+                return Ok(Stmt::Goto(label));
+            }
+        }
         match self.peek() {
             Token::Semicolon => {
                 self.advance();
@@ -443,28 +459,36 @@ impl Parser {
                 self.expect(&Token::LParen)?;
 
                 // Init: optional assignment or expression before first ;
-                let init = if self.peek() == Token::Semicolon {
-                    vec![]
-                } else {
-                    let stmt = self.parse_for_init()?;
-                    vec![stmt]
-                };
+                let mut init = Vec::new();
+                while self.peek() != Token::Semicolon {
+                    init.push(self.parse_for_init()?);
+                    if self.peek() != Token::Comma {
+                        break;
+                    }
+                    self.advance();
+                }
                 self.expect(&Token::Semicolon)?;
 
-                // Condition: optional expression before second ;
-                let condition = if self.peek() == Token::Semicolon {
-                    None
-                } else {
-                    Some(self.parse_expr()?)
-                };
+                // Every comma-separated condition is evaluated; the last one
+                // determines whether the loop continues.
+                let mut condition = Vec::new();
+                while self.peek() != Token::Semicolon {
+                    condition.push(self.parse_expr()?);
+                    if self.peek() != Token::Comma {
+                        break;
+                    }
+                    self.advance();
+                }
                 self.expect(&Token::Semicolon)?;
 
-                // Update: optional expression before )
-                let update = if self.peek() == Token::RParen {
-                    None
-                } else {
-                    Some(self.parse_expr()?)
-                };
+                let mut update = Vec::new();
+                while self.peek() != Token::RParen {
+                    update.push(self.parse_expr()?);
+                    if self.peek() != Token::Comma {
+                        break;
+                    }
+                    self.advance();
+                }
                 self.expect(&Token::RParen)?;
 
                 let body = self.parse_block_or_stmt()?;
@@ -480,18 +504,36 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let array = self.parse_expr()?;
                 self.expect(&Token::As)?;
-                // foreach ($arr as $key => $val) or foreach ($arr as $val)
+                // foreach ($arr as $key => $val), foreach ($arr as $val),
+                // and the corresponding destructuring value forms.
                 let first_by_ref = if self.peek() == Token::Ampersand {
                     self.advance();
                     true
                 } else {
                     false
                 };
+                if self.peek() == Token::LBracket {
+                    if first_by_ref {
+                        return Err("Foreach destructuring target cannot be a reference".into());
+                    }
+                    self.advance();
+                    let targets = self.parse_list_targets(&Token::RBracket)?;
+                    self.expect(&Token::RBracket)?;
+                    self.expect(&Token::RParen)?;
+                    let body = self.parse_block_or_stmt()?;
+                    return Ok(Stmt::Foreach {
+                        array,
+                        value: ForeachTarget::Destructure(targets),
+                        key_var: None,
+                        by_ref: false,
+                        body,
+                    });
+                }
                 let first_var = match self.advance() {
                     Token::Variable(name) => name,
-                    other => return Err(format!("Expected variable after 'as', got {:?}", other)),
+                    other => return Err(format!("Expected foreach target after 'as', got {:?}", other)),
                 };
-                let (key_var, value_var, by_ref) = if self.peek() == Token::DoubleArrow {
+                let (key_var, value, by_ref) = if self.peek() == Token::DoubleArrow {
                     if first_by_ref {
                         return Err("Foreach key cannot be a reference".into());
                     }
@@ -502,21 +544,40 @@ impl Parser {
                     } else {
                         false
                     };
-                    let val = match self.advance() {
-                        Token::Variable(name) => name,
-                        other => {
-                            return Err(format!("Expected variable after '=>', got {:?}", other));
+                    let value = if self.peek() == Token::LBracket {
+                        if by_ref {
+                            return Err(
+                                "Foreach destructuring target cannot be a reference".into()
+                            );
+                        }
+                        self.advance();
+                        let targets = self.parse_list_targets(&Token::RBracket)?;
+                        self.expect(&Token::RBracket)?;
+                        ForeachTarget::Destructure(targets)
+                    } else {
+                        match self.advance() {
+                            Token::Variable(name) => ForeachTarget::Variable(name),
+                            other => {
+                                return Err(format!(
+                                    "Expected foreach target after '=>', got {:?}",
+                                    other
+                                ));
+                            }
                         }
                     };
-                    (Some(first_var), val, by_ref)
+                    (Some(first_var), value, by_ref)
                 } else {
-                    (None, first_var, first_by_ref)
+                    (
+                        None,
+                        ForeachTarget::Variable(first_var),
+                        first_by_ref,
+                    )
                 };
                 self.expect(&Token::RParen)?;
                 let body = self.parse_block_or_stmt()?;
                 Ok(Stmt::Foreach {
                     array,
-                    value_var,
+                    value,
                     key_var,
                     by_ref,
                     body,

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{run_php, run_php_expect_error};
+use common::run_php;
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
@@ -194,9 +194,10 @@ echo $sum . '|' . $row['value'];
 }
 
 #[test]
-fn missing_long_projection_preserves_canonical_error() {
-    let error = run_php_expect_error(
-        r#"<?php
+fn missing_long_projection_preserves_canonical_null_arithmetic() {
+    assert_eq!(
+        run_php(
+            r#"<?php
 $json = '{"other":10}';
 $sum = 0;
 for ($i = 0; $i < 100; $i++) {
@@ -205,13 +206,9 @@ for ($i = 0; $i < 100; $i++) {
 }
 echo $sum;
 "#,
+        ),
+        "0"
     );
-    match error {
-        rphp::vm::execute::VmError::Fatal(message) => {
-            assert!(message.contains("Unsupported operand types"));
-        }
-        other => panic!("expected canonical arithmetic error, got {other:?}"),
-    }
 }
 
 #[test]

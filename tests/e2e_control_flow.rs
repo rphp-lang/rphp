@@ -380,3 +380,22 @@ fn test_parenthesized_expression_statement_can_invoke_closure() {
         "42"
     );
 }
+#[test]
+fn test_for_supports_comma_separated_sections() {
+    assert_eq!(
+        run_php(
+            "<?php $out = ''; for ($i = 0, $j = 3; $ignored = true, $i < 3; ++$i, --$j) { $out .= $i . $j; } echo $out;"
+        ),
+        "031221"
+    );
+}
+
+#[test]
+fn test_goto_supports_forward_and_backward_labels() {
+    assert_eq!(
+        run_php(
+            "<?php goto start; echo 'skip'; start: $i = 0; again: echo $i; if (++$i < 3) { goto again; }"
+        ),
+        "012"
+    );
+}

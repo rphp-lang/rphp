@@ -170,10 +170,9 @@ impl Parser {
             if self.peek() == Token::Function {
                 // Method
                 self.advance(); // consume 'function'
-                let method_name = match self.advance() {
-                    Token::Identifier(n) => n,
-                    other => return Err(format!("Expected method name, got {:?}", other)),
-                };
+                let token = self.advance();
+                let method_name = Self::token_as_named_arg_label(&token)
+                    .ok_or_else(|| format!("Expected method name, got {:?}", token))?;
                 let previous_class_scope = self.class_scope_active;
                 self.class_scope_active = true;
                 let generic_params = self.parse_generic_parameters()?;
@@ -274,10 +273,9 @@ impl Parser {
 
             if self.peek() == Token::Function {
                 self.advance();
-                let method_name = match self.advance() {
-                    Token::Identifier(n) => n,
-                    other => return Err(format!("Expected method name, got {:?}", other)),
-                };
+                let token = self.advance();
+                let method_name = Self::token_as_named_arg_label(&token)
+                    .ok_or_else(|| format!("Expected method name, got {:?}", token))?;
                 let previous_class_scope = self.class_scope_active;
                 self.class_scope_active = true;
                 let method_generic_params = self.parse_generic_parameters()?;
@@ -378,10 +376,9 @@ impl Parser {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, true)?);
             } else if self.peek() == Token::Function {
                 self.advance(); // consume 'function'
-                let method_name = match self.advance() {
-                    Token::Identifier(n) => n,
-                    other => return Err(format!("Expected method name, got {:?}", other)),
-                };
+                let token = self.advance();
+                let method_name = Self::token_as_named_arg_label(&token)
+                    .ok_or_else(|| format!("Expected method name, got {:?}", token))?;
                 let previous_class_scope = self.class_scope_active;
                 self.class_scope_active = true;
                 let method_generic_params = self.parse_generic_parameters()?;
@@ -480,10 +477,9 @@ impl Parser {
                     constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
                 } else if self.peek() == Token::Function {
                     self.advance();
-                    let method_name = match self.advance() {
-                        Token::Identifier(n) => n,
-                        other => return Err(format!("Expected method name, got {:?}", other)),
-                    };
+                    let token = self.advance();
+                    let method_name = Self::token_as_named_arg_label(&token)
+                        .ok_or_else(|| format!("Expected method name, got {:?}", token))?;
                     let previous_class_scope = self.class_scope_active;
                     self.class_scope_active = true;
                     let generic_params = self.parse_generic_parameters()?;

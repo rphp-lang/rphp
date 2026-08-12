@@ -111,6 +111,7 @@ where
             if !visitor(CaptureView {
                 groups: &groups,
                 named_groups: &regex.named_groups,
+                mark: None,
             })? {
                 break;
             }
@@ -132,6 +133,7 @@ fn class_tail_plan(node: &Node) -> Option<ClassTailPlan<'_>> {
         min,
         max,
         greedy,
+        ..
     } = node
     else {
         return None;
@@ -174,6 +176,7 @@ fn prefix_plan(node: &Node) -> Option<PrefixPlan<'_>> {
                         min,
                         max,
                         greedy,
+                        ..
                     } if index + 1 == nodes.len() => {
                         plan.tail = Some(Tail {
                             inner,
@@ -192,6 +195,7 @@ fn prefix_plan(node: &Node) -> Option<PrefixPlan<'_>> {
             min,
             max,
             greedy,
+            ..
         } => {
             plan.tail = Some(Tail {
                 inner,

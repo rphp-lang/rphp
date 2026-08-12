@@ -15,8 +15,8 @@ use crate::generics::{
     PendingGenericUseSite,
 };
 use crate::parser::{
-    BinOp, CallArg, CastType, ClassConstant, Expr, GenericAncestor, ListTarget, Param, Stmt,
-    TypeHint, UseKind, Visibility,
+    BinOp, CallArg, CastType, ClassConstant, Expr, ForeachTarget, GenericAncestor, ListTarget,
+    Param, Stmt, TypeHint, UseKind, Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -1248,6 +1248,8 @@ pub struct Compiler {
     functions: Vec<(String, UserFunction)>,
     /// Loop context stack for break/continue
     loop_stack: Vec<LoopContext>,
+    labels: HashMap<String, u16>,
+    goto_patches: Vec<(usize, String)>,
     /// Try/catch entries
     try_entries: Vec<TryEntry>,
     /// Class definitions
@@ -1372,6 +1374,8 @@ impl Compiler {
             next_tmp: 0,
             functions: Vec::new(),
             loop_stack: Vec::new(),
+            labels: HashMap::new(),
+            goto_patches: Vec::new(),
             try_entries: Vec::new(),
             class_defs: Vec::new(),
             generic_declarations: Vec::new(),
@@ -2058,6 +2062,7 @@ impl Compiler {
         for stmt in stmts {
             self.compile_stmt(stmt)?;
         }
+        self.finalize_gotos()?;
         // Check for deferred errors from compile_expr
         if let Some(err) = self.deferred_error.take() {
             return Err(err);
@@ -3992,6 +3997,9 @@ impl Compiler {
                         break;
                     }
                 }
+                if let Err(error) = func_compiler.finalize_gotos() {
+                    self.deferred_error = Some(error);
+                }
                 let null_idx = func_compiler.add_literal(Value::null());
                 let mut ret = Instruction::new(OpCode::Return);
                 ret.op1_type = OpType::Const;
@@ -4684,6 +4692,42 @@ impl Compiler {
         }
     }
 
+    fn define_label(&mut self, name: &str) -> Result<(), String> {
+        let target = self.instructions.len() as u16;
+        if self.labels.insert(name.to_string(), target).is_some() {
+            return Err(format!("Label '{name}' already defined"));
+        }
+        let mut index = 0;
+        while index < self.goto_patches.len() {
+            if self.goto_patches[index].1 == name {
+                let (instruction, _) = self.goto_patches.swap_remove(index);
+                self.instructions[instruction].op1 = target;
+            } else {
+                index += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_goto(&mut self, name: &str) {
+        let mut instruction = Instruction::new(OpCode::Jmp);
+        if let Some(target) = self.labels.get(name) {
+            instruction.op1 = *target;
+        } else {
+            self.goto_patches
+                .push((self.instructions.len(), name.to_string()));
+        }
+        self.instructions.push(instruction);
+    }
+
+    fn finalize_gotos(&self) -> Result<(), String> {
+        if let Some((_, label)) = self.goto_patches.first() {
+            Err(format!("'goto' to undefined label '{label}'"))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Build list of all CVs from cv_table.
     fn all_cvs(&self) -> Vec<(u32, String)> {
         self.cv_table
@@ -4910,7 +4954,8 @@ impl Compiler {
     fn compile_list_targets(
         &mut self,
         targets: &[crate::parser::ListTarget],
-        array_tmp: u16,
+        array: u16,
+        array_type: OpType,
         start_index: usize,
     ) -> Result<(), String> {
         use crate::parser::ListTarget;
@@ -4922,8 +4967,8 @@ impl Compiler {
                     let idx_literal = self.add_literal(Value::long(idx as i64));
                     let fetch_tmp = self.alloc_tmp();
                     let mut fetch = Instruction::new(OpCode::FetchDimR);
-                    fetch.op1_type = OpType::Tmp;
-                    fetch.op1 = array_tmp;
+                    fetch.op1_type = array_type;
+                    fetch.op1 = array;
                     fetch.op2_type = OpType::Const;
                     fetch.op2 = idx_literal;
                     fetch.result_type = OpType::Tmp;
@@ -4943,8 +4988,8 @@ impl Compiler {
                     let idx_literal = self.add_literal(Value::long(idx as i64));
                     let fetch_tmp = self.alloc_tmp();
                     let mut fetch = Instruction::new(OpCode::FetchDimR);
-                    fetch.op1_type = OpType::Tmp;
-                    fetch.op1 = array_tmp;
+                    fetch.op1_type = array_type;
+                    fetch.op1 = array;
                     fetch.op2_type = OpType::Const;
                     fetch.op2 = idx_literal;
                     fetch.result_type = OpType::Tmp;
@@ -5022,15 +5067,15 @@ impl Compiler {
                     let idx_literal = self.add_literal(Value::long(idx as i64));
                     let sub_tmp = self.alloc_tmp();
                     let mut fetch = Instruction::new(OpCode::FetchDimR);
-                    fetch.op1_type = OpType::Tmp;
-                    fetch.op1 = array_tmp;
+                    fetch.op1_type = array_type;
+                    fetch.op1 = array;
                     fetch.op2_type = OpType::Const;
                     fetch.op2 = idx_literal;
                     fetch.result_type = OpType::Tmp;
                     fetch.result = sub_tmp;
                     self.instructions.push(fetch);
                     // Recurse
-                    self.compile_list_targets(inner_targets, sub_tmp, 0)?;
+                    self.compile_list_targets(inner_targets, sub_tmp, OpType::Tmp, 0)?;
                     idx += 1;
                 }
                 ListTarget::KeyedVariable { key, var } => {
@@ -5038,8 +5083,8 @@ impl Compiler {
                     let (key_op, key_type) = self.compile_expr(key);
                     let fetch_tmp = self.alloc_tmp();
                     let mut fetch = Instruction::new(OpCode::FetchDimR);
-                    fetch.op1_type = OpType::Tmp;
-                    fetch.op1 = array_tmp;
+                    fetch.op1_type = array_type;
+                    fetch.op1 = array;
                     fetch.op2_type = key_type;
                     fetch.op2 = key_op;
                     fetch.result_type = OpType::Tmp;

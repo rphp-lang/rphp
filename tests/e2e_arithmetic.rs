@@ -126,6 +126,14 @@ fn test_float_int_mixed() {
 }
 
 #[test]
+fn test_arithmetic_coerces_bool_null_and_numeric_strings() {
+    assert_eq!(
+        run_php("<?php echo (5 - false), ':', (true + 2), ':', (null + 3), ':', ('4.5' + 0.5);"),
+        "5:3:3:5"
+    );
+}
+
+#[test]
 fn test_float_comparison() {
     assert_eq!(run_php("<?php echo 3.14 > 3 ? 'yes' : 'no';"), "yes");
 }

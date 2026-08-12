@@ -1312,6 +1312,21 @@ fn op_init_static_call<'a>(
             }
         }
     }
+    let called_scope_class_id = if raw_class.eq_ignore_ascii_case("self")
+        || raw_class.eq_ignore_ascii_case("parent")
+    {
+        let forwarding = late_static_call_class_id(eg, frame);
+        if forwarding != 0 {
+            forwarding
+        } else {
+            eg.class_id_of(&class)
+        }
+    } else {
+        eg.class_id_of(&class)
+    };
+    if called_scope_class_id != 0 {
+        publish_late_static_call_class_id(eg, call, called_scope_class_id);
+    }
     Ok(ColdResult::Done)
 }
 
@@ -1440,6 +1455,9 @@ fn op_init_late_static_call<'a>(
     );
     unsafe {
         (*frame).call = call;
+    }
+    if class_id != 0 {
+        publish_late_static_call_class_id(eg, call, class_id);
     }
     Ok(ColdResult::Done)
 }
@@ -1584,22 +1602,50 @@ fn init_resolved_user_call_mode(
 }
 
 #[inline(never)]
-fn op_init_dynamic_call(
+fn op_init_dynamic_call<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     let callable = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
     if callable.value_type() == ValueType::Array {
+        let class_name = callable.as_array().and_then(|array| {
+            if array.len() != 2 || array.get_value_at(1)?.as_str().is_none() {
+                return None;
+            }
+            array.get_value_at(0)?.as_str().map(str::to_string)
+        });
+        if let Some(class_name) = class_name
+            && eg.find_class(&class_name).is_none()
+        {
+            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+            if !loaded {
+                let error = make_error_value("Error", &format!("Class \"{class_name}\" not found"));
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+        }
         let resolved = resolve_user_call_at_opline(eg, frame, op_array, opline)
             .ok_or_else(|| VmError::Fatal("Array is not callable".into()))?;
         // Dynamic-call sends start at CV 0 because the compiler cannot know
         // that this callable is a method. Defer the hidden receiver until
         // DoFcall, which shifts the supplied positional prefix by one.
         init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, true);
-        return Ok(());
+        return Ok(ColdResult::Done);
     }
 
     if let Some(closure) = callable.as_closure() {
@@ -1696,5 +1742,5 @@ fn op_init_dynamic_call(
     } else {
         return Err(VmError::Fatal(format!("Value of type {:?} is not callable", callable.value_type())));
     }
-    Ok(())
+    Ok(ColdResult::Done)
 }

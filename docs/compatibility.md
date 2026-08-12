@@ -83,8 +83,9 @@ a `RuntimeException` that reports 8.2.0. This exercises include-expression
 return values, direct static-call autoload, both forms of `strtr()`, and both
 sides of Composer's generated PHP-version gate; it does not claim that Composer
 itself runs under RPHP. Symfony support is admitted separately: the first
-bounded S1 gates now execute the unmodified EventDispatcher 7.4.15 and
-HttpFoundation 7.4.16 components through Composer's generated autoloader.
+bounded S1 gates now execute the unmodified EventDispatcher 7.4.15,
+HttpFoundation 7.4.16 and compiled Routing 7.4.15 components through
+Composer's generated autoloader.
 `extension_loaded()` remains conservatively false until individual extension
 contracts are admitted.
 
@@ -104,6 +105,15 @@ reference PHP and RPHP byte-for-byte. Its required output is
 exercised request/response and header-bag path; files, cookies, sessions,
 trusted proxies, streamed responses and a real HTTP SAPI remain separate
 gates.
+
+The pinned Symfony Routing S1 fixture builds real `Route` objects, dumps their
+compiled matcher tables and executes the unmodified `CompiledUrlMatcher`. It
+compares a static GET, a constrained dynamic route with extracted defaults, a
+405 including its allowed methods and a 404 against reference PHP. Its exact
+output is `health|article_show:rphp-8:html|405:GET,HEAD|404`. This admits the
+exercised compiled matcher path, including Symfony's branch-reset/MARK regex;
+URL generation, localized/host routes, condition expressions and broader route
+loader formats remain separate gates.
 
 `use function` imports have their own case-insensitive alias table, separate
 from class imports. Direct calls support default, explicit and comma-separated

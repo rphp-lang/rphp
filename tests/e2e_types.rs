@@ -295,6 +295,26 @@ fn test_unset_array_preserves_other() {
     );
 }
 
+#[test]
+fn test_unset_dynamic_object_property() {
+    assert_eq!(
+        run_php(
+            "<?php $state = (object)['route' => 'home', 'keep' => 1]; unset($state->route); echo (isset($state->route) ? 'set' : 'unset') . ':' . $state->keep;"
+        ),
+        "unset:1"
+    );
+}
+
+#[test]
+fn test_unset_declared_object_property() {
+    assert_eq!(
+        run_php(
+            "<?php class Box { public $value = 1; } $box = new Box(); unset($box->value); echo isset($box->value) ? 'set' : 'unset';"
+        ),
+        "unset"
+    );
+}
+
 // ========== Type casting ==========
 
 #[test]
@@ -374,6 +394,26 @@ fn test_cast_array_from_null() {
 fn test_cast_array_from_array() {
     assert_eq!(
         run_php("<?php $a = [1,2]; $b = (array)$a; echo count($b);"),
+        "2"
+    );
+}
+
+#[test]
+fn test_cast_object_from_array_scalar_and_null() {
+    assert_eq!(
+        run_php(
+            "<?php $a = (object)['name' => 'route', 0 => 'zero']; $s = (object)42; $n = (object)null; echo $a->name . ':' . $s->scalar . ':' . (isset($n->missing) ? 'set' : 'empty');"
+        ),
+        "route:42:empty"
+    );
+}
+
+#[test]
+fn test_cast_object_keeps_object_identity() {
+    assert_eq!(
+        run_php(
+            "<?php $a = (object)['value' => 1]; $b = (object)$a; $b->value = 2; echo $a->value;"
+        ),
         "2"
     );
 }

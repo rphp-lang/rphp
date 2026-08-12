@@ -276,6 +276,14 @@ fn test_e2e_pre_dec_null() {
     assert_eq!(run_php("<?php $x = null; echo --$x;"), "");
 }
 
+#[test]
+fn test_e2e_bool_inc_dec_have_no_effect() {
+    assert_eq!(
+        run_php("<?php $a = true; $b = false; $a++; --$a; ++$b; $b--; var_dump($a, $b);"),
+        "bool(true)\nbool(false)\n"
+    );
+}
+
 // === do...while ===
 
 #[test]

@@ -110,6 +110,7 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "PHP_QUERY_RFC3986" => Some(value::Value::long(2)),
         "PHP_URL_PATH" => Some(value::Value::long(5)),
         "PREG_SET_ORDER" => Some(value::Value::long(2)),
+        "PREG_OFFSET_CAPTURE" => Some(value::Value::long(256)),
         "PREG_SPLIT_NO_EMPTY" => Some(value::Value::long(1)),
         "JSON_ERROR_NONE" => Some(value::Value::long(0)),
         "JSON_BIGINT_AS_STRING" => Some(value::Value::long(2)),
