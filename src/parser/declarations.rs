@@ -584,7 +584,7 @@ impl Parser {
         let mut constants = Vec::new();
         loop {
             let name = match self.advance() {
-                Token::Identifier(name) => name,
+                Token::Identifier(name) | Token::MagicConstant { name, .. } => name,
                 other => return Err(format!("Expected class constant name, got {:?}", other)),
             };
             self.expect(&Token::Assign)?;
@@ -899,7 +899,8 @@ impl Parser {
             | Expr::StringLiteral(_)
             | Expr::Bool(_)
             | Expr::Null
-            | Expr::Constant(_) => {}
+            | Expr::Constant(_)
+            | Expr::MagicConstant { .. } => {}
             // Yield — collect vars from value/key expressions
             Expr::Yield { value, key } => {
                 if let Some(v) = value {

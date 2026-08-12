@@ -160,6 +160,10 @@ pub enum Expr {
         class_name: String,
     },
     Constant(String), // FOO, PHP_INT_MAX — named constant reference
+    MagicConstant {
+        name: String,
+        line: usize,
+    },
     Yield {
         // yield $value or yield $key => $value
         value: Option<Box<Expr>>,
@@ -244,7 +248,8 @@ impl Expr {
             | Expr::PreDec(_)
             | Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
-            | Expr::Constant(_) => false,
+            | Expr::Constant(_)
+            | Expr::MagicConstant { .. } => false,
             Expr::DynamicClassConstant {
                 class, constant, ..
             } => {

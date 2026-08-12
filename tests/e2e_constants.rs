@@ -955,3 +955,54 @@ echo $c->limit;
     );
     assert_eq!(out, "100");
 }
+
+#[test]
+fn test_global_and_source_magic_constants() {
+    let out = run_php_with_source_context(
+        "<?php\necho __LINE__ . '|' . __FILE__ . '|' . __DIR__ . '|' . __file__;",
+        "/virtual/project/example.php",
+        "/virtual/project",
+    );
+    assert_eq!(
+        out,
+        "2|/virtual/project/example.php|/virtual/project|/virtual/project/example.php"
+    );
+}
+
+#[test]
+fn test_scope_magic_constants() {
+    let out = run_php(
+        r#"<?php
+namespace Demo;
+function probe() {
+    echo __FUNCTION__ . '|' . __METHOD__ . '|' . __CLASS__ . '|' . __NAMESPACE__ . ';';
+}
+class Subject {
+    public function probe() {
+        echo __FUNCTION__ . '|' . __METHOD__ . '|' . __CLASS__ . '|' . __TRAIT__ . '|' . __NAMESPACE__ . ';';
+    }
+}
+trait NamedTrait {
+    public function traitProbe() {
+        echo __FUNCTION__ . '|' . __METHOD__ . '|' . __TRAIT__ . ';';
+    }
+}
+class UsesTrait { use NamedTrait; }
+probe();
+(new Subject())->probe();
+(new UsesTrait())->traitProbe();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Demo\\probe|Demo\\probe||Demo;probe|Demo\\Subject::probe|Demo\\Subject||Demo;traitProbe|Demo\\NamedTrait::traitProbe|Demo\\NamedTrait;"
+    );
+}
+
+#[test]
+fn test_fully_qualified_builtin_constant_uses_global_lookup() {
+    assert_eq!(
+        run_php("<?php echo \\PHP_EOL === PHP_EOL ? 'yes' : 'no';"),
+        "yes"
+    );
+}

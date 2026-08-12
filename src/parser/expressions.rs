@@ -336,6 +336,11 @@ impl Parser {
     /// Unary: -expr, (int)expr, (string)expr, etc.
     fn parse_unary(&mut self) -> Result<Expr, String> {
         match self.peek() {
+            Token::Bang => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expr::Not(Box::new(expr)))
+            }
             Token::Minus => {
                 self.advance();
                 let expr = self.parse_unary()?;
@@ -345,6 +350,11 @@ impl Parser {
                 self.advance();
                 let expr = self.parse_unary()?;
                 Ok(Expr::BitwiseNot(Box::new(expr)))
+            }
+            Token::Clone => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expr::Clone(Box::new(expr)))
             }
             Token::LParen => {
                 // Check for type cast: (int), (string), (float), (bool), (array)
@@ -380,7 +390,8 @@ impl Parser {
 
     /// Power: ** (right-associative, higher precedence than unary)
     fn parse_power(&mut self) -> Result<Expr, String> {
-        let base = self.parse_primary()?;
+        let atom = self.parse_primary_atom()?;
+        let base = self.parse_postfix_chain(atom)?;
 
         if self.peek() == Token::StarStar {
             self.advance();
@@ -395,7 +406,9 @@ impl Parser {
         }
     }
 
-    fn parse_primary(&mut self) -> Result<Expr, String> {
+    /// Parse exactly one primary atom. Postfix operators are deliberately
+    /// applied by `parse_power`, so every atom gets the same chaining grammar.
+    fn parse_primary_atom(&mut self) -> Result<Expr, String> {
         match self.peek() {
             Token::Integer(_) => {
                 let val = match self.advance() {
@@ -443,9 +456,7 @@ impl Parser {
                     self.advance();
                     return Ok(Expr::PostDec(name));
                 }
-                let expr = Expr::Variable(name);
-                let expr = self.parse_postfix_chain(expr)?;
-                Ok(expr)
+                Ok(Expr::Variable(name))
             }
             Token::PlusPlus => {
                 self.advance();
@@ -463,11 +474,6 @@ impl Parser {
                 };
                 Ok(Expr::PreDec(name))
             }
-            Token::Bang => {
-                self.advance();
-                let expr = self.parse_primary()?;
-                Ok(Expr::Not(Box::new(expr)))
-            }
             Token::Print => {
                 self.advance();
                 let expr = self.parse_expr()?;
@@ -477,7 +483,7 @@ impl Parser {
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
-                self.parse_postfix_chain(expr)
+                Ok(expr)
             }
             Token::Isset => {
                 self.advance();
@@ -525,16 +531,19 @@ impl Parser {
                 if self.peek() == Token::LParen {
                     self.advance();
                     let args = self.parse_call_args()?;
-                    let expr = Expr::FunctionCall {
+                    Ok(Expr::FunctionCall {
                         name,
                         args,
                         generic_args: Vec::new(),
-                    };
-                    self.parse_postfix_chain(expr)
+                    })
                 } else {
                     Ok(Expr::Constant(name))
                 }
             }
+            Token::MagicConstant { .. } => match self.advance() {
+                Token::MagicConstant { name, line } => Ok(Expr::MagicConstant { name, line }),
+                _ => unreachable!(),
+            },
             Token::Identifier(_) => {
                 let name = if self.peek_at(1) == Token::Backslash {
                     // Qualified name: App\Models\User
@@ -549,12 +558,11 @@ impl Parser {
                 if !generic_args.is_empty() {
                     self.expect(&Token::LParen)?;
                     let args = self.parse_call_args()?;
-                    let expr = Expr::FunctionCall {
+                    return Ok(Expr::FunctionCall {
                         name,
                         args,
                         generic_args,
-                    };
-                    return Ok(self.parse_postfix_chain(expr)?);
+                    });
                 }
                 // Static access: ClassName::method() or ClassName::$prop
                 if self.peek() == Token::DoubleColon {
@@ -564,12 +572,11 @@ impl Parser {
                 if self.peek() == Token::LParen {
                     self.advance(); // consume (
                     let args = self.parse_call_args()?;
-                    let expr = Expr::FunctionCall {
+                    Ok(Expr::FunctionCall {
                         name,
                         args,
                         generic_args: Vec::new(),
-                    };
-                    self.parse_postfix_chain(expr)
+                    })
                 } else {
                     // Bare identifier — constant reference (e.g., PHP_INT_MAX, FOO)
                     Ok(Expr::Constant(name))
@@ -618,24 +625,16 @@ impl Parser {
                 } else {
                     Vec::new()
                 };
-                let mut expr = Expr::New {
+                Ok(Expr::New {
                     class_name,
                     args,
                     generic_args,
-                };
-                // Handle ->method() / ->prop chains on new
-                expr = self.parse_postfix_chain(expr)?;
-                return Ok(expr);
+                })
             }
             Token::Throw => {
                 self.advance();
                 let expr = self.parse_expr()?;
                 return Ok(Expr::Throw(Box::new(expr)));
-            }
-            Token::Clone => {
-                self.advance(); // consume 'clone'
-                let expr = self.parse_unary()?;
-                return Ok(Expr::Clone(Box::new(expr)));
             }
             Token::LBracket => {
                 // Short array syntax: [1, 2, 'a' => 3]
@@ -654,64 +653,6 @@ impl Parser {
             }
             other => Err(format!("Expected expression, got {:?}", other)),
         }
-    }
-
-    /// Parse a statically named member after a class-like owner. Keeping the
-    /// fully-qualified, ordinary and late-static entry points here prevents
-    /// their turbofish/postfix grammar from drifting apart.
-    fn parse_named_static_access(&mut self, class_name: String) -> Result<Expr, String> {
-        self.expect(&Token::DoubleColon)?;
-        if self.peek() == Token::LBrace {
-            self.advance();
-            let constant = self.parse_expr()?;
-            self.expect(&Token::RBrace)?;
-            if self.peek() == Token::LParen {
-                return Err("Dynamic static method calls are not supported yet".into());
-            }
-            let expr = Expr::DynamicNamedClassConstant {
-                class_name,
-                constant: Box::new(constant),
-            };
-            return self.parse_postfix_chain(expr);
-        }
-        if let Token::Variable(_) = self.peek() {
-            let property = match self.advance() {
-                Token::Variable(name) => name,
-                _ => unreachable!(),
-            };
-            let expr = Expr::StaticProperty {
-                class_name,
-                property,
-            };
-            return self.parse_postfix_chain(expr);
-        }
-
-        let member = match self.advance() {
-            Token::Identifier(name) => name,
-            Token::Class => "class".to_string(),
-            other => return Err(format!("Expected member name after ::, got {:?}", other)),
-        };
-        let generic_args = self.parse_optional_turbofish()?;
-        if self.peek() != Token::LParen {
-            if !generic_args.is_empty() {
-                return Err("Generic type arguments must be followed by a method call".into());
-            }
-            let expr = Expr::ClassConstant {
-                class_name,
-                constant: member,
-            };
-            return self.parse_postfix_chain(expr);
-        }
-
-        self.advance();
-        let args = self.parse_call_args()?;
-        let expr = Expr::StaticCall {
-            class_name,
-            method: member,
-            args,
-            generic_args,
-        };
-        self.parse_postfix_chain(expr)
     }
 
     /// Parse comma-separated array elements until `end_token`.
@@ -746,103 +687,4 @@ impl Parser {
         Ok(elements)
     }
 
-    /// Parse postfix chains: [idx], ->prop, ->method()
-    fn parse_postfix_chain(&mut self, mut expr: Expr) -> Result<Expr, String> {
-        loop {
-            match self.peek() {
-                Token::LBracket => {
-                    self.advance();
-                    let index = self.parse_expr()?;
-                    self.expect(&Token::RBracket)?;
-                    expr = Expr::ArrayAccess {
-                        array: Box::new(expr),
-                        index: Box::new(index),
-                    };
-                }
-                Token::LParen => {
-                    // Dynamic call: $var(...), $arr[0](...), etc.
-                    self.advance(); // consume '('
-                    let args = self.parse_call_args()?;
-                    expr = Expr::DynamicCall {
-                        callable: Box::new(expr),
-                        args,
-                        generic_args: Vec::new(),
-                    };
-                }
-                Token::DoubleColon if self.peek_at(1) == Token::Less => {
-                    let generic_args = self.parse_optional_turbofish()?;
-                    self.expect(&Token::LParen)?;
-                    let args = self.parse_call_args()?;
-                    expr = Expr::DynamicCall {
-                        callable: Box::new(expr),
-                        args,
-                        generic_args,
-                    };
-                }
-                Token::DoubleColon => {
-                    self.advance();
-                    let dynamic_name = self.peek() == Token::LBrace;
-                    let constant = if dynamic_name {
-                        self.advance();
-                        let constant = self.parse_expr()?;
-                        self.expect(&Token::RBrace)?;
-                        constant
-                    } else {
-                        match self.advance() {
-                            Token::Identifier(name) => Expr::StringLiteral(name),
-                            Token::Class => Expr::StringLiteral("class".to_string()),
-                            other => {
-                                return Err(format!(
-                                    "Expected constant name after dynamic ::, got {:?}",
-                                    other
-                                ));
-                            }
-                        }
-                    };
-                    if self.peek() == Token::LParen {
-                        return Err("Dynamic static method calls are not supported yet".into());
-                    }
-                    expr = Expr::DynamicClassConstant {
-                        class: Box::new(expr),
-                        constant: Box::new(constant),
-                        dynamic_name,
-                    };
-                }
-                Token::Arrow | Token::NullSafe => {
-                    let nullsafe = matches!(self.peek(), Token::NullSafe);
-                    self.advance();
-                    let member = match self.advance() {
-                        Token::Identifier(n) => n,
-                        other => {
-                            return Err(format!(
-                                "Expected property/method name after {}, got {:?}",
-                                if nullsafe { "?->" } else { "->" },
-                                other
-                            ));
-                        }
-                    };
-                    let generic_args = self.parse_optional_turbofish()?;
-                    if self.peek() == Token::LParen {
-                        self.advance();
-                        let args = self.parse_call_args()?;
-                        expr = Expr::MethodCall {
-                            object: Box::new(expr),
-                            method: member,
-                            args,
-                            generic_args,
-                            nullsafe,
-                        };
-                    } else {
-                        expr = Expr::PropertyAccess {
-                            object: Box::new(expr),
-                            property: member,
-                            nullsafe,
-                        };
-                    }
-                }
-                _ => break,
-            }
-        }
-        Ok(expr)
-    }
 }

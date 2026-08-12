@@ -79,14 +79,16 @@ fn op_include(
     };
 
     if is_once {
-        eg.included_files.insert(canonical);
+        eg.included_files.insert(canonical.clone());
     }
 
     let tokens = crate::lexer::Lexer::new(&source).tokenize()
         .map_err(|e| VmError::Fatal(format!("Syntax error in {}: {}", resolved_path, e)))?;
     let stmts = crate::parser::Parser::new(tokens).parse()
         .map_err(|e| VmError::Fatal(format!("Parse error in {}: {}", resolved_path, e)))?;
-    let mut compile_result = crate::compiler::compile::Compiler::new().compile(&stmts)
+    let mut compile_result = crate::compiler::compile::Compiler::new()
+        .with_source_path(canonical.clone())
+        .compile(&stmts)
         .map_err(|e| VmError::Fatal(format!("Compile error in {}: {}", resolved_path, e)))?;
 
     // Includes are separate compilation units, but both generic runtimes and

@@ -40,9 +40,26 @@ pub fn run_php(source: &str) -> String {
 
 #[allow(dead_code)]
 pub fn run_php_with_functions(source: &str, register: impl FnOnce(&mut ExecutorGlobals)) -> String {
+    run_php_with_compiler(source, Compiler::new(), register)
+}
+
+#[allow(dead_code)]
+pub fn run_php_with_source_context(source: &str, file: &str, directory: &str) -> String {
+    run_php_with_compiler(
+        source,
+        Compiler::new().with_source_context(file, directory),
+        |_| {},
+    )
+}
+
+fn run_php_with_compiler(
+    source: &str,
+    compiler: Compiler,
+    register: impl FnOnce(&mut ExecutorGlobals),
+) -> String {
     let tokens = Lexer::new(source).tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
-    let result = Compiler::new().compile(&stmts).unwrap();
+    let result = compiler.compile(&stmts).unwrap();
     let generic_metadata = result.generic_metadata;
     let main_func = make_user_function(result.main);
     let (mut eg, buf) = make_eg_with_capture();

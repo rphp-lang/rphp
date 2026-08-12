@@ -98,6 +98,25 @@ fn main() {
         _ => {}
     }
 
+    let source_directory = std::env::current_dir()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (source_file, source_directory) = match &action {
+        CliAction::File(file) => {
+            let absolute = std::fs::canonicalize(file)
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| file.clone());
+            let directory = std::path::Path::new(&absolute)
+                .parent()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| source_directory.clone());
+            (absolute, directory)
+        }
+        CliAction::Inline(_) => ("Command line code".to_string(), source_directory),
+        CliAction::Stdin => ("Standard input code".to_string(), source_directory),
+        CliAction::Help | CliAction::Version => unreachable!("handled above"),
+    };
+
     let source = read_source(action).unwrap_or_else(|error| {
         eprintln!("error: {error}");
         std::process::exit(1);
@@ -117,10 +136,13 @@ fn main() {
         std::process::exit(1);
     });
 
-    let result = Compiler::new().compile(&stmts).unwrap_or_else(|e| {
-        eprintln!("Fatal error: {}", e);
-        std::process::exit(1);
-    });
+    let result = Compiler::new()
+        .with_source_context(source_file, source_directory)
+        .compile(&stmts)
+        .unwrap_or_else(|e| {
+            eprintln!("Fatal error: {}", e);
+            std::process::exit(1);
+        });
     let main_func = make_user_function(result.main);
     let mut eg = ExecutorGlobals::new();
     eg.generic_metadata = result.generic_metadata;

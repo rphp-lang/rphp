@@ -17,6 +17,23 @@ echo functionResult()->method() . ':' . functionResult()->value;
     assert_eq!(out, "method:property");
 }
 
+#[test]
+fn call_results_continue_through_array_and_dynamic_call_postfixes() {
+    let out = run_php(
+        r#"<?php
+function values() { return ['key' => 'value']; }
+function callableValue() { return function ($value) { return [$value]; }; }
+class StaticValues {
+    public static function values() { return ['static']; }
+}
+echo values()['key'] . ':';
+echo callableValue()('dynamic')[0] . ':';
+echo StaticValues::values()[0];
+"#,
+    );
+    assert_eq!(out, "value:dynamic:static");
+}
+
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::{make_internal_function, make_user_function};
 use rphp::lexer::Lexer;

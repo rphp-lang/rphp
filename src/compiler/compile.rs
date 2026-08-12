@@ -1285,6 +1285,10 @@ pub struct Compiler {
     static_vars: Vec<(u32, String)>,
     /// Current function name (for static variable keying)
     current_function_name: String,
+    /// Source identity used by the compile-time `__FILE__` and `__DIR__`
+    /// constants. Embedders may leave both empty when no file exists.
+    source_file: String,
+    source_directory: String,
     /// Constants known at compile time (from `const FOO = 42;` in the same file).
     /// Used by eval_const_expr to resolve Expr::Constant in property defaults.
     known_constants: HashMap<String, Value>,
@@ -1315,6 +1319,7 @@ impl Compiler {
             Expr::Integer(_)
             | Expr::Float(_)
             | Expr::StringLiteral(_)
+            | Expr::MagicConstant { .. }
             | Expr::Bool(_)
             | Expr::Null
             | Expr::ClassConstant { .. } => true,
@@ -1378,8 +1383,29 @@ impl Compiler {
             global_vars: Vec::new(),
             static_vars: Vec::new(),
             current_function_name: String::new(),
+            source_file: String::new(),
+            source_directory: String::new(),
             known_constants: HashMap::new(),
         }
+    }
+
+    pub fn with_source_context(
+        mut self,
+        file: impl Into<String>,
+        directory: impl Into<String>,
+    ) -> Self {
+        self.source_file = file.into();
+        self.source_directory = directory.into();
+        self
+    }
+
+    pub fn with_source_path(self, path: impl Into<String>) -> Self {
+        let file = path.into();
+        let directory = std::path::Path::new(&file)
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.with_source_context(file, directory)
     }
 
     fn child_compiler(&self) -> Self {
@@ -1395,7 +1421,45 @@ impl Compiler {
         child.lexical_static_class = self.lexical_static_class.clone();
         child.lexical_static_parent = self.lexical_static_parent.clone();
         child.dynamic_static_scope = self.dynamic_static_scope;
+        child.source_file = self.source_file.clone();
+        child.source_directory = self.source_directory.clone();
         child
+    }
+
+    fn magic_constant_value(&self, name: &str, line: usize) -> Value {
+        match name.to_ascii_uppercase().as_str() {
+            "__LINE__" => Value::long(line as i64),
+            "__FILE__" => Value::string(self.source_file.clone()),
+            "__DIR__" => Value::string(self.source_directory.clone()),
+            "__NAMESPACE__" => Value::string(self.current_namespace.clone().unwrap_or_default()),
+            "__CLASS__" => Value::string(self.lexical_static_class.clone().unwrap_or_default()),
+            "__TRAIT__" => Value::string(if self.dynamic_static_scope {
+                self.lexical_static_class.clone().unwrap_or_default()
+            } else {
+                String::new()
+            }),
+            "__FUNCTION__" => {
+                let function = if self.current_function_name.starts_with("__closure_") {
+                    "{closure}".to_string()
+                } else if self.lexical_static_class.is_some() {
+                    self.current_function_name.rsplit_once("::").map_or_else(
+                        || self.current_function_name.clone(),
+                        |(_, name)| name.into(),
+                    )
+                } else {
+                    self.current_function_name.clone()
+                };
+                Value::string(function)
+            }
+            "__METHOD__" => {
+                Value::string(if self.current_function_name.starts_with("__closure_") {
+                    "{closure}".to_string()
+                } else {
+                    self.current_function_name.clone()
+                })
+            }
+            _ => Value::null(),
+        }
     }
 
     fn record_generic_declaration(
@@ -2081,6 +2145,7 @@ impl Compiler {
             Expr::Bool(b) => Ok(Value::bool(*b)),
             Expr::Null => Ok(Value::null()),
             Expr::Constant(name) => {
+                let name = name.strip_prefix('\\').unwrap_or(name);
                 // Check user-defined constants from the same compilation unit
                 if let Some(val) = known.get(name) {
                     return Ok(val.clone());
@@ -2090,7 +2155,7 @@ impl Compiler {
                     return Ok(val);
                 }
                 // Stream constants cannot be used in constant expressions
-                match name.as_str() {
+                match name {
                     "STDIN" | "STDOUT" | "STDERR" => {
                         Err(format!("{} is not available in constant expressions", name))
                     }
@@ -2098,6 +2163,16 @@ impl Compiler {
                         "expression Constant(\"{}\") is not a compile-time constant",
                         name
                     )),
+                }
+            }
+            Expr::MagicConstant { name, line } => {
+                if name.eq_ignore_ascii_case("__LINE__") {
+                    Ok(Value::long(*line as i64))
+                } else {
+                    Err(format!(
+                        "magic constant {} requires the active compilation context",
+                        name
+                    ))
                 }
             }
             Expr::ClassConstant {
@@ -4169,7 +4244,8 @@ impl Compiler {
             }
             Expr::Constant(name) => {
                 // Fetch a named constant at runtime
-                let name_idx = self.add_literal(Value::string(name.clone()));
+                let runtime_name = name.strip_prefix('\\').unwrap_or(name);
+                let name_idx = self.add_literal(Value::string(runtime_name.to_string()));
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::FetchConst);
                 instr.op1 = name_idx;
@@ -4180,6 +4256,11 @@ impl Compiler {
                 instr.extended_value = 0;
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
+            }
+            Expr::MagicConstant { name, line } => {
+                let value = self.magic_constant_value(name, *line);
+                let literal = self.add_literal(value);
+                (literal, OpType::Const)
             }
             Expr::Yield { value, key } => {
                 self.contains_yield = true;

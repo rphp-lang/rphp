@@ -62,11 +62,12 @@ pub enum Token {
     Require,     // require
     RequireOnce, // require_once
     // Literals
-    Integer(i64),          // 42, -1
-    Float(f64),            // 3.14, 1.5e10
-    StringLiteral(String), // "hello", 'world'
-    Variable(String),      // $a, $foo
-    Identifier(String),    // my_double, strlen
+    Integer(i64),                                // 42, -1
+    Float(f64),                                  // 3.14, 1.5e10
+    StringLiteral(String),                       // "hello", 'world'
+    Variable(String),                            // $a, $foo
+    Identifier(String),                          // my_double, strlen
+    MagicConstant { name: String, line: usize }, // __FILE__, __LINE__, ...
     // Operators
     Assign,           // =
     Plus,             // +
@@ -433,7 +434,34 @@ impl<'a> Lexer<'a> {
                     tokens.push(self.read_number()?);
                 }
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
+                    let identifier_start = self.pos;
                     let ident = self.read_identifier();
+                    let is_member_name = matches!(
+                        tokens.last(),
+                        Some(
+                            Token::Backslash | Token::DoubleColon | Token::Arrow | Token::NullSafe
+                        )
+                    );
+                    if !is_member_name
+                        && matches!(
+                            ident.to_ascii_uppercase().as_str(),
+                            "__LINE__"
+                                | "__FILE__"
+                                | "__DIR__"
+                                | "__FUNCTION__"
+                                | "__METHOD__"
+                                | "__CLASS__"
+                                | "__TRAIT__"
+                                | "__NAMESPACE__"
+                        )
+                    {
+                        let line = 1 + self.src[..identifier_start]
+                            .iter()
+                            .filter(|byte| **byte == b'\n')
+                            .count();
+                        tokens.push(Token::MagicConstant { name: ident, line });
+                        continue;
+                    }
                     match ident.as_str() {
                         "echo" => tokens.push(Token::Echo),
                         "function" => tokens.push(Token::Function),
@@ -679,6 +707,7 @@ impl<'a> Lexer<'a> {
                     | Token::RParen
                     | Token::RBracket
                     | Token::Identifier(_)
+                    | Token::MagicConstant { .. }
                     | Token::True
                     | Token::False
                     | Token::Null
@@ -813,6 +842,35 @@ mod tests {
                 Token::LParen,
                 Token::Integer(21),
                 Token::RParen,
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn magic_constants_are_case_insensitive_but_member_names_remain_identifiers() {
+        let tokens = Lexer::new("<?php\necho __line__; echo \\__FILE__; echo Example::__CLASS__;")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Echo,
+                Token::MagicConstant {
+                    name: "__line__".into(),
+                    line: 2,
+                },
+                Token::Semicolon,
+                Token::Echo,
+                Token::Backslash,
+                Token::Identifier("__FILE__".into()),
+                Token::Semicolon,
+                Token::Echo,
+                Token::Identifier("Example".into()),
+                Token::DoubleColon,
+                Token::Identifier("__CLASS__".into()),
                 Token::Semicolon,
                 Token::Eof,
             ]

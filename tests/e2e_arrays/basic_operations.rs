@@ -412,3 +412,20 @@ fn test_e2e_function_builds_array() {
         "357"
     );
 }
+
+#[test]
+fn postfix_offsets_apply_uniformly_to_literal_and_match_atoms() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo [10, 20][1] . ':';
+echo 'abc'[1] . ':';
+echo match (2) {
+    1 => ['wrong'],
+    2 => ['right'],
+}[0];
+"#,
+        ),
+        "20:b:right"
+    );
+}

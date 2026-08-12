@@ -17,6 +17,7 @@ pub struct Parser {
 include!("parser/generics.rs");
 include!("parser/statements.rs");
 include!("parser/expressions.rs");
+include!("parser/postfix.rs");
 include!("parser/declarations.rs");
 include!("parser/helpers.rs");
 

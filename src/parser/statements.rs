@@ -110,7 +110,7 @@ impl Parser {
             Token::Const => {
                 self.advance(); // consume 'const'
                 let name = match self.advance() {
-                    Token::Identifier(n) => n,
+                    Token::Identifier(n) | Token::MagicConstant { name: n, .. } => n,
                     other => {
                         return Err(format!(
                             "Expected constant name after 'const', got {:?}",

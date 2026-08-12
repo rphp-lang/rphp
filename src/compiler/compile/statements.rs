@@ -1013,6 +1013,8 @@ impl Compiler {
                     func_compiler.lexical_static_class = Some(resolved_class.clone());
                     func_compiler.lexical_static_parent = resolved_parent.clone();
                     func_compiler.dynamic_static_scope = false;
+                    func_compiler.current_function_name =
+                        format!("{}::{}", resolved_class, method.name);
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
@@ -1277,6 +1279,8 @@ impl Compiler {
                     func_compiler.lexical_static_class = Some(resolved_iface.clone());
                     func_compiler.lexical_static_parent = None;
                     func_compiler.dynamic_static_scope = false;
+                    func_compiler.current_function_name =
+                        format!("{}::{}", resolved_iface, method.name);
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("interface method {}::{}", name, method.name);
@@ -1409,6 +1413,8 @@ impl Compiler {
                     func_compiler.lexical_static_class = Some(resolved_trait.clone());
                     func_compiler.lexical_static_parent = None;
                     func_compiler.dynamic_static_scope = true;
+                    func_compiler.current_function_name =
+                        format!("{}::{}", resolved_trait, method.name);
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("trait method {}::{}", name, method.name);
@@ -1583,6 +1589,8 @@ impl Compiler {
                     func_compiler.lexical_static_class = Some(resolved_enum.clone());
                     func_compiler.lexical_static_parent = None;
                     func_compiler.dynamic_static_scope = false;
+                    func_compiler.current_function_name =
+                        format!("{}::{}", resolved_enum, method.name);
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("enum method {}::{}", name, method.name);
