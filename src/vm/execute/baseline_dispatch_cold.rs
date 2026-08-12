@@ -1104,20 +1104,36 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let raw_class_value =
-        unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let raw_constant_value =
-        unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    let class_value = if raw_class_value.is_reference() {
-        unsafe { &*raw_class_value.as_ref_ptr() }
-    } else {
-        raw_class_value
+    // SAFETY: dispatch supplies a live frame and an instruction from this
+    // op-array; its operand kinds and writable result slot were emitted by the
+    // compiler and remain valid until this opcode completes.
+    let (raw_class_value, raw_constant_value, result_ptr) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+            (*frame).get_op_mut(opline.result as u32, opline.result_type),
+        )
     };
-    let constant_value = if raw_constant_value.is_reference() {
-        unsafe { &*raw_constant_value.as_ref_ptr() }
-    } else {
-        raw_constant_value
+    // SAFETY: a Reference-tagged operand was created from a live VM slot; the
+    // class/name borrows do not outlive this opcode or mutate that slot.
+    let (class_value, constant_value) = unsafe {
+        (
+            if raw_class_value.is_reference() {
+                &*raw_class_value.as_ref_ptr()
+            } else {
+                raw_class_value
+            },
+            if raw_constant_value.is_reference() {
+                &*raw_constant_value.as_ref_ptr()
+            } else {
+                raw_constant_value
+            },
+        )
+    };
+    let set_result = |value| {
+        // SAFETY: `result_ptr` is the initialized writable result slot proven
+        // above, and every call transfers exactly one owned Value into it.
+        unsafe { slot_set(result_ptr, value) };
     };
     let dynamic_owner = opline._pad & CLASS_CONST_DYNAMIC_OWNER != 0;
     let dynamic_name = opline._pad & CLASS_CONST_DYNAMIC_NAME != 0;
@@ -1145,10 +1161,11 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             "Cannot use \"::class\" on string".to_string(),
         ));
     }
-    let ip = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-    };
+    // SAFETY: `opline` belongs to this op-array, and cache has one stable entry
+    // per instruction. Execution is single-threaded, so this opcode owns the
+    // mutable cache access for the duration of the lookup.
     let cache = unsafe {
+        let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
         &mut *(op_array.cache.as_ptr().add(ip)
             as *mut crate::vm::instruction::InlineCache)
     };
@@ -1181,7 +1198,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         ));
     };
     if constant.eq_ignore_ascii_case("class") && (!dynamic_name || !compile_time_name) {
-        unsafe { slot_set(result_ptr, Value::string(class.name.clone())) };
+        set_result(Value::string(class.name.clone()));
         return Ok(ColdResult::Done);
     }
 
@@ -1194,15 +1211,16 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             .get(cache.property_slot())
             .expect("cached class constant index must stay valid");
         if !dynamic_name || definition.name == constant {
-            unsafe { slot_set(result_ptr, definition.value.clone()) };
+            set_result(definition.value.clone());
             return Ok(ColdResult::Done);
         }
     }
     if !dynamic_name && class_id != 0 && cache.class_id == class_id && cache.property_flags() == 2 {
-        let value = clone_static_property_value(unsafe {
-            eg.static_property_value_unchecked(cache.property_slot())
-        });
-        unsafe { slot_set(result_ptr, value) };
+        let stored = eg
+            .static_property_value(cache.property_slot())
+            .expect("cached enum-case storage slot must stay valid");
+        let value = clone_static_property_value(stored);
+        set_result(value);
         return Ok(ColdResult::Done);
     }
 
@@ -1222,11 +1240,12 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 .position(|case| case.name == constant)
             && let Some(storage_slot) = eg.static_property_storage_slot(class_id, case_index)
         {
-            let value = clone_static_property_value(unsafe {
-                eg.static_property_value_unchecked(storage_slot)
-            });
+            let stored = eg
+                .static_property_value(storage_slot)
+                .expect("resolved enum-case storage slot must stay valid");
+            let value = clone_static_property_value(stored);
             cache.set_property(class_id, storage_slot, 2);
-            unsafe { slot_set(result_ptr, value) };
+            set_result(value);
             return Ok(ColdResult::Done);
         }
         return Ok(static_property_throw(
@@ -1259,7 +1278,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     }
     let value = definition.value.clone();
     cache.set_property(class_id, constant_index, 1);
-    unsafe { slot_set(result_ptr, value) };
+    set_result(value);
     Ok(ColdResult::Done)
 }
 
@@ -1449,20 +1468,24 @@ fn validate_cached_typed_static_property<'a>(
     };
     #[cfg(feature = "php-generics-reified")]
     let definition = if reified_contract.is_null() {
-        cache.typed_static_property_definition()
+        cache
+            .typed_static_property_definition()
+            .expect("typed static cache must retain its definition")
     } else {
-        unsafe { eg.static_generic_property_contract_definition(reified_contract) }
+        // SAFETY: tag 6 was published from an executor-owned boxed contract
+        // and remains stable until executor teardown.
+        unsafe { &*eg.static_generic_property_contract_definition(reified_contract) }
     };
     #[cfg(not(feature = "php-generics-reified"))]
-    let definition = cache.typed_static_property_definition();
-    debug_assert!(!definition.is_null());
-    let definition_ref = unsafe { &*definition };
+    let definition = cache
+        .typed_static_property_definition()
+        .expect("typed static cache must retain its definition");
     let called_class = eg
         .class_by_id(class_id)
         .map_or(raw_class, |class| class.name.as_str());
     value = match prepare_property_assignment(
         value,
-        definition_ref,
+        definition,
         eg,
         op_array.strict_types,
         called_class,
@@ -1478,10 +1501,10 @@ fn validate_cached_typed_static_property<'a>(
         }
     };
     #[cfg(feature = "php-generics-reified")]
-    if definition_ref.requires_reified_check
+    if definition.requires_reified_check
         && let Err(message) = eg.check_reified_static_property_value(
             called_class,
-            &definition_ref.name,
+            &definition.name,
             &value,
         )
     {
@@ -1565,13 +1588,13 @@ fn assign_static_property_cache_miss<'a>(
     if !reified_contract.is_null() {
         cache.set_reified_static_property(reified_contract, class_id, resolved.storage_slot);
     } else if definition.is_typed() {
-        cache.set_typed_static_property(resolved.definition, class_id, resolved.storage_slot);
+        cache.set_typed_static_property(definition, class_id, resolved.storage_slot);
     } else {
         cache.set_property(class_id, resolved.storage_slot, 3);
     }
     #[cfg(not(feature = "php-generics-reified"))]
     if definition.is_typed() {
-        cache.set_typed_static_property(resolved.definition, class_id, resolved.storage_slot);
+        cache.set_typed_static_property(definition, class_id, resolved.storage_slot);
     } else {
         cache.set_property(class_id, resolved.storage_slot, 3);
     }

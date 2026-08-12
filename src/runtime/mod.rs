@@ -97,7 +97,9 @@ impl StaticGenericPropertyContract {
         if value.value_type() != crate::value::ValueType::Object {
             return false;
         }
-        let identity = unsafe { value.object_identity_unchecked() };
+        let identity = value
+            .object_identity()
+            .expect("object tag must expose object identity");
         self.identity.get() == identity && self.object.borrow().strong_count() != 0
     }
 
@@ -1256,19 +1258,17 @@ impl ExecutorGlobals {
         }
     }
 
-    /// Stable declaration pointer for one object-layout slot. Class
-    /// definitions are boxed before publication and their property vectors
-    /// are immutable afterwards, so inline caches may retain this pointer.
+    /// Declaration metadata for one object-layout slot. Class definitions are
+    /// boxed before publication and their property vectors are immutable
+    /// afterwards, so callers may subsequently publish the returned address
+    /// into an inline cache.
     #[inline(always)]
     pub(crate) fn instance_property_definition(
         &self,
         class_id: u32,
         property_slot: usize,
-    ) -> Option<*const PropertyDefinition> {
-        self.class_by_id(class_id)?
-            .properties
-            .get(property_slot)
-            .map(|definition| definition as *const PropertyDefinition)
+    ) -> Option<&PropertyDefinition> {
+        self.class_by_id(class_id)?.properties.get(property_slot)
     }
 
     /// Resolve one class-local declaration index to its canonical mutable

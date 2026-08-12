@@ -156,7 +156,9 @@ fn instance_property_cache_accepts_exact_non_generic_write(
     if cache.property_flags() != 2 {
         return false;
     }
-    let definition = unsafe { &*cache.typed_instance_property_definition() };
+    let definition = cache
+        .typed_instance_property_definition()
+        .expect("typed instance cache must retain its definition");
     definition.generic_declaration.is_none()
         && property_type_matches_exact(
             value,

@@ -25,6 +25,8 @@ fn try_assign_cached_typed_instance_property<'a>(
     object: &Value,
     object_class_id: u32,
 ) -> Result<Option<ColdResult<'a>>, VmError> {
+    // SAFETY: dispatch passes `opline` from this op-array, so offset_from has
+    // common provenance and selects the corresponding stable cache entry.
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
@@ -36,16 +38,33 @@ fn try_assign_cached_typed_instance_property<'a>(
         return Ok(None);
     }
 
-    let source = unsafe {
-        &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
+    // SAFETY: the live dispatch frame owns the compiler-emitted source slot.
+    // A Reference points at a live VM slot, and flags == 2 proves that the
+    // tagged cache word contains a stable PropertyDefinition pointer.
+    let (source, definition) = unsafe {
+        let source = &*(*frame).get_op_ptr(
+            opline.result as u32,
+            opline.result_type,
+            op_array,
+        );
+        let source = if source.is_reference() {
+            &*source.as_ref_ptr()
+        } else {
+            source
+        };
+        (
+            source,
+            cache
+                .typed_instance_property_definition()
+                .expect("typed instance cache must retain its definition"),
+        )
     };
-    let source = if source.is_reference() {
-        unsafe { &*source.as_ref_ptr() }
-    } else {
-        source
-    };
-    let definition = unsafe { &*cache.typed_instance_property_definition() };
     let tag = cache.typed_instance_property_tag();
+    let set_value = |value| {
+        // SAFETY: the class-id guard above proves that the cached slot belongs
+        // to this object; the object is not borrowed elsewhere in this path.
+        unsafe { object.object_set_property_slot_unchecked(cache.property_slot(), value) };
+    };
 
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     if let Some(declaration) = definition.generic_declaration
@@ -65,9 +84,7 @@ fn try_assign_cached_typed_instance_property<'a>(
     }
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     if definition.generic_declaration.is_some() {
-        unsafe {
-            object.object_set_property_slot_unchecked(cache.property_slot(), source.clone());
-        }
+        set_value(source.clone());
         return Ok(Some(ColdResult::Done));
     }
 
@@ -95,9 +112,7 @@ fn try_assign_cached_typed_instance_property<'a>(
             _ => None,
         };
         if let Some(value) = fast_value {
-            unsafe {
-                object.object_set_property_slot_unchecked(cache.property_slot(), value);
-            }
+            set_value(value);
             return Ok(Some(ColdResult::Done));
         }
     }
@@ -122,8 +137,6 @@ fn try_assign_cached_typed_instance_property<'a>(
             )));
         }
     };
-    unsafe {
-        object.object_set_property_slot_unchecked(cache.property_slot(), value);
-    }
+    set_value(value);
     Ok(Some(ColdResult::Done))
 }

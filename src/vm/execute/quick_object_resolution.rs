@@ -236,7 +236,9 @@ unsafe fn quick_long_property_slots(
                     return None;
                 }
                 let declaration = if cache.property_flags() == 2 {
-                    (&*cache.typed_instance_property_definition()).generic_declaration?
+                    cache
+                        .typed_instance_property_definition()?
+                        .generic_declaration?
                 } else {
                     cache.generic_property_declaration()?
                 };

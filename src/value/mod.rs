@@ -3389,6 +3389,16 @@ impl Value {
         self.data.ptr as usize
     }
 
+    /// Stable allocation identity for an object value.
+    #[inline]
+    pub fn object_identity(&self) -> Option<usize> {
+        (self.value_type() == ValueType::Object).then(|| {
+            // SAFETY: the tag check above proves that the pointer union field
+            // contains the live `Rc<RefCell<PhpObject>>` allocation address.
+            unsafe { self.object_identity_unchecked() }
+        })
+    }
+
     /// Read the immutable class name for Object values without taking a
     /// `RefCell` borrow. This is needed by boundary checks that may run while
     /// the same object's property storage is already mutably borrowed.
@@ -3742,9 +3752,7 @@ impl Value {
                     .zip(b.iter())
                     .all(|((ka, va), (kb, vb))| ka == kb && va.structurally_equal(vb))
             }
-            ValueType::Object => unsafe {
-                self.object_identity_unchecked() == other.object_identity_unchecked()
-            },
+            ValueType::Object => self.object_identity() == other.object_identity(),
             _ => false,
         }
     }

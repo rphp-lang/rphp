@@ -312,14 +312,14 @@ impl InlineCache {
     #[inline]
     pub fn set_typed_static_property(
         &mut self,
-        definition: *const PropertyDefinition,
+        definition: &PropertyDefinition,
         class_id: u32,
         slot: usize,
     ) {
-        debug_assert!(!definition.is_null());
-        debug_assert_eq!(definition as usize & Self::TYPED_PROPERTY_TAG_MASK, 0);
+        let definition_ptr = definition as *const PropertyDefinition;
+        debug_assert_eq!(definition_ptr as usize & Self::TYPED_PROPERTY_TAG_MASK, 0);
         self.set_property(class_id, slot, 1);
-        let tag = match unsafe { &*definition }.type_hint {
+        let tag = match definition.type_hint {
             super::function::ParamTypeHint::Int => Self::TYPED_PROPERTY_INT,
             super::function::ParamTypeHint::Float => Self::TYPED_PROPERTY_FLOAT,
             super::function::ParamTypeHint::String => Self::TYPED_PROPERTY_STRING,
@@ -327,7 +327,7 @@ impl InlineCache {
             super::function::ParamTypeHint::Array => Self::TYPED_PROPERTY_ARRAY,
             _ => Self::TYPED_PROPERTY_COMPLEX,
         };
-        self.func = ((definition as usize) | tag) as *const FunctionCommon;
+        self.func = ((definition_ptr as usize) | tag) as *const FunctionCommon;
     }
 
     /// Typed instance writes use the write-safe bit without the read-safe bit.
@@ -338,23 +338,22 @@ impl InlineCache {
     #[inline]
     pub fn set_typed_instance_property(
         &mut self,
-        definition: *const PropertyDefinition,
+        definition: &PropertyDefinition,
         class_id: u32,
         slot: usize,
     ) {
-        debug_assert!(!definition.is_null());
-        debug_assert_eq!(definition as usize & Self::TYPED_PROPERTY_TAG_MASK, 0);
+        let definition_ptr = definition as *const PropertyDefinition;
+        debug_assert_eq!(definition_ptr as usize & Self::TYPED_PROPERTY_TAG_MASK, 0);
         self.set_property(class_id, slot, 2);
-        let definition_ref = unsafe { &*definition };
         // Generic-origin contracts must never acquire an exact scalar tag:
         // their substituted bound/reified check remains authoritative even
         // when the erased declaration currently looks like `int` or another
         // scalar. Encoding that distinction on cache fill lets the warmed
         // exact path avoid dereferencing cold declaration metadata.
-        let tag = if definition_ref.generic_declaration.is_some() {
+        let tag = if definition.generic_declaration.is_some() {
             Self::TYPED_PROPERTY_COMPLEX
         } else {
-            match definition_ref.type_hint {
+            match definition.type_hint {
                 super::function::ParamTypeHint::Int => Self::TYPED_PROPERTY_INT,
                 super::function::ParamTypeHint::Float => Self::TYPED_PROPERTY_FLOAT,
                 super::function::ParamTypeHint::String => Self::TYPED_PROPERTY_STRING,
@@ -363,13 +362,23 @@ impl InlineCache {
                 _ => Self::TYPED_PROPERTY_COMPLEX,
             }
         };
-        self.func = ((definition as usize) | tag) as *const FunctionCommon;
+        self.func = ((definition_ptr as usize) | tag) as *const FunctionCommon;
     }
 
     #[inline(always)]
-    pub fn typed_instance_property_definition(&self) -> *const PropertyDefinition {
-        debug_assert_eq!(self.property_flags(), 2);
-        (self.func as usize & !Self::TYPED_PROPERTY_TAG_MASK) as *const PropertyDefinition
+    pub fn typed_instance_property_definition(&self) -> Option<&PropertyDefinition> {
+        if self.property_flags() != 2 {
+            return None;
+        }
+        let definition =
+            (self.func as usize & !Self::TYPED_PROPERTY_TAG_MASK) as *const PropertyDefinition;
+        if definition.is_null() {
+            return None;
+        }
+        // SAFETY: instance cache state 2 with a non-null payload is published
+        // only by `set_typed_instance_property`, from an immutable definition
+        // in a boxed class that remains stable for the executor lifetime.
+        Some(unsafe { &*definition })
     }
 
     #[inline(always)]
@@ -379,9 +388,19 @@ impl InlineCache {
     }
 
     #[inline(always)]
-    pub fn typed_static_property_definition(&self) -> *const PropertyDefinition {
-        debug_assert_eq!(self.property_flags(), 1);
-        (self.func as usize & !Self::TYPED_PROPERTY_TAG_MASK) as *const PropertyDefinition
+    pub fn typed_static_property_definition(&self) -> Option<&PropertyDefinition> {
+        if self.property_flags() != 1 {
+            return None;
+        }
+        let definition =
+            (self.func as usize & !Self::TYPED_PROPERTY_TAG_MASK) as *const PropertyDefinition;
+        if definition.is_null() {
+            return None;
+        }
+        // SAFETY: typed static cache state is published from immutable boxed
+        // class metadata. Reified contract tag 6 is handled by its caller and
+        // never reaches this accessor as a PropertyDefinition.
+        Some(unsafe { &*definition })
     }
 
     #[inline(always)]
@@ -634,12 +653,17 @@ mod inline_cache_tests {
         ));
         let definition_ptr = &*definition as *const PropertyDefinition;
         let mut cache = InlineCache::empty();
-        cache.set_typed_instance_property(definition_ptr, 7, 3);
+        cache.set_typed_instance_property(&definition, 7, 3);
 
         assert_eq!(cache.class_id, 7);
         assert_eq!(cache.property_slot(), 3);
         assert_eq!(cache.property_flags(), 2);
-        assert_eq!(cache.typed_instance_property_definition(), definition_ptr);
+        assert_eq!(
+            cache
+                .typed_instance_property_definition()
+                .map(|definition| definition as *const PropertyDefinition),
+            Some(definition_ptr)
+        );
         assert_eq!(
             cache.typed_instance_property_tag(),
             InlineCache::TYPED_PROPERTY_INT
@@ -659,10 +683,12 @@ mod inline_cache_tests {
         generic_definition.generic_declaration = Some(11);
         let generic_definition = Box::new(generic_definition);
         let generic_definition_ptr = &*generic_definition as *const PropertyDefinition;
-        cache.set_typed_instance_property(generic_definition_ptr, 9, 4);
+        cache.set_typed_instance_property(&generic_definition, 9, 4);
         assert_eq!(
-            cache.typed_instance_property_definition(),
-            generic_definition_ptr
+            cache
+                .typed_instance_property_definition()
+                .map(|definition| definition as *const PropertyDefinition),
+            Some(generic_definition_ptr)
         );
         assert_eq!(
             cache.typed_instance_property_tag(),

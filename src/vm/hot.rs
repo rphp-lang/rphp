@@ -1257,7 +1257,7 @@ pub fn execute_hot_frame(
                     return bailout(frame, opline_ptr, HotBailReason::ObjAssignHeapSrc);
                 }
                 let typed_definition = if ic.property_flags() == 2 {
-                    Some(unsafe { &*ic.typed_instance_property_definition() })
+                    ic.typed_instance_property_definition()
                 } else {
                     None
                 };
@@ -1287,9 +1287,13 @@ pub fn execute_hot_frame(
                         == crate::vm::instruction::InlineCache::TYPED_PROPERTY_FLOAT
                     && src_val.value_type() == ValueType::Long
                 {
+                    // SAFETY: the preceding tag guard proves the Long union
+                    // field is initialized.
                     Value::double(unsafe { src_val.raw_long() } as f64)
                 } else {
                     let mut copied = Value::undef();
+                    // SAFETY: heap/reference sources bailed above, so this is a
+                    // plain scalar bit-copy into an initialized local Value.
                     unsafe { Value::raw_copy(src_val as *const Value, &mut copied as *mut Value) };
                     copied
                 };

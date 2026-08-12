@@ -21,7 +21,9 @@ impl ExecutorGlobals {
         if value.value_type() != crate::value::ValueType::Object {
             return false;
         }
-        let identity = unsafe { value.object_identity_unchecked() };
+        let identity = value
+            .object_identity()
+            .expect("object tag must expose object identity");
         {
             let mut cache = self.reified_nested_arguments_cache.borrow_mut();
             if let Some(cached) = cache.as_mut()
@@ -91,7 +93,9 @@ impl ExecutorGlobals {
         if value.value_type() != crate::value::ValueType::Object {
             return false;
         }
-        let identity = unsafe { value.object_identity_unchecked() };
+        let identity = value
+            .object_identity()
+            .expect("object tag must expose object identity");
         {
             let mut cache = self.reified_nested_arguments_cache.borrow_mut();
             if let Some(cached) = cache.as_mut()

@@ -3273,7 +3273,9 @@ fn var_dump_value_inner(
             out
         }
         ValueType::Object => {
-            let identity = unsafe { val.object_identity_unchecked() };
+            let identity = val
+                .object_identity()
+                .expect("object tag must expose object identity");
             if !visited_objects.insert(identity) {
                 return format!("{}*RECURSION*\n", prefix);
             }

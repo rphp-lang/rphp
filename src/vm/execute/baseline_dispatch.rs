@@ -2406,11 +2406,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let property_flags = ic.property_flags();
                     // flags == 3: read-safe + write-safe declared property slot.
                     if property_flags == 3 && cache_matches {
-                        let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
-                        let val = if val.is_reference() {
-                            unsafe { &*val.as_ref_ptr() }
-                        } else {
-                            val
+                        // SAFETY: the compiler-emitted source belongs to the
+                        // live frame; a Reference target remains live through
+                        // this non-reentrant cached assignment.
+                        let val = unsafe {
+                            let val = &*(*frame).get_op_ptr(
+                                opline.result as u32,
+                                opline.result_type,
+                                op_array,
+                            );
+                            if val.is_reference() {
+                                &*val.as_ref_ptr()
+                            } else {
+                                val
+                            }
                         };
                         let cloned = val.clone();
                         unsafe {
@@ -2421,21 +2430,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && ic.typed_instance_property_tag()
                             == crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT
                         && {
+                            // SAFETY: as above, the source slot and any
+                            // Reference target remain live for this opcode.
                             let source = unsafe {
-                                &*(*frame).get_op_ptr(
+                                let source = &*(*frame).get_op_ptr(
                                     opline.result as u32,
                                     opline.result_type,
                                     op_array,
-                                )
-                            };
-                            let source = if source.is_reference() {
-                                unsafe { &*source.as_ref_ptr() }
-                            } else {
-                                source
+                                );
+                                if source.is_reference() {
+                                    &*source.as_ref_ptr()
+                                } else {
+                                    source
+                                }
                             };
                             if source.value_type() != ValueType::Long {
                                 false
                             } else {
+                                // SAFETY: class-id equality proves the cached
+                                // declared slot belongs to this object.
                                 unsafe {
                                     obj_val.object_set_property_slot_unchecked(
                                         ic.property_slot(),

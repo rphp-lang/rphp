@@ -112,7 +112,9 @@ unsafe fn try_execute_property_init_constructor(
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             {
                 let declaration = if cache.property_flags() == 2 {
-                    (&*cache.typed_instance_property_definition()).generic_declaration?
+                    cache
+                        .typed_instance_property_definition()?
+                        .generic_declaration?
                 } else {
                     cache.generic_property_declaration()?
                 };
@@ -380,6 +382,8 @@ fn finish_cached_fetch_obj_r(
     opline: &Instruction,
     property_ptr: *const Value,
 ) -> CachedFetchObjResult {
+    // SAFETY: callers obtain `property_ptr` from a guarded object layout and
+    // perform no mutable property operation before this helper returns.
     let property = unsafe { &*property_ptr };
     // A class cache is shared by every instance. Another object of the same
     // class may still hold the typed-property undef sentinel even after this
@@ -578,10 +582,8 @@ fn op_fetch_obj_r_slow<'a>(
         }
         drop(obj); // Release borrow before potential magic method call
         if let Some(val) = found_val {
-            if val.is_undef()
-                && definition.is_some_and(|definition| unsafe { (&*definition).is_typed() })
-            {
-                let definition = unsafe { &*definition.unwrap() };
+            if val.is_undef() && definition.is_some_and(|definition| definition.is_typed()) {
+                let definition = definition.unwrap();
                 let error = make_error_value(
                     "Error",
                     &format!(
@@ -620,6 +622,8 @@ fn op_assign_obj_prop<'a>(
     let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
     let val = if val.is_reference() {
+        // SAFETY: Reference values in a live frame point at a slot whose
+        // lifetime covers this opcode; the borrow ends before any assignment.
         unsafe { &*val.as_ref_ptr() }
     } else {
         val
@@ -729,8 +733,7 @@ fn op_assign_obj_prop<'a>(
         let object_class_name = php_obj.class_name.clone();
         let prop_exists = php_obj.contains_property(&key);
         drop(php_obj);
-        if let Some(definition_ptr) = definition {
-            let definition_ref = unsafe { &*definition_ptr };
+        if let Some(definition_ref) = definition {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             if let Some(declaration) = definition_ref.generic_declaration
                 && let Err(message) = eg.check_cached_generic_property_value(
@@ -774,7 +777,7 @@ fn op_assign_obj_prop<'a>(
             let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
             if let Some(slot) = declared_slot {
                 if let Some(definition) = definition
-                    && unsafe { (&*definition).is_typed() }
+                    && definition.is_typed()
                 {
                     ic_mut.set_typed_instance_property(definition, object_class_id, slot);
                 } else {
