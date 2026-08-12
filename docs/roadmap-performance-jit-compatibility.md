@@ -9793,6 +9793,18 @@ must honor their autoload argument; `class_alias()`, `function_exists()` and
 `method_exists()` must match PHP visibility/name behavior rather than merely
 consulting an already-populated table.
 
+Current S0 checkpoint: explicit callable registration, unregister/listing,
+order, prepend, duplicate identity, recursion suppression and exception
+propagation are implemented in request-local state. Object-method callbacks can
+load a class through ordinary `require`; existence probes autoload by the
+correct symbol kind, and `method_exists()` autoloads string owners while seeing
+abstract and non-public declarations. The callback stack is published as an
+immutable `Rc` slice, so a lookup takes an allocation-free snapshot even when a
+loader mutates the live registry. S0 is not complete: default/null registration
+and `spl_autoload()`, the remaining include-return/scope edges,
+`class_alias()`/`function_exists()` behavior and the unmodified Composer fixture
+gate remain outstanding.
+
 Composer's generated platform check must observe truthful `PHP_VERSION_ID`,
 `PHP_VERSION`, `PHP_INT_SIZE`, extension availability and exit/error behavior.
 RPHP currently advertises PHP 8.4.0, so Symfony will select PHP 8.4 branches.
