@@ -121,6 +121,12 @@ pub enum Expr {
         property: String,
         nullsafe: bool,
     },
+    DynamicPropertyAccess {
+        // $obj->{$property}
+        object: Box<Expr>,
+        property: Box<Expr>,
+        nullsafe: bool,
+    },
     MethodCall {
         // $obj->method(args) or $obj?->method(args)
         object: Box<Expr>,
@@ -239,6 +245,9 @@ impl Expr {
             Expr::ArrayAccess { array, index } => {
                 array.contains_yield() || index.contains_yield()
             }
+            Expr::DynamicPropertyAccess {
+                object, property, ..
+            } => object.contains_yield() || property.contains_yield(),
             Expr::Cast { expr, .. }
             | Expr::PropertyAccess { object: expr, .. }
             | Expr::Instanceof { expr, .. }
@@ -408,6 +417,14 @@ pub enum UseKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct TraitAlias {
+    pub trait_name: Option<String>,
+    pub method: String,
+    pub alias: Option<String>,
+    pub visibility: Option<Visibility>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Noop,
     Label(String),
@@ -511,6 +528,7 @@ pub enum Stmt {
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
         uses: Vec<GenericAncestor>, // trait names from `use Foo<T>, Bar<U>;`
+        trait_aliases: Vec<TraitAlias>,
         generic_params: Vec<GenericParameter>,
     },
     Interface {

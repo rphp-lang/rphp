@@ -5,6 +5,7 @@ enum ArrayRootWriteback {
         object: u16,
         object_type: OpType,
         property: u16,
+        property_type: OpType,
     },
     Static {
         class: u16,
@@ -26,6 +27,7 @@ enum CoalesceWrite {
         object: u16,
         object_type: OpType,
         property: u16,
+        property_type: OpType,
     },
     StaticProperty {
         class: u16,
@@ -41,6 +43,7 @@ pub(super) enum ForeachArrayWriteback {
         object: u16,
         object_type: OpType,
         property: u16,
+        property_type: OpType,
     },
     StaticProperty {
         class: u16,
@@ -83,6 +86,34 @@ impl Compiler {
                         object,
                         object_type,
                         property,
+                        property_type: OpType::Const,
+                    },
+                ))
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let (property, property_type) = self.compile_expr(property);
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = property_type;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                Ok((
+                    current,
+                    OpType::Tmp,
+                    ForeachArrayWriteback::ObjectProperty {
+                        object,
+                        object_type,
+                        property,
+                        property_type,
                     },
                 ))
             }
@@ -164,12 +195,13 @@ impl Compiler {
                 object,
                 object_type,
                 property,
+                property_type,
             } => {
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                 assign.op1 = object;
                 assign.op1_type = object_type;
                 assign.op2 = property;
-                assign.op2_type = OpType::Const;
+                assign.op2_type = property_type;
                 assign.result = array;
                 assign.result_type = OpType::Tmp;
                 self.instructions.push(assign);
@@ -242,6 +274,34 @@ impl Compiler {
                         object,
                         object_type,
                         property,
+                        property_type: OpType::Const,
+                    },
+                )
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let (property, property_type) = self.compile_expr(property);
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = property_type;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (
+                    current,
+                    OpType::Tmp,
+                    CoalesceWrite::ObjectProperty {
+                        object,
+                        object_type,
+                        property,
+                        property_type,
                     },
                 )
             }
@@ -329,12 +389,13 @@ impl Compiler {
                 object,
                 object_type,
                 property,
+                property_type,
             } => {
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                 assign.op1 = object;
                 assign.op1_type = object_type;
                 assign.op2 = property;
-                assign.op2_type = OpType::Const;
+                assign.op2_type = property_type;
                 assign.result = value;
                 assign.result_type = value_type;
                 self.instructions.push(assign);
@@ -396,6 +457,7 @@ impl Compiler {
                 object: u16,
                 object_type: OpType,
                 property: u16,
+                property_type: OpType,
             },
             Static {
                 class: u16,
@@ -417,6 +479,21 @@ impl Compiler {
                     object,
                     object_type,
                     property,
+                    property_type: OpType::Const,
+                }
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let (property, property_type) = self.compile_expr(property);
+                WriteTarget::Object {
+                    object,
+                    object_type,
+                    property,
+                    property_type,
                 }
             }
             Expr::StaticProperty {
@@ -457,12 +534,13 @@ impl Compiler {
                 object,
                 object_type,
                 property,
+                property_type,
             } => {
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                 assign.op1 = object;
                 assign.op1_type = object_type;
                 assign.op2 = property;
-                assign.op2_type = OpType::Const;
+                assign.op2_type = property_type;
                 assign.result = result;
                 assign.result_type = OpType::Tmp;
                 self.instructions.push(assign);
@@ -536,6 +614,33 @@ impl Compiler {
                         object,
                         object_type,
                         property,
+                        property_type: OpType::Const,
+                    },
+                )
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let (property, property_type) = self.compile_expr(property);
+                let container = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = property_type;
+                fetch.result = container;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (
+                    (container, OpType::Tmp),
+                    ArrayRootWriteback::Object {
+                        object,
+                        object_type,
+                        property,
+                        property_type,
                     },
                 )
             }
@@ -620,12 +725,13 @@ impl Compiler {
                 object,
                 object_type,
                 property,
+                property_type,
             } => {
                 let mut instruction = Instruction::new(OpCode::AssignObjProp);
                 instruction.op1 = object;
                 instruction.op1_type = object_type;
                 instruction.op2 = property;
-                instruction.op2_type = OpType::Const;
+                instruction.op2_type = property_type;
                 instruction
             }
             ArrayRootWriteback::Static {
@@ -1755,6 +1861,7 @@ impl Compiler {
                 is_abstract,
                 is_final,
                 uses,
+                trait_aliases,
                 properties,
                 constants,
                 methods,
@@ -2017,6 +2124,18 @@ impl Compiler {
                     implements.iter().map(|i| self.resolve_name(&i.name)).collect();
                 let resolved_uses: Vec<String> =
                     uses.iter().map(|u| self.resolve_name(&u.name)).collect();
+                let resolved_trait_aliases = trait_aliases
+                    .iter()
+                    .map(|adaptation| TraitMethodAlias {
+                        trait_name: adaptation
+                            .trait_name
+                            .as_ref()
+                            .map(|name| self.resolve_name(name)),
+                        method: adaptation.method.clone(),
+                        alias: adaptation.alias.clone(),
+                        visibility: adaptation.visibility,
+                    })
+                    .collect();
                 let compiled_constants = self.compile_class_constants(
                     &resolved_class,
                     resolved_parent.as_deref(),
@@ -2032,6 +2151,7 @@ impl Compiler {
                     is_trait: false,
                     is_enum: false,
                     uses: resolved_uses,
+                    trait_aliases: resolved_trait_aliases,
                     properties: compiled_props,
                     static_properties: compiled_static_props,
                     constants: compiled_constants,
@@ -2186,6 +2306,7 @@ impl Compiler {
                     is_trait: false,
                     is_enum: false,
                     uses: vec![],
+                    trait_aliases: vec![],
                     properties: vec![],
                     static_properties: vec![],
                     constants: compiled_constants,
@@ -2375,6 +2496,7 @@ impl Compiler {
                     is_trait: true,
                     is_enum: false,
                     uses: vec![],
+                    trait_aliases: vec![],
                     properties: compiled_props,
                     static_properties: compiled_static_props,
                     constants: compiled_constants,
@@ -2551,6 +2673,7 @@ impl Compiler {
                     is_trait: false,
                     is_enum: true,
                     uses: vec![],
+                    trait_aliases: vec![],
                     properties: vec![],
                     static_properties: compiled_props,
                     constants: compiled_constants,

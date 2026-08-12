@@ -1180,6 +1180,14 @@ pub struct ClassConstantDefinition {
     pub is_final: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct TraitMethodAlias {
+    pub trait_name: Option<String>,
+    pub method: String,
+    pub alias: Option<String>,
+    pub visibility: Option<Visibility>,
+}
+
 pub struct ClassDef {
     pub name: String,
     pub parent: Option<String>,
@@ -1190,6 +1198,7 @@ pub struct ClassDef {
     pub is_trait: bool,
     pub is_enum: bool,
     pub uses: Vec<String>, // trait names from `use Foo, Bar;`
+    pub trait_aliases: Vec<TraitMethodAlias>,
     /// Instance-property declarations in deterministic layout order.
     pub properties: Vec<PropertyDefinition>,
     /// Static properties remain outside every object layout. Mutable static
@@ -4196,6 +4205,41 @@ impl Compiler {
                     self.instructions[idx].op2 = self.instructions.len() as u16;
                 }
 
+                (tmp, OpType::Tmp)
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe,
+            } => {
+                let (obj_op, obj_type) = self.compile_expr(object);
+                let tmp = self.alloc_tmp();
+                let nullsafe_patch = if *nullsafe {
+                    let mut check = Instruction::new(OpCode::NullSafeCheck);
+                    check.op1 = obj_op;
+                    check.op1_type = obj_type;
+                    check.op2 = 0;
+                    check.result = tmp;
+                    check.result_type = OpType::Tmp;
+                    check.extended_value = 0;
+                    let index = self.instructions.len();
+                    self.instructions.push(check);
+                    Some(index)
+                } else {
+                    None
+                };
+                let (property_op, property_type) = self.compile_expr(property);
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = obj_op;
+                fetch.op1_type = obj_type;
+                fetch.op2 = property_op;
+                fetch.op2_type = property_type;
+                fetch.result = tmp;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                if let Some(index) = nullsafe_patch {
+                    self.instructions[index].op2 = self.instructions.len() as u16;
+                }
                 (tmp, OpType::Tmp)
             }
             Expr::MethodCall {

@@ -865,6 +865,10 @@ impl Parser {
                     nullsafe: false,
                     ..
                 }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
                 | Expr::StaticProperty { .. }
         ) {
             return Err("Invalid array append target".into());
@@ -886,6 +890,10 @@ impl Parser {
                     nullsafe: false,
                     ..
                 }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
                 | Expr::StaticProperty { .. }
         );
         if !valid_target {
@@ -903,6 +911,10 @@ impl Parser {
             Expr::Variable(_)
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::DynamicPropertyAccess {
                     nullsafe: false,
                     ..
                 }

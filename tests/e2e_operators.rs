@@ -284,6 +284,48 @@ fn test_e2e_null_coalescing_assignment_in_ternary_arms() {
 }
 
 #[test]
+fn test_e2e_coalesce_assignment_binds_on_null_coalesce_rhs() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FactoryHolder {
+    private static $factory;
+
+    private static function make() {
+        return 'made';
+    }
+
+    public static function resolve() {
+        return ($missing['service'] ?? self::$factory ??= self::make(...))();
+    }
+}
+
+echo FactoryHolder::resolve();
+"#,
+        ),
+        "made"
+    );
+}
+
+#[test]
+fn test_e2e_dynamic_object_property_read_and_coalesce_assignment() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DynamicProperties {
+    public $values = ['ready' => 'yes'];
+}
+$object = new DynamicProperties();
+$property = 'values';
+echo $object->{$property}['ready'], '|';
+echo $object->{$property}['missing'] ??= 'created';
+"#,
+        ),
+        "yes|created"
+    );
+}
+
+#[test]
 fn test_e2e_property_and_array_assignment_expressions_produce_values() {
     assert_eq!(
         run_php(

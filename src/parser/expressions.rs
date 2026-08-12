@@ -30,6 +30,9 @@ impl Parser {
             | Expr::PropertyAccess {
                 nullsafe: false, ..
             }
+            | Expr::DynamicPropertyAccess {
+                nullsafe: false, ..
+            }
             | Expr::StaticProperty { .. } => Ok(Expr::AssignTarget {
                 target: Box::new(target),
                 expr,
@@ -44,6 +47,10 @@ impl Parser {
             Expr::Variable(_)
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::DynamicPropertyAccess {
                     nullsafe: false,
                     ..
                 }
@@ -159,6 +166,9 @@ impl Parser {
         if self.peek() == Token::QuestionQuestion {
             self.advance();
             let right = self.parse_null_coalesce()?; // right-associative
+            // Assignment is lower precedence than `??`, but it may start on
+            // the recursively parsed right-hand side (`$a ?? $b ??= $c`).
+            let right = self.finish_assignment_tail(right)?;
             Ok(Expr::NullCoalesce {
                 left: Box::new(left),
                 right: Box::new(right),

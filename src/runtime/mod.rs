@@ -1131,6 +1131,36 @@ impl ExecutorGlobals {
             }
         }
 
+        for adaptation in &class_def.trait_aliases {
+            let source_trait = if let Some(trait_name) = &adaptation.trait_name {
+                trait_names
+                    .iter()
+                    .find(|used| used.eq_ignore_ascii_case(trait_name))
+            } else {
+                trait_names.iter().find(|used| {
+                    self.function_table
+                        .contains_key(&format!("{}::{}", used, adaptation.method).to_lowercase())
+                })
+            }
+            .ok_or_else(|| {
+                format!(
+                    "Trait method {}::{} not found",
+                    adaptation.trait_name.as_deref().unwrap_or(""),
+                    adaptation.method
+                )
+            })?;
+            let source = format!("{}::{}", source_trait, adaptation.method).to_lowercase();
+            let pointer = *self
+                .function_table
+                .get(&source)
+                .ok_or_else(|| format!("Trait method {source} not found"))?;
+            let alias = adaptation.alias.as_deref().unwrap_or(&adaptation.method);
+            self.function_table
+                .insert(format!("{}::{}", class_name, alias).to_lowercase(), pointer);
+            self.method_declaring_class
+                .insert(pointer, class_name.clone());
+        }
+
         // Interface constants are inherited without being copied into source
         // declarations. Flatten them once at class registration so reads and
         // their inline caches are an indexed lookup thereafter.
@@ -1795,9 +1825,53 @@ impl ExecutorGlobals {
                         if name.to_lowercase() == method_lower
                             && !trait_def.method_is_abstract(name)
                         {
+                            if class_def.trait_aliases.iter().any(|adaptation| {
+                                adaptation.alias.is_none()
+                                    && adaptation.method.eq_ignore_ascii_case(method_name)
+                            }) {
+                                continue;
+                            }
                             // Trait method visibility applies as if declared in the using class
                             return Some((*vis, *is_static, class_name.to_string()));
                         }
+                    }
+                }
+            }
+            for adaptation in &class_def.trait_aliases {
+                let alias = adaptation.alias.as_deref().unwrap_or(&adaptation.method);
+                if alias.eq_ignore_ascii_case(method_name) {
+                    let source_trait = adaptation
+                        .trait_name
+                        .as_ref()
+                        .and_then(|name| {
+                            class_def
+                                .uses
+                                .iter()
+                                .find(|used| used.eq_ignore_ascii_case(name))
+                        })
+                        .or_else(|| {
+                            class_def.uses.iter().find(|used| {
+                                self.class_table
+                                    .get(used.as_str())
+                                    .is_some_and(|definition| {
+                                        definition.methods.iter().any(|(name, _, _, _, _)| {
+                                            name.eq_ignore_ascii_case(&adaptation.method)
+                                        })
+                                    })
+                            })
+                        });
+                    if let Some(trait_name) = source_trait
+                        && let Some(trait_def) = self.class_table.get(trait_name.as_str())
+                        && let Some((_, visibility, is_static, _, _)) =
+                            trait_def.methods.iter().find(|(name, _, _, _, _)| {
+                                name.eq_ignore_ascii_case(&adaptation.method)
+                            })
+                    {
+                        return Some((
+                            adaptation.visibility.unwrap_or(*visibility),
+                            *is_static,
+                            class_name.to_string(),
+                        ));
                     }
                 }
             }

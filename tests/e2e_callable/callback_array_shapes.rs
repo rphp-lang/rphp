@@ -365,6 +365,21 @@ echo $class::create('dynamic');
 }
 
 #[test]
+fn test_dynamic_object_method_expression_call() {
+    let out = run_php(
+        r#"<?php
+class DynamicHandler {
+    public function format($value) { return strtoupper($value); }
+}
+$handler = new DynamicHandler();
+$methods = ['service' => 'format'];
+echo $handler->{$methods['service']}('rphp');
+"#,
+    );
+    assert_eq!(out, "RPHP");
+}
+
+#[test]
 fn test_dynamic_static_call_preserves_late_static_scope() {
     let out = run_php(
         r#"<?php

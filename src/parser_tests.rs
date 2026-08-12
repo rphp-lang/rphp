@@ -151,6 +151,13 @@ fn test_parse_first_class_callable_and_argument_unpack() {
 }
 
 #[test]
+fn test_parse_trailing_commas_in_call_arguments() {
+    let source = "<?php sink(1,); sink(named: 2,); $object->run(3,); Thing::make(4,);";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_static_first_class_callable() {
     let tokens = Lexer::new("<?php $callable = self::handleError(...);")
         .tokenize()

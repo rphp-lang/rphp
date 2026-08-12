@@ -1,5 +1,5 @@
 mod common;
-use common::run_php;
+use common::{run_php, run_php_expect_error};
 
 // ─── Basic trait usage ────────────────────────────────────────────
 
@@ -599,4 +599,43 @@ class C {
         result.is_err(),
         "Expected panic from different length array defaults"
     );
+}
+
+#[test]
+fn trait_method_alias_can_change_visibility_and_name() {
+    let out = run_php(
+        r#"<?php
+trait ReadsValue {
+    public function get() { return 'aliased'; }
+}
+class Reader {
+    use ReadsValue {
+        ReadsValue::get as private doGet;
+    }
+    public function read() { return $this->doGet(); }
+}
+echo (new Reader())->read();
+"#,
+    );
+    assert_eq!(out, "aliased");
+
+    let err = run_php_expect_error(
+        r#"<?php
+trait ReadsValue {
+    public function get() { return 'aliased'; }
+}
+class Reader {
+    use ReadsValue {
+        ReadsValue::get as private doGet;
+    }
+}
+(new Reader())->doGet();
+"#,
+    );
+    match err {
+        rphp::vm::execute::VmError::Fatal(message) => {
+            assert!(message.contains("private"), "unexpected error: {message}");
+        }
+        other => panic!("Expected private visibility error, got: {other:?}"),
+    }
 }

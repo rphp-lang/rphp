@@ -10003,6 +10003,42 @@ not yet claim URL generation, route loader formats, localized or host routes,
 expression-language conditions or the S3 cold route-cache build. S1 now
 advances to a small prebuilt DependencyInjection container.
 
+#### Symfony prebuilt DependencyInjection S1 gate (2026-08-12)
+
+The fourth and final S1 component gate now passes. The fixture pins
+`symfony/dependency-injection` v7.4.16 at
+`7f59a843c1fbcceafecdf6863d3e38ea6ecd5061`, `symfony/var-exporter` v7.4.16
+at `ca31404415670aa3834809005b529df1b84f0790`, service contracts v3.7.1 at
+`c0a284bab1ed8aa0417e3d69250ab437739563a0`, deprecation contracts v3.7.1
+at `f3202fa1b5097b0af062dc978b32ecf63404e31d` and PSR Container 2.0.2 at
+`c71ecc56dfe541dbd90c5360474fbc405f8d5963`. The checksum-pinned Composer
+2.8.12 PHAR performs a clean install from the exact lock.
+
+Reference PHP builds a real `ContainerBuilder`, registers a formatter and a
+greeter with constructor injection, compiles the graph and asks the unmodified
+`PhpDumper` to emit `RphpPrebuiltContainer`. RPHP then executes that generated
+file unchanged through Composer's generated autoloader. Both runtimes must
+print exactly `hello RPHP|same|hello|missing`, covering the emitted service
+factory, inlined private dependency, public alias, shared identity, parameter
+lookup and missing-service probe. The local entry point is
+`scripts/test-symfony-dependency-injection-s1.sh`; CI owns the matching
+`Symfony DependencyInjection S1` job.
+
+The compatibility work again closes general PHP paths: trailing commas in all
+call argument forms, assignment precedence on the right of `??`, dynamic
+object member expressions and trait method aliases with visibility changes.
+Focused parser and E2E regressions retain these contracts independently of the
+fixture.
+
+This remains the intentionally bounded prebuilt S1 gate. The generated class
+uses a small fixture base so merely autoloading unused service-locator branches
+does not pull anonymous-class and Reflection work forward. The full Symfony
+`Container`, lazy services, service locators, environment processors and a
+reference-built warmed FrameworkBundle cache belong to S2; RPHP compiling and
+publishing the container and route cache itself remains the S3 compatibility
+claim. With all four S1 component gates complete, the roadmap now advances to
+the warmed-kernel S2 diagnostic.
+
 ### S1/S3 blockers: language and object model
 
 Close these source-level gaps against focused PHPT cases before treating a

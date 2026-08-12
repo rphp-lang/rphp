@@ -94,6 +94,9 @@ impl Parser {
                         seen_named = true;
                         if self.peek() == Token::Comma {
                             self.advance();
+                            if self.peek() == Token::RParen {
+                                break;
+                            }
                             continue;
                         } else {
                             break;
@@ -110,6 +113,9 @@ impl Parser {
                     args.push(CallArg::Unpack(expr));
                     if self.peek() == Token::Comma {
                         self.advance();
+                        if self.peek() == Token::RParen {
+                            break;
+                        }
                         continue;
                     }
                     break;
@@ -118,6 +124,9 @@ impl Parser {
                 args.push(CallArg::Positional(expr));
                 if self.peek() == Token::Comma {
                     self.advance();
+                    if self.peek() == Token::RParen {
+                        break;
+                    }
                 } else {
                     break;
                 }

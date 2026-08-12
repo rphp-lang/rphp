@@ -103,6 +103,15 @@ jobs:
       - name: Run pinned Symfony Routing gate
         run: scripts/test-symfony-routing-s1.sh
 
+  symfony-dependency-injection-s1:
+    name: Symfony DependencyInjection S1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run pinned Symfony DependencyInjection gate
+        run: scripts/test-symfony-dependency-injection-s1.sh
+
   native-jit:
     name: Native JIT (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}

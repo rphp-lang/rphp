@@ -160,6 +160,41 @@ impl Parser {
                 Token::Arrow | Token::NullSafe => {
                     let nullsafe = matches!(self.peek(), Token::NullSafe);
                     self.advance();
+                    if self.peek() == Token::LBrace {
+                        if nullsafe {
+                            return Err(
+                                "Dynamic nullsafe method calls are not supported yet".into()
+                            );
+                        }
+                        self.advance();
+                        let member = self.parse_expr()?;
+                        self.expect(&Token::RBrace)?;
+                        if self.peek() == Token::LParen {
+                            self.advance();
+                            let args = self.parse_call_args()?;
+                            expr = Expr::DynamicCall {
+                                callable: Box::new(Expr::ArrayLiteral(vec![
+                                    ArrayElement {
+                                        key: None,
+                                        value: expr,
+                                    },
+                                    ArrayElement {
+                                        key: None,
+                                        value: member,
+                                    },
+                                ])),
+                                args,
+                                generic_args: Vec::new(),
+                            };
+                        } else {
+                            expr = Expr::DynamicPropertyAccess {
+                                object: Box::new(expr),
+                                property: Box::new(member),
+                                nullsafe: false,
+                            };
+                        }
+                        continue;
+                    }
                     let token = self.advance();
                     let member = Self::token_as_named_arg_label(&token).ok_or_else(|| {
                         format!(
