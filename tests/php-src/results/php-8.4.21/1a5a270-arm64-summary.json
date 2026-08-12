@@ -1,0 +1,56 @@
+{
+    "schema_version": 1,
+    "rphp_commit": "1a5a2706d8e494bcad5ae8d2d4fec114a6587062",
+    "php_src_commit": "7a64ae0507799547fbbd39b067bd3dd2c35e8fec",
+    "features": "all-features",
+    "architecture": "arm64",
+    "target": "rphp",
+    "timeout_seconds": 3,
+    "total": 5259,
+    "statuses": {
+        "pass": 350,
+        "fail": 4526,
+        "skip": 95,
+        "unsupported": 274,
+        "timeout": 0,
+        "crash": 14
+    },
+    "categories": {
+        "compile": 72,
+        "extension": 65,
+        "output": 601,
+        "parse": 2821,
+        "pass": 350,
+        "runtime": 1034,
+        "runtime-cli-ini": 269,
+        "section": 5,
+        "skipif": 41,
+        "xfail": 1
+    },
+    "suites": {
+        "Zend/tests": {
+            "pass": 314,
+            "fail": 4294,
+            "skip": 85,
+            "unsupported": 258,
+            "timeout": 0,
+            "crash": 14,
+            "total": 4965,
+            "headline_pass_rate": 0.0681423611111111,
+            "attempted_pass_rate": 0.06793595845954133
+        },
+        "tests/lang": {
+            "pass": 36,
+            "fail": 232,
+            "skip": 10,
+            "unsupported": 16,
+            "timeout": 0,
+            "crash": 0,
+            "total": 294,
+            "headline_pass_rate": 0.13432835820895522,
+            "attempted_pass_rate": 0.13432835820895522
+        }
+    },
+    "headline_pass_rate": 0.07178014766201805,
+    "attempted_pass_rate": 0.07157464212678936
+}

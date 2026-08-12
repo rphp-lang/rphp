@@ -5,6 +5,57 @@ compatibility around PHP 8.4 language behavior, but it is not certified for a
 complete PHP version and must not be treated as a drop-in PHP replacement.
 Passing a script is evidence only for the exercised behavior.
 
+## Official php-src PHPT baseline
+
+The first reproducible upstream baseline runs the unmodified `Zend/tests` and
+`tests/lang` suites from PHP 8.4.21 commit
+`7a64ae0507799547fbbd39b067bd3dd2c35e8fec` against all-features RPHP commit
+`1a5a2706d8e494bcad5ae8d2d4fec114a6587062`. The recorded run used arm64 and a
+three-second per-process timeout. It discovered 5,259 PHPT cases.
+
+| Suite | Pass | Fail | Skip | Unsupported | Timeout | Crash | Headline pass rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `Zend/tests` | 314 | 4,294 | 85 | 258 | 0 | 14 | 6.814% |
+| `tests/lang` | 36 | 232 | 10 | 16 | 0 | 0 | 13.433% |
+| **Combined** | **350** | **4,526** | **95** | **274** | **0** | **14** | **7.178%** |
+
+The headline follows the published gate definition exactly:
+`pass / (pass + fail)`. It does not count skips, unsupported cases, timeouts or
+crashes as passes. A stricter whole-corpus view is 350 / 5,259, or **6.655%**;
+including crashes in the attempted denominator gives **7.157%**. These numbers
+are intentionally pre-alpha and are not a claim of PHP 8.4 compatibility.
+
+The largest failure groups are 2,821 parse failures, 1,020 runtime failures,
+601 output mismatches, 72 compile failures, 11 failed `SKIPIF` evaluations and
+one expected-failure mismatch. Fourteen cases terminate by signal. Of the 95
+skips, 65 require unavailable extensions and 30 are selected by `SKIPIF`.
+Unsupported cases remain in the total: 269 require per-process `INI` behavior
+that the RPHP CLI does not expose, while five require PHPDBG or CGI/header
+sections outside this CLI gate.
+
+The dependency-free project runner supports `FILE`, `FILEEOF`,
+`FILE_EXTERNAL`, `EXPECT`, `EXPECTF`, `EXPECTREGEX`, `SKIPIF`, `INI`, `ENV`,
+`ARGS`, `STDIN`, `CLEAN` and extension declarations, with explicit capability
+classification where the runtime cannot execute a section. Its expectation and
+section handling was compared on the same pinned checkout with the official
+`run-tests.php` under the official PHP 8.4.21 CLI image; both runners passed the
+same five representative cases, 5/5.
+
+The complete machine-readable result is committed as
+[`1a5a270-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/1a5a270-arm64-manifest.jsonl),
+with aggregate metadata in
+[`1a5a270-arm64-summary.json`](../tests/php-src/results/php-8.4.21/1a5a270-arm64-summary.json).
+Every upstream path remains visible with its pass/fail/skip/unsupported/
+timeout/crash status and classification.
+
+To reproduce the run from an external checkout pinned to the commit above:
+
+```sh
+cargo build --locked --release --all-features
+RPHP_PHPT_TIMEOUT=3 scripts/run-php-src-phpt.sh \
+  /path/to/php-src target/release/rphp /tmp/rphp-phpt-results 4
+```
+
 ## Default build
 
 End-to-end tests cover representative behavior in these areas:
