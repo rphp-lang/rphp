@@ -95,6 +95,17 @@ fn test_parse_empty_statement() {
 }
 
 #[test]
+fn test_parse_general_expression_statements() {
+    let tokens = Lexer::new("<?php (1 + 2); 42; 'unused'; ++$i; fn(): int => 1;")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+
+    assert_eq!(stmts.len(), 5);
+    assert!(stmts.iter().all(|stmt| matches!(stmt, Stmt::ExprStmt(_))));
+}
+
+#[test]
 fn test_parse_abstract_method_contract() {
     let tokens = Lexer::new(
         "<?php abstract class Shape { abstract protected static function area(int $scale): int; }",

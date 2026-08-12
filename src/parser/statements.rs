@@ -516,11 +516,21 @@ impl Parser {
             | Token::New
             | Token::Yield
             | Token::Clone
-            | Token::Print => {
-                let expr = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
-                Ok(Stmt::ExprStmt(expr))
-            }
+            | Token::Print
+            | Token::LParen
+            | Token::Fn
+            | Token::Integer(_)
+            | Token::Float(_)
+            | Token::StringLiteral(_)
+            | Token::Null
+            | Token::True
+            | Token::False
+            | Token::Bang
+            | Token::Minus
+            | Token::Tilde
+            | Token::PlusPlus
+            | Token::MinusMinus
+            | Token::ArrayKw => self.parse_expression_statement(),
             Token::Identifier(_) | Token::Backslash => {
                 // Check for list() destructuring: list($a, $b) = expr;
                 if let Token::Identifier(ref name) = self.peek() {
@@ -537,9 +547,7 @@ impl Parser {
                     return self.parse_short_list_assign();
                 }
                 // Otherwise treat as expression statement (array literal)
-                let expr = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
-                Ok(Stmt::ExprStmt(expr))
+                self.parse_expression_statement()
             }
             Token::Global => {
                 self.advance(); // consume 'global'
@@ -738,5 +746,15 @@ impl Parser {
             let stmt = self.parse_stmt()?;
             Ok(vec![stmt])
         }
+    }
+
+    /// Parse an expression used only for its side effects. Keeping all simple
+    /// expression-statement entry points on this path prevents the statement
+    /// grammar from lagging behind expressions already accepted by
+    /// `parse_primary`.
+    fn parse_expression_statement(&mut self) -> Result<Stmt, String> {
+        let expr = self.parse_expr()?;
+        self.expect(&Token::Semicolon)?;
+        Ok(Stmt::ExprStmt(expr))
     }
 }

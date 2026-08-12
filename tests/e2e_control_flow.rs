@@ -366,3 +366,17 @@ echo $i;
         "3"
     );
 }
+
+#[test]
+fn test_parenthesized_expression_statement_can_invoke_closure() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+(function (int $value): void {
+    echo $value + 1;
+})(41);
+"#,
+        ),
+        "42"
+    );
+}
