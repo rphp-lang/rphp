@@ -1,4 +1,5 @@
 /// Minimal PHP lexer — just enough tokens for the vertical slice.
+mod strings;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -204,7 +205,10 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 b'<' => {
-                    if self.peek_next() == Some(b'=') {
+                    if self.starts_with(b"<<<") {
+                        let parts = self.read_document_string()?;
+                        Self::emit_string_parts(&mut tokens, &parts);
+                    } else if self.peek_next() == Some(b'=') {
                         if self.src.get(self.pos + 2) == Some(&b'>') {
                             tokens.push(Token::Spaceship);
                             self.pos += 3;
@@ -332,49 +336,7 @@ impl<'a> Lexer<'a> {
                 }
                 b'"' => {
                     let parts = self.read_double_quoted_string()?;
-                    if parts.len() == 1 {
-                        match &parts[0] {
-                            StringPart::Literal(s) => {
-                                tokens.push(Token::StringLiteral(s.clone()));
-                            }
-                            StringPart::Variable(name) => {
-                                // "$var" → ("" . $var) to force string
-                                tokens.push(Token::LParen);
-                                tokens.push(Token::StringLiteral(String::new()));
-                                tokens.push(Token::Dot);
-                                tokens.push(Token::Variable(name.clone()));
-                                tokens.push(Token::RParen);
-                            }
-                            StringPart::ArrayAccess(name, idx) => {
-                                tokens.push(Token::LParen);
-                                tokens.push(Token::StringLiteral(String::new()));
-                                tokens.push(Token::Dot);
-                                Self::emit_array_access_tokens(&mut tokens, name, idx);
-                                tokens.push(Token::RParen);
-                            }
-                        }
-                    } else {
-                        tokens.push(Token::LParen);
-                        let mut first = true;
-                        for part in &parts {
-                            if !first {
-                                tokens.push(Token::Dot);
-                            }
-                            first = false;
-                            match part {
-                                StringPart::Literal(s) => {
-                                    tokens.push(Token::StringLiteral(s.clone()))
-                                }
-                                StringPart::Variable(name) => {
-                                    tokens.push(Token::Variable(name.clone()))
-                                }
-                                StringPart::ArrayAccess(name, idx) => {
-                                    Self::emit_array_access_tokens(&mut tokens, name, idx);
-                                }
-                            }
-                        }
-                        tokens.push(Token::RParen);
-                    }
+                    Self::emit_string_parts(&mut tokens, &parts);
                 }
                 b'-' => {
                     if self.peek_next() == Some(b'>') {
@@ -706,197 +668,6 @@ impl<'a> Lexer<'a> {
         String::from_utf8(self.src[start..self.pos].to_vec()).unwrap()
     }
 
-    fn read_string(&mut self, quote: u8) -> Result<String, String> {
-        self.pos += 1; // skip opening quote
-        let mut result = String::new();
-        while self.pos < self.src.len() && self.src[self.pos] != quote {
-            if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
-                self.pos += 1; // skip backslash
-                let escaped = self.src[self.pos];
-                if quote == b'"' {
-                    // Double-quoted: interpret escape sequences
-                    match escaped {
-                        b'n' => result.push('\n'),
-                        b'r' => result.push('\r'),
-                        b't' => result.push('\t'),
-                        b'\\' => result.push('\\'),
-                        b'$' => result.push('$'),
-                        b'"' => result.push('"'),
-                        _ => {
-                            // Unknown escape — keep backslash + char
-                            result.push('\\');
-                            result.push(escaped as char);
-                        }
-                    }
-                } else {
-                    // Single-quoted: only \\ and \' are special
-                    match escaped {
-                        b'\\' => result.push('\\'),
-                        b'\'' => result.push('\''),
-                        _ => {
-                            result.push('\\');
-                            result.push(escaped as char);
-                        }
-                    }
-                }
-                self.pos += 1;
-            } else {
-                // Decode UTF-8 character (handles multi-byte correctly)
-                let rest = &self.src[self.pos..];
-                match std::str::from_utf8(rest) {
-                    Ok(s) => {
-                        let ch = s.chars().next().unwrap();
-                        result.push(ch);
-                        self.pos += ch.len_utf8();
-                    }
-                    Err(e) => {
-                        // Try partial valid UTF-8
-                        let valid_up_to = e.valid_up_to();
-                        if valid_up_to > 0 {
-                            let s = std::str::from_utf8(&rest[..valid_up_to]).unwrap();
-                            let ch = s.chars().next().unwrap();
-                            result.push(ch);
-                            self.pos += ch.len_utf8();
-                        } else {
-                            return Err(format!(
-                                "Invalid UTF-8 byte 0x{:02x} in string at position {}",
-                                self.src[self.pos], self.pos
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-        if self.pos >= self.src.len() {
-            return Err("Unterminated string literal".into());
-        }
-        self.pos += 1; // skip closing quote
-        Ok(result)
-    }
-
-    fn read_double_quoted_string(&mut self) -> Result<Vec<StringPart>, String> {
-        self.pos += 1; // skip opening "
-        let mut parts = Vec::new();
-        let mut current = String::new();
-
-        while self.pos < self.src.len() && self.src[self.pos] != b'"' {
-            if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
-                self.pos += 1; // skip backslash
-                match self.src[self.pos] {
-                    b'n' => current.push('\n'),
-                    b'r' => current.push('\r'),
-                    b't' => current.push('\t'),
-                    b'\\' => current.push('\\'),
-                    b'$' => current.push('$'),
-                    b'"' => current.push('"'),
-                    _ => {
-                        current.push('\\');
-                        current.push(self.src[self.pos] as char);
-                    }
-                }
-                self.pos += 1;
-            } else if self.src[self.pos] == b'$' {
-                let next = self.src.get(self.pos + 1).copied().unwrap_or(0);
-                if next == b'_' || next.is_ascii_alphabetic() {
-                    // Variable interpolation: $varname
-                    if !current.is_empty() {
-                        parts.push(StringPart::Literal(std::mem::take(&mut current)));
-                    }
-                    self.pos += 1; // skip $
-                    let name = self.read_identifier();
-                    parts.push(StringPart::Variable(name));
-                } else {
-                    current.push('$');
-                    self.pos += 1;
-                }
-            } else if self.src[self.pos] == b'{' && self.src.get(self.pos + 1) == Some(&b'$') {
-                // {$var} or {$var[idx]} syntax
-                if !current.is_empty() {
-                    parts.push(StringPart::Literal(std::mem::take(&mut current)));
-                }
-                self.pos += 2; // skip {$
-                let name = self.read_identifier();
-                if self.pos < self.src.len() && self.src[self.pos] == b'[' {
-                    // {$var[idx]} — read the index
-                    self.pos += 1; // skip [
-                    let mut idx_str = String::new();
-                    while self.pos < self.src.len() && self.src[self.pos] != b']' {
-                        idx_str.push(self.src[self.pos] as char);
-                        self.pos += 1;
-                    }
-                    if self.pos < self.src.len() && self.src[self.pos] == b']' {
-                        self.pos += 1; // skip ]
-                    }
-                    if self.pos < self.src.len() && self.src[self.pos] == b'}' {
-                        self.pos += 1; // skip }
-                    }
-                    parts.push(StringPart::ArrayAccess(name, idx_str));
-                } else {
-                    if self.pos < self.src.len() && self.src[self.pos] == b'}' {
-                        self.pos += 1; // skip }
-                    }
-                    parts.push(StringPart::Variable(name));
-                }
-            } else {
-                // Regular character — handle UTF-8
-                let rest = &self.src[self.pos..];
-                match std::str::from_utf8(rest) {
-                    Ok(s) => {
-                        let ch = s.chars().next().unwrap();
-                        current.push(ch);
-                        self.pos += ch.len_utf8();
-                    }
-                    Err(e) => {
-                        let valid_up_to = e.valid_up_to();
-                        if valid_up_to > 0 {
-                            let s = std::str::from_utf8(&rest[..valid_up_to]).unwrap();
-                            let ch = s.chars().next().unwrap();
-                            current.push(ch);
-                            self.pos += ch.len_utf8();
-                        } else {
-                            return Err(format!(
-                                "Invalid UTF-8 byte 0x{:02x} in string at position {}",
-                                self.src[self.pos], self.pos
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        if self.pos >= self.src.len() {
-            return Err("Unterminated string literal".into());
-        }
-        self.pos += 1; // skip closing "
-
-        if !current.is_empty() || parts.is_empty() {
-            parts.push(StringPart::Literal(current));
-        }
-
-        Ok(parts)
-    }
-
-    /// Emit tokens for $var[idx] in interpolated strings
-    fn emit_array_access_tokens(tokens: &mut Vec<Token>, name: &str, idx: &str) {
-        tokens.push(Token::Variable(name.to_string()));
-        tokens.push(Token::LBracket);
-        // Try to parse index as integer, otherwise treat as string key
-        if let Ok(n) = idx.parse::<i64>() {
-            tokens.push(Token::Integer(n));
-        } else {
-            // Strip quotes if present (e.g. 'key' or "key")
-            let key = if (idx.starts_with('\'') && idx.ends_with('\''))
-                || (idx.starts_with('"') && idx.ends_with('"'))
-            {
-                &idx[1..idx.len() - 1]
-            } else {
-                idx
-            };
-            tokens.push(Token::StringLiteral(key.to_string()));
-        }
-        tokens.push(Token::RBracket);
-    }
-
     fn is_value_token(tok: Option<&Token>) -> bool {
         matches!(
             tok,
@@ -1086,5 +857,74 @@ mod tests {
                 Token::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn nowdoc_preserves_variables_and_escape_sequences() {
+        let tokens = Lexer::new("<?php echo <<<'DOC'\n$name\\n\nDOC;")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Echo,
+                Token::StringLiteral("$name\\n".into()),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn heredoc_uses_shared_string_interpolation() {
+        let tokens = Lexer::new("<?php $name = 'PHP'; echo <<<DOC\nHello $name!\nDOC;")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Variable("name".into()),
+                Token::Assign,
+                Token::StringLiteral("PHP".into()),
+                Token::Semicolon,
+                Token::Echo,
+                Token::LParen,
+                Token::StringLiteral("Hello ".into()),
+                Token::Dot,
+                Token::Variable("name".into()),
+                Token::Dot,
+                Token::StringLiteral("!".into()),
+                Token::RParen,
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn flexible_heredoc_removes_closing_indentation() {
+        let tokens = Lexer::new("<?php echo <<<DOC\n    first\n      second\n    DOC;")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Echo,
+                Token::StringLiteral("first\n  second".into()),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn heredoc_rejects_shallow_non_empty_body_indentation() {
+        let error = Lexer::new("<?php echo <<<DOC\n  first\n    DOC;")
+            .tokenize()
+            .unwrap_err();
+        assert!(error.contains("shallower than the closing marker"));
     }
 }

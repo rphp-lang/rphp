@@ -235,6 +235,41 @@ foreach ($names as $name) {
     );
 }
 
+#[test]
+fn test_heredoc_interpolation_and_flexible_indentation() {
+    assert_eq!(
+        run_php(
+            "<?php
+$name = 'PHP';
+echo <<<TEXT
+  Hello $name
+    indented
+  TEXT;
+",
+        ),
+        "Hello PHP\n  indented"
+    );
+}
+
+#[test]
+fn test_nowdoc_is_literal_and_supports_expression_terminator() {
+    assert_eq!(
+        run_php(
+            "<?php
+$name = 'PHP';
+echo <<<'TEXT'
+$name\\n
+TEXT;
+echo '|';
+echo strlen(<<<TEXT
+abcd
+TEXT);
+",
+        ),
+        "$name\\n|4"
+    );
+}
+
 // ── COW string aliasing regression tests ──────────────────────────
 
 #[test]
