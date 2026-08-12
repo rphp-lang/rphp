@@ -10,41 +10,45 @@ Passing a script is evidence only for the exercised behavior.
 The latest reproducible upstream baseline runs the unmodified `Zend/tests` and
 `tests/lang` suites from PHP 8.4.21 commit
 `7a64ae0507799547fbbd39b067bd3dd2c35e8fec` against all-features RPHP commit
-`67a924d5e9af7449115c06189bfad3aad17d61d8`. The recorded run used arm64 and a
+`e107bf2cf7eee416a3294144273315e7fc2c06c5`. The recorded run used arm64 and a
 three-second per-process timeout. It discovered 5,259 PHPT cases.
 
 | Suite | Pass | Fail | Skip | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 408 | 4,206 | 86 | 258 | 0 | 7 | 8.843% |
-| `tests/lang` | 40 | 228 | 10 | 16 | 0 | 0 | 14.925% |
-| **Combined** | **448** | **4,434** | **96** | **274** | **0** | **7** | **9.177%** |
+| `Zend/tests` | 480 | 4,134 | 86 | 258 | 0 | 7 | 10.403% |
+| `tests/lang` | 42 | 226 | 10 | 16 | 0 | 0 | 15.672% |
+| **Combined** | **522** | **4,360** | **96** | **274** | **0** | **7** | **10.692%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, unsupported cases, timeouts or
-crashes as passes. A stricter whole-corpus view is 448 / 5,259, or **8.519%**;
-including crashes in the attempted denominator gives **9.163%**. These numbers
+crashes as passes. A stricter whole-corpus view is 522 / 5,259, or **9.926%**;
+including crashes in the attempted denominator gives **10.677%**. These numbers
 are intentionally pre-alpha and are not a claim of PHP 8.4 compatibility.
 
-The largest failure groups are 2,314 parse failures, 1,309 runtime failures,
-696 output mismatches, 106 compile failures, eight failed `SKIPIF` evaluations and
+The largest failure groups are 2,147 parse failures, 1,362 runtime failures,
+713 output mismatches, 129 compile failures, eight failed `SKIPIF` evaluations and
 one expected-failure mismatch. Seven cases terminate by signal. Of the 96
 skips, 65 require unavailable extensions and 31 are selected by `SKIPIF`.
 Unsupported cases remain in the total: 269 require per-process `INI` behavior
 that the RPHP CLI does not expose, while five require PHPDBG or CGI/header
 sections outside this CLI gate.
 
-Relative to the retained `1a5a270` baseline, this run adds 98 passing cases
-without losing a previous pass, reduces parser failures by 507 and reduces
+Relative to the retained `1a5a270` baseline, this run adds 172 passing cases
+without losing a previous pass, reduces parser failures by 674 and reduces
 signal-terminated cases from 14 to 7. The measured change covers standard
 comma-separated `echo`, standalone `print` statements and generator-safe call
 argument suspension, empty/no-op and general expression statements, heredoc and
-nowdoc strings, plus body-less abstract class and trait method contracts.
+nowdoc strings, body-less abstract class and trait method contracts, and
+class-like constants across classes, interfaces, traits and enums. Constant
+support includes visibility, `final` and typed declarations, inheritance and
+composition checks, late-static reads, enum aliases and common constant
+expressions; repeated runtime reads use an ID-and-index inline cache.
 Interface and abstract declarations now share compile-time LSP validation for
 arity, variadics, reference mode, visibility, staticness and declared types. It
 does not infer support for the remaining downstream behavior of every case that
-now parses. The retained `f6a20c1`, `1bc6650`, `18e4dde`, `81de421`, `7ab1941`
-and `21f2d98` results isolate the earlier syntax, abstract-method and
-shared-contract uplifts.
+now parses. The retained `f6a20c1`, `1bc6650`, `18e4dde`, `81de421`, `7ab1941`,
+`21f2d98` and `67a924d` results isolate the earlier syntax, abstract-method,
+shared-contract and string-literal uplifts.
 
 The dependency-free project runner supports `FILE`, `FILEEOF`,
 `FILE_EXTERNAL`, `EXPECT`, `EXPECTF`, `EXPECTREGEX`, `SKIPIF`, `INI`, `ENV`,
@@ -55,9 +59,9 @@ section handling was compared on the same pinned checkout with the official
 same five representative cases, 5/5.
 
 The complete machine-readable result is committed as
-[`67a924d-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/67a924d-arm64-manifest.jsonl),
+[`e107bf2-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/e107bf2-arm64-manifest.jsonl),
 with aggregate metadata in
-[`67a924d-arm64-summary.json`](../tests/php-src/results/php-8.4.21/67a924d-arm64-summary.json).
+[`e107bf2-arm64-summary.json`](../tests/php-src/results/php-8.4.21/e107bf2-arm64-summary.json).
 Every upstream path remains visible with its pass/fail/skip/unsupported/
 timeout/crash status and classification.
 
