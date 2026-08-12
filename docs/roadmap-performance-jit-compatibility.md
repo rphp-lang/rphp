@@ -9800,10 +9800,15 @@ load a class through ordinary `require`; existence probes autoload by the
 correct symbol kind, and `method_exists()` autoloads string owners while seeing
 abstract and non-public declarations. The callback stack is published as an
 immutable `Rc` slice, so a lookup takes an allocation-free snapshot even when a
-loader mutates the live registry. S0 is not complete: default/null registration
-and `spl_autoload()`, the remaining include-return/scope edges,
-`class_alias()`/`function_exists()` behavior and the unmodified Composer fixture
-gate remain outstanding.
+loader mutates the live registry. Class aliases now share their exact
+reference-counted class identity across alias chains and preserve class-like
+kind, methods, static state, inheritance, callbacks and `instanceof` behavior.
+`function_exists()` accepts global names with a leading separator;
+`is_a()`/`is_subclass_of()` implement their string/autoload contract; and
+`stdClass` is a registered internal class. S0 is not complete: default/null
+registration and `spl_autoload()`, the remaining include-return/scope edges,
+namespace function-import edges and the unmodified Composer fixture gate remain
+outstanding.
 
 Composer's generated platform check must observe truthful `PHP_VERSION_ID`,
 `PHP_VERSION`, `PHP_INT_SIZE`, extension availability and exit/error behavior.

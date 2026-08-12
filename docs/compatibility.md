@@ -10,41 +10,58 @@ Passing a script is evidence only for the exercised behavior.
 The latest reproducible upstream baseline runs the unmodified `Zend/tests` and
 `tests/lang` suites from PHP 8.4.21 commit
 `7a64ae0507799547fbbd39b067bd3dd2c35e8fec` against all-features RPHP commit
-`c47018359a03fa95410d1f3d8f9d6fbf807e56c4`. The recorded run used arm64 and a
+`80137b6bbea3bbcb3241a269e0d6b6af3bd86890`, using runner commit
+`12a17e489f666b42de3660d663da8183306f89ba`. The recorded run used arm64 and a
 three-second per-process timeout. It discovered 5,259 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 560 | 4,053 | 86 | 1 | 258 | 0 | 7 | 12.140% |
-| `tests/lang` | 43 | 225 | 10 | 0 | 16 | 0 | 0 | 16.045% |
-| **Combined** | **603** | **4,278** | **96** | **1** | **274** | **0** | **7** | **12.354%** |
+| `Zend/tests` | 583 | 4,033 | 86 | 1 | 258 | 0 | 4 | 12.630% |
+| `tests/lang` | 44 | 224 | 10 | 0 | 16 | 0 | 0 | 16.418% |
+| **Combined** | **627** | **4,257** | **96** | **1** | **274** | **0** | **4** | **12.838%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 603 / 5,259, or **11.466%**; including crashes in the attempted denominator
-gives **12.336%**. These numbers are intentionally pre-alpha and are not a
+is 627 / 5,259, or **11.922%**; including crashes in the attempted denominator
+gives **12.827%**. These numbers are intentionally pre-alpha and are not a
 claim of PHP 8.4 compatibility.
 
-The schema-3 execution profile makes the strict score less easy to mistake for
-language coverage. Of 4,888 attempted cases, 2,708 (**55.401%**) got past the
-observed parse/compile failure stage and reached runtime behavior. This is not a
-second compatibility score: invalid-source PHPT cases are supposed to stop in
-the front end, and reaching runtime says nothing about correct semantics or
-diagnostic text. It does show why the exact-output pass rate can be much lower
-than the practical surface already exercised by RPHP.
+The schema-4 execution profile makes the strict score less easy to mistake for
+language coverage. Of 4,888 attempted cases, eight fail during `SKIPIF` before
+the test body, 2,180 are rejected in the observed parse/compile stage, and
+2,700 (**55.237%**) execute the test's `FILE` section past that stage. This is
+not a second compatibility score: invalid-source PHPT cases are supposed to
+stop in the front end, and reaching runtime says nothing about correct
+semantics or diagnostic text. Exact negative-test passes are now counted in
+the observed front-end bucket instead of being mistaken for runtime reach.
 
-The largest failure groups are 2,035 parse failures, 1,299 runtime failures,
-791 output mismatches, 145 compile failures and eight failed `SKIPIF`
-evaluations; one known upstream expected failure is reported separately. Seven
+The largest failure groups are 2,035 parse failures, 1,248 runtime failures,
+821 output mismatches, 145 compile failures and eight failed `SKIPIF`
+evaluations; one known upstream expected failure is reported separately. Four
 cases terminate by signal. Of the 96 skips, 65 require unavailable extensions
 and 31 are selected by `SKIPIF`.
 Unsupported cases remain in the total: 269 require per-process `INI` behavior
 that the RPHP CLI does not expose, while five require PHPDBG or CGI/header
 sections outside this CLI gate.
 
-Relative to the retained `0fafdd4` baseline, this run adds 12 passing cases
-without losing a previous pass. Request-local SPL callback stacks preserve
+Relative to the retained `c470183` baseline, this run adds 24 passing cases
+without losing a previous pass. PHP class aliases now share the exact
+reference-counted class identity rather than copying a class definition, so
+alias chains preserve methods, static state, inheritance, callbacks and
+`instanceof` behavior across classes, interfaces, traits and enums.
+`stdClass` is registered as a real internal class; `is_a()` and
+`is_subclass_of()` honor string/autoload behavior and shared alias identity;
+`function_exists()` accepts a leading namespace separator; and `var_dump()` is
+variadic. Three previously crashing `try` cases now terminate normally, taking
+the crash total from seven to four. The same 2,700 test bodies get past the
+front end: this slice converts 24 already-runtime-reaching cases to exact
+passes, reduces ordinary runtime failures by 51 and moves 30 cases to later
+output comparison.
+
+Relative to the retained `0fafdd4` baseline, the current run adds 36 passing
+cases without losing a previous pass. The retained `c470183` checkpoint
+isolates 12 of them. Request-local SPL callback stacks preserve
 registration order, prepend, duplicate and unregister identity, guard recursive
 lookups and propagate loader exceptions. `class_exists()`, `interface_exists()`,
 `trait_exists()` and `enum_exists()` autoload the correct symbol kind while
@@ -52,11 +69,9 @@ honoring the opt-out argument and case-insensitive names. `method_exists()` now
 autoloads string owners and sees abstract or non-public declarations instead of
 using the stricter callback-callability test. Object-method callbacks can load
 classes through ordinary unmodified `require`, matching Composer's primary
-loader shape. The execution-reach total is unchanged: this slice converts 12
-already-runtime-reaching cases into exact passes and moves 28 other cases from
-runtime failures to later output mismatches.
+loader shape.
 
-Relative to the retained `102800d` baseline, the current run adds 16 passing
+Relative to the retained `102800d` baseline, the current run adds 40 passing
 cases without losing a previous pass. The retained `0fafdd4` checkpoint isolates
 four of them: object-property chains became legal `isset` targets, intermediate
 null/scalar/property reads remain silent, inaccessible and uninitialized
@@ -64,20 +79,20 @@ properties do not leak, multiple operands short-circuit, and
 `__isset`/`__get` run in PHP order with catchable exceptions. The same exception
 propagation repair also closes an older ordinary `__get` regression.
 
-Relative to the retained `9c8812d` baseline, this run adds 74 passing cases
+Relative to the retained `9c8812d` baseline, this run adds 98 passing cases
 without losing a previous pass. A single postfix loop now covers offsets,
 dynamic calls, object access and class constants for every primary atom instead
 of selected parser entry points. Source-aware, case-insensitive magic constants
 cover file, directory, line, namespace, class, trait, function and method scope;
 fully-qualified built-in constants also discard their global namespace marker
 before lookup. Includes receive their own canonical source context. These
-shared changes reduce runtime failures by 118 and parser failures by 42; some
+shared changes reduce runtime failures by 169 and parser failures by 42; some
 tests now reach later output or compile-time checks, so those classifications
 increase even though the exact pass set only grows.
 
-Relative to the retained `1a5a270` baseline, this run adds 253 passing cases
+Relative to the retained `1a5a270` baseline, this run adds 277 passing cases
 without losing a previous pass, reduces parser failures by 786 and reduces
-signal-terminated cases from 14 to 7. The measured change covers standard
+signal-terminated cases from 14 to 4. The measured change covers standard
 comma-separated `echo`, standalone `print` statements and generator-safe call
 argument suspension, empty/no-op and general expression statements, heredoc and
 nowdoc strings, body-less abstract class and trait method contracts, and
@@ -95,9 +110,10 @@ Interface and abstract declarations now share compile-time LSP validation for
 arity, variadics, reference mode, visibility, staticness and declared types. It
 does not infer support for the remaining downstream behavior of every case that
 now parses. The retained `f6a20c1`, `1bc6650`, `18e4dde`, `81de421`, `7ab1941`,
-`21f2d98`, `67a924d`, `e107bf2`, `42ea718`, `9c8812d`, `102800d` and `0fafdd4` results
-isolate the earlier syntax, abstract-method, shared-contract, string-literal,
-class-constant, postfix, magic-constant and runner uplifts.
+`21f2d98`, `67a924d`, `e107bf2`, `42ea718`, `9c8812d`, `102800d`, `0fafdd4` and
+`c470183` results isolate the earlier syntax, abstract-method, shared-contract,
+string-literal, class-constant, postfix, magic-constant, `isset` and autoload
+uplifts.
 
 An audit found that the earlier runner did not preserve php-src's generated
 `.php` basename and section-ending newline, omitted the `%0` `EXPECTF`
@@ -124,6 +140,16 @@ discovery, and expectation matching as the cause of the low strict rate. The
 remaining gap is in RPHP behavior and PHP-compatible diagnostics, not a hidden
 runner divisor.
 
+The current schema-4 audit also found a measurement bug that affected using
+PHP 8.5 as a local oracle for the pinned PHP 8.4 suite: PHP 8.5 enables
+compile-time fatal backtraces by default. The runner now restores the PHP 8.4
+diagnostic profile for reference runs and covers it with a regression fixture.
+It also records the runner commit independently and separates failed
+pre-execution setup and exact negative-test passes in the execution profile.
+Rerunning RPHP changed none of the 5,259 path statuses or categories, so this
+fix corrects calibration and descriptive reach without inflating the 627-pass
+compatibility result.
+
 The dependency-free project runner supports `FILE`, `FILEEOF`,
 `FILE_EXTERNAL`, `EXPECT`, `EXPECTF`, `EXPECTREGEX`, `SKIPIF`, `INI`, `ENV`,
 `ARGS`, `STDIN`, `CLEAN` and extension declarations, with explicit capability
@@ -132,9 +158,9 @@ section handling are continuously covered by local fixtures and the complete
 oracle result above.
 
 The complete machine-readable result is committed as
-[`c470183-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/c470183-arm64-manifest.jsonl),
+[`80137b6-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/80137b6-arm64-manifest.jsonl),
 with aggregate metadata in
-[`c470183-arm64-summary.json`](../tests/php-src/results/php-8.4.21/c470183-arm64-summary.json).
+[`80137b6-arm64-summary.json`](../tests/php-src/results/php-8.4.21/80137b6-arm64-summary.json).
 Every upstream path remains visible with its pass/fail/skip/XFAIL/unsupported/
 timeout/crash status and classification.
 
