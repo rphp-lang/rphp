@@ -194,6 +194,107 @@ class MissingName { use NeedsName; }
     );
 }
 
+#[test]
+fn test_abstract_method_contract_checks_signature() {
+    let incompatible_parameters = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+abstract class Formatter {
+    abstract public function format(int $value, string $suffix = ""): string;
+}
+class NarrowFormatter extends Formatter {
+    public function format(string $value): string { return $value; }
+}
+"#,
+        )
+    });
+    assert!(
+        incompatible_parameters.is_err(),
+        "Expected an incompatible abstract parameter contract to fail"
+    );
+
+    let incompatible_return = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+abstract class Factory {
+    abstract public function create(): object;
+}
+class ScalarFactory extends Factory {
+    public function create(): int { return 1; }
+}
+"#,
+        )
+    });
+    assert!(
+        incompatible_return.is_err(),
+        "Expected an incompatible abstract return contract to fail"
+    );
+}
+
+#[test]
+fn test_abstract_method_contract_checks_visibility_staticness_and_references() {
+    let visibility = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+abstract class Base {
+    abstract public function run(): void;
+}
+class Hidden extends Base {
+    protected function run(): void {}
+}
+"#,
+        )
+    });
+    assert!(visibility.is_err(), "Expected visibility narrowing to fail");
+
+    let staticness = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+abstract class Base {
+    abstract public static function run(): void;
+}
+class InstanceRun extends Base {
+    public function run(): void {}
+}
+"#,
+        )
+    });
+    assert!(staticness.is_err(), "Expected staticness mismatch to fail");
+
+    let references = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+abstract class Mutator {
+    abstract public function mutate(&$value): void;
+}
+class ByValueMutator extends Mutator {
+    public function mutate($value): void {}
+}
+"#,
+        )
+    });
+    assert!(references.is_err(), "Expected reference mode mismatch to fail");
+}
+
+#[test]
+fn test_abstract_trait_method_retains_visibility_compatibility_exception() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait RequiresWork {
+    abstract public function work(): void;
+}
+class Worker {
+    use RequiresWork;
+    private function work(): void {}
+}
+echo "ok";
+"#,
+        ),
+        "ok"
+    );
+}
+
 // ── P1 repro: Private method early binding (parent vs child) ──
 
 #[test]

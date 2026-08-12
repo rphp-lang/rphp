@@ -69,6 +69,17 @@ struct GenericPropertyContractBinding {
     expected: GenericType,
 }
 
+#[derive(Clone, Copy)]
+struct MethodDeclaration<'a> {
+    owner: &'a str,
+    name: &'a str,
+    visibility: Visibility,
+    enforces_visibility: bool,
+    is_static: bool,
+    is_abstract: bool,
+    function: &'a FunctionCommon,
+}
+
 /// Stable sidecar for one reified static-property declaration. The weak
 /// receiver guard makes pointer reuse safe without retaining assigned objects;
 /// a different or already-dropped object always falls back to the full
@@ -659,21 +670,20 @@ impl ExecutorGlobals {
         let _ = take_generic_member_call(&mut self.active_generic_member_calls, call);
     }
 
-    fn collect_abstract_method_requirements(
-        &self,
-        class_def: &ClassDef,
-        requirements: &mut Vec<(String, String)>,
+    fn collect_abstract_method_requirements<'a>(
+        &'a self,
+        class_def: &'a ClassDef,
+        requirements: &mut Vec<MethodDeclaration<'a>>,
         visited: &mut std::collections::HashSet<String>,
     ) {
         if !visited.insert(class_def.name.to_ascii_lowercase()) {
             return;
         }
-        requirements.extend(
+        requirements.extend(class_def.methods.iter().filter_map(|method| {
             class_def
-                .abstract_methods
-                .iter()
-                .map(|method| (class_def.name.clone(), method.clone())),
-        );
+                .method_is_abstract(&method.0)
+                .then(|| Self::method_declaration(class_def, method))
+        }));
         for trait_name in &class_def.uses {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
                 self.collect_abstract_method_requirements(trait_def, requirements, visited);
@@ -686,32 +696,181 @@ impl ExecutorGlobals {
         }
     }
 
-    fn has_concrete_method(&self, class_def: &ClassDef, method_name: &str) -> bool {
-        if let Some((name, _, _, _, _)) = class_def
+    fn method_declaration<'a>(
+        class_def: &'a ClassDef,
+        method: &'a (
+            String,
+            Visibility,
+            bool,
+            bool,
+            crate::vm::function::UserFunction,
+        ),
+    ) -> MethodDeclaration<'a> {
+        MethodDeclaration {
+            owner: &class_def.name,
+            name: &method.0,
+            visibility: method.1,
+            // PHP retains a backwards-compatibility exception for abstract
+            // trait requirements: their implementation may narrow visibility.
+            enforces_visibility: !class_def.is_trait,
+            is_static: method.2,
+            is_abstract: class_def.method_is_abstract(&method.0),
+            function: &method.4.common,
+        }
+    }
+
+    fn find_effective_method<'a>(
+        &'a self,
+        class_def: &'a ClassDef,
+        method_name: &str,
+    ) -> Option<MethodDeclaration<'a>> {
+        if let Some(method) = class_def
             .methods
             .iter()
             .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
         {
-            return !class_def.method_is_abstract(name);
+            return Some(Self::method_declaration(class_def, method));
         }
+        let mut abstract_trait_method = None;
         for trait_name in &class_def.uses {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str())
-                && trait_def.methods.iter().any(|(name, _, _, _, _)| {
-                    name.eq_ignore_ascii_case(method_name) && !trait_def.method_is_abstract(name)
-                })
+                && let Some(method) = trait_def
+                    .methods
+                    .iter()
+                    .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
             {
-                return true;
+                let declaration = Self::method_declaration(trait_def, method);
+                if !declaration.is_abstract {
+                    return Some(declaration);
+                }
+                abstract_trait_method.get_or_insert(declaration);
             }
         }
-        class_def
+        let parent_method = class_def
             .parent
             .as_ref()
             .and_then(|parent| self.class_table.get(parent.as_str()))
-            .is_some_and(|parent| self.has_concrete_method(parent, method_name))
+            .and_then(|parent| self.find_effective_method(parent, method_name));
+        match parent_method {
+            Some(method) if !method.is_abstract => Some(method),
+            Some(method) => abstract_trait_method.or(Some(method)),
+            None => abstract_trait_method,
+        }
+    }
+
+    fn method_contract_errors(
+        &self,
+        required: MethodDeclaration<'_>,
+        implementation: MethodDeclaration<'_>,
+    ) -> Vec<String> {
+        use crate::vm::function::ParamTypeHint;
+
+        let mut errors = Vec::new();
+        let visibility_rank = |visibility| match visibility {
+            Visibility::Private => 0,
+            Visibility::Protected => 1,
+            Visibility::Public => 2,
+        };
+        if required.enforces_visibility
+            && visibility_rank(implementation.visibility) < visibility_rank(required.visibility)
+        {
+            errors.push(format!("access must be at least {:?}", required.visibility));
+        }
+        if implementation.is_static != required.is_static {
+            errors.push(if required.is_static {
+                "implementation must be static".to_string()
+            } else {
+                "implementation cannot be static".to_string()
+            });
+        }
+
+        let required_signature = &required.function.sig;
+        let implementation_signature = &implementation.function.sig;
+        let required_public = required_signature.public_arity();
+        let implementation_public = implementation_signature.public_arity();
+        if implementation_public < required_public && !implementation_signature.is_variadic {
+            errors.push(format!(
+                "requires {} parameters, implementation accepts {}",
+                required_public, implementation_public
+            ));
+        }
+        if implementation_signature.required_num_args > required_signature.required_num_args {
+            errors.push(format!(
+                "implementation requires {} parameters, declaration requires only {}",
+                implementation_signature.required_num_args, required_signature.required_num_args
+            ));
+        }
+        if required_signature.is_variadic && !implementation_signature.is_variadic {
+            errors.push("implementation must be variadic".to_string());
+        }
+
+        let parametric = self
+            .generic_metadata
+            .method_has_parametric_signature(required.owner, required.name);
+        if !parametric {
+            let check_count = required_signature
+                .param_type_hints
+                .len()
+                .max(implementation_signature.param_type_hints.len());
+            for index in 0..check_count {
+                let required_parameter = required_signature.param_type_hints.get(index);
+                let implementation_parameter = implementation_signature.param_type_hints.get(index);
+                match (implementation_parameter, required_parameter) {
+                    (None | Some(ParamTypeHint::None), None | Some(ParamTypeHint::None)) => {}
+                    (None | Some(ParamTypeHint::None) | Some(ParamTypeHint::Mixed), Some(_)) => {}
+                    (Some(implementation_hint), None | Some(ParamTypeHint::None)) => {
+                        if !matches!(implementation_hint, ParamTypeHint::Mixed) {
+                            errors.push(format!(
+                                "parameter {} must not add type {}, declaration has no type",
+                                index + 1,
+                                implementation_hint.display_name()
+                            ));
+                        }
+                    }
+                    (Some(implementation_hint), Some(required_hint)) => {
+                        if !self.is_param_type_compatible(implementation_hint, required_hint) {
+                            errors.push(format!(
+                                "parameter {} type must be compatible with {}, got {}",
+                                index + 1,
+                                required_hint.display_name(),
+                                implementation_hint.display_name()
+                            ));
+                        }
+                    }
+                }
+            }
+
+            let required_return = &required_signature.return_type_hint;
+            if !matches!(required_return, ParamTypeHint::None)
+                && !self.is_return_type_compatible(
+                    &implementation_signature.return_type_hint,
+                    required_return,
+                )
+            {
+                errors.push(format!(
+                    "return type must be compatible with {}, got {}",
+                    required_return.display_name(),
+                    implementation_signature.return_type_hint.display_name()
+                ));
+            }
+        }
+
+        let reference_count = required_public.min(64);
+        for index in 0..reference_count {
+            if required_signature.is_param_by_ref(index)
+                != implementation_signature.is_param_by_ref(index)
+            {
+                errors.push(format!(
+                    "parameter {} reference mode must match the declaration",
+                    index + 1
+                ));
+            }
+        }
+        errors
     }
 
     fn validate_abstract_method_contracts(&self, class_def: &ClassDef) -> Result<(), String> {
-        if class_def.is_interface || class_def.is_abstract || class_def.is_trait {
+        if class_def.is_interface || class_def.is_trait {
             return Ok(());
         }
         let mut requirements = Vec::new();
@@ -720,14 +879,31 @@ impl ExecutorGlobals {
             &mut requirements,
             &mut std::collections::HashSet::new(),
         );
-        if let Some((owner, method)) = requirements
-            .into_iter()
-            .find(|(_, method)| !self.has_concrete_method(class_def, method))
-        {
-            return Err(format!(
-                "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining methods ({}::{})",
-                class_def.name, owner, method
-            ));
+        for requirement in requirements {
+            let Some(implementation) = self.find_effective_method(class_def, requirement.name)
+            else {
+                continue;
+            };
+            if implementation.is_abstract && !class_def.is_abstract {
+                return Err(format!(
+                    "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining methods ({}::{})",
+                    class_def.name, requirement.owner, requirement.name
+                ));
+            }
+            if let Some(reason) = self
+                .method_contract_errors(requirement, implementation)
+                .into_iter()
+                .next()
+            {
+                return Err(format!(
+                    "Declaration of {}::{}() must be compatible with {}::{}() ({})",
+                    implementation.owner,
+                    implementation.name,
+                    requirement.owner,
+                    requirement.name,
+                    reason
+                ));
+            }
         }
         Ok(())
     }
@@ -1358,36 +1534,15 @@ impl ExecutorGlobals {
         })
     }
 
-    /// Collect all required interface method signatures (recursively through interface extends).
-    /// Returns Vec of (method_name_lower, visibility, num_args, required_num_args, is_static, interface_name, return_type_hint, param_type_hints).
-    fn collect_interface_methods(
-        &self,
-        iface_name: &str,
-    ) -> Vec<(
-        String,
-        Visibility,
-        u32,
-        u32,
-        bool,
-        String,
-        crate::vm::function::ParamTypeHint,
-        Vec<crate::vm::function::ParamTypeHint>,
-    )> {
+    /// Collect all required interface method declarations recursively through
+    /// interface inheritance. The same declaration representation feeds both
+    /// interface and abstract class/trait compatibility checks.
+    fn collect_interface_methods<'a>(&'a self, iface_name: &str) -> Vec<MethodDeclaration<'a>> {
         let mut result = Vec::new();
         if let Some(iface_def) = self.class_table.get(iface_name) {
-            for (method_name, vis, is_static, _is_final, func) in &iface_def.methods {
-                result.push((
-                    method_name.to_lowercase(),
-                    *vis,
-                    func.common.sig.num_args,
-                    func.common.sig.required_num_args,
-                    *is_static,
-                    iface_name.to_string(),
-                    func.common.sig.return_type_hint.clone(),
-                    func.common.sig.param_type_hints.clone(),
-                ));
+            for method in &iface_def.methods {
+                result.push(Self::method_declaration(iface_def, method));
             }
-            // Recurse into parent interfaces
             for parent_iface in &iface_def.implements {
                 result.extend(self.collect_interface_methods(parent_iface));
             }
@@ -1408,14 +1563,16 @@ impl ExecutorGlobals {
     }
 
     /// Validate that a concrete class implements all required interface methods.
-    /// Checks: existence, public visibility, static compatibility, parameter arity.
+    /// Shared contract logic covers visibility, staticness, arity, reference
+    /// mode, parameter contravariance and return covariance.
     /// Returns a list of (interface_name, error_description), empty if all satisfied.
     pub fn validate_interface_contracts(&self, class_name: &str) -> Vec<(String, String)> {
         let mut errors = Vec::new();
-        if let Some(class_def) = self.class_table.get(class_name) {
-            if class_def.is_interface || class_def.is_abstract || class_def.is_trait {
-                return errors; // interfaces/abstract classes/traits don't need to implement
-            }
+        let Some(class_def) = self.class_table.get(class_name) else {
+            return errors;
+        };
+        if class_def.is_interface || class_def.is_abstract || class_def.is_trait {
+            return errors; // interfaces/abstract classes/traits don't need to implement
         }
         // Collect interfaces from the entire parent chain (fix P2: inherited obligations)
         let all_ifaces = self.collect_all_interfaces(class_name);
@@ -1424,162 +1581,26 @@ impl ExecutorGlobals {
             if !seen.insert(iface_name.clone()) {
                 continue;
             }
-            let required = self.collect_interface_methods(&iface_name);
-            for (
-                method,
-                _iface_vis,
-                iface_nargs,
-                iface_required,
-                iface_static,
-                declaring_iface,
-                iface_return_hint,
-                iface_param_hints,
-            ) in required
-            {
-                let full = format!("{}::{}", class_name, method).to_lowercase();
-                if !self.function_table.contains_key(&full) {
-                    errors.push((declaring_iface.clone(), method.clone()));
+            for requirement in self.collect_interface_methods(&iface_name) {
+                let Some(implementation) = self.find_effective_method(class_def, requirement.name)
+                else {
+                    errors.push((requirement.owner.to_string(), requirement.name.to_string()));
+                    continue;
+                };
+                if implementation.is_abstract {
+                    errors.push((requirement.owner.to_string(), requirement.name.to_string()));
                     continue;
                 }
-                // Check visibility and staticness
-                if let Some((impl_vis, impl_is_static, _)) =
-                    self.find_method_info(class_name, &method)
-                {
-                    if impl_vis != Visibility::Public {
-                        errors.push((
-                            declaring_iface.clone(),
-                            format!(
-                                "{} (must be public, is {:?})",
-                                method,
-                                match impl_vis {
-                                    Visibility::Protected => "protected",
-                                    Visibility::Private => "private",
-                                    _ => "public",
-                                }
-                            ),
-                        ));
-                    }
-                    // Static mismatch: non-static interface method cannot be implemented as static
-                    // and vice versa.
-                    if iface_static && !impl_is_static {
-                        errors.push((
-                            declaring_iface.clone(),
-                            format!("{} (must be static as declared in interface)", method),
-                        ));
-                    }
-                    if !iface_static && impl_is_static {
-                        errors.push((
-                            declaring_iface.clone(),
-                            format!(
-                                "{} (cannot be static, interface declares it non-static)",
-                                method
-                            ),
-                        ));
-                    }
-                }
-                // Check parameter count compatibility:
-                // - Implementation must accept at least as many total params as the interface
-                // - Implementation must not REQUIRE more params than the interface DECLARES
-                //   (total), because a caller following the interface contract may pass
-                //   only `iface_nargs` arguments.
-                // - Implementation must not REQUIRE more params than the interface REQUIRES,
-                //   because a caller following the interface contract may pass only
-                //   `iface_required` arguments (the rest are optional on the interface side).
-                if let Some(func_ptr) = self.function_table.get(&full) {
-                    let impl_common = unsafe { &**func_ptr };
-                    let iface_public = iface_nargs; // interface stubs don't have this_offset
-                    let impl_public = impl_common.sig.num_args - impl_common.sig.this_offset;
-                    // required_num_args is NOT adjusted for this_offset in the compiler,
-                    // so it already represents the public required parameter count.
-                    let impl_required = impl_common.sig.required_num_args;
-                    // Implementation must accept at least as many params as the interface
-                    if impl_public < iface_public {
-                        errors.push((
-                            declaring_iface.clone(),
-                            format!(
-                                "{} (requires {} params, implementation has {})",
-                                method, iface_public, impl_public
-                            ),
-                        ));
-                    }
-                    // Implementation must not require more params than the interface declares
-                    // (total), and also must not require more than the interface requires.
-                    // The stricter bound is iface_required: a valid caller may pass only
-                    // that many arguments and the implementation must still work.
-                    if impl_required > iface_required {
-                        errors.push((declaring_iface.clone(), format!(
-                            "{} (implementation requires {} params, interface requires only {})",
-                            method, impl_required, iface_required
-                        )));
-                    }
-                    // Check parameter type compatibility (contravariance):
-                    // Interface param A => implementation must accept A or a supertype of A.
-                    // Parametric signatures were already checked against every substituted
-                    // path. Their erased raw hints are not a second, authoritative contract.
-                    use crate::vm::function::ParamTypeHint;
-                    let parametric = self
-                        .generic_metadata
-                        .method_has_parametric_signature(&declaring_iface, &method);
-                    if !parametric {
-                        let check_count = iface_param_hints
-                            .len()
-                            .max(impl_common.sig.param_type_hints.len());
-                        for i in 0..check_count {
-                            let iface_param = iface_param_hints.get(i);
-                            let impl_param = impl_common.sig.param_type_hints.get(i);
-                            match (impl_param, iface_param) {
-                                // Both untyped or both absent — ok
-                                (
-                                    None | Some(ParamTypeHint::None),
-                                    None | Some(ParamTypeHint::None),
-                                ) => {}
-                                // Impl has no type / mixed — always compatible
-                                (
-                                    None | Some(ParamTypeHint::None) | Some(ParamTypeHint::Mixed),
-                                    Some(_),
-                                ) => {}
-                                // Interface has no type but impl adds a type — narrowing, rejected
-                                (Some(impl_p), None | Some(ParamTypeHint::None)) => {
-                                    if !matches!(impl_p, ParamTypeHint::Mixed) {
-                                        errors.push((declaring_iface.clone(), format!(
-                                        "{} (parameter {} must not add type {}, interface has no type)",
-                                        method, i + 1,
-                                        impl_p.display_name()
-                                    )));
-                                    }
-                                }
-                                // Both have types — check contravariance
-                                (Some(impl_p), Some(iface_p)) => {
-                                    if !self.is_param_type_compatible(impl_p, iface_p) {
-                                        errors.push((declaring_iface.clone(), format!(
-                                        "{} (parameter {} type must be compatible with {}, got {})",
-                                        method, i + 1,
-                                        iface_p.display_name(),
-                                        impl_p.display_name()
-                                    )));
-                                    }
-                                }
-                            }
-                        }
-
-                        // Check return type compatibility: if the interface declares a return type,
-                        // the implementation must declare the same or a covariant return type.
-                        if !matches!(iface_return_hint, ParamTypeHint::None) {
-                            let impl_return = &impl_common.sig.return_type_hint;
-                            if !self.is_return_type_compatible(impl_return, &iface_return_hint) {
-                                errors.push((
-                                    declaring_iface.clone(),
-                                    format!(
-                                        "{} (return type must be compatible with {}, got {})",
-                                        method,
-                                        iface_return_hint.display_name(),
-                                        impl_return.display_name()
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                }
+                errors.extend(
+                    self.method_contract_errors(requirement, implementation)
+                        .into_iter()
+                        .map(|reason| {
+                            (
+                                requirement.owner.to_string(),
+                                format!("{} ({})", requirement.name, reason),
+                            )
+                        }),
+                );
             }
         }
         errors
