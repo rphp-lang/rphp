@@ -72,6 +72,7 @@ fn register_reflection_class_kind(
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -94,6 +95,7 @@ fn register_reflection_interface(eg: &mut ExecutorGlobals, name: &str) {
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -129,6 +131,7 @@ fn register_generic_variance(eg: &mut ExecutorGlobals) {
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();

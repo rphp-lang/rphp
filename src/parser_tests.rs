@@ -85,6 +85,55 @@ fn test_parse_standalone_print_statement() {
 }
 
 #[test]
+fn test_parse_abstract_method_contract() {
+    let tokens = Lexer::new(
+        "<?php abstract class Shape { abstract protected static function area(int $scale): int; }",
+    )
+    .tokenize()
+    .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    let Stmt::Class {
+        is_abstract,
+        methods,
+        ..
+    } = &stmts[0]
+    else {
+        panic!("expected class declaration");
+    };
+    assert!(*is_abstract);
+    assert_eq!(methods.len(), 1);
+    assert_eq!(methods[0].name, "area");
+    assert_eq!(methods[0].visibility, Visibility::Protected);
+    assert!(methods[0].is_static);
+    assert!(methods[0].is_abstract);
+    assert!(methods[0].body.is_empty());
+}
+
+#[test]
+fn test_reject_invalid_abstract_method_modifiers() {
+    let parse = |source: &str| {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        Parser::new(tokens).parse()
+    };
+
+    assert!(
+        parse("<?php class C { abstract public function run(); }")
+            .unwrap_err()
+            .contains("must therefore be declared abstract")
+    );
+    assert!(
+        parse("<?php abstract class C { final abstract public function run(); }")
+            .unwrap_err()
+            .contains("final modifier on an abstract method")
+    );
+    assert!(
+        parse("<?php abstract class C { abstract private function run(); }")
+            .unwrap_err()
+            .contains("cannot be declared private")
+    );
+}
+
+#[test]
 fn test_static_return_type_requires_a_real_class_scope() {
     let parse = |source: &str| {
         let tokens = Lexer::new(source).tokenize().unwrap();

@@ -123,6 +123,77 @@ $c->name();
     );
 }
 
+#[test]
+fn test_abstract_method_implemented_by_concrete_child() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class Shape {
+    abstract public function area(): int;
+}
+class Square extends Shape {
+    public function area(): int { return 16; }
+}
+$shape = new Square();
+echo $shape->area();
+"#,
+        ),
+        "16"
+    );
+}
+
+#[test]
+fn test_abstract_method_required_for_concrete_child() {
+    let result = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+abstract class Shape {
+    abstract public function area(): int;
+}
+class MissingArea extends Shape {}
+"#,
+        )
+    });
+    assert!(
+        result.is_err(),
+        "Expected concrete child without abstract implementation to fail"
+    );
+}
+
+#[test]
+fn test_abstract_trait_method_contract() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait NeedsName {
+    abstract public function name(): string;
+}
+class NamedThing {
+    use NeedsName;
+    public function name(): string { return "thing"; }
+}
+echo (new NamedThing())->name();
+"#,
+        ),
+        "thing"
+    );
+
+    let result = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+trait NeedsName {
+    abstract public function name(): string;
+}
+class MissingName { use NeedsName; }
+"#,
+        )
+    });
+    assert!(
+        result.is_err(),
+        "Expected an unsatisfied abstract trait method to fail"
+    );
+}
+
 // ── P1 repro: Private method early binding (parent vs child) ──
 
 #[test]

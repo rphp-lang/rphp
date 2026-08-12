@@ -958,6 +958,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -1028,6 +1029,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -1054,6 +1056,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -1080,6 +1083,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -1101,6 +1105,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -1122,6 +1127,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -1143,6 +1149,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
+        abstract_methods: vec![],
         class_id: 0,
     })
     .unwrap();
@@ -1193,6 +1200,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             property_defaults: std::rc::Rc::from([]),
             readonly_props: vec![],
             methods: vec![],
+            abstract_methods: vec![],
             class_id: 0,
         };
 
@@ -3687,10 +3695,10 @@ fn find_method_in_class_hierarchy<'a>(
 ) -> Option<(Visibility, bool, *const FunctionCommon, &'a str)> {
     let mut current = find_class_case_insensitive(eg, class_name);
     while let Some(class) = current {
-        if let Some((_, visibility, is_static, _, function)) = class
-            .methods
-            .iter()
-            .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+        if let Some((_, visibility, is_static, _, function)) =
+            class.methods.iter().find(|(name, _, _, _, _)| {
+                name.eq_ignore_ascii_case(method_name) && !class.method_is_abstract(name)
+            })
         {
             return Some((
                 *visibility,
@@ -3706,10 +3714,10 @@ fn find_method_in_class_hierarchy<'a>(
             let Some(trait_def) = find_class_case_insensitive(eg, trait_name) else {
                 continue;
             };
-            if let Some((_, visibility, is_static, _, function)) = trait_def
-                .methods
-                .iter()
-                .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+            if let Some((_, visibility, is_static, _, function)) =
+                trait_def.methods.iter().find(|(name, _, _, _, _)| {
+                    name.eq_ignore_ascii_case(method_name) && !trait_def.method_is_abstract(name)
+                })
             {
                 return Some((
                     *visibility,

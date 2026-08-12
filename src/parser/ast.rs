@@ -520,6 +520,7 @@ pub struct ClassMethod {
     pub body: Vec<Stmt>,
     pub is_static: bool,
     pub is_final: bool,
+    pub is_abstract: bool,
     pub return_type: Option<TypeHint>,
     pub generic_params: Vec<GenericParameter>,
 }

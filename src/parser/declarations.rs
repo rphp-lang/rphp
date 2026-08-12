@@ -1,3 +1,24 @@
+#[derive(Debug, Clone, Copy)]
+struct MemberModifiers {
+    visibility: Visibility,
+    is_static: bool,
+    is_final: bool,
+    is_readonly: bool,
+    is_abstract: bool,
+}
+
+impl Default for MemberModifiers {
+    fn default() -> Self {
+        Self {
+            visibility: Visibility::Public,
+            is_static: false,
+            is_final: false,
+            is_readonly: false,
+            is_abstract: false,
+        }
+    }
+}
+
 impl Parser {
     /// Parse try { } catch (Type $e) { } finally { }
     fn parse_try_catch(&mut self) -> Result<Stmt, String> {
@@ -134,7 +155,7 @@ impl Parser {
                 continue;
             }
 
-            let (vis, is_static, is_final, is_readonly) = self.parse_visibility_and_static();
+            let modifiers = self.parse_member_modifiers();
 
             if self.peek() == Token::Function {
                 // Method
@@ -151,26 +172,25 @@ impl Parser {
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
-                self.expect(&Token::LBrace)?;
-                let mut body = Vec::new();
-                while self.peek() != Token::RBrace && !self.at_eof() {
-                    body.push(self.parse_stmt()?);
-                }
-                self.expect(&Token::RBrace)?;
+                let body = self.parse_method_body(&modifiers, &method_name)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
-                    visibility: vis,
+                    visibility: modifiers.visibility,
                     name: method_name,
                     params,
                     body,
-                    is_static,
-                    is_final,
+                    is_static: modifiers.is_static,
+                    is_final: modifiers.is_final,
+                    is_abstract: modifiers.is_abstract,
                     return_type,
                     generic_params,
                 });
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
+                if modifiers.is_abstract {
+                    return Err("Properties cannot be declared abstract".into());
+                }
                 let type_hint = self.try_parse_type_hint()?;
                 let prop_name = match self.advance() {
                     Token::Variable(n) => n,
@@ -184,12 +204,12 @@ impl Parser {
                 };
                 self.expect(&Token::Semicolon)?;
                 properties.push(ClassProperty {
-                    visibility: vis,
+                    visibility: modifiers.visibility,
                     name: prop_name,
                     type_hint,
                     default,
-                    is_static,
-                    is_readonly,
+                    is_static: modifiers.is_static,
+                    is_readonly: modifiers.is_readonly,
                 });
             } else if matches!(self.peek(), Token::Const) {
                 // Class constants — not yet implemented
@@ -201,6 +221,15 @@ impl Parser {
         self.in_class_body = prev_in_class;
         self.expect(&Token::RBrace)?;
         self.pop_generic_scope();
+
+        if !is_abstract
+            && let Some(method) = methods.iter().find(|method| method.is_abstract)
+        {
+            return Err(format!(
+                "Class {} declares abstract method {}() and must therefore be declared abstract",
+                name, method.name
+            ));
+        }
 
         Ok(Stmt::Class {
             name,
@@ -230,7 +259,7 @@ impl Parser {
         let mut methods = Vec::new();
 
         while self.peek() != Token::RBrace && !self.at_eof() {
-            let (vis, is_static, is_final, is_readonly) = self.parse_visibility_and_static();
+            let modifiers = self.parse_member_modifiers();
 
             if self.peek() == Token::Function {
                 self.advance();
@@ -246,26 +275,25 @@ impl Parser {
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
-                self.expect(&Token::LBrace)?;
-                let mut body = Vec::new();
-                while self.peek() != Token::RBrace && !self.at_eof() {
-                    body.push(self.parse_stmt()?);
-                }
-                self.expect(&Token::RBrace)?;
+                let body = self.parse_method_body(&modifiers, &method_name)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
-                    visibility: vis,
+                    visibility: modifiers.visibility,
                     name: method_name,
                     params,
                     body,
-                    is_static,
-                    is_final,
+                    is_static: modifiers.is_static,
+                    is_final: modifiers.is_final,
+                    is_abstract: modifiers.is_abstract,
                     return_type,
                     generic_params: method_generic_params,
                 });
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
+                if modifiers.is_abstract {
+                    return Err("Properties cannot be declared abstract".into());
+                }
                 let type_hint = self.try_parse_type_hint()?;
                 let prop_name = match self.advance() {
                     Token::Variable(n) => n,
@@ -279,12 +307,12 @@ impl Parser {
                 };
                 self.expect(&Token::Semicolon)?;
                 properties.push(ClassProperty {
-                    visibility: vis,
+                    visibility: modifiers.visibility,
                     name: prop_name,
                     type_hint,
                     default,
-                    is_static,
-                    is_readonly,
+                    is_static: modifiers.is_static,
+                    is_readonly: modifiers.is_readonly,
                 });
             } else {
                 return Err(format!("Unexpected token in trait body: {:?}", self.peek()));
@@ -330,7 +358,7 @@ impl Parser {
 
         let mut methods = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
-            let (vis, is_static, _is_final, _is_readonly) = self.parse_visibility_and_static();
+            let modifiers = self.parse_member_modifiers();
             if self.peek() == Token::Function {
                 self.advance(); // consume 'function'
                 let method_name = match self.advance() {
@@ -342,8 +370,8 @@ impl Parser {
                 let method_generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&method_generic_params);
                 // Interface methods must be public (PHP rule)
-                if vis != Visibility::Public {
-                    let vis_str = match vis {
+                if modifiers.visibility != Visibility::Public {
+                    let vis_str = match modifiers.visibility {
                         Visibility::Protected => "protected",
                         Visibility::Private => "private",
                         _ => "public",
@@ -361,12 +389,13 @@ impl Parser {
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
-                    visibility: vis,
+                    visibility: modifiers.visibility,
                     name: method_name,
                     params,
                     body: vec![],
-                    is_static,
+                    is_static: modifiers.is_static,
                     is_final: false,
+                    is_abstract: true,
                     return_type,
                     generic_params: method_generic_params,
                 });
@@ -427,7 +456,7 @@ impl Parser {
                 cases.push((case_name, value));
             } else {
                 // Method in enum
-                let (vis, is_static, is_final, _is_readonly) = self.parse_visibility_and_static();
+                let modifiers = self.parse_member_modifiers();
                 if self.peek() == Token::Function {
                     self.advance();
                     let method_name = match self.advance() {
@@ -451,12 +480,13 @@ impl Parser {
                     self.pop_generic_scope();
                     self.class_scope_active = previous_class_scope;
                     methods.push(ClassMethod {
-                        visibility: vis,
+                        visibility: modifiers.visibility,
                         name: method_name,
                         params,
                         body,
-                        is_static,
-                        is_final,
+                        is_static: modifiers.is_static,
+                        is_final: modifiers.is_final,
+                        is_abstract: false,
                         return_type,
                         generic_params,
                     });
@@ -476,45 +506,73 @@ impl Parser {
         })
     }
 
-    fn parse_visibility_and_static(&mut self) -> (Visibility, bool, bool, bool) {
-        let mut vis = Visibility::Public;
-        let mut is_static = false;
-        let mut is_final = false;
-        let mut is_readonly = false;
+    fn parse_member_modifiers(&mut self) -> MemberModifiers {
+        let mut modifiers = MemberModifiers::default();
 
         loop {
             match self.peek() {
                 Token::Public => {
                     self.advance();
-                    vis = Visibility::Public;
+                    modifiers.visibility = Visibility::Public;
                 }
                 Token::Protected => {
                     self.advance();
-                    vis = Visibility::Protected;
+                    modifiers.visibility = Visibility::Protected;
                 }
                 Token::Private => {
                     self.advance();
-                    vis = Visibility::Private;
+                    modifiers.visibility = Visibility::Private;
                 }
                 Token::Static => {
                     self.advance();
-                    is_static = true;
+                    modifiers.is_static = true;
                 }
                 Token::Final => {
                     self.advance();
-                    is_final = true;
+                    modifiers.is_final = true;
                 }
                 Token::Abstract => {
-                    self.advance(); /* absorbed for abstract methods */
+                    self.advance();
+                    modifiers.is_abstract = true;
                 }
                 Token::Identifier(ref s) if s == "readonly" => {
                     self.advance();
-                    is_readonly = true;
+                    modifiers.is_readonly = true;
                 }
                 _ => break,
             }
         }
-        (vis, is_static, is_final, is_readonly)
+        modifiers
+    }
+
+    fn parse_method_body(
+        &mut self,
+        modifiers: &MemberModifiers,
+        method_name: &str,
+    ) -> Result<Vec<Stmt>, String> {
+        if modifiers.is_abstract {
+            if modifiers.is_final {
+                return Err(format!(
+                    "Cannot use the final modifier on an abstract method {}()",
+                    method_name
+                ));
+            }
+            if modifiers.visibility == Visibility::Private {
+                return Err(format!(
+                    "Abstract function {}() cannot be declared private",
+                    method_name
+                ));
+            }
+            self.expect(&Token::Semicolon)?;
+            return Ok(Vec::new());
+        }
+        self.expect(&Token::LBrace)?;
+        let mut body = Vec::new();
+        while self.peek() != Token::RBrace && !self.at_eof() {
+            body.push(self.parse_stmt()?);
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(body)
     }
 
     /// Parse match expression

@@ -1179,9 +1179,22 @@ pub struct ClassDef {
     pub property_defaults: std::rc::Rc<[Value]>,
     pub readonly_props: Vec<String>, // names of readonly properties
     pub methods: Vec<(String, Visibility, bool, bool, UserFunction)>, // (name, vis, is_static, is_final, func)
+    /// Body-less method contracts declared by abstract classes or traits.
+    /// Kept outside the callable tuple so abstract stubs cannot accidentally
+    /// enter the function table as executable implementations.
+    pub abstract_methods: Vec<String>,
     /// Stable numeric ID assigned at registration time. Used as inline cache key.
     /// 0 = not yet assigned (set by ExecutorGlobals::register_class).
     pub class_id: u32,
+}
+
+impl ClassDef {
+    #[inline]
+    pub fn method_is_abstract(&self, method_name: &str) -> bool {
+        self.abstract_methods
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(method_name))
+    }
 }
 
 /// Tracks loop context for break/continue patching

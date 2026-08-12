@@ -659,6 +659,79 @@ impl ExecutorGlobals {
         let _ = take_generic_member_call(&mut self.active_generic_member_calls, call);
     }
 
+    fn collect_abstract_method_requirements(
+        &self,
+        class_def: &ClassDef,
+        requirements: &mut Vec<(String, String)>,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        if !visited.insert(class_def.name.to_ascii_lowercase()) {
+            return;
+        }
+        requirements.extend(
+            class_def
+                .abstract_methods
+                .iter()
+                .map(|method| (class_def.name.clone(), method.clone())),
+        );
+        for trait_name in &class_def.uses {
+            if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
+                self.collect_abstract_method_requirements(trait_def, requirements, visited);
+            }
+        }
+        if let Some(parent_name) = &class_def.parent
+            && let Some(parent_def) = self.class_table.get(parent_name.as_str())
+        {
+            self.collect_abstract_method_requirements(parent_def, requirements, visited);
+        }
+    }
+
+    fn has_concrete_method(&self, class_def: &ClassDef, method_name: &str) -> bool {
+        if let Some((name, _, _, _, _)) = class_def
+            .methods
+            .iter()
+            .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+        {
+            return !class_def.method_is_abstract(name);
+        }
+        for trait_name in &class_def.uses {
+            if let Some(trait_def) = self.class_table.get(trait_name.as_str())
+                && trait_def.methods.iter().any(|(name, _, _, _, _)| {
+                    name.eq_ignore_ascii_case(method_name) && !trait_def.method_is_abstract(name)
+                })
+            {
+                return true;
+            }
+        }
+        class_def
+            .parent
+            .as_ref()
+            .and_then(|parent| self.class_table.get(parent.as_str()))
+            .is_some_and(|parent| self.has_concrete_method(parent, method_name))
+    }
+
+    fn validate_abstract_method_contracts(&self, class_def: &ClassDef) -> Result<(), String> {
+        if class_def.is_interface || class_def.is_abstract || class_def.is_trait {
+            return Ok(());
+        }
+        let mut requirements = Vec::new();
+        self.collect_abstract_method_requirements(
+            class_def,
+            &mut requirements,
+            &mut std::collections::HashSet::new(),
+        );
+        if let Some((owner, method)) = requirements
+            .into_iter()
+            .find(|(_, method)| !self.has_concrete_method(class_def, method))
+        {
+            return Err(format!(
+                "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining methods ({}::{})",
+                class_def.name, owner, method
+            ));
+        }
+        Ok(())
+    }
+
     /// Register a class definition and its methods in the function table.
     /// Resolves inheritance: merges parent properties/methods into child.
     /// For non-interface, non-abstract classes: validates interface contracts.
@@ -707,6 +780,8 @@ impl ExecutorGlobals {
                 }
             }
         }
+
+        self.validate_abstract_method_contracts(&class_def)?;
 
         // Resolve inheritance — merge parent's properties and methods
         if let Some(parent_name) = &class_def.parent {
@@ -934,6 +1009,9 @@ impl ExecutorGlobals {
         let method_entries: Vec<(String, *const FunctionCommon)> = class
             .methods
             .iter()
+            .filter(|(method_name, _, _, _, _)| {
+                class.is_interface || !class.method_is_abstract(method_name)
+            })
             .map(|(method_name, _vis, _is_static, _is_final, func)| {
                 let full_name = format!("{}::{}", class_name, method_name).to_lowercase();
                 let func_ptr = &func.common as *const FunctionCommon;
@@ -1529,7 +1607,7 @@ impl ExecutorGlobals {
         if let Some(class_def) = self.class_table.get(class_name) {
             // Check own methods
             for (name, vis, is_static, _is_final, _func) in &class_def.methods {
-                if name.to_lowercase() == method_lower {
+                if name.to_lowercase() == method_lower && !class_def.method_is_abstract(name) {
                     return Some((*vis, *is_static, class_name.to_string()));
                 }
             }
@@ -1537,7 +1615,9 @@ impl ExecutorGlobals {
             for trait_name in &class_def.uses {
                 if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
                     for (name, vis, is_static, _is_final, _func) in &trait_def.methods {
-                        if name.to_lowercase() == method_lower {
+                        if name.to_lowercase() == method_lower
+                            && !trait_def.method_is_abstract(name)
+                        {
                             // Trait method visibility applies as if declared in the using class
                             return Some((*vis, *is_static, class_name.to_string()));
                         }

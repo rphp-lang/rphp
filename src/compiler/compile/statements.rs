@@ -1213,6 +1213,11 @@ impl Compiler {
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props,
                     methods: compiled_methods,
+                    abstract_methods: methods
+                        .iter()
+                        .filter(|method| method.is_abstract)
+                        .map(|method| method.name.clone())
+                        .collect(),
                     class_id: 0,
                 });
             }
@@ -1350,6 +1355,7 @@ impl Compiler {
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
                     methods: compiled_methods,
+                    abstract_methods: methods.iter().map(|method| method.name.clone()).collect(),
                     class_id: 0,
                 });
             }
@@ -1525,6 +1531,11 @@ impl Compiler {
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
                     methods: compiled_methods,
+                    abstract_methods: methods
+                        .iter()
+                        .filter(|method| method.is_abstract)
+                        .map(|method| method.name.clone())
+                        .collect(),
                     class_id: 0,
                 });
             }
@@ -1675,6 +1686,7 @@ impl Compiler {
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
                     methods: compiled_methods,
+                    abstract_methods: vec![],
                     class_id: 0,
                 });
             }
