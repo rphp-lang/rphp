@@ -511,7 +511,8 @@ impl Parser {
             | Token::Match
             | Token::New
             | Token::Yield
-            | Token::Clone => {
+            | Token::Clone
+            | Token::Print => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::ExprStmt(expr))

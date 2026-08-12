@@ -73,6 +73,18 @@ fn test_parse_comma_separated_echo() {
 }
 
 #[test]
+fn test_parse_standalone_print_statement() {
+    let tokens = Lexer::new("<?php print 'value';").tokenize().unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert_eq!(
+        stmts,
+        vec![Stmt::ExprStmt(Expr::Print(Box::new(Expr::StringLiteral(
+            "value".into()
+        ),)))]
+    );
+}
+
+#[test]
 fn test_static_return_type_requires_a_real_class_scope() {
     let parse = |source: &str| {
         let tokens = Lexer::new(source).tokenize().unwrap();

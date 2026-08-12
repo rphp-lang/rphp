@@ -15,6 +15,11 @@ echo $x;
 }
 
 #[test]
+fn test_standalone_print_statement() {
+    assert_eq!(run_php("<?php print 'hello';"), "hello");
+}
+
+#[test]
 fn test_spaceship() {
     assert_eq!(
         run_php(
