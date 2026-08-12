@@ -434,7 +434,10 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'?' => {
-                    if self.peek_next() == Some(b'?') {
+                    if self.peek_next() == Some(b'>') {
+                        self.pos += 2;
+                        self.finish_php_segment(&mut tokens)?;
+                    } else if self.peek_next() == Some(b'?') {
                         tokens.push(Token::QuestionQuestion);
                         self.pos += 2;
                     } else if self.peek_next() == Some(b'-')
@@ -911,6 +914,44 @@ impl<'a> Lexer<'a> {
             )
         )
     }
+
+    /// Close the current PHP segment, emit intervening inline HTML as an echo,
+    /// and resume lexing at a later long opening tag. A closing tag also ends
+    /// the current statement, so supply the semicolon when source omitted it.
+    /// PHP consumes the first line break immediately after `?>`.
+    fn finish_php_segment(&mut self, tokens: &mut Vec<Token>) -> Result<(), String> {
+        if !matches!(
+            tokens.last(),
+            Some(Token::Semicolon | Token::LBrace | Token::RBrace)
+        ) {
+            tokens.push(Token::Semicolon);
+        }
+
+        let mut inline_start = self.pos;
+        if self.src.get(inline_start..inline_start + 2) == Some(b"\r\n") {
+            inline_start += 2;
+        } else if self.src.get(inline_start) == Some(&b'\n') {
+            inline_start += 1;
+        }
+
+        let next_open = self.src[inline_start..]
+            .windows(5)
+            .position(|window| window == b"<?php")
+            .map(|offset| inline_start + offset);
+        let inline_end = next_open.unwrap_or(self.src.len());
+        if inline_end > inline_start {
+            let inline = std::str::from_utf8(&self.src[inline_start..inline_end])
+                .map_err(|_| "Inline HTML is not valid UTF-8".to_string())?;
+            tokens.push(Token::Echo);
+            tokens.push(Token::StringLiteral(inline.to_string()));
+            tokens.push(Token::Semicolon);
+        }
+        self.pos = match next_open {
+            Some(open) => open + 5,
+            None => self.src.len(),
+        };
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -926,6 +967,44 @@ mod tests {
                 Token::OpenTag,
                 Token::Echo,
                 Token::Integer(42),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn closing_tag_ends_the_php_segment() {
+        let tokens = Lexer::new("<?php echo 42 ?>").tokenize().unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Echo,
+                Token::Integer(42),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn closing_tag_emits_inline_html_and_resumes_php() {
+        let tokens = Lexer::new("<?php echo 1; ?>\nplain<?php echo 2; ?>")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Echo,
+                Token::Integer(1),
+                Token::Semicolon,
+                Token::Echo,
+                Token::StringLiteral("plain".into()),
+                Token::Semicolon,
+                Token::Echo,
+                Token::Integer(2),
                 Token::Semicolon,
                 Token::Eof,
             ]
