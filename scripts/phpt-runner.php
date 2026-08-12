@@ -47,6 +47,7 @@ usage:
       SHARD.jsonl...
 
 PATH is relative to --suite-root and may name a PHPT file or a directory.
+Known upstream XFAIL outcomes are reported separately from compatibility fails.
 USAGE);
     exit(2);
 }

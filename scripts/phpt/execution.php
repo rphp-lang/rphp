@@ -10,7 +10,6 @@ function run_test(
     string $kind,
     float $timeout,
     array $loadedExtensions,
-    int $shard,
 ): array {
     try {
         $sections = parse_sections($absolutePath);
@@ -65,10 +64,31 @@ function run_test(
     }
 
     $directory = dirname($absolutePath);
-    $stem = basename($absolutePath, '.phpt') . ".rphp-phpt-" . getmypid() . "-{$shard}";
+    // php-src expectations intentionally mention the generated basename, such
+    // as `%stest.php`. Match run-tests.php's `test.phpt` -> `test.php` naming.
+    // Shards partition paths, so the canonical name remains collision-free.
+    $stem = basename($absolutePath, '.phpt');
     $temporaryFiles = [];
     $environment = process_environment($sections['ENV'] ?? '');
-    $ini = $sections['INI'] ?? '';
+    foreach ([
+        'REDIRECT_STATUS',
+        'QUERY_STRING',
+        'PATH_TRANSLATED',
+        'SCRIPT_FILENAME',
+        'REQUEST_METHOD',
+        'CONTENT_TYPE',
+        'CONTENT_LENGTH',
+        'TZ',
+    ] as $name) {
+        $environment[$name] = '';
+    }
+    $environment['TEST_PHP_EXECUTABLE'] = $target;
+    $environment['TEST_PHP_EXECUTABLE_ESCAPED'] = escapeshellarg($target);
+    $ini = str_replace(
+        ['{PWD}', '{TMP}'],
+        [$directory, sys_get_temp_dir()],
+        $sections['INI'] ?? '',
+    );
     $args = $sections['ARGS'] ?? '';
     $totalDuration = 0;
 
@@ -99,10 +119,7 @@ function run_test(
                 $result['reason'] = 'SKIPIF target crashed';
                 return $result;
             }
-            $skipOutput = normalized_output(
-                normalized_runtime_output($skip['output'], [$skipFile => $relativePath]),
-                false,
-            );
+            $skipOutput = normalized_output(normalized_runtime_output($skip['output']), false);
             if (preg_match('/^skip(?:\s|$)/i', $skipOutput) === 1) {
                 $result['status'] = 'skip';
                 $result['category'] = 'skipif';
@@ -129,6 +146,9 @@ function run_test(
             if ($fileSection === null) {
                 throw new RuntimeException('missing FILE, FILEEOF or FILE_EXTERNAL section');
             }
+            if (isset($sections['FILEEOF'])) {
+                $fileSection = preg_replace('/[\r\n]+$/', '', $fileSection) ?? $fileSection;
+            }
             $testFile = $directory . DIRECTORY_SEPARATOR . $stem . '.php';
             if (file_put_contents($testFile, $fileSection) === false) {
                 throw new RuntimeException('cannot create FILE section');
@@ -144,10 +164,7 @@ function run_test(
             $timeout,
         );
         $totalDuration += $execution['duration_ms'];
-        $actual = normalized_runtime_output(
-            $execution['output'],
-            [$testFile => $relativePath, $absolutePath => $relativePath],
-        );
+        $actual = normalized_runtime_output($execution['output']);
         $result['duration_ms'] = $totalDuration;
         $result['exit_code'] = $execution['exit_code'];
         $result['actual_sha256'] = hash('sha256', normalized_output($actual, false));
@@ -170,14 +187,14 @@ function run_test(
                 $result['category'] = 'pass';
                 $result['reason'] = '';
                 $result['actual_excerpt'] = '';
+            } elseif (isset($sections['XFAIL'])) {
+                $result['status'] = 'xfail';
+                $result['category'] = 'xfail';
+                $result['reason'] = trim($sections['XFAIL']);
             } else {
                 $result['status'] = 'fail';
-                $result['category'] = isset($sections['XFAIL'])
-                    ? 'xfail'
-                    : classify_failure($actual, $execution['exit_code']);
-                $result['reason'] = isset($sections['XFAIL'])
-                    ? trim($sections['XFAIL'])
-                    : 'actual output does not match ' . $expectation;
+                $result['category'] = classify_failure($actual, $execution['exit_code']);
+                $result['reason'] = 'actual output does not match ' . $expectation;
             }
         }
 
@@ -195,10 +212,7 @@ function run_test(
                 $timeout,
             );
             $result['duration_ms'] += $clean['duration_ms'];
-            $cleanOutput = normalized_output(
-                normalized_runtime_output($clean['output'], [$cleanFile => $relativePath]),
-                false,
-            );
+            $cleanOutput = normalized_output(normalized_runtime_output($clean['output']), false);
             if ($clean['timeout'] || $clean['crash'] || $clean['exit_code'] !== 0 || $cleanOutput !== '') {
                 if ($result['status'] === 'pass') {
                     $result['status'] = $clean['timeout'] ? 'timeout' : ($clean['crash'] ? 'crash' : 'fail');
@@ -256,7 +270,7 @@ function run_command(array $options, array $paths): void
             continue;
         }
         $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($test, strlen($root) + 1));
-        $result = run_test($test, $relative, $target, $kind, $timeout, $loaded, $shardIndex);
+        $result = run_test($test, $relative, $target, $kind, $timeout, $loaded);
         fwrite($handle, json_encode($result, JSON_UNESCAPED_SLASHES) . "\n");
         $completed++;
         if ($completed % 100 === 0) {

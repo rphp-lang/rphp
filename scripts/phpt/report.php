@@ -29,11 +29,12 @@ function merge_command(array $options, array $manifests): void
         json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
     );
     printf(
-        "total=%d pass=%d fail=%d skip=%d unsupported=%d timeout=%d crash=%d headline=%.3f%% attempted=%.3f%%\n",
+        "total=%d pass=%d fail=%d skip=%d xfail=%d unsupported=%d timeout=%d crash=%d headline=%.3f%% attempted=%.3f%%\n",
         $summary['total'],
         $summary['statuses']['pass'],
         $summary['statuses']['fail'],
         $summary['statuses']['skip'],
+        $summary['statuses']['xfail'],
         $summary['statuses']['unsupported'],
         $summary['statuses']['timeout'],
         $summary['statuses']['crash'],
@@ -54,7 +55,7 @@ function write_published_manifest(string $path, array $records): void
             'status' => $record['status'],
             'category' => $record['category'],
         ];
-        if (in_array($record['status'], ['skip', 'unsupported', 'timeout', 'crash'], true)) {
+        if (in_array($record['status'], ['skip', 'xfail', 'unsupported', 'timeout', 'crash'], true)) {
             $published['reason'] = $record['reason'];
         }
         fwrite($handle, json_encode($published, JSON_UNESCAPED_SLASHES) . "\n");
@@ -65,7 +66,10 @@ function write_published_manifest(string $path, array $records): void
 /** @return array<string, mixed> */
 function summarize_results(array $options, array $records): array
 {
-    $statuses = array_fill_keys(['pass', 'fail', 'skip', 'unsupported', 'timeout', 'crash'], 0);
+    $statuses = array_fill_keys(
+        ['pass', 'fail', 'skip', 'xfail', 'unsupported', 'timeout', 'crash'],
+        0,
+    );
     $categories = [];
     $suites = [];
     foreach ($records as $record) {
@@ -74,7 +78,7 @@ function summarize_results(array $options, array $records): array
         $suite = str_starts_with($record['path'], 'Zend/tests/') ? 'Zend/tests' : 'tests/lang';
         if (!isset($suites[$suite])) {
             $suites[$suite] = array_fill_keys(
-                ['pass', 'fail', 'skip', 'unsupported', 'timeout', 'crash'],
+                ['pass', 'fail', 'skip', 'xfail', 'unsupported', 'timeout', 'crash'],
                 0,
             );
         }
@@ -98,7 +102,7 @@ function summarize_results(array $options, array $records): array
     $headlineDenominator = $statuses['pass'] + $statuses['fail'];
     $attemptedDenominator = $headlineDenominator + $statuses['timeout'] + $statuses['crash'];
     return [
-        'schema_version' => 1,
+        'schema_version' => 2,
         'rphp_commit' => $options['rphp-commit'] ?? '',
         'php_src_commit' => $options['php-src-commit'] ?? '',
         'features' => $options['features'] ?? '',

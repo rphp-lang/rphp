@@ -2,10 +2,12 @@
 
 declare(strict_types=1);
 
-function normalized_output(string $output, bool $whitespaceSensitive): string
+function normalized_output(string $output, bool $_whitespaceSensitive): string
 {
     $output = str_replace(["\r\n", "\r"], "\n", $output);
-    return $whitespaceSensitive ? $output : trim($output);
+    // run-tests.php trims only the outer boundary for every expectation. The
+    // WHITESPACE_SENSITIVE section protects whitespace inside the output.
+    return trim($output);
 }
 
 function expectf_pattern(string $expected): string
@@ -41,6 +43,7 @@ function expectf_pattern(string $expected): string
         '%x' => '[0-9a-fA-F]+',
         '%f' => '[+-]?(?:\\d+|(?=\\.\\d))(?:\\.\\d+)?(?:[Ee][+-]?\\d+)?',
         '%c' => '.',
+        '%0' => '\\x00',
         '%%' => '%',
     ]);
 }
@@ -76,11 +79,8 @@ function output_excerpt(string $output): string
     return $output;
 }
 
-function normalized_runtime_output(string $output, array $pathReplacements): string
+function normalized_runtime_output(string $output): string
 {
-    if ($pathReplacements !== []) {
-        $output = str_replace(array_keys($pathReplacements), array_values($pathReplacements), $output);
-    }
     return preg_replace(
         "/thread 'main' \\(\\d+\\)/",
         "thread 'main' (<id>)",

@@ -14,6 +14,12 @@ function parse_sections(string $path): array
     $current = null;
     foreach (explode("\n", $source) as $line) {
         if (preg_match('/^--([A-Z_]+)--$/D', $line, $match) === 1) {
+            if ($current !== null) {
+                // The newline before the next section header belongs to the
+                // preceding section. Keeping it is significant for heredoc
+                // termination and shutdown output after a closing PHP tag.
+                $sectionLines[$current][] = '';
+            }
             $current = $match[1];
             if (isset($sectionLines[$current])) {
                 throw new RuntimeException("duplicate --{$current}-- section");
@@ -90,8 +96,16 @@ function ini_arguments(string $section): array
         if ($line === '' || str_starts_with($line, ';')) {
             continue;
         }
+        $separator = strpos($line, '=');
+        if ($separator === false) {
+            $name = trim($line);
+            $value = '1';
+        } else {
+            $name = trim(substr($line, 0, $separator));
+            $value = trim(substr($line, $separator + 1));
+        }
         $arguments[] = '-d';
-        $arguments[] = $line;
+        $arguments[] = $name . '=' . $value;
     }
     return $arguments;
 }

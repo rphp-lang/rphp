@@ -26,9 +26,11 @@ cp -R "$script_root/tests/php-src/runner-fixtures/." "$fixture_copy/"
 
 "$php_bin" -r '
 $summary = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
-if ($summary["total"] !== 8
-    || $summary["statuses"]["pass"] !== 7
+if ($summary["schema_version"] !== 2
+    || $summary["total"] !== 13
+    || $summary["statuses"]["pass"] !== 11
     || $summary["statuses"]["skip"] !== 1
+    || $summary["statuses"]["xfail"] !== 1
     || array_sum(array_intersect_key(
         $summary["statuses"],
         array_flip(["fail", "unsupported", "timeout", "crash"]),

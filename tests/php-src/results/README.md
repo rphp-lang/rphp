@@ -7,9 +7,10 @@ kept outside this repository.
 Each `*-summary.json` records the exact RPHP and php-src commits, feature set,
 architecture, timeout policy, aggregate statuses, failure categories and suite
 breakdown. The corresponding `*-manifest.jsonl` has one deterministic record
-per unmodified PHPT path with its status and category. Skip, unsupported,
-timeout and crash records also retain their public reason.
+per unmodified PHPT path with its status and category. Skip, expected-failure,
+unsupported, timeout and crash records also retain their public reason.
 
-The headline rate is always `pass / (pass + fail)`. Skips, unsupported cases,
-timeouts and crashes are published separately and are never counted as passes.
+The headline rate is always `pass / (pass + fail)`. Skips, known upstream
+`XFAIL` outcomes, unsupported cases, timeouts and crashes are published
+separately and are never counted as passes.
 Use `scripts/run-php-src-phpt.sh` to reproduce or update a result.
