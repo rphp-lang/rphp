@@ -1,5 +1,5 @@
 {
-    "schema_version": 2,
+    "schema_version": 3,
     "rphp_commit": "102800d9fa88a34ebc240a7a01c93fdd71f803bf",
     "php_src_commit": "7a64ae0507799547fbbd39b067bd3dd2c35e8fec",
     "features": "all-features",
@@ -37,9 +37,27 @@
             "unsupported": 258,
             "timeout": 0,
             "crash": 7,
+            "categories": {
+                "compile": 138,
+                "extension": 65,
+                "output": 723,
+                "parse": 1951,
+                "pass": 545,
+                "runtime": 1258,
+                "runtime-cli-ini": 254,
+                "section": 4,
+                "skipif": 26,
+                "xfail": 1
+            },
             "total": 4965,
             "headline_pass_rate": 0.11814437459353999,
-            "attempted_pass_rate": 0.11796536796536797
+            "attempted_pass_rate": 0.11796536796536797,
+            "execution_profile": {
+                "attempted": 4620,
+                "front_end_rejected": 2089,
+                "runtime_reached": 2531,
+                "runtime_reach_rate": 0.5478354978354978
+            }
         },
         "tests/lang": {
             "pass": 42,
@@ -49,11 +67,33 @@
             "unsupported": 16,
             "timeout": 0,
             "crash": 0,
+            "categories": {
+                "compile": 7,
+                "output": 39,
+                "parse": 94,
+                "pass": 42,
+                "runtime": 83,
+                "runtime-cli-ini": 15,
+                "section": 1,
+                "skipif": 13
+            },
             "total": 294,
             "headline_pass_rate": 0.15671641791044777,
-            "attempted_pass_rate": 0.15671641791044777
+            "attempted_pass_rate": 0.15671641791044777,
+            "execution_profile": {
+                "attempted": 268,
+                "front_end_rejected": 101,
+                "runtime_reached": 167,
+                "runtime_reach_rate": 0.6231343283582089
+            }
         }
     },
     "headline_pass_rate": 0.12026224134398689,
-    "attempted_pass_rate": 0.12009001636661211
+    "attempted_pass_rate": 0.12009001636661211,
+    "execution_profile": {
+        "attempted": 4888,
+        "front_end_rejected": 2190,
+        "runtime_reached": 2698,
+        "runtime_reach_rate": 0.5519639934533551
+    }
 }

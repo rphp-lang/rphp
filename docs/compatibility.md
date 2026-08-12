@@ -26,6 +26,14 @@ is 587 / 5,259, or **11.162%**; including crashes in the attempted denominator
 gives **12.009%**. These numbers are intentionally pre-alpha and are not a
 claim of PHP 8.4 compatibility.
 
+The schema-3 execution profile makes the strict score less easy to mistake for
+language coverage. Of 4,888 attempted cases, 2,698 (**55.196%**) got past the
+observed parse/compile failure stage and reached runtime behavior. This is not a
+second compatibility score: invalid-source PHPT cases are supposed to stop in
+the front end, and reaching runtime says nothing about correct semantics or
+diagnostic text. It does show why the exact-output pass rate can be much lower
+than the practical surface already exercised by RPHP.
+
 The largest failure groups are 2,045 parse failures, 1,334 runtime failures,
 762 output mismatches, 145 compile failures and eight failed `SKIPIF`
 evaluations; one known upstream expected failure is reported separately. Seven
@@ -87,6 +95,12 @@ variable-variable names (59), and returned-by-reference declarations (57).
 PHPT is an exact-output conformance suite: a correct rejection with different
 diagnostic text still fails, so this strict percentage is deliberately lower
 than feature reach.
+
+A fresh all-features rerun over all 5,259 pinned cases reproduced every
+published status and aggregate exactly. Together with the 5,132-pass,
+zero-failure reference-PHP oracle, this rules out sharding, discovery, and
+expectation matching as the cause of the low strict rate. The remaining gap is
+in RPHP behavior and PHP-compatible diagnostics, not a hidden runner divisor.
 
 The dependency-free project runner supports `FILE`, `FILEEOF`,
 `FILE_EXTERNAL`, `EXPECT`, `EXPECTF`, `EXPECTREGEX`, `SKIPIF`, `INI`, `ENV`,

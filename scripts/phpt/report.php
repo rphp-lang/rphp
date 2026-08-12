@@ -29,7 +29,7 @@ function merge_command(array $options, array $manifests): void
         json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
     );
     printf(
-        "total=%d pass=%d fail=%d skip=%d xfail=%d unsupported=%d timeout=%d crash=%d headline=%.3f%% attempted=%.3f%%\n",
+        "total=%d pass=%d fail=%d skip=%d xfail=%d unsupported=%d timeout=%d crash=%d headline=%.3f%% attempted=%.3f%% runtime-reach=%.3f%%\n",
         $summary['total'],
         $summary['statuses']['pass'],
         $summary['statuses']['fail'],
@@ -40,6 +40,7 @@ function merge_command(array $options, array $manifests): void
         $summary['statuses']['crash'],
         100 * ($summary['headline_pass_rate'] ?? 0),
         100 * ($summary['attempted_pass_rate'] ?? 0),
+        100 * ($summary['execution_profile']['runtime_reach_rate'] ?? 0),
     );
 }
 
@@ -81,28 +82,39 @@ function summarize_results(array $options, array $records): array
                 ['pass', 'fail', 'skip', 'xfail', 'unsupported', 'timeout', 'crash'],
                 0,
             );
+            $suites[$suite]['categories'] = [];
         }
         $suites[$suite][$record['status']]++;
+        $suites[$suite]['categories'][$record['category']] =
+            ($suites[$suite]['categories'][$record['category']] ?? 0) + 1;
     }
     ksort($categories);
     ksort($suites);
     foreach ($suites as &$suiteStatuses) {
+        ksort($suiteStatuses['categories']);
         $suiteHeadline = $suiteStatuses['pass'] + $suiteStatuses['fail'];
         $suiteAttempted = $suiteHeadline + $suiteStatuses['timeout'] + $suiteStatuses['crash'];
-        $suiteStatuses['total'] = array_sum($suiteStatuses);
+        $suiteStatuses['total'] = $suiteAttempted
+            + $suiteStatuses['skip']
+            + $suiteStatuses['xfail']
+            + $suiteStatuses['unsupported'];
         $suiteStatuses['headline_pass_rate'] = $suiteHeadline === 0
             ? null
             : $suiteStatuses['pass'] / $suiteHeadline;
         $suiteStatuses['attempted_pass_rate'] = $suiteAttempted === 0
             ? null
             : $suiteStatuses['pass'] / $suiteAttempted;
+        $suiteStatuses['execution_profile'] = execution_profile(
+            $suiteStatuses,
+            $suiteStatuses['categories'],
+        );
     }
     unset($suiteStatuses);
 
     $headlineDenominator = $statuses['pass'] + $statuses['fail'];
     $attemptedDenominator = $headlineDenominator + $statuses['timeout'] + $statuses['crash'];
     return [
-        'schema_version' => 2,
+        'schema_version' => 3,
         'rphp_commit' => $options['rphp-commit'] ?? '',
         'php_src_commit' => $options['php-src-commit'] ?? '',
         'features' => $options['features'] ?? '',
@@ -119,5 +131,29 @@ function summarize_results(array $options, array $records): array
         'attempted_pass_rate' => $attemptedDenominator === 0
             ? null
             : $statuses['pass'] / $attemptedDenominator,
+        'execution_profile' => execution_profile($statuses, $categories),
+    ];
+}
+
+/**
+ * Execution reach is descriptive, not a compatibility score. A PHPT may
+ * intentionally expect a front-end rejection, while a runtime-reaching case
+ * may still behave incorrectly.
+ *
+ * @return array{attempted: int, front_end_rejected: int, runtime_reached: int, runtime_reach_rate: ?float}
+ */
+function execution_profile(array $statuses, array $categories): array
+{
+    $attempted = $statuses['pass']
+        + $statuses['fail']
+        + $statuses['timeout']
+        + $statuses['crash'];
+    $frontEndRejected = ($categories['parse'] ?? 0) + ($categories['compile'] ?? 0);
+    $runtimeReached = max(0, $attempted - $frontEndRejected);
+    return [
+        'attempted' => $attempted,
+        'front_end_rejected' => $frontEndRejected,
+        'runtime_reached' => $runtimeReached,
+        'runtime_reach_rate' => $attempted === 0 ? null : $runtimeReached / $attempted,
     ];
 }
