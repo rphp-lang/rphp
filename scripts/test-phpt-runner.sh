@@ -27,8 +27,8 @@ cp -R "$script_root/tests/php-src/runner-fixtures/." "$fixture_copy/"
 "$php_bin" -r '
 $summary = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
 if ($summary["schema_version"] !== 3
-    || $summary["total"] !== 13
-    || $summary["statuses"]["pass"] !== 11
+    || $summary["total"] !== 14
+    || $summary["statuses"]["pass"] !== 12
     || $summary["statuses"]["skip"] !== 1
     || $summary["statuses"]["xfail"] !== 1
     || array_sum(array_intersect_key(
@@ -36,9 +36,9 @@ if ($summary["schema_version"] !== 3
         array_flip(["fail", "unsupported", "timeout", "crash"]),
     )) !== 0
     || $summary["execution_profile"] !== [
-        "attempted" => 11,
+        "attempted" => 12,
         "front_end_rejected" => 0,
-        "runtime_reached" => 11,
+        "runtime_reached" => 12,
         "runtime_reach_rate" => 1,
     ]
 ) {

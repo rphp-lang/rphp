@@ -141,6 +141,11 @@ function target_command(
         'short_open_tag=0',
         '-d',
         'date.timezone=UTC',
+        // PHP 8.5 enables compile-time fatal backtraces by default. The
+        // pinned PHP 8.4 suite predates that output change, so keep reference
+        // runs on the suite's diagnostic profile as run-tests.php would.
+        '-d',
+        'fatal_error_backtraces=0',
         ...ini_arguments($ini),
         '-f',
         $file,
