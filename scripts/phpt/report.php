@@ -73,6 +73,7 @@ function summarize_results(array $options, array $records): array
     );
     $categories = [];
     $suites = [];
+    $executionCounts = ['front_end_rejected' => 0, 'pre_execution_failed' => 0];
     foreach ($records as $record) {
         $statuses[$record['status']] = ($statuses[$record['status']] ?? 0) + 1;
         $categories[$record['category']] = ($categories[$record['category']] ?? 0) + 1;
@@ -83,10 +84,23 @@ function summarize_results(array $options, array $records): array
                 0,
             );
             $suites[$suite]['categories'] = [];
+            $suites[$suite]['_execution'] = [
+                'front_end_rejected' => 0,
+                'pre_execution_failed' => 0,
+            ];
         }
         $suites[$suite][$record['status']]++;
         $suites[$suite]['categories'][$record['category']] =
             ($suites[$suite]['categories'][$record['category']] ?? 0) + 1;
+        if (in_array($record['status'], ['pass', 'fail', 'timeout', 'crash'], true)) {
+            if (!($record['test_file_executed'] ?? false)) {
+                $executionCounts['pre_execution_failed']++;
+                $suites[$suite]['_execution']['pre_execution_failed']++;
+            } elseif ($record['front_end_rejected'] ?? false) {
+                $executionCounts['front_end_rejected']++;
+                $suites[$suite]['_execution']['front_end_rejected']++;
+            }
+        }
     }
     ksort($categories);
     ksort($suites);
@@ -106,16 +120,19 @@ function summarize_results(array $options, array $records): array
             : $suiteStatuses['pass'] / $suiteAttempted;
         $suiteStatuses['execution_profile'] = execution_profile(
             $suiteStatuses,
-            $suiteStatuses['categories'],
+            $suiteStatuses['_execution']['front_end_rejected'],
+            $suiteStatuses['_execution']['pre_execution_failed'],
         );
+        unset($suiteStatuses['_execution']);
     }
     unset($suiteStatuses);
 
     $headlineDenominator = $statuses['pass'] + $statuses['fail'];
     $attemptedDenominator = $headlineDenominator + $statuses['timeout'] + $statuses['crash'];
     return [
-        'schema_version' => 3,
+        'schema_version' => 4,
         'rphp_commit' => $options['rphp-commit'] ?? '',
+        'runner_commit' => $options['runner-commit'] ?? '',
         'php_src_commit' => $options['php-src-commit'] ?? '',
         'features' => $options['features'] ?? '',
         'architecture' => $options['architecture'] ?? php_uname('m'),
@@ -131,7 +148,11 @@ function summarize_results(array $options, array $records): array
         'attempted_pass_rate' => $attemptedDenominator === 0
             ? null
             : $statuses['pass'] / $attemptedDenominator,
-        'execution_profile' => execution_profile($statuses, $categories),
+        'execution_profile' => execution_profile(
+            $statuses,
+            $executionCounts['front_end_rejected'],
+            $executionCounts['pre_execution_failed'],
+        ),
     ];
 }
 
@@ -140,18 +161,22 @@ function summarize_results(array $options, array $records): array
  * intentionally expect a front-end rejection, while a runtime-reaching case
  * may still behave incorrectly.
  *
- * @return array{attempted: int, front_end_rejected: int, runtime_reached: int, runtime_reach_rate: ?float}
+ * @return array{attempted: int, pre_execution_failed: int, front_end_rejected: int, runtime_reached: int, runtime_reach_rate: ?float}
  */
-function execution_profile(array $statuses, array $categories): array
+function execution_profile(
+    array $statuses,
+    int $frontEndRejected,
+    int $preExecutionFailed,
+): array
 {
     $attempted = $statuses['pass']
         + $statuses['fail']
         + $statuses['timeout']
         + $statuses['crash'];
-    $frontEndRejected = ($categories['parse'] ?? 0) + ($categories['compile'] ?? 0);
-    $runtimeReached = max(0, $attempted - $frontEndRejected);
+    $runtimeReached = max(0, $attempted - $frontEndRejected - $preExecutionFailed);
     return [
         'attempted' => $attempted,
+        'pre_execution_failed' => $preExecutionFailed,
         'front_end_rejected' => $frontEndRejected,
         'runtime_reached' => $runtimeReached,
         'runtime_reach_rate' => $attempted === 0 ? null : $runtimeReached / $attempted,

@@ -26,7 +26,7 @@ cp -R "$script_root/tests/php-src/runner-fixtures/." "$fixture_copy/"
 
 "$php_bin" -r '
 $summary = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
-if ($summary["schema_version"] !== 3
+if ($summary["schema_version"] !== 4
     || $summary["total"] !== 14
     || $summary["statuses"]["pass"] !== 12
     || $summary["statuses"]["skip"] !== 1
@@ -37,9 +37,10 @@ if ($summary["schema_version"] !== 3
     )) !== 0
     || $summary["execution_profile"] !== [
         "attempted" => 12,
-        "front_end_rejected" => 0,
-        "runtime_reached" => 12,
-        "runtime_reach_rate" => 1,
+        "pre_execution_failed" => 0,
+        "front_end_rejected" => 2,
+        "runtime_reached" => 10,
+        "runtime_reach_rate" => 10 / 12,
     ]
 ) {
     fwrite(STDERR, "unexpected PHPT runner fixture summary\n");
@@ -59,15 +60,27 @@ $profile = execution_profile(
         "timeout" => 1,
         "crash" => 1,
     ],
-    ["parse" => 2, "compile" => 1, "runtime" => 7],
+    3,
+    1,
 );
 if ($profile !== [
     "attempted" => 10,
+    "pre_execution_failed" => 1,
     "front_end_rejected" => 3,
-    "runtime_reached" => 7,
-    "runtime_reach_rate" => 0.7,
+    "runtime_reached" => 6,
+    "runtime_reach_rate" => 0.6,
 ]) {
     fwrite(STDERR, "unexpected synthetic execution profile\n");
     exit(1);
 }
 ' "$script_root/scripts/phpt/report.php"
+
+"$php_bin" -r '
+require $argv[1];
+if (classify_failure("Parse error: emitted by user code", 0) !== "output"
+    || classify_failure("Parse error: emitted by the parser", 1) !== "parse"
+) {
+    fwrite(STDERR, "unexpected execution-phase classification\n");
+    exit(1);
+}
+' "$script_root/scripts/phpt/expectation.php"

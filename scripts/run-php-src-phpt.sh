@@ -79,12 +79,14 @@ if [ "$failed" -ne 0 ]; then
     exit 1
 fi
 
-rphp_commit=$(git -C "$script_root" rev-parse HEAD)
+runner_commit=$(git -C "$script_root" rev-parse HEAD)
+rphp_commit=${RPHP_PHPT_RPHP_COMMIT:-$runner_commit}
 architecture=$(uname -m)
 "$reference_php" "$runner" merge \
     --manifest "$output_dir/manifest.jsonl" \
     --summary "$output_dir/summary.json" \
     --rphp-commit "$rphp_commit" \
+    --runner-commit "$runner_commit" \
     --php-src-commit "$PHP_SRC_COMMIT" \
     --features all-features \
     --architecture "$architecture" \

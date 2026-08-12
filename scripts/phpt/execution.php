@@ -156,6 +156,7 @@ function run_test(
             $temporaryFiles[] = $testFile;
         }
 
+        $result['test_file_executed'] = true;
         $execution = run_process(
             target_command($target, $kind, $testFile, $ini, $args),
             $directory,
@@ -169,6 +170,10 @@ function run_test(
         $result['exit_code'] = $execution['exit_code'];
         $result['actual_sha256'] = hash('sha256', normalized_output($actual, false));
         $result['actual_excerpt'] = output_excerpt($actual);
+        $failureCategory = classify_failure($actual, $execution['exit_code']);
+        $result['front_end_rejected'] = !$execution['timeout']
+            && !$execution['crash']
+            && in_array($failureCategory, ['parse', 'compile'], true);
 
         if ($execution['timeout']) {
             $result['status'] = 'timeout';
@@ -193,7 +198,7 @@ function run_test(
                 $result['reason'] = trim($sections['XFAIL']);
             } else {
                 $result['status'] = 'fail';
-                $result['category'] = classify_failure($actual, $execution['exit_code']);
+                $result['category'] = $failureCategory;
                 $result['reason'] = 'actual output does not match ' . $expectation;
             }
         }

@@ -103,15 +103,22 @@ function base_result(string $path, array $sections): array
         'actual_sha256' => null,
         'expected_sha256' => null,
         'actual_excerpt' => '',
+        // Internal runner fields. The merged public manifest omits them, but
+        // the aggregate execution profile needs to distinguish FILE failures
+        // from SKIPIF/runner failures and exact negative-test passes.
+        'test_file_executed' => false,
+        'front_end_rejected' => false,
     ];
 }
 
 function classify_failure(string $output, int $exitCode): string
 {
-    if (preg_match('/(?:^|\n)Parse error:/i', $output) === 1) {
+    if ($exitCode !== 0 && preg_match('/(?:^|\n)Parse error:/i', $output) === 1) {
         return 'parse';
     }
-    if (preg_match('/(?:^|\n)Fatal error:.*(?:compile|unsupported|declaration|default)/i', $output) === 1) {
+    if ($exitCode !== 0
+        && preg_match('/(?:^|\n)Fatal error:.*(?:compile|unsupported|declaration|default)/i', $output) === 1
+    ) {
         return 'compile';
     }
     return $exitCode === 0 ? 'output' : 'runtime';
