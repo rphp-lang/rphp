@@ -721,6 +721,7 @@ fn mark_embedded_late_static_properties(op_array: &mut OpArray, embedded: bool) 
             OpCode::FetchLateStaticProp
                 | OpCode::AssignLateStaticProp
                 | OpCode::FetchLateClassConst
+                | OpCode::FetchLateDynamicClassConst
         ) && instruction.op1_type == OpType::Const
             && op_array
                 .literals
@@ -778,6 +779,7 @@ pub fn make_user_function_full(
                 | OpCode::FetchLateStaticProp
                 | OpCode::AssignLateStaticProp
                 | OpCode::FetchLateClassConst
+                | OpCode::FetchLateDynamicClassConst
         )
     });
     let is_fast_scalar = !is_variadic
@@ -932,6 +934,7 @@ pub fn make_user_function_typed(
                     | OpCode::FetchLateStaticProp
                     | OpCode::AssignLateStaticProp
                     | OpCode::FetchLateClassConst
+                    | OpCode::FetchLateDynamicClassConst
             )
         });
     let has_fast_scalar_shape = !is_variadic
@@ -5086,6 +5089,7 @@ pub fn finalize_user_method(
                 OpCode::FetchLateStaticProp
                     | OpCode::AssignLateStaticProp
                     | OpCode::FetchLateClassConst
+                    | OpCode::FetchLateDynamicClassConst
             ) {
                 instruction._pad &= !LATE_STATIC_PROP_EMBEDDED_SCOPE;
             }

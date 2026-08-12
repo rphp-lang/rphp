@@ -131,6 +131,17 @@ pub enum Expr {
         class_name: String,
         constant: String,
     },
+    DynamicClassConstant {
+        // $class::CONSTANT, $object::CONSTANT, or $class::{$constant}
+        class: Box<Expr>,
+        constant: Box<Expr>,
+        dynamic_name: bool,
+    },
+    DynamicNamedClassConstant {
+        // ClassName::{$constant}
+        class_name: String,
+        constant: Box<Expr>,
+    },
     Throw(Box<Expr>), // throw expr (PHP 8 expression)
     Assign {
         // $var = expr (used in expressions like $a = $b ?? $c)
@@ -234,6 +245,12 @@ impl Expr {
             | Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
             | Expr::Constant(_) => false,
+            Expr::DynamicClassConstant {
+                class, constant, ..
+            } => {
+                class.contains_yield() || constant.contains_yield()
+            }
+            Expr::DynamicNamedClassConstant { constant, .. } => constant.contains_yield(),
         }
     }
 }

@@ -112,6 +112,8 @@ pub(super) fn loop_miss_reason(
             | OpCode::AssignLateStaticProp
             | OpCode::FetchClassConst
             | OpCode::FetchLateClassConst
+            | OpCode::FetchDynamicClassConst
+            | OpCode::FetchLateDynamicClassConst
             | OpCode::InitStaticCall
             | OpCode::InitLateStaticCall
             | OpCode::Instanceof

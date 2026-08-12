@@ -2,6 +2,21 @@
 mod common;
 use common::{make_eg_with_capture, run_php, run_php_expect_error, run_php_with_functions};
 
+#[test]
+fn function_results_continue_through_postfix_method_and_property_chains() {
+    let out = run_php(
+        r#"<?php
+class FunctionResult {
+    public $value = 'property';
+    public function method() { return 'method'; }
+}
+function functionResult() { return new FunctionResult(); }
+echo functionResult()->method() . ':' . functionResult()->value;
+"#,
+    );
+    assert_eq!(out, "method:property");
+}
+
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::{make_internal_function, make_user_function};
 use rphp::lexer::Lexer;

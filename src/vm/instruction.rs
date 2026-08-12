@@ -50,6 +50,18 @@ pub const CALL_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 9;
 /// embedded scope slot. Wide frames and instance methods use the resolver.
 pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;
 
+/// FetchDynamicClassConst flag: the class owner is a runtime expression rather
+/// than a statically named class-like declaration.
+pub const CLASS_CONST_DYNAMIC_OWNER: u16 = 1 << 1;
+
+/// Dynamic class-constant flag: the name came from a braced expression.
+pub const CLASS_CONST_DYNAMIC_NAME: u16 = 1 << 2;
+
+/// Dynamic class-constant flag: PHP resolved the braced name as a compile-time
+/// expression. In particular, a literal `"class"` remains an ordinary lookup
+/// while a runtime value equal to `"class"` has PHP's pseudo-constant meaning.
+pub const CLASS_CONST_COMPILE_TIME_NAME: u16 = 1 << 3;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that

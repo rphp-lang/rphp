@@ -1077,6 +1077,26 @@ fn op_fetch_late_class_const<'a>(
     op_fetch_class_const_impl::<true>(eg, frame, op_array, opline)
 }
 
+#[inline(never)]
+fn op_fetch_dynamic_class_const<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    op_fetch_class_const_impl::<false>(eg, frame, op_array, opline)
+}
+
+#[inline(never)]
+fn op_fetch_late_dynamic_class_const<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    op_fetch_class_const_impl::<true>(eg, frame, op_array, opline)
+}
+
 #[inline(always)]
 fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
@@ -1084,13 +1104,47 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let class_name =
+    let raw_class_value =
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let constant_name =
+    let raw_constant_value =
         unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    let raw_class = class_name.as_str().unwrap_or("");
-    let constant = constant_name.as_str().unwrap_or("");
+    let class_value = if raw_class_value.is_reference() {
+        unsafe { &*raw_class_value.as_ref_ptr() }
+    } else {
+        raw_class_value
+    };
+    let constant_value = if raw_constant_value.is_reference() {
+        unsafe { &*raw_constant_value.as_ref_ptr() }
+    } else {
+        raw_constant_value
+    };
+    let dynamic_owner = opline._pad & CLASS_CONST_DYNAMIC_OWNER != 0;
+    let dynamic_name = opline._pad & CLASS_CONST_DYNAMIC_NAME != 0;
+    let compile_time_name = opline._pad & CLASS_CONST_COMPILE_TIME_NAME != 0;
+    let raw_class = class_value.as_str().unwrap_or("");
+    let constant = constant_value.as_str();
+
+    if dynamic_owner && class_value.as_object().is_none() && class_value.as_str().is_none() {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            "Class name must be a valid object or a string".to_string(),
+        ));
+    }
+    if dynamic_owner
+        && !dynamic_name
+        && class_value.as_str().is_some()
+        && constant.is_some_and(|name| name.eq_ignore_ascii_case("class"))
+    {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "TypeError",
+            "Cannot use \"::class\" on string".to_string(),
+        ));
+    }
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
@@ -1098,17 +1152,35 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         &mut *(op_array.cache.as_ptr().add(ip)
             as *mut crate::vm::instruction::InlineCache)
     };
-    let class_id = static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class);
+    let class_id = if dynamic_owner && !LATE_STATIC {
+        class_value
+            .as_object()
+            .map(|object| object.class_id)
+            .unwrap_or_else(|| eg.class_id_of(raw_class))
+    } else {
+        static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class)
+    };
 
-    if constant.eq_ignore_ascii_case("class") {
-        let Some(class) = eg.class_by_id(class_id) else {
-            return Ok(static_property_throw(
-                eg,
-                frame,
-                "Error",
-                format!("Class \"{}\" not found", raw_class),
-            ));
-        };
+    let Some(class) = eg.class_by_id(class_id) else {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Class \"{}\" not found", raw_class),
+        ));
+    };
+    let Some(constant) = constant else {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "TypeError",
+            format!(
+                "Cannot use value of type {} as class constant name",
+                constant_value.type_name()
+            ),
+        ));
+    };
+    if constant.eq_ignore_ascii_case("class") && (!dynamic_name || !compile_time_name) {
         unsafe { slot_set(result_ptr, Value::string(class.name.clone())) };
         return Ok(ColdResult::Done);
     }
@@ -1121,10 +1193,12 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             .constants
             .get(cache.property_slot())
             .expect("cached class constant index must stay valid");
-        unsafe { slot_set(result_ptr, definition.value.clone()) };
-        return Ok(ColdResult::Done);
+        if !dynamic_name || definition.name == constant {
+            unsafe { slot_set(result_ptr, definition.value.clone()) };
+            return Ok(ColdResult::Done);
+        }
     }
-    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 2 {
+    if !dynamic_name && class_id != 0 && cache.class_id == class_id && cache.property_flags() == 2 {
         let value = clone_static_property_value(unsafe {
             eg.static_property_value_unchecked(cache.property_slot())
         });
@@ -1132,14 +1206,6 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         return Ok(ColdResult::Done);
     }
 
-    let Some(class) = eg.class_by_id(class_id) else {
-        return Ok(static_property_throw(
-            eg,
-            frame,
-            "Error",
-            format!("Class \"{}\" not found", raw_class),
-        ));
-    };
     if class.is_trait {
         let message = format!("Cannot access trait constant {}::{} directly", class.name, constant);
         return Ok(static_property_throw(eg, frame, "Error", message));

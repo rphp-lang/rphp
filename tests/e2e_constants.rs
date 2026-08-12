@@ -91,6 +91,191 @@ class TypedConstant { public const int VALUE = "wrong"; }
     assert!(format!("{type_error:?}").contains("for class constant TypedConstant::VALUE"));
 }
 
+#[test]
+fn test_dynamic_class_constant_owners_and_names_rekey_one_cache_site() {
+    let out = run_php(
+        r#"<?php
+class DynamicA {
+    public const FIRST = "a1";
+    public const SECOND = "a2";
+}
+class DynamicB {
+    public const FIRST = "b1";
+    public const SECOND = "b2";
+}
+function fixedConstant($owner) { return $owner::FIRST; }
+function namedConstant($owner, $name) { return $owner::{$name}; }
+
+echo fixedConstant(DynamicA::class) . ':';
+echo fixedConstant(DynamicB::class) . ':';
+echo fixedConstant(new DynamicA()) . ':';
+echo fixedConstant(new DynamicB()) . ':';
+echo namedConstant(DynamicA::class, 'FIRST') . ':';
+echo namedConstant(DynamicA::class, 'SECOND') . ':';
+echo namedConstant(DynamicB::class, 'FIRST') . ':';
+echo namedConstant(new DynamicB(), 'SECOND');
+"#,
+    );
+    assert_eq!(out, "a1:b1:a1:b1:a1:a2:b1:b2");
+}
+
+#[test]
+fn test_dynamic_class_constants_preserve_evaluation_late_static_and_visibility() {
+    let out = run_php(
+        r#"<?php
+class DynamicBase {
+    protected const SECRET = "base-secret";
+    public const VALUE = "base";
+    public static function late($name) { return static::{$name}; }
+    public static function lexical($name) { return self::{$name}; }
+    public function own($name) { return $this::{$name}; }
+}
+class DynamicChild extends DynamicBase {
+    public const VALUE = "child";
+}
+function ownerExpression() { echo 'O'; return DynamicChild::class; }
+function nameExpression() { echo 'N'; return 'VALUE'; }
+
+echo DynamicBase::late('VALUE') . ':' . DynamicChild::late('VALUE') . ':';
+echo DynamicChild::lexical('VALUE') . ':';
+echo (new DynamicBase())->own('SECRET') . ':';
+echo ownerExpression()::{nameExpression()};
+try {
+    $name = 'SECRET';
+    echo DynamicBase::{$name};
+} catch (Error $error) {
+    echo ':' . $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "base:child:base:base-secret:ONchild:Cannot access protected constant DynamicBase::SECRET"
+    );
+}
+
+#[test]
+fn test_dynamic_class_keyword_distinguishes_runtime_and_compile_time_names() {
+    let out = run_php(
+        r#"<?php
+class DynamicClassName { public const CLASS_NAME = 'class'; }
+const DYNAMIC_CLASS_KEYWORD = 'class';
+$object = new DynamicClassName();
+$owner = DynamicClassName::class;
+$name = 'class';
+
+echo $object::class . ':';
+echo $owner::{$name} . ':';
+echo DynamicClassName::{$name} . ':';
+echo DynamicClassName::{DYNAMIC_CLASS_KEYWORD} . ':';
+try { echo $owner::class; } catch (TypeError $error) { echo $error->getMessage(); }
+echo ':';
+try { echo DynamicClassName::{"class"}; } catch (Error $error) { echo $error->getMessage(); }
+echo ':';
+try { echo $owner::{"cl" . "ass"}; } catch (Error $error) { echo $error->getMessage(); }
+echo ':';
+try { echo DynamicClassName::{DynamicClassName::CLASS_NAME}; }
+catch (Error $error) { echo $error->getMessage(); }
+echo ':';
+try { echo DynamicClassName::{true ? 'class' : 'missing'}; }
+catch (Error $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "DynamicClassName:DynamicClassName:DynamicClassName:DynamicClassName:Cannot use \"::class\" on string:Undefined constant DynamicClassName::class:Undefined constant DynamicClassName::class:Undefined constant DynamicClassName::class:Undefined constant DynamicClassName::class"
+    );
+}
+
+#[test]
+fn test_dynamic_class_constant_type_errors_follow_php_resolution_order() {
+    let out = run_php(
+        r#"<?php
+class DynamicTypeOwner { public const VALUE = 1; }
+function dynamicTypeFetch($owner, $name) { return $owner::{$name}; }
+
+try { dynamicTypeFetch(42, 42); }
+catch (Error $error) { echo $error->getMessage(); }
+echo ':';
+try { dynamicTypeFetch('MissingDynamicOwner', 42); }
+catch (Error $error) { echo $error->getMessage(); }
+echo ':';
+try { dynamicTypeFetch(DynamicTypeOwner::class, 42); }
+catch (TypeError $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Class name must be a valid object or a string:Class \"MissingDynamicOwner\" not found:Cannot use value of type int as class constant name"
+    );
+}
+
+#[test]
+fn test_dynamic_enum_cases_and_constants_do_not_alias_cache_entries() {
+    let out = run_php(
+        r#"<?php
+enum DynamicSuit {
+    case Hearts;
+    case Spades;
+    public const LABEL = 'suit';
+}
+function dynamicEnumMember($name) { return DynamicSuit::{$name}; }
+
+echo dynamicEnumMember('LABEL') . ':';
+echo (dynamicEnumMember('Hearts') === DynamicSuit::Hearts ? 'heart' : 'bad') . ':';
+echo dynamicEnumMember('LABEL') . ':';
+echo (dynamicEnumMember('Spades') === DynamicSuit::Spades ? 'spade' : 'bad');
+"#,
+    );
+    assert_eq!(out, "suit:heart:suit:spade");
+}
+
+#[test]
+fn test_dynamic_class_constant_arrow_capture_and_generator_suspension() {
+    let out = run_php(
+        r#"<?php
+class DynamicSuspended { public const VALUE = 'resolved'; }
+$owner = DynamicSuspended::class;
+$name = 'VALUE';
+$fetch = fn() => $owner::{$name};
+echo $fetch() . ':';
+
+function suspendedDynamicConstant() {
+    return (yield 'owner')::{yield 'name'};
+}
+$generator = suspendedDynamicConstant();
+echo $generator->current() . ':';
+echo $generator->send(DynamicSuspended::class) . ':';
+$generator->send('VALUE');
+echo $generator->getReturn();
+"#,
+    );
+    assert_eq!(out, "resolved:owner:name:resolved");
+}
+
+#[test]
+fn test_dynamic_class_constant_fetches_are_valid_constant_expressions() {
+    let out = run_php(
+        r#"<?php
+class DynamicConstantExpression {
+    public const BA = 'BA';
+    public const R = 'R';
+    public const BAR = 'bar';
+    public const DynamicConstantExpression = 'bar';
+    public const FIRST = self::{'BAR'};
+    public const SECOND = self::{'BA' . 'R'};
+    public const THIRD = self::{self::BA . self::R};
+}
+const DYNAMIC_CONST_EXPRESSION = DynamicConstantExpression::{DynamicConstantExpression::class};
+echo DynamicConstantExpression::FIRST . ':';
+echo DynamicConstantExpression::SECOND . ':';
+echo DynamicConstantExpression::THIRD . ':';
+echo DYNAMIC_CONST_EXPRESSION;
+"#,
+    );
+    assert_eq!(out, "bar:bar:bar:bar");
+}
+
 // ============================================================================
 // const keyword
 // ============================================================================

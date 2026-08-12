@@ -24,7 +24,8 @@ use crate::value::{
 };
 use crate::vm::instruction::{
     ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
-    CALL_FLAG_EXACT_SCALAR_ARGS, InlineCache, Instruction, KnownScalarType, OpType,
+    CALL_FLAG_EXACT_SCALAR_ARGS, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
+    CLASS_CONST_DYNAMIC_OWNER, InlineCache, Instruction, KnownScalarType, OpType,
 };
 use crate::vm::opcode::OpCode;
 
@@ -1306,6 +1307,51 @@ fn builtin_ref_args(name: &str) -> u64 {
 }
 
 impl Compiler {
+    /// PHP treats a braced name produced by a constant expression differently
+    /// from a runtime string equal to `class`: the former remains an ordinary
+    /// case-sensitive constant lookup, while the latter resolves `::class`.
+    fn is_compile_time_class_constant_name(expr: &Expr) -> bool {
+        match expr {
+            Expr::Integer(_)
+            | Expr::Float(_)
+            | Expr::StringLiteral(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::ClassConstant { .. } => true,
+            Expr::BinaryOp { left, right, .. }
+            | Expr::NullCoalesce { left, right }
+            | Expr::Elvis { left, right } => {
+                Self::is_compile_time_class_constant_name(left)
+                    && Self::is_compile_time_class_constant_name(right)
+            }
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                Self::is_compile_time_class_constant_name(condition)
+                    && Self::is_compile_time_class_constant_name(then_expr)
+                    && Self::is_compile_time_class_constant_name(else_expr)
+            }
+            Expr::UnaryMinus(inner)
+            | Expr::Not(inner)
+            | Expr::BitwiseNot(inner)
+            | Expr::Cast { expr: inner, .. } => Self::is_compile_time_class_constant_name(inner),
+            Expr::ArrayLiteral(elements) => elements.iter().all(|element| {
+                element
+                    .key
+                    .as_ref()
+                    .is_none_or(Self::is_compile_time_class_constant_name)
+                    && Self::is_compile_time_class_constant_name(&element.value)
+            }),
+            Expr::ArrayAccess { array, index } => {
+                Self::is_compile_time_class_constant_name(array)
+                    && Self::is_compile_time_class_constant_name(index)
+            }
+            _ => false,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             instructions: Vec::new(),
@@ -2066,6 +2112,54 @@ impl Compiler {
                         class_name, constant
                     )
                 }),
+            Expr::DynamicNamedClassConstant {
+                class_name,
+                constant,
+            } => {
+                let constant = Self::eval_const_expr_with_constants(constant, known)?;
+                let constant = constant.as_str().ok_or_else(|| {
+                    format!(
+                        "value of type {} cannot be used as a class constant name",
+                        constant.type_name()
+                    )
+                })?;
+                known
+                    .get(&format!("{}::{}", class_name, constant))
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "class constant {}::{} is not available in this constant expression",
+                            class_name, constant
+                        )
+                    })
+            }
+            Expr::DynamicClassConstant {
+                class, constant, ..
+            } => {
+                let class = Self::eval_const_expr_with_constants(class, known)?;
+                let class = class.as_str().ok_or_else(|| {
+                    format!(
+                        "value of type {} cannot be used as a class name",
+                        class.type_name()
+                    )
+                })?;
+                let constant = Self::eval_const_expr_with_constants(constant, known)?;
+                let constant = constant.as_str().ok_or_else(|| {
+                    format!(
+                        "value of type {} cannot be used as a class constant name",
+                        constant.type_name()
+                    )
+                })?;
+                known
+                    .get(&format!("{}::{}", class, constant))
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "class constant {}::{} is not available in this constant expression",
+                            class, constant
+                        )
+                    })
+            }
             Expr::BinaryOp { op, left, right } => {
                 let left = Self::eval_const_expr_with_constants(left, known)?;
                 // Preserve PHP's short-circuit rules even though constant
@@ -3199,6 +3293,57 @@ impl Compiler {
                 fetch.op2 = idx_op;
                 fetch.result_type = OpType::Tmp;
                 fetch.result = tmp;
+                self.instructions.push(fetch);
+                (tmp, OpType::Tmp)
+            }
+            Expr::DynamicClassConstant {
+                class,
+                constant,
+                dynamic_name,
+            } => {
+                let (class_op, class_type) = self.compile_expr(class);
+                let (constant_op, constant_type) = self.compile_expr(constant);
+                let tmp = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDynamicClassConst);
+                fetch._pad |= CLASS_CONST_DYNAMIC_OWNER;
+                if *dynamic_name {
+                    fetch._pad |= CLASS_CONST_DYNAMIC_NAME;
+                    if Self::is_compile_time_class_constant_name(constant) {
+                        fetch._pad |= CLASS_CONST_COMPILE_TIME_NAME;
+                    }
+                }
+                fetch.op1 = class_op;
+                fetch.op1_type = class_type;
+                fetch.op2 = constant_op;
+                fetch.op2_type = constant_type;
+                fetch.result = tmp;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (tmp, OpType::Tmp)
+            }
+            Expr::DynamicNamedClassConstant {
+                class_name,
+                constant,
+            } => {
+                let (resolved, dynamic_static_scope) = self.resolve_static_member_owner(class_name);
+                let class_op = self.add_literal(Value::string(resolved));
+                let (constant_op, constant_type) = self.compile_expr(constant);
+                let tmp = self.alloc_tmp();
+                let mut fetch = Instruction::new(if dynamic_static_scope {
+                    OpCode::FetchLateDynamicClassConst
+                } else {
+                    OpCode::FetchDynamicClassConst
+                });
+                fetch._pad |= CLASS_CONST_DYNAMIC_NAME;
+                if Self::is_compile_time_class_constant_name(constant) {
+                    fetch._pad |= CLASS_CONST_COMPILE_TIME_NAME;
+                }
+                fetch.op1 = class_op;
+                fetch.op1_type = OpType::Const;
+                fetch.op2 = constant_op;
+                fetch.op2_type = constant_type;
+                fetch.result = tmp;
+                fetch.result_type = OpType::Tmp;
                 self.instructions.push(fetch);
                 (tmp, OpType::Tmp)
             }

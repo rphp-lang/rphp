@@ -525,11 +525,12 @@ impl Parser {
                 if self.peek() == Token::LParen {
                     self.advance();
                     let args = self.parse_call_args()?;
-                    Ok(Expr::FunctionCall {
+                    let expr = Expr::FunctionCall {
                         name,
                         args,
                         generic_args: Vec::new(),
-                    })
+                    };
+                    self.parse_postfix_chain(expr)
                 } else {
                     Ok(Expr::Constant(name))
                 }
@@ -563,11 +564,12 @@ impl Parser {
                 if self.peek() == Token::LParen {
                     self.advance(); // consume (
                     let args = self.parse_call_args()?;
-                    Ok(Expr::FunctionCall {
+                    let expr = Expr::FunctionCall {
                         name,
                         args,
                         generic_args: Vec::new(),
-                    })
+                    };
+                    self.parse_postfix_chain(expr)
                 } else {
                     // Bare identifier — constant reference (e.g., PHP_INT_MAX, FOO)
                     Ok(Expr::Constant(name))
@@ -659,6 +661,19 @@ impl Parser {
     /// their turbofish/postfix grammar from drifting apart.
     fn parse_named_static_access(&mut self, class_name: String) -> Result<Expr, String> {
         self.expect(&Token::DoubleColon)?;
+        if self.peek() == Token::LBrace {
+            self.advance();
+            let constant = self.parse_expr()?;
+            self.expect(&Token::RBrace)?;
+            if self.peek() == Token::LParen {
+                return Err("Dynamic static method calls are not supported yet".into());
+            }
+            let expr = Expr::DynamicNamedClassConstant {
+                class_name,
+                constant: Box::new(constant),
+            };
+            return self.parse_postfix_chain(expr);
+        }
         if let Token::Variable(_) = self.peek() {
             let property = match self.advance() {
                 Token::Variable(name) => name,
@@ -762,6 +777,35 @@ impl Parser {
                         callable: Box::new(expr),
                         args,
                         generic_args,
+                    };
+                }
+                Token::DoubleColon => {
+                    self.advance();
+                    let dynamic_name = self.peek() == Token::LBrace;
+                    let constant = if dynamic_name {
+                        self.advance();
+                        let constant = self.parse_expr()?;
+                        self.expect(&Token::RBrace)?;
+                        constant
+                    } else {
+                        match self.advance() {
+                            Token::Identifier(name) => Expr::StringLiteral(name),
+                            Token::Class => Expr::StringLiteral("class".to_string()),
+                            other => {
+                                return Err(format!(
+                                    "Expected constant name after dynamic ::, got {:?}",
+                                    other
+                                ));
+                            }
+                        }
+                    };
+                    if self.peek() == Token::LParen {
+                        return Err("Dynamic static method calls are not supported yet".into());
+                    }
+                    expr = Expr::DynamicClassConstant {
+                        class: Box::new(expr),
+                        constant: Box::new(constant),
+                        dynamic_name,
                     };
                 }
                 Token::Arrow | Token::NullSafe => {

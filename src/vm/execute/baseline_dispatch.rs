@@ -3163,6 +3163,36 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::FetchDynamicClassConst => {
+                match op_fetch_dynamic_class_const(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
+            OpCode::FetchLateDynamicClassConst => {
+                match op_fetch_late_dynamic_class_const(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             OpCode::AssignStaticProp => {
                 match op_assign_static_prop(eg, frame, op_array, opline)? {
                     ColdResult::NewFrame(nf, no) => {

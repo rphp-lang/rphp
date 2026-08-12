@@ -884,6 +884,15 @@ impl Parser {
                 }
             }
             Expr::StaticProperty { .. } | Expr::ClassConstant { .. } => {}
+            Expr::DynamicClassConstant {
+                class, constant, ..
+            } => {
+                Self::collect_free_vars(class, bound, out);
+                Self::collect_free_vars(constant, bound, out);
+            }
+            Expr::DynamicNamedClassConstant { constant, .. } => {
+                Self::collect_free_vars(constant, bound, out);
+            }
             // Literals and constants — no variables
             Expr::Integer(_)
             | Expr::Float(_)

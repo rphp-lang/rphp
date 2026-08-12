@@ -155,6 +155,10 @@ pub enum OpCode {
     FetchClassConst = 142,
     /// Read an immutable class-like constant through PHP's runtime called class.
     FetchLateClassConst = 143,
+    /// Read a class-like constant from a runtime object/string owner or name.
+    FetchDynamicClassConst = 144,
+    /// Read a dynamically named constant through PHP's runtime called class.
+    FetchLateDynamicClassConst = 145,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.
