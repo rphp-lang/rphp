@@ -577,6 +577,7 @@ mod inner {
             143 => Some("FetchLateClassConst"),
             144 => Some("FetchDynamicClassConst"),
             145 => Some("FetchLateDynamicClassConst"),
+            146 => Some("IssetObj"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),

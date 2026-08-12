@@ -534,6 +534,10 @@ impl Parser {
         matches!(expr, Expr::Variable(_) | Expr::ArrayAccess { .. })
     }
 
+    fn is_isset_target(expr: &Expr) -> bool {
+        Self::is_variable_like(expr) || matches!(expr, Expr::PropertyAccess { .. })
+    }
+
     /// Check if current $var[...] is an array assignment ($var[idx] =).
     /// Scans ahead from pos+2 (inside brackets) to find matching ] then =.
     fn is_array_assign(&self) -> bool {

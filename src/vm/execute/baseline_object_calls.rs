@@ -375,6 +375,19 @@ enum CachedFetchObjResult {
     CompleteAndSkipNext,
 }
 
+#[inline]
+fn take_magic_exception<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Option<ColdResult<'a>> {
+    eg.exception.take().map(|exception| match throw_in_frame(eg, frame, exception) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    })
+}
+
 #[inline(always)]
 fn finish_cached_fetch_obj_r(
     frame: *mut ExecuteData,
@@ -483,11 +496,26 @@ fn op_fetch_obj_r_slow<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+    // SAFETY: dispatch supplies a live frame and compiler-emitted operands and
+    // result slot; none of these borrows escape this non-reentrant opcode.
+    let (obj_val, prop_name, result_ptr) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+            (*frame).get_op_mut(opline.result as u32, opline.result_type),
+        )
+    };
+    let set_result = |value| {
+        // SAFETY: `result_ptr` is the live compiler-emitted slot proven above;
+        // each invocation transfers exactly one owned Value into it.
+        unsafe { frame_slot_set(frame, result_ptr, value) };
+    };
 
     if obj_val.value_type() != ValueType::Object {
+        if opline._pad & FETCH_OBJ_SILENT != 0 {
+            set_result(Value::null());
+            return Ok(ColdResult::Done);
+        }
         return Err(VmError::Fatal("Attempt to read property on non-object".into()));
     }
 
@@ -513,6 +541,7 @@ fn op_fetch_obj_r_slow<'a>(
 
         // Determine if property is public (for caching)
         let mut is_public = true;
+        let mut property_accessible = true;
         // Visibility check
         if let Some((vis, defining_class)) = eg.find_property_visibility(&obj.class_name, name) {
             if vis != Visibility::Public {
@@ -533,11 +562,14 @@ fn op_fetch_obj_r_slow<'a>(
                 });
                 if !own_private && !caller_has_own {
                     if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                        let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
-                        return Err(VmError::Fatal(format!(
-                            "Cannot access {} property {}::${}",
-                            vis_str, defining_class, name
-                        )));
+                        if opline._pad & FETCH_OBJ_SILENT == 0 {
+                            let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                            return Err(VmError::Fatal(format!(
+                                "Cannot access {} property {}::${}",
+                                vis_str, defining_class, name
+                            )));
+                        }
+                        property_accessible = false;
                     }
                 }
             }
@@ -561,11 +593,15 @@ fn op_fetch_obj_r_slow<'a>(
             }
         }
 
-        let declared_slot = obj.property_slot(&key);
+        let declared_slot = property_accessible
+            .then(|| obj.property_slot(&key))
+            .flatten();
         let definition = declared_slot.and_then(|slot| {
             eg.instance_property_definition(obj.class_id, slot)
         });
-        let (found_val, dynamic_position) = if cache_dynamic_std_class {
+        let (found_val, dynamic_position) = if !property_accessible {
+            (None, None)
+        } else if cache_dynamic_std_class {
             match obj.get_dynamic_property_with_position(&key) {
                 Some((value, position)) => (Some(value.clone()), position),
                 None => (None, None),
@@ -583,6 +619,10 @@ fn op_fetch_obj_r_slow<'a>(
         drop(obj); // Release borrow before potential magic method call
         if let Some(val) = found_val {
             if val.is_undef() && definition.is_some_and(|definition| definition.is_typed()) {
+                if opline._pad & FETCH_OBJ_SILENT != 0 {
+                    set_result(Value::null());
+                    return Ok(ColdResult::Done);
+                }
                 let definition = definition.unwrap();
                 let error = make_error_value(
                     "Error",
@@ -598,16 +638,104 @@ fn op_fetch_obj_r_slow<'a>(
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
             }
-            unsafe { frame_slot_set(frame, result_ptr, val) };
+            set_result(val);
         } else {
-            // Property not found — try __get magic method
-            if let Some(result) = call_magic_method(eg, obj_val, "__get", &[Value::string(name)])? {
-                unsafe { frame_slot_set(frame, result_ptr, result) };
+            // An intermediate property in `isset($object->a->b)` first asks
+            // `__isset(a)` and invokes `__get(a)` only when it returns true.
+            if opline._pad & FETCH_OBJ_SILENT != 0 {
+                let magic_set = call_magic_method(
+                    eg,
+                    obj_val,
+                    "__isset",
+                    &[Value::string(name)],
+                )?;
+                if let Some(result) = take_magic_exception(eg, frame) {
+                    return Ok(result);
+                }
+                if !magic_set.is_some_and(|value| value.is_truthy()) {
+                    set_result(Value::null());
+                    return Ok(ColdResult::Done);
+                }
+            }
+            // Property not found (or accepted by __isset) — try __get.
+            let magic_value = call_magic_method(eg, obj_val, "__get", &[Value::string(name)])?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
+            if let Some(result) = magic_value {
+                set_result(result);
             } else {
-                unsafe { frame_slot_set(frame, result_ptr, Value::null()) };
+                set_result(Value::null());
             }
         }
     }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_isset_obj<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: dispatch supplies a live frame and compiler-emitted operands and
+    // result slot; none of these borrows escape this non-reentrant opcode.
+    let (object, property, result_ptr) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+            (*frame).get_op_mut(opline.result as u32, opline.result_type),
+        )
+    };
+    let set_result = |value| {
+        // SAFETY: `result_ptr` is the live compiler-emitted TMP proven above.
+        unsafe { frame_tmp_set_bool(frame, result_ptr, value) };
+    };
+
+    if object.value_type() != ValueType::Object {
+        set_result(false);
+        return Ok(ColdResult::Done);
+    }
+    let name = property.as_str().unwrap_or("");
+    let caller_class = get_caller_class(frame, eg);
+    let object_ref = object.as_object().expect("object tag must expose object storage");
+    let receiver_in_scope = caller_class
+        .as_ref()
+        .is_some_and(|caller| eg.class_is_a(&object_ref.class_name, caller));
+    let effective_caller = receiver_in_scope
+        .then_some(caller_class.as_deref())
+        .flatten();
+    let accessible = eg
+        .find_property_visibility(&object_ref.class_name, name)
+        .is_none_or(|(visibility, defining_class)| {
+            visibility == Visibility::Public
+                || eg.check_visibility(effective_caller, &defining_class, visibility)
+        });
+    let property_state = if accessible {
+        let key = crate::runtime::resolve_property_key(
+            eg,
+            &object_ref.class_name,
+            name,
+            effective_caller,
+        );
+        object_ref
+            .get_property(&key)
+            .map(|value| !value.is_undef() && value.value_type() != ValueType::Null)
+    } else {
+        None
+    };
+    drop(object_ref);
+
+    let set = match property_state {
+        Some(set) => set,
+        None => call_magic_method(eg, object, "__isset", &[Value::string(name)])?
+            .is_some_and(|value| value.is_truthy()),
+    };
+    if let Some(result) = take_magic_exception(eg, frame) {
+        return Ok(result);
+    }
+    set_result(set);
     Ok(ColdResult::Done)
 }
 

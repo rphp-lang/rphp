@@ -25,7 +25,7 @@ use crate::value::{
 use crate::vm::instruction::{
     ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
     CALL_FLAG_EXACT_SCALAR_ARGS, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, InlineCache, Instruction, KnownScalarType, OpType,
+    CLASS_CONST_DYNAMIC_OWNER, FETCH_OBJ_SILENT, InlineCache, Instruction, KnownScalarType, OpType,
 };
 use crate::vm::opcode::OpCode;
 
@@ -2736,6 +2736,68 @@ impl Compiler {
     }
 
     /// Compile expression. Returns (operand_index, OpType).
+    fn compile_isset_object_base(&mut self, expr: &Expr) -> (u16, OpType) {
+        match expr {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: _,
+            } => {
+                let (object_op, object_type) = self.compile_isset_object_base(object);
+                let property_op = self.add_literal(Value::string(property.clone()));
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object_op;
+                fetch.op1_type = object_type;
+                fetch.op2 = property_op;
+                fetch.op2_type = OpType::Const;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_SILENT;
+                self.instructions.push(fetch);
+                (result, OpType::Tmp)
+            }
+            Expr::ArrayAccess { array, index } => {
+                let (array_op, array_type) = self.compile_isset_object_base(array);
+                let (index_op, index_type) = self.compile_expr(index);
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDimR);
+                fetch.op1 = array_op;
+                fetch.op1_type = array_type;
+                fetch.op2 = index_op;
+                fetch.op2_type = index_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (result, OpType::Tmp)
+            }
+            _ => self.compile_expr(expr),
+        }
+    }
+
+    fn compile_isset_operand(&mut self, expr: &Expr) -> (u16, OpType) {
+        let Expr::PropertyAccess {
+            object,
+            property,
+            nullsafe: _,
+        } = expr
+        else {
+            return self.compile_isset_object_base(expr);
+        };
+        let (object_op, object_type) = self.compile_isset_object_base(object);
+        let property_op = self.add_literal(Value::string(property.clone()));
+        let result = self.alloc_tmp();
+        let mut isset = Instruction::new(OpCode::IssetObj);
+        isset.op1 = object_op;
+        isset.op1_type = object_type;
+        isset.op2 = property_op;
+        isset.op2_type = OpType::Const;
+        isset.result = result;
+        isset.result_type = OpType::Tmp;
+        self.instructions.push(isset);
+        (result, OpType::Tmp)
+    }
+
     fn compile_expr(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
             Expr::Integer(n) => {
@@ -3461,32 +3523,45 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::Isset(args) => {
-                let (op, op_type) = self.compile_expr(&args[0]);
-                let tmp = self.alloc_tmp();
-                let mut instr = Instruction::new(OpCode::Isset);
-                instr.op1 = op;
-                instr.op1_type = op_type;
-                instr.result = tmp;
-                instr.result_type = OpType::Tmp;
-                self.instructions.push(instr);
-                // Multi-arg: AND each additional isset check
-                // Simple non-short-circuit implementation for now
+                let (tmp, tmp_type) = self.compile_isset_operand(&args[0]);
+                let tmp =
+                    if tmp_type == OpType::Tmp && matches!(args[0], Expr::PropertyAccess { .. }) {
+                        tmp
+                    } else {
+                        let result = self.alloc_tmp();
+                        let mut instr = Instruction::new(OpCode::Isset);
+                        instr.op1 = tmp;
+                        instr.op1_type = tmp_type;
+                        instr.result = result;
+                        instr.result_type = OpType::Tmp;
+                        self.instructions.push(instr);
+                        result
+                    };
+                // Multi-arg `isset` short-circuits before compiling the next
+                // operand's runtime instructions, just like PHP.
                 for arg in args.iter().skip(1) {
-                    let (op2, op_type2) = self.compile_expr(arg);
-                    let tmp2 = self.alloc_tmp();
-                    let mut instr2 = Instruction::new(OpCode::Isset);
-                    instr2.op1 = op2;
-                    instr2.op1_type = op_type2;
-                    instr2.result = tmp2;
-                    instr2.result_type = OpType::Tmp;
-                    self.instructions.push(instr2);
-                    // Combine: if first was false, result is false
                     let jmpz_idx = self.instructions.len();
                     let mut jmpz = Instruction::new(OpCode::JmpZ);
                     jmpz.op1 = tmp;
                     jmpz.op1_type = OpType::Tmp;
-                    jmpz.op2 = 0; // placeholder
+                    jmpz.op2 = 0;
                     self.instructions.push(jmpz);
+
+                    let (operand, operand_type) = self.compile_isset_operand(arg);
+                    let tmp2 = if operand_type == OpType::Tmp
+                        && matches!(arg, Expr::PropertyAccess { .. })
+                    {
+                        operand
+                    } else {
+                        let result = self.alloc_tmp();
+                        let mut instr2 = Instruction::new(OpCode::Isset);
+                        instr2.op1 = operand;
+                        instr2.op1_type = operand_type;
+                        instr2.result = result;
+                        instr2.result_type = OpType::Tmp;
+                        self.instructions.push(instr2);
+                        result
+                    };
                     // Copy tmp2 into tmp
                     let mut assign = Instruction::new(OpCode::AssignCv);
                     assign.op1_type = OpType::Tmp;
@@ -3494,8 +3569,7 @@ impl Compiler {
                     assign.op2_type = OpType::Tmp;
                     assign.op2 = tmp2;
                     self.instructions.push(assign);
-                    let end = self.instructions.len() as u16;
-                    self.instructions[jmpz_idx].op2 = end;
+                    self.instructions[jmpz_idx].op2 = self.instructions.len() as u16;
                 }
                 (tmp, OpType::Tmp)
             }

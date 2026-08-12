@@ -159,6 +159,9 @@ pub enum OpCode {
     FetchDynamicClassConst = 144,
     /// Read a dynamically named constant through PHP's runtime called class.
     FetchLateDynamicClassConst = 145,
+    /// Test one object property without materializing it or emitting ordinary
+    /// missing/non-object read diagnostics.
+    IssetObj = 146,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

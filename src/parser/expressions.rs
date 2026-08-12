@@ -490,14 +490,14 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let mut args = Vec::new();
                 let arg = self.parse_expr()?;
-                if !Self::is_variable_like(&arg) {
+                if !Self::is_isset_target(&arg) {
                     return Err("Cannot use isset() on the result of an expression".into());
                 }
                 args.push(arg);
                 while self.peek() == Token::Comma {
                     self.advance();
                     let arg = self.parse_expr()?;
-                    if !Self::is_variable_like(&arg) {
+                    if !Self::is_isset_target(&arg) {
                         return Err("Cannot use isset() on the result of an expression".into());
                     }
                     args.push(arg);

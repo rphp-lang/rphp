@@ -62,6 +62,10 @@ pub const CLASS_CONST_DYNAMIC_NAME: u16 = 1 << 2;
 /// while a runtime value equal to `"class"` has PHP's pseudo-constant meaning.
 pub const CLASS_CONST_COMPILE_TIME_NAME: u16 = 1 << 3;
 
+/// `FetchObjR` used only to reach the terminal operand of `isset()`. A null or
+/// scalar intermediate produces null without the ordinary read diagnostic.
+pub const FETCH_OBJ_SILENT: u16 = 1;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that

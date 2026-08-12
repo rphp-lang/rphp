@@ -2395,6 +2395,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::IssetObj => match op_isset_obj(eg, frame, op_array, opline)? {
+                ColdResult::NewFrame(new_frame, new_op_array) => {
+                    frame = new_frame;
+                    op_array = new_op_array;
+                    continue;
+                }
+                ColdResult::Unhandled(exception) => {
+                    eg.exception = Some(exception);
+                    return Ok(());
+                }
+                _ => {}
+            },
+
             OpCode::AssignObjProp => {
                 // ── Cache-hit fast path for public, non-enum, non-readonly properties ──
                 let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };

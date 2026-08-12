@@ -72,6 +72,117 @@ fn test_isset_rejects_expression() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_isset_accepts_property_chains() {
+    assert_eq!(
+        run_php(
+            "<?php
+            class Boxed { public $value; }
+            $null = null;
+            $object = new Boxed();
+            $object->value = new Boxed();
+            $object->value->value = 42;
+            var_dump(isset($null->missing->nested));
+            var_dump(isset($object->value->value));
+            var_dump(isset($object->value->missing));
+            var_dump(isset($null->missing['key']->nested));
+            "
+        ),
+        "bool(false)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+}
+
+#[test]
+fn test_multi_isset_short_circuits_property_magic() {
+    assert_eq!(
+        run_php(
+            "<?php
+            class MagicProbe {
+                public function __isset($name) {
+                    echo 'unexpected';
+                    return true;
+                }
+            }
+            $missing = null;
+            $probe = new MagicProbe();
+            var_dump(isset($missing, $probe->virtual));
+            "
+        ),
+        "bool(false)\n"
+    );
+}
+
+#[test]
+fn test_chained_isset_calls_magic_in_php_order() {
+    assert_eq!(
+        run_php(
+            "<?php
+            class MagicChain {
+                public function __isset($name) {
+                    echo 'isset:' . $name . \"\\n\";
+                    return $name !== 'missing';
+                }
+                public function __get($name) {
+                    echo 'get:' . $name . \"\\n\";
+                    return new MagicChain();
+                }
+            }
+            $object = new MagicChain();
+            var_dump(isset($object->first->second));
+            var_dump(isset($object->missing->second));
+            "
+        ),
+        "isset:first\nget:first\nisset:second\nbool(true)\nisset:missing\nbool(false)\n"
+    );
+}
+
+#[test]
+fn test_isset_object_property_uses_magic_only_when_unresolved() {
+    assert_eq!(
+        run_php(
+            "<?php
+            class MagicBox {
+                public $present = null;
+                public function __isset($name) {
+                    echo 'magic:' . $name . \"\\n\";
+                    return $name === 'virtual';
+                }
+            }
+            $object = new MagicBox();
+            var_dump(isset($object->present));
+            var_dump(isset($object->virtual));
+            var_dump(isset($object->missing));
+            "
+        ),
+        "bool(false)\nmagic:virtual\nbool(true)\nmagic:missing\nbool(false)\n"
+    );
+}
+
+#[test]
+fn test_isset_inaccessible_property_does_not_leak_and_magic_exceptions_propagate() {
+    assert_eq!(
+        run_php(
+            "<?php
+            class HiddenBox {
+                private $hiddenValue = 42;
+                public function __isset($name) {
+                    if ($name === 'boom') { throw new Exception('isset failed'); }
+                    echo 'magic:' . $name . \"\\n\";
+                    return false;
+                }
+                public function __get($name) { echo 'leaked'; return $this->hiddenValue; }
+            }
+            $object = new HiddenBox();
+            var_dump(isset($object->hiddenValue->nested));
+            try { isset($object->boom); } catch (Exception $error) {
+                echo $error->getMessage() . \"\\n\";
+            }
+            "
+        ),
+        "magic:hiddenValue\nbool(false)\nisset failed\n"
+    );
+}
+
 // ========== empty() ==========
 
 #[test]
