@@ -975,7 +975,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("putenv", fn_putenv, 1, 1, "assignment");
     reg!("php_uname", fn_php_uname, 1, 0, "mode");
     reg!("php_sapi_name", fn_php_sapi_name, 0, 0);
-    reg!("phpversion", fn_phpversion, 0, 0);
+    reg!("phpversion", fn_phpversion, 1, 0, "extension");
+    reg!("extension_loaded", fn_extension_loaded, 1, 1, "extension");
+    reg!("headers_sent", fn_headers_sent, 2, 0, "filename", "line");
+    reg!(
+        "header",
+        fn_header,
+        3,
+        1,
+        "header",
+        "replace",
+        "response_code"
+    );
+    reg!("ini_get", fn_ini_get, 1, 1, "option");
     reg!("sleep", fn_sleep, 1, 1, "seconds");
     reg!("usleep", fn_usleep, 1, 1, "microseconds");
 
@@ -1230,6 +1242,29 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     })
     .unwrap();
 
+    // RuntimeException extends Exception
+    eg.register_class(ClassDef {
+        name: "RuntimeException".to_string(),
+        parent: Some("Exception".to_string()),
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
+        uses: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
+
     // Error implements Throwable
     eg.register_class(ClassDef {
         name: "Error".to_string(),
@@ -1379,6 +1414,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     for class in &[
         "Throwable",
         "Exception",
+        "RuntimeException",
         "Error",
         "TypeError",
         "CompileError",
@@ -6685,11 +6721,56 @@ fn fn_php_sapi_name(
 
 /// phpversion(): string
 fn fn_phpversion(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if arg_opt!(ed, 0).is_some() {
+        ret!(rv, Value::bool(false));
+    }
+    ret!(rv, Value::string(crate::PHP_COMPAT_VERSION));
+}
+
+/// RPHP does not advertise an extension until its compatibility contract is
+/// separately admitted. Composer can therefore reject unsupported packages
+/// instead of selecting code for a partially implemented extension.
+fn fn_extension_loaded(
     _ed: *mut ExecuteData,
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::string("8.4.0".to_string()));
+    ret!(rv, Value::bool(false));
+}
+
+/// CLI execution has no response-header transport. These minimal contracts
+/// support Composer's generated platform failure path without pretending to
+/// publish HTTP headers.
+fn fn_headers_sent(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::bool(false));
+}
+
+fn fn_header(
+    _ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    Ok(())
+}
+
+fn fn_ini_get(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let option = arg_str!(ed, 0);
+    if option.eq_ignore_ascii_case("display_errors") {
+        ret!(rv, Value::string("1"));
+    }
+    ret!(rv, Value::bool(false));
 }
 
 /// PHP_INT_SIZE, PHP_INT_MAX etc. are handled as constants.

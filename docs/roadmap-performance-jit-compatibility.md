@@ -9842,7 +9842,7 @@ and its PHAR SHA-256, lets reference PHP generate `vendor/` in a task-scoped
 temporary directory, and then runs that unmodified `vendor/autoload.php` under
 RPHP. The gate verifies the returned `Composer\Autoload\ClassLoader`, direct
 static PSR-4 class resolution, and a Composer `files` function, with the exact
-result `loader|hello|composer`. It runs locally through
+result `80200|8.2.0|8.2.0|8|cli|loader|hello|composer`. It runs locally through
 `scripts/test-composer-s0.sh` and in the dedicated `Composer S0 autoload` CI
 job.
 
@@ -9873,22 +9873,26 @@ propagate through the caller's `try`/`catch`. `CompileError` and its
 retained only for bodies that contain an include, avoiding a permanent cost on
 unrelated methods.
 
-Truthful platform identity is now the remaining S0 follow-up before treating
-the broader Composer substrate as complete. Running Composer itself under RPHP
-remains the separate S5 gate.
+#### PHP 8.2 platform identity and S0 completion (2026-08-12)
 
-Composer's generated platform check must observe truthful `PHP_VERSION_ID`,
-`PHP_VERSION`, `PHP_INT_SIZE`, extension availability and exit/error behavior.
-RPHP currently advertises PHP 8.4.0, so Symfony will select PHP 8.4 branches.
-Before S0, make the first framework contract explicit and global: target PHP
-8.2.0 for the Symfony 7.4 gate and set `PHP_MAJOR_VERSION`,
-`PHP_MINOR_VERSION`, `PHP_RELEASE_VERSION`, `PHP_VERSION_ID`, `PHP_VERSION`
-and `phpversion()` consistently to `8`, `2`, `0`, `80200` and `8.2.0`.
-Validate that identity against the pinned PHP 8.2 PHPT baseline and Composer's
-generated platform check; if the baseline disproves the claim, fix the gaps
-rather than advertising a version RPHP does not yet implement. Newer syntax
-may remain available as an RPHP extension, but it is not part of this first
-compatibility contract.
+The public dependency-platform contract is now globally PHP 8.2.0.
+`PHP_MAJOR_VERSION`, `PHP_MINOR_VERSION`, `PHP_RELEASE_VERSION`,
+`PHP_VERSION_ID`, `PHP_VERSION`, `PHP_SAPI`, `PHP_INT_SIZE`, `phpversion()` and
+`php_sapi_name()` report one consistent identity. The positive Composer fixture
+runs its unmodified generated `platform_check.php` for PHP 8.2.0. A second
+Composer-generated fixture requires PHP 8.2.1 and must terminate non-zero with
+a `RuntimeException` saying that the running version is 8.2.0. The minimal CLI
+header/INI surface exists only to execute that generated failure path;
+`extension_loaded()` remains conservatively false until a separately tested
+extension contract is admitted.
+
+This closes the bounded S0 vendor-autoload gate. Newer syntax may remain
+available as an RPHP extension, but it is not part of the PHP 8.2 compatibility
+contract, and the broader PHPT results remain the authority for actual language
+coverage. Running Composer itself under RPHP remains the separate S5 gate. The
+roadmap now advances to S1, beginning with an unmodified EventDispatcher
+component fixture before HttpFoundation, compiled Routing and a prebuilt DI
+container.
 
 Do not implement this as a Symfony-only override, claim an extension in
 `extension_loaded()` without its required behavior, or change the identity

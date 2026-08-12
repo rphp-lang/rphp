@@ -18,6 +18,15 @@ pub mod stdlib;
 pub mod value;
 pub mod vm;
 
+/// Public compatibility identity used by PHP constants, phpversion(), and
+/// dependency platform checks. Newer experimental syntax does not change this
+/// contract until its full version gate is promoted.
+pub const PHP_COMPAT_VERSION: &str = "8.2.0";
+pub const PHP_COMPAT_VERSION_ID: i64 = 80_200;
+pub const PHP_COMPAT_MAJOR_VERSION: i64 = 8;
+pub const PHP_COMPAT_MINOR_VERSION: i64 = 2;
+pub const PHP_COMPAT_RELEASE_VERSION: i64 = 0;
+
 /// Resolve a PHP built-in constant by name.
 /// Single source of truth — used by both compiler (property defaults) and runtime (FetchConst).
 pub fn builtin_constant(name: &str) -> Option<value::Value> {
@@ -42,12 +51,13 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "INF" => Some(value::Value::double(f64::INFINITY)),
         "NAN" => Some(value::Value::double(f64::NAN)),
 
-        // Version (rphp emulates PHP 8.4)
-        "PHP_MAJOR_VERSION" => Some(value::Value::long(8)),
-        "PHP_MINOR_VERSION" => Some(value::Value::long(4)),
-        "PHP_RELEASE_VERSION" => Some(value::Value::long(0)),
-        "PHP_VERSION_ID" => Some(value::Value::long(80400)),
-        "PHP_VERSION" => Some(value::Value::string("8.4.0".to_string())),
+        // Public PHP compatibility contract.
+        "PHP_MAJOR_VERSION" => Some(value::Value::long(PHP_COMPAT_MAJOR_VERSION)),
+        "PHP_MINOR_VERSION" => Some(value::Value::long(PHP_COMPAT_MINOR_VERSION)),
+        "PHP_RELEASE_VERSION" => Some(value::Value::long(PHP_COMPAT_RELEASE_VERSION)),
+        "PHP_VERSION_ID" => Some(value::Value::long(PHP_COMPAT_VERSION_ID)),
+        "PHP_VERSION" => Some(value::Value::string(PHP_COMPAT_VERSION)),
+        "PHP_SAPI" => Some(value::Value::string("cli")),
 
         // System
         "PHP_EOL" => Some(value::Value::string("\n".to_string())),

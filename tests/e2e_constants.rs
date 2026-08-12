@@ -970,6 +970,23 @@ fn test_global_and_source_magic_constants() {
 }
 
 #[test]
+fn public_php_platform_identity_is_consistent() {
+    let output = run_php(
+        r#"<?php
+echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION, ".", PHP_RELEASE_VERSION, "|";
+echo PHP_VERSION_ID, "|", PHP_VERSION, "|", phpversion(), "|";
+echo PHP_INT_SIZE, "|", PHP_SAPI, "|", php_sapi_name(), "|";
+var_dump(phpversion("missing"), extension_loaded("missing"));
+"#,
+    );
+
+    assert_eq!(
+        output,
+        "8.2.0|80200|8.2.0|8.2.0|8|cli|cli|bool(false)\nbool(false)\n"
+    );
+}
+
+#[test]
 fn source_magic_constants_are_available_in_declaration_defaults() {
     let out = run_php_with_source_context(
         r#"<?php

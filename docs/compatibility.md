@@ -1,9 +1,11 @@
 # Compatibility status
 
-RPHP implements a growing, tested subset of PHP. It currently identifies PHP
-compatibility around PHP 8.4 language behavior, but it is not certified for a
-complete PHP version and must not be treated as a drop-in PHP replacement.
-Passing a script is evidence only for the exercised behavior.
+RPHP implements a growing, tested subset of PHP. Its public dependency-platform
+identity is PHP 8.2.0; some newer language behavior remains available as an
+experimental RPHP extension, but it is outside that compatibility contract.
+RPHP is not certified for a complete PHP version and must not be treated as a
+drop-in PHP replacement. Passing a script is evidence only for the exercised
+behavior.
 
 ## Official php-src PHPT baseline
 
@@ -74,10 +76,14 @@ loader shape.
 The reproducible Composer S0 gate now pins Composer 2.8.12 by version and PHAR
 SHA-256, generates `vendor/` under reference PHP, and runs the resulting
 unmodified `vendor/autoload.php` under RPHP. Its fixture verifies the returned
-Composer loader object, direct static PSR-4 class autoloading, and a Composer
-`files` function. This exercises include-expression return values, direct
-static-call autoload, and both forms of `strtr()`; it does not claim that
-Composer itself or Symfony runs under RPHP.
+Composer loader object, the exact PHP 8.2.0 constants/function identity, direct
+static PSR-4 class autoloading, and a Composer `files` function. A second
+Composer-generated platform check requiring PHP 8.2.1 must fail under RPHP with
+a `RuntimeException` that reports 8.2.0. This exercises include-expression
+return values, direct static-call autoload, both forms of `strtr()`, and both
+sides of Composer's generated PHP-version gate; it does not claim that Composer
+itself or Symfony runs under RPHP. `extension_loaded()` remains conservatively
+false until individual extension contracts are admitted.
 
 `use function` imports have their own case-insensitive alias table, separate
 from class imports. Direct calls support default, explicit and comma-separated
