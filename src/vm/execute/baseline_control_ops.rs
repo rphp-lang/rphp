@@ -5,7 +5,7 @@
 // Each helper is #[inline(never)] so LLVM keeps their code out of the jump table.
 
 pub(crate) enum IncludeFileOutcome {
-    Executed,
+    Executed(Value),
     AlreadyIncluded,
     Missing(std::io::Error),
 }
@@ -44,6 +44,7 @@ pub(crate) fn execute_included_file(
         .map_err(|e| VmError::Fatal(format!("Parse error in {}: {}", resolved_path, e)))?;
     let mut compile_result = crate::compiler::compile::Compiler::new()
         .with_source_path(canonical.clone())
+        .with_implicit_return_value(Value::long(1))
         .compile(&stmts)
         .map_err(|e| VmError::Fatal(format!("Compile error in {}: {}", resolved_path, e)))?;
 
@@ -155,7 +156,7 @@ pub(crate) fn execute_included_file(
 
     if caller.is_none() && eg.exception.is_some() {
         inc_result?;
-        return Ok(IncludeFileOutcome::Executed);
+        return Ok(IncludeFileOutcome::Executed(inc_return_value));
     }
     if let Some(exc) = eg.exception.take() {
         let (class_name, message) = if let Some(obj) = exc.as_object() {
@@ -181,7 +182,27 @@ pub(crate) fn execute_included_file(
     }
 
     inc_result?;
-    Ok(IncludeFileOutcome::Executed)
+    Ok(IncludeFileOutcome::Executed(inc_return_value))
+}
+
+fn write_include_result(
+    frame: *mut ExecuteData,
+    opline: &crate::vm::instruction::Instruction,
+    value: Value,
+) {
+    if opline.result_type == OpType::Unused {
+        return;
+    }
+    // SAFETY: the compiler assigns Include results to a live caller-frame
+    // operand; temporary writes use the frame ownership bitmap contract.
+    unsafe {
+        let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+            frame_tmp_set(frame, result, value);
+        } else {
+            slot_set(result, value);
+        }
+    }
 }
 
 /// Returns true if the caller should `continue` (skip opline advance).
@@ -225,7 +246,14 @@ fn op_include(
     };
 
     match execute_included_file(eg, &resolved_path, is_once, Some((frame, op_array)))? {
-        IncludeFileOutcome::Executed | IncludeFileOutcome::AlreadyIncluded => Ok(false),
+        IncludeFileOutcome::Executed(value) => {
+            write_include_result(frame, opline, value);
+            Ok(false)
+        }
+        IncludeFileOutcome::AlreadyIncluded => {
+            write_include_result(frame, opline, Value::bool(true));
+            Ok(false)
+        }
         IncludeFileOutcome::Missing(error) if is_require => Err(VmError::Fatal(format!(
             "require({path_str}): Failed opening required '{resolved_path}' ({error})"
         ))),
@@ -236,6 +264,7 @@ fn op_include(
                 )
                 .as_bytes(),
             );
+            write_include_result(frame, opline, Value::bool(false));
             unsafe { (*frame).opline = (*frame).opline.add(1) };
             Ok(true)
         }

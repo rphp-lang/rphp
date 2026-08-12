@@ -60,6 +60,57 @@ fn test_basic_require() {
 }
 
 #[test]
+fn include_expressions_return_explicit_and_implicit_values() {
+    let (_explicit_dir, explicit) = write_temp_php("explicit.php", "<?php return 'loaded';");
+    let (_implicit_dir, implicit) = write_temp_php("implicit.php", "<?php $value = 1;");
+    let source = format!(
+        "<?php $explicit = require '{}'; $implicit = include '{}'; var_dump($explicit, $implicit);",
+        explicit, implicit
+    );
+
+    assert_eq!(run_php(&source), "string(6) \"loaded\"\nint(1)\n");
+}
+
+#[test]
+fn include_once_expression_returns_true_after_the_first_execution() {
+    let (_dir, path) = write_temp_php("once_value.php", "<?php return 42;");
+    let source = format!(
+        "<?php var_dump(include_once '{}'); var_dump(include_once '{}');",
+        path, path
+    );
+
+    assert_eq!(run_php(&source), "int(42)\nbool(true)\n");
+}
+
+#[test]
+fn missing_include_expression_warns_and_returns_false() {
+    let output = run_php(
+        "<?php $result = include '/nonexistent/rphp/include-expression.php'; var_dump($result);",
+    );
+    assert!(output.contains("Warning: include("), "{output}");
+    assert!(output.ends_with("bool(false)\n"), "{output}");
+}
+
+#[test]
+fn nested_include_expression_forwards_the_inner_return_value() {
+    let dir = TempDir::new();
+    let inner = dir.path().join("inner-return.php");
+    std::fs::write(&inner, "<?php return 'nested';").unwrap();
+    let outer = dir.path().join("outer-return.php");
+    std::fs::write(
+        &outer,
+        format!("<?php return require '{}';", inner.to_string_lossy()),
+    )
+    .unwrap();
+    let source = format!(
+        "<?php $result = require '{}'; var_dump($result);",
+        outer.to_string_lossy()
+    );
+
+    assert_eq!(run_php(&source), "string(6) \"nested\"\n");
+}
+
+#[test]
 fn test_include_shares_variables() {
     // Included file should be able to see variables set before the include
     // and set variables that are visible after the include.

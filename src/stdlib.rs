@@ -414,6 +414,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("substr", fn_substr, 3, 2, "string", "offset", "length");
     reg!("strpos", fn_strpos, 2, 2, "haystack", "needle");
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
+    reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
     reg!(
         "str_replace",
         fn_str_replace,
@@ -2310,6 +2311,106 @@ fn fn_strrpos(
             Some(pos) => Value::long(pos as i64),
             None => Value::bool(false),
         }
+    );
+}
+
+fn fn_strtr(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let subject = arg_str!(ed, 0);
+    let from_or_pairs = arg!(ed, 1);
+
+    if let Some(to_value) = arg_opt!(ed, 2) {
+        let from = match from_or_pairs.as_str() {
+            Some(value) => Cow::Borrowed(value),
+            None if !matches!(
+                from_or_pairs.value_type(),
+                ValueType::Array | ValueType::Object
+            ) =>
+            {
+                Cow::Owned(from_or_pairs.echo_to_string())
+            }
+            None => {
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    "strtr(): Argument #2 ($from) must be of type string",
+                ));
+                return Ok(());
+            }
+        };
+        let to = match to_value.as_str() {
+            Some(value) => Cow::Borrowed(value),
+            None if !matches!(to_value.value_type(), ValueType::Array | ValueType::Object) => {
+                Cow::Owned(to_value.echo_to_string())
+            }
+            None => {
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    "strtr(): Argument #3 ($to) must be of type string",
+                ));
+                return Ok(());
+            }
+        };
+
+        let mut translated = subject.as_bytes().to_vec();
+        let from = from.as_bytes();
+        let to = to.as_bytes();
+        for byte in &mut translated {
+            if let Some(position) = from.iter().position(|candidate| candidate == byte)
+                && let Some(replacement) = to.get(position)
+            {
+                *byte = *replacement;
+            }
+        }
+        ret!(
+            rv,
+            Value::string(String::from_utf8_lossy(&translated).into_owned())
+        );
+    }
+
+    let Some(pairs) = from_or_pairs.as_array() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "strtr(): Argument #2 ($from) must be of type array, string given",
+        ));
+        return Ok(());
+    };
+
+    let mut replacements = Vec::with_capacity(pairs.len());
+    for (key, value) in pairs.iter() {
+        let search = match key {
+            ArrayKey::Int(value) => value.to_string(),
+            ArrayKey::String(value) => value,
+        };
+        if search.is_empty() {
+            eg.write_output(b"Warning: strtr(): Ignoring replacement of empty string\n");
+            continue;
+        }
+        if value.value_type() == ValueType::Array {
+            eg.write_output(b"Warning: Array to string conversion\n");
+        }
+        replacements.push((search.into_bytes(), value.echo_to_string()));
+    }
+    // PHP selects the longest key at each input position. `sort_by` is stable,
+    // so equal-length keys retain their source-array order.
+    replacements.sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()));
+
+    let input = subject.as_bytes();
+    let mut translated = Vec::with_capacity(input.len());
+    let mut position = 0;
+    while position < input.len() {
+        if let Some((search, replacement)) = replacements
+            .iter()
+            .find(|(search, _)| input[position..].starts_with(search))
+        {
+            translated.extend_from_slice(replacement.as_bytes());
+            position += search.len();
+        } else {
+            translated.push(input[position]);
+            position += 1;
+        }
+    }
+    ret!(
+        rv,
+        Value::string(String::from_utf8_lossy(&translated).into_owned())
     );
 }
 

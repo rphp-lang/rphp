@@ -526,6 +526,22 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 Ok(Expr::Print(Box::new(expr)))
             }
+            Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+                let token = self.advance();
+                let (is_require, is_once) = match token {
+                    Token::Include => (false, false),
+                    Token::IncludeOnce => (false, true),
+                    Token::Require => (true, false),
+                    Token::RequireOnce => (true, true),
+                    _ => unreachable!(),
+                };
+                let path = self.parse_expr()?;
+                Ok(Expr::Include {
+                    path: Box::new(path),
+                    is_require,
+                    is_once,
+                })
+            }
             Token::LParen => {
                 self.advance();
                 let expr = self.parse_expr()?;

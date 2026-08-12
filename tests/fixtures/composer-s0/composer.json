@@ -1,0 +1,23 @@
+{
+    "name": "rphp/composer-s0-fixture",
+    "version": "1.0.0",
+    "description": "Reproducible Composer vendor/autoload.php compatibility gate",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Fixture\\": "src/"
+        },
+        "files": [
+            "src/functions.php"
+        ]
+    },
+    "config": {
+        "platform": {
+            "php": "8.2.0"
+        },
+        "sort-packages": true
+    }
+}

@@ -67,6 +67,15 @@ jobs:
       - name: Run test configuration
         run: ${{ matrix.command }}
 
+  composer-s0:
+    name: Composer S0 autoload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run pinned Composer autoload gate
+        run: scripts/test-composer-s0.sh
+
   native-jit:
     name: Native JIT (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}

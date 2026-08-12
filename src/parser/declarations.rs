@@ -790,6 +790,7 @@ impl Parser {
             | Expr::Throw(inner)
             | Expr::Empty(inner)
             | Expr::Print(inner)
+            | Expr::Include { path: inner, .. }
             | Expr::BitwiseNot(inner) => {
                 Self::collect_free_vars(inner, bound, out);
             }

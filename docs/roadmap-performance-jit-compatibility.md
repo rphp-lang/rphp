@@ -9833,10 +9833,31 @@ compatibility denominator.
 
 The full default, no-default-features, erased-generics, reified-generics, and
 all-features test matrix passes. The CI formatting and all-target check passes,
-including its unsafe-policy ratchet at 1,625 blocks against a ceiling of 1,628.
-S0 is not complete: the remaining ordinary include-return/scope/exception
-edges, namespace function-import edges, truthful platform identity, and the
-unmodified Composer fixture gate remain outstanding.
+including its unsafe-policy ratchet at 1,626 blocks against a ceiling of 1,628.
+
+#### Composer S0 vendor-autoload gate (2026-08-12)
+
+The S0 table gate now passes. A repository-owned fixture pins Composer 2.8.12
+and its PHAR SHA-256, lets reference PHP generate `vendor/` in a task-scoped
+temporary directory, and then runs that unmodified `vendor/autoload.php` under
+RPHP. The gate verifies the returned `Composer\Autoload\ClassLoader`, direct
+static PSR-4 class resolution, and a Composer `files` function, with the exact
+result `loader|hello|composer`. It runs locally through
+`scripts/test-composer-s0.sh` and in the dedicated `Composer S0 autoload` CI
+job.
+
+The substrate added for this gate makes all four include forms expressions and
+preserves explicit return values, the implicit integer `1`, the `true` result
+of a repeated `*_once`, `false` for a missing non-required include, and nested
+include returns. Direct static calls now invoke SPL autoload before class/method
+resolution and preserve catchable loader exceptions. `strtr()` covers both the
+three-argument byte map and the longest-key-first replacement-array form used
+by Composer's PSR-4 path normalization.
+
+S0 follow-up work remains: ordinary include scope and exception edge cases,
+namespace function-import edges, and truthful platform identity must still be
+closed before treating the broader Composer substrate as complete. Running
+Composer itself under RPHP remains the separate S5 gate.
 
 Composer's generated platform check must observe truthful `PHP_VERSION_ID`,
 `PHP_VERSION`, `PHP_INT_SIZE`, extension availability and exit/error behavior.

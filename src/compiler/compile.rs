@@ -1290,6 +1290,9 @@ pub struct Compiler {
     /// constants. Embedders may leave both empty when no file exists.
     source_file: String,
     source_directory: String,
+    /// Value produced by the synthetic return at the end of this compilation
+    /// unit. Included files use integer 1; ordinary scripts/functions use null.
+    implicit_return_value: Value,
     /// Constants known at compile time (from `const FOO = 42;` in the same file).
     /// Used by eval_const_expr to resolve Expr::Constant in property defaults.
     known_constants: HashMap<String, Value>,
@@ -1386,6 +1389,7 @@ impl Compiler {
             current_function_name: String::new(),
             source_file: String::new(),
             source_directory: String::new(),
+            implicit_return_value: Value::null(),
             known_constants: HashMap::new(),
         }
     }
@@ -1407,6 +1411,11 @@ impl Compiler {
             .map(|parent| parent.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.with_source_context(file, directory)
+    }
+
+    pub fn with_implicit_return_value(mut self, value: Value) -> Self {
+        self.implicit_return_value = value;
+        self
     }
 
     fn child_compiler(&self) -> Self {
@@ -2015,11 +2024,12 @@ impl Compiler {
             return Err(err);
         }
 
-        // Implicit return null
-        let null_idx = self.add_literal(Value::null());
+        // Include units override the ordinary implicit null with integer 1.
+        let implicit_return = self.implicit_return_value.clone();
+        let return_idx = self.add_literal(implicit_return);
         let mut ret = Instruction::new(OpCode::Return);
         ret.op1_type = OpType::Const;
-        ret.op1 = null_idx;
+        ret.op1 = return_idx;
         self.instructions.push(ret);
 
         // Main script: collect all CVs for syncing to eg.globals before function calls.
@@ -3193,6 +3203,22 @@ impl Compiler {
                 // print returns 1
                 let one_lit = self.add_literal(Value::long(1));
                 (one_lit, OpType::Const)
+            }
+            Expr::Include {
+                path,
+                is_require,
+                is_once,
+            } => {
+                let (path_op, path_type) = self.compile_expr(path);
+                let result = self.alloc_tmp();
+                let mut include = Instruction::new(OpCode::Include);
+                include.op1 = path_op;
+                include.op1_type = path_type;
+                include.result = result;
+                include.result_type = OpType::Tmp;
+                include.extended_value = u32::from(*is_require) | (u32::from(*is_once) << 1);
+                self.instructions.push(include);
+                (result, OpType::Tmp)
             }
             Expr::FunctionCall {
                 name,

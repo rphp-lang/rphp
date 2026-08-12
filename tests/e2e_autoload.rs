@@ -158,6 +158,52 @@ echo $object->value();
 }
 
 #[test]
+fn static_method_call_invokes_registered_autoloaders_before_method_resolution() {
+    let dir = TempPhpDir::new();
+    std::fs::write(
+        dir.0.join("static.php"),
+        "<?php class StaticLoadedByComposerStyle { public static function value() { return 'loaded'; } }",
+    )
+    .unwrap();
+    let source_file = dir.0.join("static-call.php").to_string_lossy().into_owned();
+    let source_dir = dir.0.to_string_lossy().into_owned();
+    let output = run_php_with_source_context(
+        r#"<?php
+function load_for_static_call($class) {
+    echo "load:$class|";
+    if ($class === 'StaticLoadedByComposerStyle') { require __DIR__ . '/static.php'; }
+}
+spl_autoload_register('load_for_static_call');
+echo StaticLoadedByComposerStyle::value();
+"#,
+        &source_file,
+        &source_dir,
+    );
+
+    assert_eq!(output, "load:StaticLoadedByComposerStyle|loaded");
+}
+
+#[test]
+fn missing_static_call_class_throws_class_not_found_after_autoload() {
+    let output = run_php(
+        r#"<?php
+function observe_missing_static_class($class) { echo "load:$class|"; }
+spl_autoload_register('observe_missing_static_class');
+try {
+    MissingStaticClass::value();
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        "load:MissingStaticClass|Class \"MissingStaticClass\" not found"
+    );
+}
+
+#[test]
 fn spl_autoload_honors_explicit_and_request_local_extensions() {
     let dir = TempPhpDir::new();
     std::fs::write(

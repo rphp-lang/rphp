@@ -1185,11 +1185,32 @@ fn op_init_static_call<'a>(
         let dynamic_scope = opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0;
         let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
         let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-        let raw_class = class_name.as_str().unwrap_or("");
-        let method = method_name.as_str().unwrap_or("");
+        let raw_class = class_name.as_str().unwrap_or("").to_string();
+        let method = method_name.as_str().unwrap_or("").to_string();
 
-        let class = resolve_static_call_class(eg, frame, raw_class, dynamic_scope)
-            .unwrap_or_else(|| raw_class.to_string());
+        let class = resolve_static_call_class(eg, frame, &raw_class, dynamic_scope)
+            .unwrap_or_else(|| raw_class.clone());
+
+        if eg.find_class(&class).is_none() {
+            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &class)?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+            if !loaded {
+                let error = make_error_value("Error", &format!("Class \"{class}\" not found"));
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        }
 
         let full_name = format!("{}::{}", class, method);
         let resolved = match eg.find_function(&full_name) {
@@ -1208,7 +1229,7 @@ fn op_init_static_call<'a>(
         };
 
         // Visibility check on first resolve for each dynamic class.
-        if let Some((vis, defining_class)) = eg.find_method_visibility(&class, method) {
+        if let Some((vis, defining_class)) = eg.find_method_visibility(&class, &method) {
             if vis != Visibility::Public {
                 let caller_class = if dynamic_scope {
                     resolve_static_call_class(eg, frame, "self", true)

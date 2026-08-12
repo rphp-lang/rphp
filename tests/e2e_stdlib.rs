@@ -79,6 +79,34 @@ fn test_e2e_strpos_not_found() {
     );
 }
 
+// === strtr() ===
+
+#[test]
+fn test_e2e_strtr_character_map_is_simultaneous_and_truncates_to_shorter_map() {
+    assert_eq!(
+        run_php("<?php echo strtr('hello', 'el', 'ip'), '|'; echo strtr('abcd', 'abc', 'X');"),
+        "hippo|Xbcd"
+    );
+}
+
+#[test]
+fn test_e2e_strtr_pair_map_prefers_longest_key_and_accepts_integer_keys() {
+    assert_eq!(
+        run_php(
+            "<?php echo strtr('ababa', ['ab' => 'X', 'a' => 'Y']), '|'; echo strtr('123', [1 => 'x', '12' => 'y']);"
+        ),
+        "XXY|y3"
+    );
+}
+
+#[test]
+fn test_e2e_strtr_pair_map_warns_and_ignores_empty_keys() {
+    assert_eq!(
+        run_php("<?php echo strtr('abc', ['' => 'x']);"),
+        "Warning: strtr(): Ignoring replacement of empty string\nabc"
+    );
+}
+
 // === str_replace() ===
 
 #[test]

@@ -71,6 +71,14 @@ using the stricter callback-callability test. Object-method callbacks can load
 classes through ordinary unmodified `require`, matching Composer's primary
 loader shape.
 
+The reproducible Composer S0 gate now pins Composer 2.8.12 by version and PHAR
+SHA-256, generates `vendor/` under reference PHP, and runs the resulting
+unmodified `vendor/autoload.php` under RPHP. Its fixture verifies the returned
+Composer loader object, direct static PSR-4 class autoloading, and a Composer
+`files` function. This exercises include-expression return values, direct
+static-call autoload, and both forms of `strtr()`; it does not claim that
+Composer itself or Symfony runs under RPHP.
+
 Relative to the retained `102800d` baseline, the current run adds 40 passing
 cases without losing a previous pass. The retained `0fafdd4` checkpoint isolates
 four of them: object-property chains became legal `isset` targets, intermediate

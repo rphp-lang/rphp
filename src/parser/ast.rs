@@ -144,6 +144,11 @@ pub enum Expr {
         constant: Box<Expr>,
     },
     Throw(Box<Expr>), // throw expr (PHP 8 expression)
+    Include {
+        path: Box<Expr>,
+        is_require: bool,
+        is_once: bool,
+    },
     Assign {
         // $var = expr (used in expressions like $a = $b ?? $c)
         var: String,
@@ -187,6 +192,7 @@ impl Expr {
             | Expr::UnaryMinus(inner)
             | Expr::Empty(inner)
             | Expr::Throw(inner)
+            | Expr::Include { path: inner, .. }
             | Expr::BitwiseNot(inner)
             | Expr::Clone(inner) => inner.contains_yield(),
             Expr::Ternary {

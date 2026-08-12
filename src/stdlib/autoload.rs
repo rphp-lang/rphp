@@ -184,12 +184,12 @@ pub(crate) fn fn_spl_autoload(
         let filename = format!("{lower_name}{extension}");
         if let Some(path) = resolve_autoload_candidate(eg, ed, &filename) {
             match execute_included_file(eg, &path, true, None)? {
-                IncludeFileOutcome::Executed | IncludeFileOutcome::AlreadyIncluded
+                IncludeFileOutcome::Executed(_) | IncludeFileOutcome::AlreadyIncluded
                     if symbol_exists(eg, &class_name, SymbolKind::Any) =>
                 {
                     break;
                 }
-                IncludeFileOutcome::Executed
+                IncludeFileOutcome::Executed(_)
                 | IncludeFileOutcome::AlreadyIncluded
                 | IncludeFileOutcome::Missing(_) => {}
             }
