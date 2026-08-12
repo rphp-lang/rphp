@@ -4,78 +4,34 @@
 // Extracted from execute_ex to reduce icache pressure on the hot dispatch loop.
 // Each helper is #[inline(never)] so LLVM keeps their code out of the jump table.
 
-/// Returns true if the caller should `continue` (skip opline advance).
-#[inline(never)]
-fn op_include(
+pub(crate) enum IncludeFileOutcome {
+    Executed,
+    AlreadyIncluded,
+    Missing(std::io::Error),
+}
+
+/// Compile, register and execute one already-resolved PHP file. Ordinary
+/// include opcodes provide their caller frame for the existing scope bridge;
+/// internal loaders deliberately execute without borrowing an internal frame
+/// as a user `OpArray`.
+#[cold]
+pub(crate) fn execute_included_file(
     eg: &mut ExecutorGlobals,
-    frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
-    opline: &crate::vm::instruction::Instruction,
-) -> Result<bool, VmError> {
-    let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let path_str = path_val.echo_to_string();
-    let is_require = (opline.extended_value & 1) != 0;
-    let is_once = (opline.extended_value & 2) != 0;
-
-    #[cfg(not(feature = "include-path"))]
-    let resolved_path = if std::path::Path::new(&path_str).is_absolute() {
-        path_str.clone()
-    } else {
-        let base_dir = {
-            let op_name = &op_array.name;
-            let p = std::path::Path::new(op_name);
-            if p.is_file() {
-                p.parent().map(|d| d.to_path_buf())
-            } else {
-                None
-            }
-        }.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        base_dir.join(&path_str).to_string_lossy().to_string()
-    };
-    #[cfg(feature = "include-path")]
-    let resolved_path = if let Some(path) = crate::stdlib::include_path::resolve_existing(eg, &path_str) {
-        path
-    } else if std::path::Path::new(&path_str).is_absolute() {
-        path_str.clone()
-    } else {
-        let base_dir = {
-            let op_name = &op_array.name;
-            let p = std::path::Path::new(op_name);
-            if p.is_file() {
-                p.parent().map(|d| d.to_path_buf())
-            } else {
-                None
-            }
-        }.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        base_dir.join(&path_str).to_string_lossy().to_string()
-    };
-
+    resolved_path: &str,
+    is_once: bool,
+    caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
+) -> Result<IncludeFileOutcome, VmError> {
     let canonical = std::fs::canonicalize(&resolved_path)
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| resolved_path.clone());
+        .unwrap_or_else(|_| resolved_path.to_string());
 
     if is_once && eg.included_files.contains(&canonical) {
-        return Ok(false);
+        return Ok(IncludeFileOutcome::AlreadyIncluded);
     }
 
     let source = match std::fs::read_to_string(&resolved_path) {
         Ok(s) => s,
-        Err(e) => {
-            if is_require {
-                return Err(VmError::Fatal(format!(
-                    "require({}): Failed opening required '{}' ({})",
-                    path_str, resolved_path, e
-                )));
-            } else {
-                let warning = format!(
-                    "Warning: include({}): Failed opening '{}' for inclusion ({})\n",
-                    path_str, resolved_path, e
-                );
-                eg.write_output(warning.as_bytes());
-                unsafe { (*frame).opline = (*frame).opline.add(1); }
-                return Ok(true); // continue
-            }
-        }
+        Err(error) => return Ok(IncludeFileOutcome::Missing(error)),
     };
 
     if is_once {
@@ -114,23 +70,31 @@ fn op_include(
     }
 
     let mut inc_op_array_main = compile_result.main;
-    inc_op_array_main.name = resolved_path.clone();
+    inc_op_array_main.name = resolved_path.to_string();
     let main_func_boxed = Box::new(crate::compiler::make_user_function(inc_op_array_main));
     eg.included_functions.push(main_func_boxed);
     let main_func: &UserFunction = unsafe {
         &*(&**eg.included_functions.last().unwrap() as *const UserFunction)
     };
 
-    let scope_vars: Vec<(u32, String)> = if !op_array.all_cvs.is_empty() {
-        op_array.all_cvs.clone()
-    } else {
-        op_array.main_scope_vars.clone()
-    };
-    for (cv_idx, var_name) in &scope_vars {
-        if var_name == "this" { continue; }
-        let cv_ptr = unsafe { (*frame).get_op_ptr(*cv_idx, OpType::Cv, op_array) };
-        let val = unsafe { (*cv_ptr).clone() };
-        globals_set(&mut eg.globals, var_name, val);
+    let scope_vars: Vec<(u32, String)> = caller.map_or_else(Vec::new, |(_, op_array)| {
+        if !op_array.all_cvs.is_empty() {
+            op_array.all_cvs.clone()
+        } else {
+            op_array.main_scope_vars.clone()
+        }
+    });
+    if let Some((frame, op_array)) = caller {
+        for (cv_idx, var_name) in &scope_vars {
+            if var_name == "this" {
+                continue;
+            }
+            let val = unsafe {
+                let cv_ptr = (*frame).get_op_ptr(*cv_idx, OpType::Cv, op_array);
+                (*cv_ptr).clone()
+            };
+            globals_set(&mut eg.globals, var_name, val);
+        }
     }
 
     let inc_func_ptr = &main_func.common as *const FunctionCommon;
@@ -146,10 +110,12 @@ fn op_include(
         (*inc_frame).return_value = &mut inc_return_value;
         (*inc_frame).opline = main_func.op_array.instructions.as_ptr();
     }
-    for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
-        if let Some(val) = eg.globals.get(var_name) {
-            let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
-            unsafe { slot_set(cv_ptr, val.clone()) };
+    if caller.is_some() {
+        for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
+            if let Some(val) = eg.globals.get(var_name) {
+                let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
+                unsafe { slot_set(cv_ptr, val.clone()) };
+            }
         }
     }
 
@@ -157,30 +123,40 @@ fn op_include(
     eg.current_execute_data.set(inc_frame);
     let inc_result = execute_ex(eg, inc_frame);
 
-    let inc_op_array = unsafe { (*inc_frame).op_array() };
-    let inc_scope = if !inc_op_array.all_cvs.is_empty() {
-        &inc_op_array.all_cvs
-    } else {
-        &inc_op_array.main_scope_vars
-    };
-    for (cv_idx, var_name) in inc_scope {
-        let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
-        let val = unsafe { (*cv_ptr).clone() };
-        globals_set(&mut eg.globals, var_name, val);
+    if caller.is_some() {
+        let inc_op_array = unsafe { (*inc_frame).op_array() };
+        let inc_scope = if !inc_op_array.all_cvs.is_empty() {
+            &inc_op_array.all_cvs
+        } else {
+            &inc_op_array.main_scope_vars
+        };
+        for (cv_idx, var_name) in inc_scope {
+            let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
+            let val = unsafe { (*cv_ptr).clone() };
+            globals_set(&mut eg.globals, var_name, val);
+        }
     }
 
     eg.current_execute_data.set(prev_ed);
     unsafe { cleanup_frame_slots(inc_frame) };
     unsafe { pop_vm_call_frame(eg, inc_frame) };
 
-    for (cv_idx, var_name) in &scope_vars {
-        if var_name == "this" { continue; }
-        if let Some(val) = eg.globals.get(var_name) {
-            let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-            unsafe { slot_set(cv_ptr, val.clone()) };
+    if let Some((frame, _)) = caller {
+        for (cv_idx, var_name) in &scope_vars {
+            if var_name == "this" {
+                continue;
+            }
+            if let Some(val) = eg.globals.get(var_name) {
+                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                unsafe { slot_set(cv_ptr, val.clone()) };
+            }
         }
     }
 
+    if caller.is_none() && eg.exception.is_some() {
+        inc_result?;
+        return Ok(IncludeFileOutcome::Executed);
+    }
     if let Some(exc) = eg.exception.take() {
         let (class_name, message) = if let Some(obj) = exc.as_object() {
             let cls = obj.class_name.clone();
@@ -194,16 +170,76 @@ fn op_include(
         return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
     }
 
-    let new_op_array = unsafe { (*frame).op_array() };
-    for (cv_idx, var_name) in &new_op_array.main_scope_vars {
-        if let Some(val) = eg.globals.get(var_name) {
-            let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-            unsafe { slot_set(cv_ptr, val.clone()) };
+    if let Some((frame, _)) = caller {
+        let new_op_array = unsafe { (*frame).op_array() };
+        for (cv_idx, var_name) in &new_op_array.main_scope_vars {
+            if let Some(val) = eg.globals.get(var_name) {
+                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                unsafe { slot_set(cv_ptr, val.clone()) };
+            }
         }
     }
 
     inc_result?;
-    Ok(false)
+    Ok(IncludeFileOutcome::Executed)
+}
+
+/// Returns true if the caller should `continue` (skip opline advance).
+#[inline(never)]
+fn op_include(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+) -> Result<bool, VmError> {
+    let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    let path_str = path_val.echo_to_string();
+    let is_require = (opline.extended_value & 1) != 0;
+    let is_once = (opline.extended_value & 2) != 0;
+
+    #[cfg(not(feature = "include-path"))]
+    let resolved_path = if std::path::Path::new(&path_str).is_absolute() {
+        path_str.clone()
+    } else {
+        let base_dir = {
+            let op_name = &op_array.name;
+            let path = std::path::Path::new(op_name);
+            path.is_file().then(|| path.parent()).flatten().map(std::path::Path::to_path_buf)
+        }
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        base_dir.join(&path_str).to_string_lossy().into_owned()
+    };
+    #[cfg(feature = "include-path")]
+    let resolved_path = if let Some(path) = crate::stdlib::include_path::resolve_existing(eg, &path_str) {
+        path
+    } else if std::path::Path::new(&path_str).is_absolute() {
+        path_str.clone()
+    } else {
+        let base_dir = {
+            let op_name = &op_array.name;
+            let path = std::path::Path::new(op_name);
+            path.is_file().then(|| path.parent()).flatten().map(std::path::Path::to_path_buf)
+        }
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        base_dir.join(&path_str).to_string_lossy().into_owned()
+    };
+
+    match execute_included_file(eg, &resolved_path, is_once, Some((frame, op_array)))? {
+        IncludeFileOutcome::Executed | IncludeFileOutcome::AlreadyIncluded => Ok(false),
+        IncludeFileOutcome::Missing(error) if is_require => Err(VmError::Fatal(format!(
+            "require({path_str}): Failed opening required '{resolved_path}' ({error})"
+        ))),
+        IncludeFileOutcome::Missing(error) => {
+            eg.write_output(
+                format!(
+                    "Warning: include({path_str}): Failed opening '{resolved_path}' for inclusion ({error})\n"
+                )
+                .as_bytes(),
+            );
+            unsafe { (*frame).opline = (*frame).opline.add(1) };
+            Ok(true)
+        }
+    }
 }
 
 /// Result type for cold opcode helpers that may change the VM frame (e.g. via throw_in_frame).

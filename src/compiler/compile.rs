@@ -2106,7 +2106,11 @@ impl Compiler {
                 is_generator: false,
                 global_vars: self.global_vars,
                 static_vars: self.static_vars,
-                name: "<main>".to_string(),
+                name: if self.source_file.is_empty() {
+                    "<main>".to_string()
+                } else {
+                    self.source_file.clone()
+                },
                 main_scope_vars,
                 all_cvs,
                 cache,

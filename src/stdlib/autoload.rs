@@ -7,7 +7,7 @@
 
 use crate::runtime::{AutoloadEntry, AutoloadState, ExecutorGlobals};
 use crate::value::{PhpArray, Value, ValueType, make_error_value};
-use crate::vm::execute::VmError;
+use crate::vm::execute::{IncludeFileOutcome, VmError, execute_included_file};
 use crate::vm::frame::ExecuteData;
 
 use super::{ResolvedCallback, call_resolved_with_values, resolve_callback_at_callsite};
@@ -20,6 +20,8 @@ enum SymbolKind {
     Trait,
     Enum,
 }
+
+const DEFAULT_AUTOLOAD_EXTENSIONS: &str = ".inc,.php";
 
 #[inline]
 fn normalized_symbol_name(name: &str) -> &str {
@@ -87,14 +89,141 @@ fn callback_equal(left: &Value, right: &Value) -> bool {
     }
 }
 
-fn invalid_callback(function: &str, callback: &Value, eg: &mut ExecutorGlobals) {
+fn invalid_callback(function: &str, callback: &Value, nullable: bool, eg: &mut ExecutorGlobals) {
     let description = callback.echo_to_string();
+    let nullable = if nullable { " or null" } else { "" };
     eg.exception = Some(make_error_value(
         "TypeError",
         &format!(
-            "{function}(): Argument #1 ($callback) must be a valid callback, function \"{description}\" not found or not callable"
+            "{function}(): Argument #1 ($callback) must be a valid callback{nullable}, function \"{description}\" not found or not callable"
         ),
     ));
+}
+
+#[cold]
+fn resolve_autoload_candidate(
+    eg: &ExecutorGlobals,
+    execute_data: *mut ExecuteData,
+    filename: &str,
+) -> Option<String> {
+    #[cfg(feature = "include-path")]
+    if let Some(path) = crate::stdlib::include_path::resolve_existing(eg, filename) {
+        return Some(path);
+    }
+    #[cfg(not(feature = "include-path"))]
+    if std::path::Path::new(filename).exists() {
+        return Some(filename.to_string());
+    }
+
+    if let Some(directory) = eg
+        .autoload
+        .as_ref()
+        .and_then(|state| state.base_directory.as_deref())
+    {
+        let candidate = std::path::Path::new(directory).join(filename);
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+
+    callsite_source_directory(execute_data).and_then(|directory| {
+        let candidate = std::path::Path::new(&directory).join(filename);
+        candidate
+            .exists()
+            .then(|| candidate.to_string_lossy().into_owned())
+    })
+}
+
+fn callsite_source_directory(execute_data: *mut ExecuteData) -> Option<String> {
+    // SAFETY: the active internal-function frame and every predecessor remain
+    // linked and alive for the duration of this synchronous callback.
+    unsafe {
+        let mut caller = (*execute_data).prev_execute_data;
+        while !caller.is_null() {
+            let function = &*(*caller).func;
+            if function.fn_type == crate::vm::function::FunctionType::User {
+                let source = (*caller).op_array().name.as_str();
+                return std::path::Path::new(source)
+                    .parent()
+                    .map(|path| path.to_string_lossy().into_owned());
+            }
+            caller = (*caller).prev_execute_data;
+        }
+    }
+    None
+}
+
+pub(crate) fn fn_spl_autoload(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let class_name = arg!(ed, 0).echo_to_string();
+    let explicit_extensions = arg_opt!(ed, 1)
+        .filter(|value| value.value_type() != ValueType::Null)
+        .map(Value::echo_to_string);
+    let configured_extensions = eg
+        .autoload
+        .as_ref()
+        .and_then(|state| state.extensions.clone());
+    let extensions = explicit_extensions
+        .as_deref()
+        .or(configured_extensions.as_deref())
+        .unwrap_or(DEFAULT_AUTOLOAD_EXTENSIONS);
+    let lower_name = normalized_symbol_name(&class_name)
+        .to_ascii_lowercase()
+        .replace('\\', std::path::MAIN_SEPARATOR_STR);
+
+    let mut remaining = extensions;
+    while !remaining.is_empty() && eg.exception.is_none() {
+        let (extension, next) = remaining
+            .split_once(',')
+            .map_or((remaining, None), |(extension, rest)| {
+                (extension, Some(rest))
+            });
+        let filename = format!("{lower_name}{extension}");
+        if let Some(path) = resolve_autoload_candidate(eg, ed, &filename) {
+            match execute_included_file(eg, &path, true, None)? {
+                IncludeFileOutcome::Executed | IncludeFileOutcome::AlreadyIncluded
+                    if symbol_exists(eg, &class_name, SymbolKind::Any) =>
+                {
+                    break;
+                }
+                IncludeFileOutcome::Executed
+                | IncludeFileOutcome::AlreadyIncluded
+                | IncludeFileOutcome::Missing(_) => {}
+            }
+        }
+        let Some(next) = next else {
+            break;
+        };
+        remaining = next;
+    }
+
+    if eg.exception.is_none() {
+        ret!(rv, Value::null());
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_spl_autoload_extensions(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(value) = arg_opt!(ed, 0)
+        && value.value_type() != ValueType::Null
+    {
+        eg.autoload
+            .get_or_insert_with(|| Box::new(AutoloadState::default()))
+            .extensions = Some(value.echo_to_string().into());
+    }
+    let extensions = eg
+        .autoload
+        .as_ref()
+        .and_then(|state| state.extensions.as_deref())
+        .unwrap_or(DEFAULT_AUTOLOAD_EXTENSIONS);
+    ret!(rv, Value::string(extensions));
 }
 
 fn resolved_entry(callback: Value, resolved: ResolvedCallback) -> AutoloadEntry {
@@ -120,22 +249,17 @@ fn invoke_entry(
     Ok(())
 }
 
-fn exists_with_autoload(
+fn invoke_autoload_stack(
     eg: &mut ExecutorGlobals,
     name: &str,
-    kind: SymbolKind,
-    autoload: bool,
-) -> Result<bool, VmError> {
-    if symbol_exists(eg, name, kind) {
-        return Ok(true);
-    }
-    if !autoload
-        || eg
-            .autoload
-            .as_ref()
-            .is_none_or(|state| state.entries.is_empty())
+    stop_kind: SymbolKind,
+) -> Result<(), VmError> {
+    if eg
+        .autoload
+        .as_ref()
+        .is_none_or(|state| state.entries.is_empty())
     {
-        return Ok(false);
+        return Ok(());
     }
 
     let normalized = normalized_symbol_name(name);
@@ -145,7 +269,7 @@ fn exists_with_autoload(
         .as_ref()
         .is_some_and(|state| state.active_classes.contains(&guard_key));
     if already_active {
-        return Ok(false);
+        return Ok(());
     }
 
     let entries = eg
@@ -165,7 +289,7 @@ fn exists_with_autoload(
         invocation_result = invoke_entry(eg, entry, &class_name);
         if invocation_result.is_err()
             || eg.exception.is_some()
-            || symbol_exists(eg, normalized, kind)
+            || symbol_exists(eg, normalized, stop_kind)
         {
             break;
         }
@@ -174,8 +298,29 @@ fn exists_with_autoload(
     if let Some(state) = eg.autoload.as_mut() {
         state.active_classes.remove(&guard_key);
     }
-    invocation_result?;
-    Ok(eg.exception.is_none() && symbol_exists(eg, normalized, kind))
+    invocation_result
+}
+
+fn exists_with_autoload(
+    eg: &mut ExecutorGlobals,
+    name: &str,
+    kind: SymbolKind,
+    autoload: bool,
+) -> Result<bool, VmError> {
+    if symbol_exists(eg, name, kind) {
+        return Ok(true);
+    }
+    if !autoload
+        || eg
+            .autoload
+            .as_ref()
+            .is_none_or(|state| state.entries.is_empty())
+    {
+        return Ok(false);
+    }
+
+    invoke_autoload_stack(eg, name, kind)?;
+    Ok(eg.exception.is_none() && symbol_exists(eg, name, kind))
 }
 
 fn symbol_exists_handler(
@@ -260,15 +405,27 @@ pub(crate) fn fn_spl_autoload_register(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let callback = arg!(ed, 0).clone();
+    let callback = match arg_opt!(ed, 0) {
+        None => Value::string("spl_autoload"),
+        Some(value) if value.value_type() == ValueType::Null => Value::string("spl_autoload"),
+        Some(value) => value.clone(),
+    };
+    if arg_opt!(ed, 1).is_some_and(|value| !value.is_truthy()) {
+        eg.write_output(
+            b"Notice: spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw\n",
+        );
+    }
     let Some(resolved) = resolve_callback_at_callsite(&callback, eg, ed) else {
-        invalid_callback("spl_autoload_register", &callback, eg);
+        invalid_callback("spl_autoload_register", &callback, true, eg);
         return Ok(());
     };
     let prepend = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
     let state = eg
         .autoload
         .get_or_insert_with(|| Box::new(AutoloadState::default()));
+    if state.base_directory.is_none() && callback.as_str() == Some("spl_autoload") {
+        state.base_directory = callsite_source_directory(ed).map(Into::into);
+    }
 
     if state
         .entries
@@ -289,14 +446,43 @@ pub(crate) fn fn_spl_autoload_register(
     ret!(rv, Value::bool(true));
 }
 
+pub(crate) fn fn_spl_autoload_call(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let class_name = arg!(ed, 0).echo_to_string();
+    invoke_autoload_stack(eg, &class_name, SymbolKind::Any)?;
+    if eg.exception.is_none() {
+        ret!(rv, Value::null());
+    }
+    Ok(())
+}
+
 pub(crate) fn fn_spl_autoload_unregister(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 0).clone();
+    if callback
+        .as_str()
+        .is_some_and(|name| name.eq_ignore_ascii_case("spl_autoload_call"))
+    {
+        eg.write_output(
+            b"Deprecated: spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()\n",
+        );
+        let removed = eg.autoload.as_mut().is_some_and(|state| {
+            if state.entries.is_empty() {
+                return false;
+            }
+            state.entries = Default::default();
+            true
+        });
+        ret!(rv, Value::bool(removed));
+    }
     if resolve_callback_at_callsite(&callback, eg, ed).is_none() {
-        invalid_callback("spl_autoload_unregister", &callback, eg);
+        invalid_callback("spl_autoload_unregister", &callback, false, eg);
         return Ok(());
     }
 

@@ -586,10 +586,32 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "autoload"
     );
     reg!(
+        "spl_autoload",
+        autoload::fn_spl_autoload,
+        2,
+        1,
+        "class",
+        "file_extensions"
+    );
+    reg!(
+        "spl_autoload_extensions",
+        autoload::fn_spl_autoload_extensions,
+        1,
+        0,
+        "file_extensions"
+    );
+    reg!(
+        "spl_autoload_call",
+        autoload::fn_spl_autoload_call,
+        1,
+        1,
+        "class"
+    );
+    reg!(
         "spl_autoload_register",
         autoload::fn_spl_autoload_register,
         3,
-        1,
+        0,
         "callback",
         "throw",
         "prepend"

@@ -1,6 +1,6 @@
 mod common;
 
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -65,6 +65,209 @@ foreach (spl_autoload_functions() as $loader) { echo $loader . ','; }
             "bool(true)\n",
             "bool(false)\n",
             "prepended_loader,first_loader,"
+        )
+    );
+}
+
+#[test]
+fn null_and_omitted_registration_append_the_default_loader_once() {
+    let output = run_php(
+        r#"<?php
+var_dump(spl_autoload_register());
+var_dump(spl_autoload_register(null));
+var_dump(spl_autoload_register(null, true, true));
+var_dump(spl_autoload_functions());
+var_dump(spl_autoload_unregister('spl_autoload'));
+var_dump(spl_autoload_functions());
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "array(1) {\n  [0]=>\n  string(12) \"spl_autoload\"\n}\n",
+            "bool(true)\n",
+            "array(0) {\n}\n"
+        )
+    );
+}
+
+#[test]
+fn default_spl_autoload_loads_lowercase_namespaced_paths_once() {
+    let dir = TempPhpDir::new();
+    std::fs::create_dir_all(dir.0.join("project")).unwrap();
+    std::fs::write(
+        dir.0.join("project/loadedclass.php"),
+        "<?php namespace Project; class LoadedClass { public static function value() { return 'loaded'; } }",
+    )
+    .unwrap();
+    let source_file = dir.0.join("autoload.php").to_string_lossy().into_owned();
+    let source_dir = dir.0.to_string_lossy().into_owned();
+    let output = run_php_with_source_context(
+        r#"<?php
+var_dump(spl_autoload_extensions());
+var_dump(spl_autoload_register());
+var_dump(class_exists('Project\\LoadedClass'));
+echo Project\LoadedClass::value() . "|";
+spl_autoload('Project\\LoadedClass');
+var_dump(class_exists('Project\\LoadedClass', false));
+"#,
+        &source_file,
+        &source_dir,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "string(9) \".inc,.php\"\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "loaded|bool(true)\n"
+        )
+    );
+}
+
+#[test]
+fn spl_autoload_honors_explicit_and_request_local_extensions() {
+    let dir = TempPhpDir::new();
+    std::fs::write(
+        dir.0.join("explicitclass.custom"),
+        "<?php class ExplicitClass {}",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.0.join("configuredclass.inc.php"),
+        "<?php class ConfiguredClass {}",
+    )
+    .unwrap();
+    let source_file = dir.0.join("extensions.php").to_string_lossy().into_owned();
+    let source_dir = dir.0.to_string_lossy().into_owned();
+    let output = run_php_with_source_context(
+        r#"<?php
+var_dump(spl_autoload('ExplicitClass', '.custom'));
+var_dump(class_exists('ExplicitClass', false));
+var_dump(spl_autoload_extensions('.inc.php'));
+spl_autoload_register(null);
+var_dump(class_exists('ConfiguredClass'));
+var_dump(spl_autoload_extensions(null));
+"#,
+        &source_file,
+        &source_dir,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "NULL\n",
+            "bool(true)\n",
+            "string(8) \".inc.php\"\n",
+            "bool(true)\n",
+            "string(8) \".inc.php\"\n"
+        )
+    );
+}
+
+#[test]
+fn default_loader_keeps_include_locals_private_and_propagates_exceptions() {
+    let dir = TempPhpDir::new();
+    std::fs::write(
+        dir.0.join("localclass.php"),
+        "<?php $autoloadLocal = 'private'; class LocalClass {}",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.0.join("throwclass.php"),
+        "<?php throw new Exception('autoload boom'); class ThrowClass {}",
+    )
+    .unwrap();
+    let source_file = dir.0.join("scope.php").to_string_lossy().into_owned();
+    let source_dir = dir.0.to_string_lossy().into_owned();
+
+    let output = run_php_with_source_context(
+        r#"<?php
+spl_autoload_register();
+var_dump(class_exists('LocalClass'));
+var_dump(isset($autoloadLocal));
+try {
+    class_exists('ThrowClass');
+} catch (Exception $error) {
+    echo $error->getMessage();
+}
+"#,
+        &source_file,
+        &source_dir,
+    );
+
+    assert_eq!(
+        output,
+        concat!("bool(true)\n", "bool(false)\n", "autoload boom")
+    );
+}
+
+#[test]
+fn false_throw_argument_is_ignored_with_php_notice() {
+    assert_eq!(
+        run_php(
+            "<?php function loader($name) {} var_dump(spl_autoload_register('loader', false));"
+        ),
+        concat!(
+            "Notice: spl_autoload_register(): Argument #2 ($do_throw) has been ignored, spl_autoload_register() will always throw\n",
+            "bool(true)\n"
+        )
+    );
+}
+
+#[test]
+fn spl_autoload_call_runs_the_stack_and_stops_after_the_symbol_loads() {
+    let dir = TempPhpDir::new();
+    std::fs::write(dir.0.join("loaded.php"), "<?php class LoadedByCall {}").unwrap();
+    let source_file = dir
+        .0
+        .join("autoload-call.php")
+        .to_string_lossy()
+        .into_owned();
+    let source_dir = dir.0.to_string_lossy().into_owned();
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function firstLoader($name) { echo "first:$name|"; if ($name === 'LoadedByCall') { require __DIR__ . '/loaded.php'; } }
+function secondLoader($name) { echo "second:$name|"; }
+spl_autoload_register('firstLoader');
+spl_autoload_register('secondLoader');
+var_dump(spl_autoload_call('LoadedByCall'));
+var_dump(class_exists('LoadedByCall', false));
+var_dump(spl_autoload_call('StillMissing'));
+"#,
+            &source_file,
+            &source_dir,
+        ),
+        concat!(
+            "first:LoadedByCall|NULL\n",
+            "bool(true)\n",
+            "first:StillMissing|second:StillMissing|NULL\n"
+        )
+    );
+}
+
+#[test]
+fn unregistering_spl_autoload_call_deprecates_and_clears_the_stack() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function loader($name) {}
+spl_autoload_register('loader');
+spl_autoload_register();
+var_dump(spl_autoload_unregister('spl_autoload_call'));
+var_dump(spl_autoload_functions());
+"#,
+        ),
+        concat!(
+            "Deprecated: spl_autoload_unregister(): Using spl_autoload_call() as a callback for spl_autoload_unregister() is deprecated, to remove all registered autoloaders, call spl_autoload_unregister() for all values returned from spl_autoload_functions()\n",
+            "bool(true)\n",
+            "array(0) {\n}\n"
         )
     );
 }

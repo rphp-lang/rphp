@@ -9793,22 +9793,28 @@ must honor their autoload argument; `class_alias()`, `function_exists()` and
 `method_exists()` must match PHP visibility/name behavior rather than merely
 consulting an already-populated table.
 
-Current S0 checkpoint: explicit callable registration, unregister/listing,
-order, prepend, duplicate identity, recursion suppression and exception
-propagation are implemented in request-local state. Object-method callbacks can
-load a class through ordinary `require`; existence probes autoload by the
-correct symbol kind, and `method_exists()` autoloads string owners while seeing
-abstract and non-public declarations. The callback stack is published as an
-immutable `Rc` slice, so a lookup takes an allocation-free snapshot even when a
-loader mutates the live registry. Class aliases now share their exact
-reference-counted class identity across alias chains and preserve class-like
-kind, methods, static state, inheritance, callbacks and `instanceof` behavior.
-`function_exists()` accepts global names with a leading separator;
-`is_a()`/`is_subclass_of()` implement their string/autoload contract; and
-`stdClass` is a registered internal class. S0 is not complete: default/null
-registration and `spl_autoload()`, the remaining include-return/scope edges,
-namespace function-import edges and the unmodified Composer fixture gate remain
-outstanding.
+Current S0 checkpoint: explicit callable and default/null registration,
+unregister/listing, order, prepend, duplicate identity, recursion suppression
+and exception propagation are implemented in request-local state. The built-in
+`spl_autoload()` lowercases class paths, translates namespace separators,
+searches the configured include path and source directory, honors request-local
+`spl_autoload_extensions()` state and executes matching files once.
+`spl_autoload_call()` reuses the same mutation-safe, recursion-guarded callback
+dispatch. The built-in loader's include scope remains private and exceptions
+remain catchable by the caller.
+Object-method callbacks can load a class through ordinary `require`; existence
+probes autoload by the correct symbol kind, and `method_exists()` autoloads
+string owners while seeing abstract and non-public declarations. The callback
+stack is published as an immutable `Rc` slice, so a lookup takes an
+allocation-free snapshot even when a loader mutates the live registry. Class
+aliases now share their exact reference-counted class identity across alias
+chains and preserve class-like kind, methods, static state, inheritance,
+callbacks and `instanceof` behavior. `function_exists()` accepts global names
+with a leading separator; `is_a()`/`is_subclass_of()` implement their
+string/autoload contract; and `stdClass` is a registered internal class. S0 is
+not complete: the remaining ordinary include-return/scope/exception edges,
+namespace function-import edges, truthful platform identity and the unmodified
+Composer fixture gate remain outstanding.
 
 Composer's generated platform check must observe truthful `PHP_VERSION_ID`,
 `PHP_VERSION`, `PHP_INT_SIZE`, extension availability and exit/error behavior.

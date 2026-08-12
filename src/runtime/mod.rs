@@ -188,6 +188,13 @@ pub(crate) struct AutoloadState {
     /// the rare register/unregister operation publishes a replacement slice.
     pub(crate) entries: std::rc::Rc<[AutoloadEntry]>,
     pub(crate) active_classes: std::collections::HashSet<String>,
+    /// Request-local suffix list used by the built-in `spl_autoload()`
+    /// callback. `None` keeps the PHP default without allocating state.
+    pub(crate) extensions: Option<std::rc::Rc<str>>,
+    /// Directory of the first default-loader registration call site. Callback
+    /// helper frames intentionally detach from their caller, so retain this
+    /// cold path context without touching ordinary class lookups.
+    pub(crate) base_directory: Option<std::rc::Rc<str>>,
 }
 
 /// Minimal ExecutorGlobals for vertical slice.
