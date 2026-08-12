@@ -28,20 +28,23 @@ fn op_check_generic_args_impl<const LATE_STATIC: bool>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<(), VmError> {
-    let ip = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-    };
-    let cache = unsafe {
-        &mut *(op_array.cache.as_ptr().add(ip)
-            as *mut crate::vm::instruction::InlineCache)
+    // SAFETY: dispatch supplies an instruction from this op-array and a live
+    // frame whose compiler-emitted owner operand remains valid for this check.
+    // The cache has exactly one stable entry per instruction.
+    let (cache, raw_owner) = unsafe {
+        let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        (
+            &mut *(op_array.cache.as_ptr().add(ip)
+                as *mut crate::vm::instruction::InlineCache),
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+        )
     };
 
     let kind = crate::generics::GenericDeclarationKind::from_tag(opline._pad)
         .ok_or_else(|| VmError::Fatal("Invalid generic declaration kind".into()))?;
-    let raw_owner = unsafe {
-        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-    };
     let owner_value = if raw_owner.is_reference() {
+        // SAFETY: a Reference-tagged owner points at a live VM slot for the
+        // duration of this non-reentrant opcode.
         unsafe { &*raw_owner.as_ref_ptr() }
     } else {
         raw_owner
@@ -888,25 +891,30 @@ fn op_call_user_func_array<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let callback_raw =
-        unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let callback = if callback_raw.is_reference() {
-        unsafe { &*callback_raw.as_ref_ptr() }
-    } else {
-        callback_raw
-    };
-    let args_raw = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let args = if args_raw.is_reference() {
-        unsafe { &*args_raw.as_ref_ptr() }
-    } else {
-        args_raw
+    // SAFETY: dispatch supplies a live frame and compiler-emitted operands.
+    // Reference targets remain live through this non-reentrant call setup.
+    let (callback, args) = unsafe {
+        let callback = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let callback = if callback.is_reference() {
+            &*callback.as_ref_ptr()
+        } else {
+            callback
+        };
+        let args = &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array);
+        let args = if args.is_reference() {
+            &*args.as_ref_ptr()
+        } else {
+            args
+        };
+        (callback, args)
     };
 
-    let ip = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    // SAFETY: `opline` belongs to this op-array, whose cache has one stable
+    // entry per instruction.
+    let cache_slot = unsafe {
+        let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache
     };
-    let cache_slot =
-        unsafe { op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache };
     let caller_class = get_caller_class(frame, eg);
     let result = crate::stdlib::invoke_call_user_func_array(
         callback,
@@ -926,8 +934,12 @@ fn op_call_user_func_array<'a>(
     }
 
     if opline.result_type != OpType::Unused {
-        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-        unsafe { slot_set(result_ptr, result) };
+        // SAFETY: the compiler emitted a writable result for this call and the
+        // frame remains live until the opcode returns.
+        unsafe {
+            let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            slot_set(result_ptr, result);
+        }
     }
     Ok(ColdResult::Done)
 }
@@ -998,28 +1010,33 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let class_name_val =
-        unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let prop_name_val =
-        unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+    // SAFETY: dispatch supplies an instruction from this op-array and a live
+    // frame with compiler-emitted operand/result slots. The cache has one
+    // stable entry per instruction and execution owns its mutable access.
+    let (class_name_val, prop_name_val, result_ptr, cache) = unsafe {
+        let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+            (*frame).get_op_mut(opline.result as u32, opline.result_type),
+            &mut *(op_array.cache.as_ptr().add(ip)
+                as *mut crate::vm::instruction::InlineCache),
+        )
+    };
 
     let raw_class = class_name_val.as_str().unwrap_or("");
     let prop = prop_name_val.as_str().unwrap_or("");
-    let ip = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-    };
-    let cache = unsafe {
-        &mut *(op_array.cache.as_ptr().add(ip)
-            as *mut crate::vm::instruction::InlineCache)
-    };
     let class_id = static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class);
 
     if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 1 {
-        let value = clone_static_property_value(unsafe {
-            eg.static_property_value_unchecked(cache.property_slot())
-        });
-        unsafe { slot_set(result_ptr, value) };
+        // SAFETY: the class/cache guards prove the storage slot is valid; the
+        // compiler-emitted result pointer was validated above.
+        unsafe {
+            let value = clone_static_property_value(
+                eg.static_property_value_unchecked(cache.property_slot()),
+            );
+            slot_set(result_ptr, value);
+        }
         return Ok(ColdResult::Done);
     }
 
