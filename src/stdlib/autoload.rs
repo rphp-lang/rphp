@@ -29,16 +29,7 @@ fn normalized_symbol_name(name: &str) -> &str {
 #[inline]
 fn symbol_exists(eg: &ExecutorGlobals, name: &str, kind: SymbolKind) -> bool {
     let name = normalized_symbol_name(name);
-    let definition = eg
-        .class_table
-        .get(name)
-        .map(|definition| definition.as_ref())
-        .or_else(|| {
-            eg.class_table
-                .iter()
-                .find(|(registered, _)| registered.eq_ignore_ascii_case(name))
-                .map(|(_, definition)| definition.as_ref())
-        });
+    let definition = eg.find_class(name);
     definition.is_some_and(|definition| match kind {
         SymbolKind::Any => true,
         SymbolKind::Class => !definition.is_interface && !definition.is_trait,
@@ -232,6 +223,36 @@ pub(crate) fn fn_enum_exists(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     symbol_exists_handler(ed, rv, eg, SymbolKind::Enum)
+}
+
+pub(crate) fn fn_class_alias(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let original = arg!(ed, 0).echo_to_string();
+    let alias = arg!(ed, 1).echo_to_string();
+    let autoload = arg_opt!(ed, 2).is_none_or(Value::is_truthy);
+
+    if !symbol_exists(eg, &original, SymbolKind::Any) {
+        if !autoload || !exists_with_autoload(eg, &original, SymbolKind::Any, true)? {
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            eg.write_output(
+                format!("Warning: class_alias(): Class \"{original}\" not found\n").as_bytes(),
+            );
+            ret!(rv, Value::bool(false));
+        }
+    }
+
+    match eg.register_class_alias(&original, &alias) {
+        Ok(()) => ret!(rv, Value::bool(true)),
+        Err(message) => {
+            eg.write_output(format!("Warning: class_alias(): {message}\n").as_bytes());
+            ret!(rv, Value::bool(false));
+        }
+    }
 }
 
 pub(crate) fn fn_spl_autoload_register(

@@ -577,6 +577,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "autoload"
     );
     reg!(
+        "class_alias",
+        autoload::fn_class_alias,
+        3,
+        2,
+        "class",
+        "alias",
+        "autoload"
+    );
+    reg!(
         "spl_autoload_register",
         autoload::fn_spl_autoload_register,
         3,
@@ -606,6 +615,24 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "object_or_class",
         "method"
     );
+    reg!(
+        "is_a",
+        fn_is_a,
+        3,
+        2,
+        "object_or_class",
+        "class",
+        "allow_string"
+    );
+    reg!(
+        "is_subclass_of",
+        fn_is_subclass_of,
+        3,
+        2,
+        "object_or_class",
+        "class",
+        "allow_string"
+    );
 
     // --- Math functions ---
     reg_direct!("abs", fn_abs, direct_abs, 1, 1, "num");
@@ -634,7 +661,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("mt_rand", fn_rand, 2, 0, "min", "max");
 
     // --- Output ---
-    reg!("var_dump", fn_var_dump, 1, 1, "value");
+    reg_var!("var_dump", fn_var_dump, 1, "value");
     reg!("print_r", fn_print_r, 1, 1, "value");
     reg!("var_export", fn_var_export, 2, 1, "value", "return");
 
@@ -1259,6 +1286,11 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             abstract_methods: vec![],
             class_id: 0,
         };
+
+    // stdClass has dynamic object storage but still participates in ordinary
+    // class_exists(), aliases, type hints and reflection as an internal class.
+    eg.register_class(empty_internal_type("stdClass", vec![], false, false))
+        .unwrap();
 
     // Canonical iterator hierarchy used by generator return contracts,
     // instanceof and the iterable pseudo-type.
@@ -2899,6 +2931,58 @@ fn fn_method_exists(
     ret!(rv, Value::bool(found));
 }
 
+fn class_relation_operands(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    default_allow_string: bool,
+) -> Result<Option<(String, String)>, VmError> {
+    let first = arg!(ed, 0);
+    let target = arg_str!(ed, 1).into_owned();
+    if let Some(object) = first.as_object() {
+        return Ok(Some((object.class_name.to_string(), target)));
+    }
+    let allow_string = arg_opt!(ed, 2)
+        .map(Value::is_truthy)
+        .unwrap_or(default_allow_string);
+    let Some(class_name) = first.as_str().filter(|_| allow_string) else {
+        return Ok(None);
+    };
+    let class_name = class_name.to_string();
+    if !autoload::ensure_symbol_loaded(eg, &class_name)? {
+        return Ok(None);
+    }
+    Ok(Some((class_name, target)))
+}
+
+fn fn_is_a(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let Some((class_name, target)) = class_relation_operands(ed, eg, false)? else {
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(false));
+        }
+        return Ok(());
+    };
+    ret!(rv, Value::bool(eg.class_is_a(&class_name, &target)));
+}
+
+fn fn_is_subclass_of(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((class_name, target)) = class_relation_operands(ed, eg, true)? else {
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(false));
+        }
+        return Ok(());
+    };
+    let same_identity = eg
+        .find_class(&class_name)
+        .zip(eg.find_class(&target))
+        .is_some_and(|(class, target)| std::ptr::eq(class, target));
+    let is_subclass = !same_identity && eg.class_is_a(&class_name, &target);
+    ret!(rv, Value::bool(is_subclass));
+}
+
 // ============================================================================
 // Math functions
 // ============================================================================
@@ -3095,9 +3179,14 @@ fn fn_var_dump(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    let output = var_dump_value(v, 0, eg);
-    eg.write_output(output.as_bytes());
+    let first = var_dump_value(arg!(ed, 0), 0, eg);
+    eg.write_output(first.as_bytes());
+    if let Some(arguments) = arg!(ed, 1).as_array() {
+        for value in arguments.values() {
+            let output = var_dump_value(value, 0, eg);
+            eg.write_output(output.as_bytes());
+        }
+    }
     Ok(())
 }
 
@@ -3777,15 +3866,7 @@ fn find_class_case_insensitive<'a>(
     eg: &'a ExecutorGlobals,
     class_name: &str,
 ) -> Option<&'a crate::compiler::compile::ClassDef> {
-    eg.class_table
-        .get(class_name)
-        .map(|class| class.as_ref())
-        .or_else(|| {
-            eg.class_table
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(class_name))
-                .map(|(_, class)| class.as_ref())
-        })
+    eg.find_class(class_name)
 }
 
 /// PHP's method_exists() is a declaration probe, not a callability check: it
@@ -6437,7 +6518,8 @@ fn fn_function_exists(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
-    let exists = eg.find_function(&name).is_some();
+    let name = name.strip_prefix('\\').unwrap_or(&name);
+    let exists = eg.find_function(name).is_some();
     ret!(rv, Value::bool(exists));
 }
 

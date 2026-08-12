@@ -141,6 +141,191 @@ var_dump(method_exists('MethodOwner', 'missingMethod'));
 }
 
 #[test]
+fn class_alias_reuses_class_identity_methods_and_type_relationships() {
+    let output = run_php(
+        r#"<?php
+class OriginalClass {
+    public static function value() { return 'method'; }
+}
+var_dump(class_alias('OriginalClass', 'AliasClass'));
+$object = new AliasClass();
+echo get_class($object) . '|';
+var_dump($object instanceof OriginalClass);
+var_dump($object instanceof AliasClass);
+echo AliasClass::value() . '|';
+var_dump(method_exists('aliasclass', 'value'));
+var_dump(class_exists('ALIASCLASS', false));
+var_dump(class_alias('OriginalClass', 'aliasclass'));
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "bool(true)\n",
+            "OriginalClass|bool(true)\n",
+            "bool(true)\n",
+            "method|bool(true)\n",
+            "bool(true)\n",
+            "Warning: class_alias(): Cannot declare class aliasclass, because the name is already in use\n",
+            "bool(false)\n"
+        )
+    );
+}
+
+#[test]
+fn class_alias_autoloads_original_and_supports_alias_chains() {
+    let dir = TempPhpDir::new();
+    let class_file = dir.write(
+        "AutoloadedOriginal.php",
+        "<?php class AutoloadedOriginal { public function name() { return 'loaded'; } }",
+    );
+    let child_file = dir.write(
+        "AliasChild.php",
+        "<?php class AliasChild extends ChainedAlias {}",
+    );
+    let source = format!(
+        r#"<?php
+function alias_loader($name) {{
+    echo "load:$name|";
+    if ($name === 'AutoloadedOriginal') {{ require '{class_file}'; }}
+}}
+spl_autoload_register('alias_loader');
+var_dump(class_alias('AutoloadedOriginal', 'FirstAlias'));
+var_dump(class_alias('firstalias', 'ChainedAlias', false));
+require '{child_file}';
+$child = new AliasChild();
+echo $child->name() . '|';
+var_dump($child instanceof AutoloadedOriginal);
+var_dump($child instanceof FirstAlias);
+var_dump($child instanceof ChainedAlias);
+var_dump(class_alias('MissingOriginal', 'NeverCreated', false));
+"#
+    );
+
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "load:AutoloadedOriginal|bool(true)\n",
+            "bool(true)\n",
+            "loaded|bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "Warning: class_alias(): Class \"MissingOriginal\" not found\n",
+            "bool(false)\n"
+        )
+    );
+}
+
+#[test]
+fn class_alias_preserves_interface_trait_and_enum_kinds() {
+    let dir = TempPhpDir::new();
+    let implementation_file = dir.write(
+        "AliasImplementation.php",
+        "<?php class AliasImplementation implements ContractAlias { use TraitAlias; }",
+    );
+    let source = format!(
+        r#"<?php
+interface OriginalContract {{ public function traitMethod(); }}
+trait OriginalTrait {{ public function traitMethod() {{ return 'trait'; }} }}
+enum OriginalEnum {{ case One; }}
+class_alias('OriginalContract', 'ContractAlias');
+class_alias('OriginalTrait', 'TraitAlias');
+class_alias('OriginalEnum', 'EnumAlias');
+var_dump(interface_exists('ContractAlias', false));
+var_dump(trait_exists('TraitAlias', false));
+var_dump(enum_exists('EnumAlias', false));
+var_dump(class_exists('EnumAlias', false));
+require '{implementation_file}';
+$implementation = new AliasImplementation();
+echo $implementation->traitMethod() . '|';
+var_dump($implementation instanceof ContractAlias);
+"#
+    );
+
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "trait|bool(true)\n"
+        )
+    );
+}
+
+#[test]
+fn function_exists_is_case_insensitive_and_accepts_a_leading_separator() {
+    let output = run_php(
+        r#"<?php
+function ProjectFunction() {}
+var_dump(function_exists('ProjectFunction'));
+var_dump(function_exists('projectfunction'));
+var_dump(function_exists('\\PROJECTFUNCTION'));
+var_dump(function_exists('\\strlen'));
+var_dump(function_exists('MissingFunction'));
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n"
+        )
+    );
+}
+
+#[test]
+fn variadic_var_dump_preserves_argument_order() {
+    assert_eq!(
+        run_php("<?php var_dump(1, 'two', false, null);"),
+        concat!("int(1)\n", "string(3) \"two\"\n", "bool(false)\n", "NULL\n")
+    );
+}
+
+#[test]
+fn class_relation_helpers_honor_alias_identity_and_string_autoload_policy() {
+    let dir = TempPhpDir::new();
+    let hierarchy_file = dir.write(
+        "RelationChild.php",
+        "<?php class RelationParent {} class RelationChild extends RelationParent {}",
+    );
+    let source = format!(
+        r#"<?php
+function relation_loader($name) {{
+    echo "load:$name|";
+    if ($name === 'RelationChild') {{ require '{hierarchy_file}'; }}
+}}
+spl_autoload_register('relation_loader');
+var_dump(is_a('RelationChild', 'RelationParent'));
+var_dump(is_a('RelationChild', 'RelationParent', true));
+var_dump(is_subclass_of('RelationChild', 'RelationParent'));
+class_alias('RelationParent', 'RelationParentAlias');
+var_dump(is_a(new RelationChild(), 'RelationParentAlias'));
+var_dump(is_a('RelationParent', 'RelationParentAlias', true));
+var_dump(is_subclass_of('RelationParent', 'RelationParentAlias'));
+var_dump(is_subclass_of('RelationChild', 'RelationParentAlias', false));
+"#
+    );
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "bool(false)\n",
+            "load:RelationChild|bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "bool(false)\n"
+        )
+    );
+}
+
+#[test]
 fn existence_probes_honor_kind_case_leading_separator_and_autoload_flag() {
     let dir = TempPhpDir::new();
     let symbols_file = dir.write(

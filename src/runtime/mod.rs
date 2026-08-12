@@ -201,8 +201,9 @@ pub struct ExecutorGlobals {
     pub timed_out: AtomicBool,
     /// Function table — name → pointer to FunctionCommon
     pub function_table: HashMap<String, *const FunctionCommon>,
-    /// Class table — name → ClassDef (Boxed for stable pointer addresses)
-    pub class_table: HashMap<String, Box<ClassDef>>,
+    /// Class table — name/alias → shared ClassDef. `Rc` keeps metadata and
+    /// inline-cache pointers stable while aliases reuse the exact identity.
+    pub class_table: HashMap<String, std::rc::Rc<ClassDef>>,
     /// Cold generic declaration side table. Ordinary dispatch never reads it.
     pub generic_metadata: GenericMetadata,
     /// Constant table — name → Value (case-sensitive, like PHP)
@@ -944,7 +945,11 @@ impl ExecutorGlobals {
         let class_name = class_def.name.clone();
         // PHP does not permit class redeclaration. Besides matching that rule,
         // this guarantees class_by_id pointers remain stable for inline caches.
-        if self.class_table.contains_key(&class_name) {
+        if self
+            .class_table
+            .keys()
+            .any(|registered| registered.eq_ignore_ascii_case(&class_name))
+        {
             return Err(format!(
                 "Cannot declare class {}, because the name is already in use",
                 class_name
@@ -1223,10 +1228,11 @@ impl ExecutorGlobals {
             .collect::<Vec<_>>()
             .into();
 
-        // Box to get stable heap address for function pointers
-        self.class_table
-            .insert(class_name.clone(), Box::new(class_def));
-        let class_ptr = &**self.class_table.get(&class_name).unwrap() as *const ClassDef;
+        // Shared ownership keeps the allocation stable and lets class_alias()
+        // publish another lookup key without duplicating metadata or identity.
+        let class_def = std::rc::Rc::new(class_def);
+        let class_ptr = std::rc::Rc::as_ptr(&class_def);
+        self.class_table.insert(class_name.clone(), class_def);
         let class_id = unsafe { (*class_ptr).class_id as usize };
         if self.class_by_id.len() <= class_id {
             self.class_by_id.resize(class_id + 1, std::ptr::null());
@@ -1413,24 +1419,86 @@ impl ExecutorGlobals {
 
     /// Check if a class is an instance of another (walks parent chain AND implements)
     pub fn class_is_a(&self, class_name: &str, target: &str) -> bool {
-        if class_name.eq_ignore_ascii_case(target) {
+        let canonical_target = self
+            .find_class(target)
+            .map_or(target, |class| class.name.as_str());
+        let canonical_class = self
+            .find_class(class_name)
+            .map_or(class_name, |class| class.name.as_str());
+        if canonical_class.eq_ignore_ascii_case(canonical_target) {
             return true;
         }
-        if let Some(class_def) = self.class_table.get(class_name) {
+        if let Some(class_def) = self.find_class(class_name) {
             // Check parent class
             if let Some(parent) = &class_def.parent {
-                if self.class_is_a(parent, target) {
+                if self.class_is_a(parent, canonical_target) {
                     return true;
                 }
             }
             // Check implemented interfaces
             for iface in &class_def.implements {
-                if self.class_is_a(iface, target) {
+                if self.class_is_a(iface, canonical_target) {
                     return true;
                 }
             }
         }
         false
+    }
+
+    /// Find a class-like symbol without allocating a normalized name. Exact
+    /// declarations and aliases hit the hash table directly; unusual caller
+    /// casing falls back to the cold case-insensitive scan required by PHP.
+    #[inline]
+    pub fn find_class(&self, name: &str) -> Option<&ClassDef> {
+        let name = name.strip_prefix('\\').unwrap_or(name);
+        self.class_table
+            .get(name)
+            .map(std::rc::Rc::as_ref)
+            .or_else(|| {
+                self.class_table
+                    .iter()
+                    .find(|(registered, _)| registered.eq_ignore_ascii_case(name))
+                    .map(|(_, class)| class.as_ref())
+            })
+    }
+
+    /// Publish another case-insensitive name for one existing class identity.
+    /// Method aliases point at the same stable functions and static/property
+    /// metadata continues to use the original numeric class ID.
+    pub(crate) fn register_class_alias(
+        &mut self,
+        original: &str,
+        alias: &str,
+    ) -> Result<(), String> {
+        let original = original.strip_prefix('\\').unwrap_or(original);
+        let alias = alias.strip_prefix('\\').unwrap_or(alias);
+        if self
+            .class_table
+            .keys()
+            .any(|registered| registered.eq_ignore_ascii_case(alias))
+        {
+            return Err(format!(
+                "Cannot declare class {}, because the name is already in use",
+                alias
+            ));
+        }
+        let class = self
+            .class_table
+            .iter()
+            .find(|(registered, _)| registered.eq_ignore_ascii_case(original))
+            .map(|(_, class)| class.clone())
+            .ok_or_else(|| format!("Class \"{}\" not found", original))?;
+
+        for (method_name, _, _, _, function) in &class.methods {
+            if !class.is_interface && class.method_is_abstract(method_name) {
+                continue;
+            }
+            let function_name = format!("{}::{}", alias, method_name).to_lowercase();
+            self.function_table
+                .insert(function_name, &function.common as *const FunctionCommon);
+        }
+        self.class_table.insert(alias.to_string(), class);
+        Ok(())
     }
 
     /// Match a class name used by interned property metadata in one concrete
@@ -1998,24 +2066,34 @@ impl ExecutorGlobals {
 }
 
 fn class_is_a_in_table(
-    class_table: &HashMap<String, Box<ClassDef>>,
+    class_table: &HashMap<String, std::rc::Rc<ClassDef>>,
     class_name: &str,
     target: &str,
 ) -> bool {
-    if class_name.eq_ignore_ascii_case(target) {
+    let find = |name: &str| {
+        class_table.get(name).map(std::rc::Rc::as_ref).or_else(|| {
+            class_table
+                .iter()
+                .find(|(registered, _)| registered.eq_ignore_ascii_case(name))
+                .map(|(_, class)| class.as_ref())
+        })
+    };
+    let canonical_target = find(target).map_or(target, |class| class.name.as_str());
+    let canonical_class = find(class_name).map_or(class_name, |class| class.name.as_str());
+    if canonical_class.eq_ignore_ascii_case(canonical_target) {
         return true;
     }
-    let Some(class_def) = class_table.get(class_name) else {
+    let Some(class_def) = find(class_name) else {
         return false;
     };
     class_def
         .parent
         .as_ref()
-        .is_some_and(|parent| class_is_a_in_table(class_table, parent, target))
+        .is_some_and(|parent| class_is_a_in_table(class_table, parent, canonical_target))
         || class_def
             .implements
             .iter()
-            .any(|interface| class_is_a_in_table(class_table, interface, target))
+            .any(|interface| class_is_a_in_table(class_table, interface, canonical_target))
 }
 
 #[cfg(test)]

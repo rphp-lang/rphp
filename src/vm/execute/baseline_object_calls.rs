@@ -182,7 +182,7 @@ fn op_new_obj<'a>(
     let class_def = if ic.class_id != 0 {
         eg.class_by_id(ic.class_id)
     } else {
-        eg.class_table.get(name).map(Box::as_ref)
+        eg.class_table.get(name).map(std::rc::Rc::as_ref)
     };
 
     // Reject instantiation of interfaces, abstract classes, and internal-only classes
