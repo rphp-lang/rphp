@@ -29,6 +29,43 @@ fn test_e2e_count_scalar() {
     assert_eq!(run_php("<?php echo count(42);"), "1");
 }
 
+#[test]
+fn array_search_supports_strict_identity_matching() {
+    assert_eq!(
+        run_php(
+            "<?php $values = ['loose' => '0', 'strict' => 0]; echo array_search(0, $values), '|'; echo array_search(0, $values, true);"
+        ),
+        "loose|strict"
+    );
+}
+
+#[test]
+fn debug_backtrace_reports_callers_arguments_limits_and_method_receivers() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function traceOuter($value) { traceInner($value); }
+function traceInner($value) {
+    $trace = debug_backtrace();
+    echo $trace[0]['function'], ':', $trace[0]['args'][0], ':';
+    echo $trace[1]['function'], ':', $trace[1]['args'][0], '|';
+    $limited = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1);
+    echo count($limited), ':', isset($limited[0]['args']) ? 'args' : 'ignored';
+}
+class TraceReceiver {
+    public function probe() {
+        $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT, 1);
+        echo '|', $trace[0]['class'], ':', $trace[0]['function'], ':', $trace[0]['type'], get_class($trace[0]['object']);
+    }
+}
+traceOuter('payload');
+(new TraceReceiver())->probe();
+"#,
+        ),
+        "traceInner:payload:traceOuter:payload|1:ignored|TraceReceiver:probe:->TraceReceiver"
+    );
+}
+
 // === strlen() ===
 
 #[test]
@@ -76,6 +113,16 @@ fn test_e2e_strpos_not_found() {
     assert_eq!(
         run_php("<?php $r = strpos('hello', 'xyz'); if (!$r) { echo 'not found'; }"),
         "not found"
+    );
+}
+
+#[test]
+fn strrchr_returns_the_suffix_at_the_last_first_byte_match() {
+    assert_eq!(
+        run_php(
+            "<?php echo strrchr('path/to/file.php', '/'), '|'; echo strrchr('abcabc', 'cd'), '|'; var_dump(strrchr('abc', ''));"
+        ),
+        "/file.php|c|bool(false)\n"
     );
 }
 

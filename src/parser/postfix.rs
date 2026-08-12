@@ -110,10 +110,12 @@ impl Parser {
                         class_name,
                         constant: "class".to_string(),
                     },
+                    unpack: false,
                 },
                 ArrayElement {
                     key: None,
                     value: Expr::StringLiteral(member),
+                    unpack: false,
                 },
             ]))));
         }
@@ -194,10 +196,12 @@ impl Parser {
                                 ArrayElement {
                                     key: None,
                                     value: expr,
+                                    unpack: false,
                                 },
                                 ArrayElement {
                                     key: None,
                                     value: constant,
+                                    unpack: false,
                                 },
                             ])),
                             args,
@@ -231,10 +235,12 @@ impl Parser {
                                     ArrayElement {
                                         key: None,
                                         value: expr,
+                                        unpack: false,
                                     },
                                     ArrayElement {
                                         key: None,
                                         value: member,
+                                        unpack: false,
                                     },
                                 ])),
                                 args,
@@ -265,10 +271,12 @@ impl Parser {
                                     ArrayElement {
                                         key: None,
                                         value: expr,
+                                        unpack: false,
                                     },
                                     ArrayElement {
                                         key: None,
                                         value: member,
+                                        unpack: false,
                                     },
                                 ])),
                                 args,
@@ -313,10 +321,12 @@ impl Parser {
                                 ArrayElement {
                                     key: None,
                                     value: expr,
+                                    unpack: false,
                                 },
                                 ArrayElement {
                                     key: None,
                                     value: Expr::StringLiteral(member),
+                                    unpack: false,
                                 },
                             ])));
                             continue;
@@ -336,6 +346,29 @@ impl Parser {
                             nullsafe,
                         };
                     }
+                }
+                Token::PlusPlus | Token::MinusMinus => {
+                    let increment = self.peek() == Token::PlusPlus;
+                    self.advance();
+                    expr = match expr {
+                        Expr::Variable(name) if increment => Expr::PostInc(name),
+                        Expr::Variable(name) => Expr::PostDec(name),
+                        Expr::PropertyAccess {
+                            nullsafe: false, ..
+                        }
+                        | Expr::DynamicPropertyAccess {
+                            nullsafe: false, ..
+                        }
+                        | Expr::StaticProperty { .. }
+                        | Expr::ArrayAccess { .. } => {
+                            if increment {
+                                Expr::PostIncTarget(Box::new(expr))
+                            } else {
+                                Expr::PostDecTarget(Box::new(expr))
+                            }
+                        }
+                        other => return Err(format!("Invalid increment target: {other:?}")),
+                    };
                 }
                 _ => break,
             }

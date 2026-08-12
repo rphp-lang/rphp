@@ -1004,7 +1004,7 @@ impl Parser {
                 }
                 Self::collect_free_vars(inner, bound, out);
             }
-            Expr::AssignTarget { target, expr } => {
+            Expr::AssignTarget { target, expr } | Expr::ArrayAppendAssign { target, expr } => {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);
             }
@@ -1092,7 +1092,10 @@ impl Parser {
             Expr::Cast { expr: inner, .. } => {
                 Self::collect_free_vars(inner, bound, out);
             }
-            Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => {
+            Expr::PostIncTarget(target)
+            | Expr::PostDecTarget(target)
+            | Expr::PreIncTarget(target)
+            | Expr::PreDecTarget(target) => {
                 Self::collect_free_vars(target, bound, out);
             }
             Expr::Instanceof { expr: inner, .. } => {

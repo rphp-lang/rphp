@@ -11,7 +11,9 @@ impl Parser {
     }
 
     fn finish_assignment_tail(&mut self, expr: Expr) -> Result<Expr, String> {
-        if self.peek() == Token::QuestionQuestionAssign {
+        if self.is_array_append_suffix() {
+            self.finish_array_append_assignment_expression(expr)
+        } else if self.peek() == Token::QuestionQuestionAssign {
             self.finish_coalesce_assignment_expression(expr)
         } else if self.peek() == Token::Assign {
             // Handle assignment as expression: $var = expr
@@ -21,6 +23,36 @@ impl Parser {
         } else {
             Ok(expr)
         }
+    }
+
+    fn finish_array_append_assignment_expression(
+        &mut self,
+        target: Expr,
+    ) -> Result<Expr, String> {
+        if !matches!(
+            &target,
+            Expr::Variable(_)
+                | Expr::ArrayAccess { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::StaticProperty { .. }
+        ) {
+            return Err("Invalid array append target".into());
+        }
+        self.expect(&Token::LBracket)?;
+        self.expect(&Token::RBracket)?;
+        self.expect(&Token::Assign)?;
+        let expr = self.parse_expr()?;
+        Ok(Expr::ArrayAppendAssign {
+            target: Box::new(target),
+            expr: Box::new(expr),
+        })
     }
 
     fn finish_compound_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
@@ -351,6 +383,7 @@ impl Parser {
                         Token::Variable(name) => Expr::Variable(name),
                         _ => unreachable!(),
                     };
+                    let class = self.parse_dynamic_new_class_expression(class)?;
                     Expr::DynamicInstanceof {
                         expr: Box::new(left),
                         class: Box::new(class),
@@ -499,9 +532,10 @@ impl Parser {
                         }
                     } else if let Token::Variable(class_name) = self.peek() {
                         self.advance();
+                        let class = self.parse_dynamic_new_class_expression(Expr::Variable(class_name))?;
                         Expr::DynamicInstanceof {
                             expr: Box::new(expr),
-                            class: Box::new(Expr::Variable(class_name)),
+                            class: Box::new(class),
                         }
                     } else {
                         return Err(format!(
@@ -560,6 +594,10 @@ impl Parser {
                         self.advance(); // type keyword
                         self.advance(); // )
                         let expr = self.parse_unary()?;
+                        // PHP casts wrap a following assignment expression:
+                        // `(bool) $value = source()` assigns first and casts
+                        // the value produced for the surrounding expression.
+                        let expr = self.finish_assignment_tail(expr)?;
                         return Ok(Expr::Cast {
                             cast_type: ct,
                             expr: Box::new(expr),
@@ -632,14 +670,6 @@ impl Parser {
                     Token::Variable(n) => n,
                     _ => unreachable!(),
                 };
-                // Check for postfix ++ / --
-                if self.peek() == Token::PlusPlus {
-                    self.advance();
-                    return Ok(Expr::PostInc(name));
-                } else if self.peek() == Token::MinusMinus {
-                    self.advance();
-                    return Ok(Expr::PostDec(name));
-                }
                 Ok(Expr::Variable(name))
             }
             Token::PlusPlus => {
@@ -952,6 +982,14 @@ impl Parser {
             return Ok(elements);
         }
         loop {
+            if self.peek() == Token::DotDotDot {
+                self.advance();
+                elements.push(ArrayElement {
+                    key: None,
+                    value: self.parse_expr()?,
+                    unpack: true,
+                });
+            } else {
             let value = self.parse_expr()?;
             if self.peek() == Token::DoubleArrow {
                 // key => value
@@ -960,9 +998,15 @@ impl Parser {
                 elements.push(ArrayElement {
                     key: Some(value),
                     value: actual_value,
+                    unpack: false,
                 });
             } else {
-                elements.push(ArrayElement { key: None, value });
+                elements.push(ArrayElement {
+                    key: None,
+                    value,
+                    unpack: false,
+                });
+            }
             }
             if self.peek() == Token::Comma {
                 self.advance();

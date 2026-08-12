@@ -54,6 +54,16 @@ fn test_e2e_array_mixed_keys() {
 }
 
 #[test]
+fn test_e2e_array_unpack_reindexes_integer_keys_and_preserves_string_keys() {
+    assert_eq!(
+        run_php(
+            "<?php class Providers { public const IPS = ['primary' => '10.0.0.1', 20 => '10.0.0.2']; } $values = [...Providers::IPS, '127.0.0.1', 'primary' => 'override']; echo $values['primary'], '|', $values[0], '|', $values[1];"
+        ),
+        "override|10.0.0.2|127.0.0.1"
+    );
+}
+
+#[test]
 fn test_e2e_array_missing_key_returns_null() {
     // Accessing non-existent key returns null (echoes as empty string)
     assert_eq!(run_php("<?php $a = [1, 2]; echo $a[5]; echo 'end';"), "end");

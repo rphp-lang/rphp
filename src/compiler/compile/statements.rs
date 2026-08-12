@@ -155,7 +155,7 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
-                let path = self.compile_mutable_array_path(root, &reversed_indices)?;
+                let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
                 let current = self.alloc_tmp();
@@ -346,7 +346,7 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
-                let path = self.compile_mutable_array_path(root, &reversed_indices)?;
+                let path = self.compile_mutable_array_path(root, &reversed_indices, true)?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
                 let current = self.alloc_tmp();
@@ -518,7 +518,11 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
-                WriteTarget::Array(self.compile_mutable_array_path(root, &reversed_indices)?)
+                WriteTarget::Array(self.compile_mutable_array_path(
+                    root,
+                    &reversed_indices,
+                    false,
+                )?)
             }
             _ => return Err("Invalid assignment target".into()),
         };
@@ -589,6 +593,7 @@ impl Compiler {
         &mut self,
         root: &Expr,
         indices: &[Expr],
+        silent_root_fetch: bool,
     ) -> Result<MutableArrayPath, String> {
         if indices.is_empty() {
             return Err("Array mutation requires at least one dimension".into());
@@ -610,6 +615,9 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
+                if silent_root_fetch {
+                    fetch._pad |= FETCH_OBJ_SILENT;
+                }
                 self.instructions.push(fetch);
                 (
                     (container, OpType::Tmp),
@@ -636,6 +644,9 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
+                if silent_root_fetch {
+                    fetch._pad |= FETCH_OBJ_SILENT;
+                }
                 self.instructions.push(fetch);
                 (
                     (container, OpType::Tmp),
@@ -666,6 +677,9 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
+                if silent_root_fetch {
+                    fetch._pad |= FETCH_OBJ_SILENT;
+                }
                 self.instructions.push(fetch);
                 (
                     (container, OpType::Tmp),
@@ -1365,7 +1379,7 @@ impl Compiler {
                 indices,
                 expr,
             } => {
-                let path = self.compile_mutable_array_path(root, indices)?;
+                let path = self.compile_mutable_array_path(root, indices, false)?;
 
                 let (value, value_type) = self.compile_expr(expr);
                 let &(leaf, leaf_type) = path.containers.last().unwrap();
@@ -1420,7 +1434,7 @@ impl Compiler {
             Stmt::Foreach {
                 array,
                 value,
-                key_var,
+                key,
                 by_ref,
                 body,
             } => {
@@ -1449,14 +1463,32 @@ impl Compiler {
 
                 // Loop start: ForeachNext fetches key/value, jumps if done
                 let loop_start = self.instructions.len();
-                let (val_cv, destructure) = match value {
-                    ForeachTarget::Variable(value_var) => (self.resolve_cv(value_var), None),
+                let value_target_name = format!("\0foreach_value_{foreach_init_idx}");
+                let (val_cv, destructure, value_write) = match value {
+                    ForeachTarget::Variable(value_var) => {
+                        (self.resolve_cv(value_var), None, None)
+                    }
+                    ForeachTarget::Target(target) => (
+                        self.resolve_cv(&value_target_name),
+                        None,
+                        Some(target),
+                    ),
                     ForeachTarget::Destructure(targets) => {
                         let name = format!("\0foreach_destructure_{foreach_init_idx}");
-                        (self.resolve_cv(&name), Some(targets))
+                        (self.resolve_cv(&name), Some(targets), None)
                     }
                 };
-                let key_cv = key_var.as_ref().map(|k| self.resolve_cv(k));
+                let key_target_name = format!("\0foreach_key_{foreach_init_idx}");
+                let (key_cv, key_write) = match key {
+                    Some(ForeachTarget::Variable(name)) => (Some(self.resolve_cv(name)), None),
+                    Some(ForeachTarget::Target(target)) => {
+                        (Some(self.resolve_cv(&key_target_name)), Some(target))
+                    }
+                    Some(ForeachTarget::Destructure(_)) => {
+                        return Err("Foreach key cannot be a destructuring target".into());
+                    }
+                    None => (None, None),
+                };
 
                 let done_tmp = self.alloc_tmp();
                 let mut next = Instruction::new(if *by_ref {
@@ -1489,6 +1521,18 @@ impl Compiler {
 
                 if let Some(targets) = destructure {
                     self.compile_list_targets(targets, val_cv, OpType::Cv, 0)?;
+                }
+                if let Some(target) = key_write {
+                    self.compile_assignment_target_expression(
+                        target,
+                        &Expr::Variable(key_target_name),
+                    )?;
+                }
+                if let Some(target) = value_write {
+                    self.compile_assignment_target_expression(
+                        target,
+                        &Expr::Variable(value_target_name),
+                    )?;
                 }
 
                 // Push loop context — continue jumps to loop_start (ForeachNext)
@@ -1555,7 +1599,7 @@ impl Compiler {
                                 root = array;
                             }
                             indices.reverse();
-                            let path = self.compile_mutable_array_path(root, &indices)?;
+                            let path = self.compile_mutable_array_path(root, &indices, false)?;
                             let &(leaf, leaf_type) = path.containers.last().unwrap();
                             let &(key, key_type) = path.keys.last().unwrap();
                             let mut unset = Instruction::new(OpCode::UnsetDim);

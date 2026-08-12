@@ -89,6 +89,9 @@ enum ArrayLiteralStorageHint {
 /// insertion choose, avoiding an allocation that an immediate transition
 /// would discard.
 fn array_literal_storage_hint(elements: &[crate::parser::ArrayElement]) -> ArrayLiteralStorageHint {
+    if elements.iter().any(|element| element.unpack) {
+        return ArrayLiteralStorageHint::Unknown;
+    }
     if elements.iter().any(|element| {
         matches!(
             element.key.as_ref(),
@@ -134,6 +137,7 @@ mod array_literal_hint_tests {
         ArrayElement {
             key,
             value: Expr::Integer(1),
+            unpack: false,
         }
     }
 
@@ -3303,6 +3307,41 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
+            Expr::PostIncTarget(target) | Expr::PostDecTarget(target) => {
+                let (current, current_type, writeback) =
+                    match self.compile_foreach_reference_source(target) {
+                        Ok(source) => source,
+                        Err(error) => {
+                            self.deferred_error = Some(error);
+                            let null = self.add_literal(Value::null());
+                            return (null, OpType::Const);
+                        }
+                    };
+                let original = self.alloc_tmp();
+                let mut preserve = Instruction::new(OpCode::AssignCv);
+                preserve.op1 = original;
+                preserve.op1_type = OpType::Tmp;
+                preserve.op2 = current;
+                preserve.op2_type = current_type;
+                self.instructions.push(preserve);
+
+                let one = self.add_literal(Value::long(1));
+                let updated = self.alloc_tmp();
+                let mut operation = Instruction::new(if matches!(expr, Expr::PostIncTarget(_)) {
+                    OpCode::Add
+                } else {
+                    OpCode::Sub
+                });
+                operation.op1 = original;
+                operation.op1_type = OpType::Tmp;
+                operation.op2 = one;
+                operation.op2_type = OpType::Const;
+                operation.result = updated;
+                operation.result_type = OpType::Tmp;
+                self.instructions.push(operation);
+                self.emit_foreach_reference_source_writeback(writeback, updated);
+                (original, OpType::Tmp)
+            }
             Expr::PreInc(name) => {
                 let cv_idx = self.resolve_cv(name);
                 let tmp = self.alloc_tmp();
@@ -3813,7 +3852,11 @@ impl Compiler {
                 // Add elements
                 for elem in elements {
                     let (val_op, val_type) = self.compile_expr(&elem.value);
-                    let mut add = Instruction::new(OpCode::AddArrayElement);
+                    let mut add = Instruction::new(if elem.unpack {
+                        OpCode::AddArrayUnpack
+                    } else {
+                        OpCode::AddArrayElement
+                    });
                     add.op1_type = OpType::Tmp;
                     add.op1 = arr_tmp;
                     add.op2_type = val_type;
@@ -4920,6 +4963,57 @@ impl Compiler {
                     }
                 }
             }
+            Expr::ArrayAppendAssign { target, expr } => {
+                let direct_cv = if let Expr::Variable(name) = target.as_ref() {
+                    Some(self.resolve_cv(name))
+                } else {
+                    None
+                };
+                let mutable_source = if direct_cv.is_none() {
+                    match self.compile_foreach_reference_source(target) {
+                        Ok(source) => Some(source),
+                        Err(error) => {
+                            self.deferred_error = Some(error);
+                            let null = self.add_literal(Value::null());
+                            return (null, OpType::Const);
+                        }
+                    }
+                } else {
+                    None
+                };
+                let (value, value_type) = self.compile_expr(expr);
+                let (assigned, assigned_type) = if value_type == OpType::Cv {
+                    let assigned = self.alloc_tmp();
+                    let mut preserve = Instruction::new(OpCode::AssignCv);
+                    preserve.op1 = assigned;
+                    preserve.op1_type = OpType::Tmp;
+                    preserve.op2 = value;
+                    preserve.op2_type = value_type;
+                    self.instructions.push(preserve);
+                    (assigned, OpType::Tmp)
+                } else {
+                    (value, value_type)
+                };
+                let (array, array_type) = direct_cv.map_or_else(
+                    || {
+                        let (array, array_type, _) = mutable_source
+                            .as_ref()
+                            .expect("non-variable append retains its mutable source");
+                        (*array, *array_type)
+                    },
+                    |cv| (cv, OpType::Cv),
+                );
+                let mut append = Instruction::new(OpCode::ArrayPushOp);
+                append.op1 = array;
+                append.op1_type = array_type;
+                append.op2 = assigned;
+                append.op2_type = assigned_type;
+                self.instructions.push(append);
+                if let Some((_, _, writeback)) = mutable_source {
+                    self.emit_foreach_reference_source_writeback(writeback, array);
+                }
+                (assigned, assigned_type)
+            }
             Expr::ListAssign { targets, expr } => {
                 let (rhs, rhs_type) = self.compile_expr(expr);
                 // Preserve a CV before the targets can overwrite it. Const and
@@ -5444,7 +5538,8 @@ impl Compiler {
                                 root = array.as_ref();
                             }
                             reversed_indices.reverse();
-                            let path = self.compile_mutable_array_path(root, &reversed_indices)?;
+                            let path =
+                                self.compile_mutable_array_path(root, &reversed_indices, false)?;
                             let &(container, container_type) = path.containers.last().unwrap();
                             let &(key, key_type) = path.keys.last().unwrap();
                             let mut assign = Instruction::new(OpCode::AssignDim);

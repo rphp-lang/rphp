@@ -41,6 +41,30 @@ impl Drop for TemporaryPath {
 }
 
 #[test]
+fn filemtime_reports_unix_seconds_and_warns_for_missing_paths() {
+    let existing = TemporaryPath::unique("filemtime-existing");
+    let missing = TemporaryPath::unique("filemtime-missing");
+    std::fs::write(&existing.0, b"timestamped").unwrap();
+    let source = format!(
+        "<?php
+        $timestamp = filemtime('{}');
+        echo is_int($timestamp) && $timestamp > 0 ? 'timestamp' : 'invalid';
+        echo '|';
+        var_dump(filemtime('{}'));
+        ",
+        existing.php_literal(),
+        missing.php_literal()
+    );
+    assert_eq!(
+        run_php(&source),
+        format!(
+            "timestamp|Warning: filemtime(): stat failed for {}\nbool(false)\n",
+            missing.php_literal()
+        )
+    );
+}
+
+#[test]
 fn file_get_contents_reads_complete_ascii_files() {
     let path = TemporaryPath::unique("file-contents-complete");
     let payload: Vec<u8> = (0..20_000).map(|index| b'a' + (index % 26) as u8).collect();

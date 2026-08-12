@@ -71,6 +71,7 @@ pub enum OpCode {
     AssignDim = 73,       // Write: op1[op2] = result (value source in extended_value)
     ArrayPushOp = 74,     // Append: op1[] = op2
     UnsetDim = 75,        // Remove key op2 from array op1
+    AddArrayUnpack = 76,  // Merge op2 array into op1 literal, reindexing integer keys
 
     // Foreach
     ForeachInit = 80, // Copy array op1 to result TMP, set position to 0; jump op2 if empty

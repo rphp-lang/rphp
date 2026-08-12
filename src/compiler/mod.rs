@@ -1080,6 +1080,7 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             // In-place array operations require an owned Rc so make_mut can
             // observe the caller and detach according to PHP COW semantics.
             OpCode::AddArrayElement
+            | OpCode::AddArrayUnpack
             | OpCode::AssignDim
             | OpCode::ArrayPushOp
             | OpCode::UnsetDim

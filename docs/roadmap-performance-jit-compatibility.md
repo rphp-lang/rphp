@@ -10081,6 +10081,35 @@ advances to S3, where RPHP itself must cold-build, atomically publish, reload
 and reuse the container and route cache and must also produce the defined
 missing-route result.
 
+#### Symfony cold-kernel S3 compatibility wave (2026-08-13)
+
+The first cold-build compatibility wave now advances the unmodified pinned
+FrameworkBundle fixture through container construction to the next explicit
+runtime dependency. General PHP support added on that measured path includes
+postfix mutation of property/static-property/dimension targets, silent typed
+property roots for `??=`, value-producing chained array appends, array literal
+unpack, property targets in `foreach`, dynamic `instanceof` member expressions
+and assignment precedence beneath casts. The required library surface now also
+includes `ReflectionClass::getInterfaceNames()`/`getTraitNames()`, the three
+`get_declared_*()` inventories, `filemtime()`, `strrchr()`, strict
+`array_search()` and a bounded live-frame `debug_backtrace()` implementation.
+Focused parser and E2E tests retain each contract independently of Symfony.
+
+This wave is not the S3 gate. A cache-free boot now stops truthfully at the
+next missing dependency, the built-in `LogicException` hierarchy, rather than
+at one of the language or introspection gaps above. The next roadmap step is to
+implement and test the core exception hierarchy, resume the same clean boot and
+continue until the fixture cold-builds, publishes and reloads both caches and
+passes the cached, deleted-cache and malformed-cache transitions required by
+S3.
+
+The compatibility additions were also checked against the preceding checkpoint
+with balanced native x86-64 A/B runs. After moving unpack to its own VM opcode,
+the ordinary array-literal, two-argument `array_search()` and ordinary keyed
+`foreach` controls measured +0.38%, +1.34% and -0.03%, respectively, all within
+the two-percent regression gate. This keeps the uncommon compatibility paths
+off the established array-literal fast path.
+
 ### S1/S3 blockers: language and object model
 
 Close these source-level gaps against focused PHPT cases before treating a

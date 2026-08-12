@@ -1564,6 +1564,51 @@ impl ExecutorGlobals {
         })
     }
 
+    fn declared_class_like_names(
+        &self,
+        predicate: impl Fn(&ClassDef) -> bool,
+        include_aliases: bool,
+    ) -> Vec<String> {
+        let mut declarations: Vec<_> = self
+            .class_table
+            .iter()
+            .filter(|(registered, class)| {
+                registered.as_str() == class.name && predicate(class.as_ref())
+            })
+            .map(|(_, class)| (class.class_id, class.name.clone()))
+            .collect();
+        declarations
+            .sort_unstable_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        let mut names: Vec<String> = declarations.into_iter().map(|(_, name)| name).collect();
+
+        if include_aliases {
+            let mut aliases: Vec<_> = self
+                .class_table
+                .iter()
+                .filter(|(registered, class)| {
+                    registered.as_str() != class.name && predicate(class.as_ref())
+                })
+                .map(|(registered, _)| registered.to_ascii_lowercase())
+                .collect();
+            aliases.sort_unstable();
+            aliases.dedup();
+            names.extend(aliases);
+        }
+        names
+    }
+
+    pub(crate) fn declared_class_names(&self) -> Vec<String> {
+        self.declared_class_like_names(|class| !class.is_interface && !class.is_trait, true)
+    }
+
+    pub(crate) fn declared_interface_names(&self) -> Vec<String> {
+        self.declared_class_like_names(|class| class.is_interface, false)
+    }
+
+    pub(crate) fn declared_trait_names(&self) -> Vec<String> {
+        self.declared_class_like_names(|class| class.is_trait, false)
+    }
+
     /// Find a class-like symbol without allocating a normalized name. Exact
     /// declarations and aliases hit the hash table directly; unusual caller
     /// casing falls back to the cold case-insensitive scan required by PHP.

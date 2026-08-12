@@ -296,6 +296,16 @@ fn test_e2e_null_coalescing_silently_initializes_typed_static_property() {
 }
 
 #[test]
+fn test_e2e_null_coalescing_silently_initializes_typed_property_array_dimension() {
+    assert_eq!(
+        run_php(
+            "<?php class Cache { private array $values; public function get($key) { return $this->values[$key] ??= strtoupper($key); } } $cache = new Cache(); echo $cache->get('ready'), ':', $cache->get('ready');"
+        ),
+        "READY:READY"
+    );
+}
+
+#[test]
 fn test_e2e_null_coalescing_assignment_is_value_producing() {
     assert_eq!(
         run_php(
@@ -425,6 +435,48 @@ fn test_e2e_unset_accepts_a_dynamic_object_property() {
             "<?php class DynamicUnset { public $value = 'set'; } $object = new DynamicUnset(); $property = 'value'; unset($object->$property); echo isset($object->$property) ? 'set' : 'unset';"
         ),
         "unset"
+    );
+}
+
+#[test]
+fn test_e2e_post_increment_and_decrement_mutable_targets_return_the_old_value() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class MutableCounter {
+    public static int $shared = 4;
+    public int $value = 7;
+    public static function next(): int { return self::$shared++; }
+}
+$object = new MutableCounter();
+$property = 'value';
+$array = [10];
+echo MutableCounter::next(), ':', MutableCounter::$shared, '|';
+echo $object->$property--, ':', $object->value, '|';
+echo $array[0]++, ':', $array[0];
+"#,
+        ),
+        "4:5|7:6|10:11"
+    );
+}
+
+#[test]
+fn test_e2e_array_append_assignments_chain_and_produce_the_assigned_value() {
+    assert_eq!(
+        run_php(
+            "<?php $left = []; $right = []; $result = ($left[] = $right[] = 7); echo $result, ':', $left[0], ':', $right[0], '|'; $self = []; $snapshot = ($self[] = $self); echo count($snapshot), ':', count($self), ':', count($self[0]);"
+        ),
+        "7:7:7|0:1:0"
+    );
+}
+
+#[test]
+fn test_e2e_cast_wraps_the_value_produced_by_a_following_assignment() {
+    assert_eq!(
+        run_php(
+            "<?php function captureCast($value) { var_dump($value); } $value = 'yes'; captureCast((bool) $value = '0'); echo '|', $value;"
+        ),
+        "bool(false)\n|0"
     );
 }
 

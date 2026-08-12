@@ -637,6 +637,21 @@ impl Parser {
         )
     }
 
+    fn into_foreach_target(expr: Expr) -> Result<ForeachTarget, String> {
+        match expr {
+            Expr::Variable(name) => Ok(ForeachTarget::Variable(name)),
+            target @ (Expr::ArrayAccess { .. }
+            | Expr::PropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::DynamicPropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::StaticProperty { .. }) => Ok(ForeachTarget::Target(target)),
+            _ => Err("Invalid foreach assignment target".into()),
+        }
+    }
+
     fn is_isset_target(expr: &Expr) -> bool {
         Self::is_variable_like(expr) || matches!(expr, Expr::PropertyAccess { .. })
     }

@@ -28,7 +28,7 @@ use crate::vm::execute::{
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
-use crate::vm::function::{FunctionCommon, FunctionType};
+use crate::vm::function::{Function, FunctionCommon, FunctionType};
 use crate::vm::instruction::InlineCache;
 use crate::vm::opcode::OpCode;
 
@@ -399,7 +399,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("array_column", fn_array_column, 2, 2, "array", "column_key");
     reg_ref!("sort", fn_sort, 1, 1, 0b1, "array");
     reg_ref!("rsort", fn_rsort, 1, 1, 0b1, "array");
-    reg!("array_search", fn_array_search, 2, 2, "needle", "haystack");
+    reg!(
+        "array_search",
+        fn_array_search,
+        3,
+        2,
+        "needle",
+        "haystack",
+        "strict"
+    );
     reg!("range", fn_range, 2, 2, "start", "end");
     reg_ref!(
         "array_splice",
@@ -434,6 +442,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("strpos", fn_strpos, 2, 2, "haystack", "needle");
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
+    reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
     reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
     reg!(
         "str_replace",
@@ -588,6 +597,9 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Reflection / class introspection ---
     reg!("get_class", fn_get_class, 1, 0, "object");
+    reg!("get_declared_classes", fn_get_declared_classes, 0, 0);
+    reg!("get_declared_interfaces", fn_get_declared_interfaces, 0, 0);
+    reg!("get_declared_traits", fn_get_declared_traits, 0, 0);
     reg!(
         "class_exists",
         autoload::fn_class_exists,
@@ -805,6 +817,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("func_num_args", fn_func_num_args, 0, 0);
     reg!("func_get_arg", fn_func_get_arg, 1, 1, "position");
     reg!("func_get_args", fn_func_get_args, 0, 0);
+    reg!(
+        "debug_backtrace",
+        fn_debug_backtrace,
+        2,
+        0,
+        "options",
+        "limit"
+    );
 
     // --- Callable functions ---
     reg_var!("call_user_func", fn_call_user_func, 1, "callback");
@@ -889,6 +909,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "context"
     );
     reg!("file_exists", fn_file_exists, 1, 1, "filename");
+    reg!("filemtime", fn_filemtime, 1, 1, "filename");
     reg!("is_file", fn_is_file, 1, 1, "filename");
     reg!("is_dir", fn_is_dir, 1, 1, "filename");
     reg!("is_readable", fn_is_readable, 1, 1, "filename");
@@ -2476,9 +2497,14 @@ fn fn_array_search(
 ) -> Result<(), VmError> {
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
+    let strict = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
     if let Some(arr) = haystack.as_array() {
         for (key, val) in arr.iter() {
-            if values_equal(needle, val) {
+            if if strict {
+                values_identical(needle, val)
+            } else {
+                values_equal(needle, val)
+            } {
                 let result = match key {
                     ArrayKey::Int(k) => Value::long(k),
                     ArrayKey::String(k) => Value::string(k),
@@ -2868,6 +2894,26 @@ fn fn_strrpos(
             None => Value::bool(false),
         }
     );
+}
+
+fn fn_strrchr(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let haystack = php_string_to_bytes(arg_str!(ed, 0).as_ref());
+    let needle = php_string_to_bytes(arg_str!(ed, 1).as_ref());
+    let Some(needle) = needle.first() else {
+        ret!(rv, Value::bool(false));
+    };
+    let value = haystack
+        .iter()
+        .rposition(|byte| byte == needle)
+        .map_or_else(
+            || Value::bool(false),
+            |position| Value::string(bytes_to_php_string(&haystack[position..])),
+        );
+    ret!(rv, value);
 }
 
 fn string_span_bounds(ed: *mut ExecuteData, byte_len: usize) -> (usize, usize) {
@@ -3818,6 +3864,38 @@ fn fn_get_class(
     ret!(rv, Value::bool(false));
 }
 
+fn declared_names_value(names: Vec<String>) -> Value {
+    let mut result = PhpArray::with_packed_capacity(names.len());
+    for name in names {
+        result.push(Value::string(name));
+    }
+    Value::array(result)
+}
+
+fn fn_get_declared_classes(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, declared_names_value(eg.declared_class_names()));
+}
+
+fn fn_get_declared_interfaces(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, declared_names_value(eg.declared_interface_names()));
+}
+
+fn fn_get_declared_traits(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, declared_names_value(eg.declared_trait_names()));
+}
+
 fn fn_method_exists(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -4473,6 +4551,112 @@ fn fn_func_get_args(
         arguments.push(caller_argument(ed, index, eg).unwrap_or_else(Value::null));
     }
     ret!(rv, Value::array(arguments));
+}
+
+/// Collect the live PHP call chain behind the internal debug_backtrace frame.
+///
+/// # Safety
+///
+/// The frame must be the active internal-function frame supplied to its
+/// handler. Every predecessor and function header must remain live for this
+/// synchronous walk, as guaranteed by the VM call-frame stack.
+unsafe fn collect_debug_backtrace(
+    ed: *mut ExecuteData,
+    options: i64,
+    limit: usize,
+    eg: &ExecutorGlobals,
+) -> PhpArray {
+    let include_object = options & 1 != 0;
+    let include_arguments = options & 2 == 0;
+    let mut trace = PhpArray::new();
+    // The built-in call frame itself is not part of PHP's reported trace;
+    // frame zero is the user/internal caller that invoked debug_backtrace().
+    let mut frame = (*ed).prev_execute_data;
+    while !frame.is_null() && (limit == 0 || trace.len() < limit) {
+        let function = Function::from_common_ptr((*frame).func);
+        let name = match function.fn_type() {
+            FunctionType::User => {
+                let name = function.as_user().op_array.name.clone();
+                if name.is_empty() {
+                    break;
+                }
+                name
+            }
+            FunctionType::Internal => {
+                let Some(name) = eg
+                    .function_table
+                    .iter()
+                    .find(|(_, candidate)| **candidate == (*frame).func)
+                    .map(|(name, _)| name.clone())
+                else {
+                    break;
+                };
+                name
+            }
+            FunctionType::Undef => break,
+        };
+        let common = &*(*frame).func;
+        let mut entry = PhpArray::new();
+        if let Some((class, method)) = name.rsplit_once("::") {
+            entry.set_str("function", Value::string(method.to_string()));
+            entry.set_str("class", Value::string(class.to_string()));
+            let is_instance = common.sig.this_offset != 0;
+            entry.set_str("type", Value::string(if is_instance { "->" } else { "::" }));
+            if include_object && is_instance {
+                let object = (*frame).cv(0).dereferenced();
+                if object.as_object().is_some() {
+                    entry.set_str("object", object.clone());
+                }
+            }
+        } else {
+            entry.set_str("function", Value::string(name));
+        }
+        if include_arguments {
+            let count = (*frame).num_args;
+            let mut arguments = PhpArray::with_packed_capacity(count as usize);
+            for index in 0..count {
+                let argument = if let Some(saved) = eg.function_arguments.get(&(frame as usize)) {
+                    saved.get(index as usize).cloned()
+                } else if common.sig.is_variadic && index >= common.sig.public_arity() {
+                    let offset = index - common.sig.public_arity();
+                    (*frame)
+                        .cv(common.sig.variadic_cv_index)
+                        .as_array()
+                        .and_then(|values| values.get_value_at(offset as usize).cloned())
+                } else {
+                    Some(
+                        (*frame)
+                            .cv(common.sig.param_cv_index(index))
+                            .dereferenced()
+                            .clone(),
+                    )
+                };
+                if let Some(argument) = argument {
+                    arguments.push(argument);
+                }
+            }
+            entry.set_str("args", Value::array(arguments));
+        }
+        trace.push(Value::array(entry));
+        frame = (*frame).prev_execute_data;
+    }
+    trace
+}
+
+fn fn_debug_backtrace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let options = arg_opt!(ed, 0).map_or(1, Value::to_long_val);
+    let limit = arg_opt!(ed, 1)
+        .map(Value::to_long_val)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0);
+    // SAFETY: internal handlers receive their currently active call frame and
+    // the VM keeps its entire synchronous predecessor chain alive.
+    let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg) };
+    ret!(rv, Value::array(trace));
 }
 
 // ============================================================================
@@ -5989,6 +6173,31 @@ fn fn_file_exists(
         rv,
         Value::bool(std::path::Path::new(path.as_ref()).exists())
     );
+}
+
+/// filemtime($filename): int|false
+fn fn_filemtime(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let modified = std::fs::metadata(path.as_ref()).and_then(|metadata| metadata.modified());
+    match modified {
+        Ok(timestamp) => {
+            let seconds = match timestamp.duration_since(std::time::UNIX_EPOCH) {
+                Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
+                Err(error) => -i64::try_from(error.duration().as_secs()).unwrap_or(i64::MAX),
+            };
+            ret!(rv, Value::long(seconds));
+        }
+        Err(_) => {
+            eg.write_output(
+                format!("Warning: filemtime(): stat failed for {}\n", path.as_ref()).as_bytes(),
+            );
+            ret!(rv, Value::bool(false));
+        }
+    }
 }
 
 /// is_file($filename): bool

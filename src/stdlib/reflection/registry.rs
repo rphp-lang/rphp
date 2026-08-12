@@ -15,11 +15,12 @@ use super::generic_parameters::{
     generic_variance_cases, is_generic, type_parameter_reference_parameter,
 };
 use super::{
-    class_construct, class_file_name, class_get_attributes, class_get_parent, class_get_properties,
-    class_is_internal, class_new_instance_without_constructor, class_new_lazy_ghost,
-    function_construct, function_get_closure_called_class, function_get_closure_this,
-    function_get_parameters, function_is_anonymous, generic_arguments, generic_runtime_modes,
-    method_construct, object_construct, parameter_allows_null, parameter_get_attributes,
+    class_construct, class_file_name, class_get_attributes, class_get_interface_names,
+    class_get_parent, class_get_properties, class_get_trait_names, class_is_internal,
+    class_new_instance_without_constructor, class_new_lazy_ghost, function_construct,
+    function_get_closure_called_class, function_get_closure_this, function_get_parameters,
+    function_is_anonymous, generic_arguments, generic_runtime_modes, method_construct,
+    object_construct, parameter_allows_null, parameter_get_attributes,
     parameter_get_declaring_class, parameter_get_default_value, parameter_get_name,
     parameter_get_type, parameter_is_default_available, parameter_is_variadic, property_construct,
     property_get_modifiers, property_get_value, property_is_initialized, property_is_readonly,
@@ -448,6 +449,22 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         []
     );
     register_method!("ReflectionClass", "isinternal", class_is_internal, 1, 0, []);
+    register_method!(
+        "ReflectionClass",
+        "getinterfacenames",
+        class_get_interface_names,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClass",
+        "gettraitnames",
+        class_get_trait_names,
+        1,
+        0,
+        []
+    );
     register_method!(
         "ReflectionClass",
         "getproperties",

@@ -22,6 +22,7 @@ impl ListTarget {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForeachTarget {
     Variable(String),
+    Target(Expr),
     Destructure(Vec<ListTarget>),
 }
 
@@ -29,6 +30,7 @@ impl ForeachTarget {
     pub(crate) fn contains_yield(&self) -> bool {
         match self {
             ForeachTarget::Variable(_) => false,
+            ForeachTarget::Target(target) => target.contains_yield(),
             ForeachTarget::Destructure(targets) => {
                 targets.iter().any(ListTarget::contains_yield)
             }
@@ -78,6 +80,8 @@ pub enum Expr {
     },
     PostInc(String),       // $i++
     PostDec(String),       // $i--
+    PostIncTarget(Box<Expr>), // self::$value++, $object->property++, $array[$key]++
+    PostDecTarget(Box<Expr>), // self::$value--, $object->property--, $array[$key]--
     PreInc(String),        // ++$i
     PreDec(String),        // --$i
     PreIncTarget(Box<Expr>), // ++self::$value, ++$object->property
@@ -222,6 +226,11 @@ pub enum Expr {
         target: Box<Expr>,
         expr: Box<Expr>,
     },
+    ArrayAppendAssign {
+        // $target[] = expression used inside a larger expression.
+        target: Box<Expr>,
+        expr: Box<Expr>,
+    },
     ListAssign {
         // [$first, , $third] = expression used inside a larger expression.
         targets: Vec<ListTarget>,
@@ -309,7 +318,7 @@ impl Expr {
             Expr::DynamicInstanceof { expr, class } => {
                 expr.contains_yield() || class.contains_yield()
             }
-            Expr::AssignTarget { target, expr } => {
+            Expr::AssignTarget { target, expr } | Expr::ArrayAppendAssign { target, expr } => {
                 target.contains_yield() || expr.contains_yield()
             }
             Expr::ListAssign { targets, expr } => {
@@ -318,7 +327,10 @@ impl Expr {
             Expr::CompoundAssignExpression { target, expr, .. } => {
                 target.contains_yield() || expr.contains_yield()
             }
-            Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => target.contains_yield(),
+            Expr::PostIncTarget(target)
+            | Expr::PostDecTarget(target)
+            | Expr::PreIncTarget(target)
+            | Expr::PreDecTarget(target) => target.contains_yield(),
             Expr::Isset(expressions) => expressions.iter().any(Expr::contains_yield),
             Expr::Match { expr, arms } => {
                 expr.contains_yield()
@@ -388,6 +400,7 @@ pub enum CastType {
 pub struct ArrayElement {
     pub key: Option<Expr>,
     pub value: Expr,
+    pub unpack: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -577,7 +590,7 @@ pub enum Stmt {
     Foreach {
         array: Expr,
         value: ForeachTarget,
-        key_var: Option<String>,
+        key: Option<ForeachTarget>,
         by_ref: bool,
         body: Vec<Stmt>,
     },
@@ -749,10 +762,15 @@ impl Stmt {
             }
             Stmt::BindArrayAppendReference { target, .. } => target.contains_yield(),
             Stmt::Foreach {
-                array, value, body, ..
+                array,
+                value,
+                key,
+                body,
+                ..
             } => {
                 array.contains_yield()
                     || value.contains_yield()
+                    || key.as_ref().is_some_and(ForeachTarget::contains_yield)
                     || body.iter().any(Stmt::contains_yield)
             }
             Stmt::TryCatch {

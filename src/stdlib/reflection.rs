@@ -9,7 +9,7 @@ mod functions;
 mod generic_parameters;
 mod registry;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ancestry::reflected_arguments;
 use functions::reflection_function_target;
@@ -562,6 +562,79 @@ fn class_is_internal(
         return return_value(rv, Value::bool(false));
     }
     return_value(rv, Value::bool(eg.class_is_internal(&owner)))
+}
+
+fn collect_reflected_interface_names(
+    eg: &ExecutorGlobals,
+    owner: &str,
+    names: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    let Some(class) = eg.find_class(owner) else {
+        return;
+    };
+    let parent = class.parent.clone();
+    let interfaces = class.implements.clone();
+
+    // PHP reports interfaces inherited from the parent class first, then the
+    // class's own declarations and each interface's extended ancestors.
+    if let Some(parent) = parent {
+        collect_reflected_interface_names(eg, &parent, names, seen);
+    }
+    for interface in interfaces {
+        let canonical = eg
+            .find_class(&interface)
+            .map_or(interface, |class| class.name.clone());
+        if seen.insert(canonical.to_ascii_lowercase()) {
+            names.push(canonical.clone());
+            collect_reflected_interface_names(eg, &canonical, names, seen);
+        }
+    }
+}
+
+fn class_get_interface_names(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::array(PhpArray::new()));
+    }
+    let mut names = Vec::new();
+    collect_reflected_interface_names(eg, &owner, &mut names, &mut HashSet::new());
+    let mut result = PhpArray::with_packed_capacity(names.len());
+    for name in names {
+        result.push(Value::string(name));
+    }
+    return_value(rv, Value::array(result))
+}
+
+fn class_get_trait_names(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::array(PhpArray::new()));
+    }
+    let Some(class) = eg.find_class(&owner) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let mut result = PhpArray::with_packed_capacity(class.uses.len());
+    for name in &class.uses {
+        result.push(Value::string(name.clone()));
+    }
+    return_value(rv, Value::array(result))
 }
 
 fn property_modifiers(property: &PropertyDefinition, is_static: bool) -> i64 {

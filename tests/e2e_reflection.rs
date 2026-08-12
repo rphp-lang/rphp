@@ -76,6 +76,67 @@ echo count((new ReflectionClass(ReflectedPropertyParent::class))->getProperties(
 }
 
 #[test]
+fn reflection_class_lists_direct_extended_and_inherited_interface_names() {
+    let out = run_php(
+        r#"<?php
+interface RootInterface {}
+interface ChildInterface extends RootInterface {}
+interface ParentInterface {}
+class ReflectedInterfaceParent implements ParentInterface {}
+class ReflectedInterfaceChild extends ReflectedInterfaceParent implements ChildInterface {}
+echo implode(',', (new ReflectionClass(ReflectedInterfaceChild::class))->getInterfaceNames());
+echo '|';
+echo implode(',', (new ReflectionClass(ChildInterface::class))->getInterfaceNames());
+"#,
+    );
+    assert_eq!(
+        out,
+        "ParentInterface,ChildInterface,RootInterface|RootInterface"
+    );
+}
+
+#[test]
+fn reflection_class_lists_only_directly_used_trait_names() {
+    let out = run_php(
+        r#"<?php
+trait ReflectedRootTrait {}
+trait ReflectedNestedTrait { use ReflectedRootTrait; }
+trait ReflectedParentTrait {}
+class ReflectedTraitParent { use ReflectedParentTrait; }
+class ReflectedTraitChild extends ReflectedTraitParent { use ReflectedNestedTrait; }
+echo implode(',', (new ReflectionClass(ReflectedTraitParent::class))->getTraitNames());
+echo '|';
+echo implode(',', (new ReflectionClass(ReflectedTraitChild::class))->getTraitNames());
+echo '|';
+echo implode(',', (new ReflectionClass(ReflectedNestedTrait::class))->getTraitNames());
+"#,
+    );
+    assert_eq!(
+        out,
+        "ReflectedParentTrait|ReflectedNestedTrait|ReflectedRootTrait"
+    );
+}
+
+#[test]
+fn declared_class_like_inventories_report_canonical_kinds_and_class_aliases() {
+    let out = run_php(
+        r#"<?php
+class DeclaredInventoryClass {}
+interface DeclaredInventoryInterface {}
+trait DeclaredInventoryTrait {}
+enum DeclaredInventoryEnum {}
+class_alias(DeclaredInventoryClass::class, 'DeclaredInventoryAlias');
+echo in_array(DeclaredInventoryClass::class, get_declared_classes(), true) ? 'c' : '-';
+echo in_array(DeclaredInventoryEnum::class, get_declared_classes(), true) ? 'e' : '-';
+echo in_array('declaredinventoryalias', get_declared_classes(), true) ? 'a' : '-';
+echo in_array(DeclaredInventoryInterface::class, get_declared_interfaces(), true) ? 'i' : '-';
+echo in_array(DeclaredInventoryTrait::class, get_declared_traits(), true) ? 't' : '-';
+"#,
+    );
+    assert_eq!(out, "ceait");
+}
+
+#[test]
 fn test_class_exists_true() {
     let out = run_php(
         r#"<?php

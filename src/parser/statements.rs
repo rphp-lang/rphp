@@ -522,21 +522,18 @@ impl Parser {
                     self.expect(&Token::RBracket)?;
                     self.expect(&Token::RParen)?;
                     let body = self.parse_block_or_stmt()?;
-                    return Ok(Stmt::Foreach {
-                        array,
-                        value: ForeachTarget::Destructure(targets),
-                        key_var: None,
-                        by_ref: false,
-                        body,
-                    });
-                }
-                let first_var = match self.advance() {
-                    Token::Variable(name) => name,
-                    other => return Err(format!("Expected foreach target after 'as', got {:?}", other)),
-                };
-                let (key_var, value, by_ref) = if self.peek() == Token::DoubleArrow {
-                    if first_by_ref {
-                        return Err("Foreach key cannot be a reference".into());
+                   return Ok(Stmt::Foreach {
+                       array,
+                       value: ForeachTarget::Destructure(targets),
+                        key: None,
+                       by_ref: false,
+                       body,
+                   });
+               }
+                let first = Self::into_foreach_target(self.parse_expr()?)?;
+                let (key, value, by_ref) = if self.peek() == Token::DoubleArrow {
+                   if first_by_ref {
+                       return Err("Foreach key cannot be a reference".into());
                     }
                     self.advance(); // consume '=>'
                     let by_ref = if self.peek() == Token::Ampersand {
@@ -553,33 +550,33 @@ impl Parser {
                         }
                         self.advance();
                         let targets = self.parse_list_targets(&Token::RBracket)?;
-                        self.expect(&Token::RBracket)?;
-                        ForeachTarget::Destructure(targets)
-                    } else {
-                        match self.advance() {
-                            Token::Variable(name) => ForeachTarget::Variable(name),
-                            other => {
-                                return Err(format!(
-                                    "Expected foreach target after '=>', got {:?}",
-                                    other
-                                ));
-                            }
-                        }
-                    };
-                    (Some(first_var), value, by_ref)
-                } else {
-                    (
-                        None,
-                        ForeachTarget::Variable(first_var),
-                        first_by_ref,
-                    )
-                };
+                       self.expect(&Token::RBracket)?;
+                       ForeachTarget::Destructure(targets)
+                   } else {
+                        Self::into_foreach_target(self.parse_expr()?)?
+                   };
+                    if by_ref && !matches!(value, ForeachTarget::Variable(_)) {
+                        return Err(
+                            "Foreach property and dimension references are not supported yet"
+                                .into(),
+                        );
+                    }
+                    (Some(first), value, by_ref)
+               } else {
+                    if first_by_ref && !matches!(first, ForeachTarget::Variable(_)) {
+                        return Err(
+                            "Foreach property and dimension references are not supported yet"
+                                .into(),
+                        );
+                    }
+                    (None, first, first_by_ref)
+               };
                 self.expect(&Token::RParen)?;
                 let body = self.parse_block_or_stmt()?;
                 Ok(Stmt::Foreach {
-                    array,
-                    value,
-                    key_var,
+                   array,
+                   value,
+                    key,
                     by_ref,
                     body,
                 })
@@ -1038,6 +1035,16 @@ impl Parser {
                 target: *target,
                 expr: *expr,
             }),
+            Expr::ArrayAppendAssign { target, expr } => match *target {
+                target @ Expr::Variable(_) => Ok(Stmt::ExprStmt(Expr::ArrayAppendAssign {
+                    target: Box::new(target),
+                    expr,
+                })),
+                target => Ok(Stmt::ArrayAppend {
+                    target,
+                    expr: *expr,
+                }),
+            },
             Expr::AssignTarget { target, expr } => match *target {
                 Expr::PropertyAccess {
                     object,

@@ -55,16 +55,13 @@ fn test_parse_foreach_value_reference() {
         .unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let Stmt::Foreach {
-        value,
-        key_var,
-        by_ref,
-        ..
+        value, key, by_ref, ..
     } = &stmts[0]
     else {
         panic!("expected foreach statement");
     };
     assert_eq!(value, &ForeachTarget::Variable("value".into()));
-    assert_eq!(key_var.as_deref(), Some("key"));
+    assert_eq!(key, &Some(ForeachTarget::Variable("key".into())));
     assert!(*by_ref);
 }
 
@@ -77,7 +74,7 @@ fn test_parse_foreach_destructuring_target() {
     assert!(matches!(
         &stmts[0],
         Stmt::Foreach {
-            key_var: Some(key),
+            key: Some(ForeachTarget::Variable(key)),
             value: ForeachTarget::Destructure(targets),
             by_ref: false,
             ..

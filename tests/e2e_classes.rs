@@ -26,6 +26,16 @@ fn instanceof_accepts_a_runtime_class_name() {
 }
 
 #[test]
+fn instanceof_accepts_a_runtime_class_name_from_an_object_property() {
+    assert_eq!(
+        run_php(
+            "<?php class PropertyRuntimeType {} class TypeHolder { public string $type = PropertyRuntimeType::class; } $holder = new TypeHolder(); $value = new PropertyRuntimeType(); echo $value instanceof $holder->type ? 'yes:' : 'no:'; echo !$value instanceof $holder->type ? 'bad' : 'negated';"
+        ),
+        "yes:negated"
+    );
+}
+
+#[test]
 fn interface_implementation_may_add_a_typed_optional_parameter() {
     assert_eq!(
         run_php(

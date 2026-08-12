@@ -40,6 +40,16 @@ fn test_e2e_foreach_int_keys() {
     );
 }
 
+#[test]
+fn test_e2e_foreach_assigns_keys_and_values_to_object_properties() {
+    assert_eq!(
+        run_php(
+            "<?php class ForeachCursor { public $key; public $value; } $cursor = new ForeachCursor(); foreach (['a' => 1, 'b' => 2] as $cursor->key => $cursor->value) { echo $cursor->key, $cursor->value; } echo '|', $cursor->key, $cursor->value;"
+        ),
+        "a1b2|b2"
+    );
+}
+
 // === Empty array ===
 
 #[test]
