@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Toolchain versions
         run: |
           rustc --version --verbose
@@ -29,6 +31,16 @@ jobs:
           rustfmt --version
       - name: Formatting
         run: cargo fmt --all -- --check
+      - name: Unsafe policy self-test
+        run: scripts/test-unsafe-policy.sh
+      - name: Unsafe policy ratchet
+        if: github.event_name == 'pull_request'
+        env:
+          RPHP_UNSAFE_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
+        run: scripts/check-unsafe-policy.sh --diff-base "${RPHP_UNSAFE_DIFF_BASE}"
+      - name: Unsafe policy inventory
+        if: github.event_name != 'pull_request'
+        run: scripts/check-unsafe-policy.sh
       - name: All features and targets
         run: cargo check --locked --all-features --all-targets
 

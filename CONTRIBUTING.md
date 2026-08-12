@@ -16,6 +16,18 @@ tests are preferred.
 - Follow the [unsafe-code policy](docs/unsafe-policy.md) for every new or
   changed unsafe block.
 
+For a change based on the current checkout, run the unsafe ratchet with:
+
+```sh
+scripts/check-unsafe-policy.sh --diff-base HEAD
+```
+
+The command is intentionally stricter than an aggregate count: a newly added
+unsafe block needs a local `// SAFETY:` proof and a newly added unsafe function
+needs a `# Safety` contract. Updating the committed ceiling requires a separate
+security rationale and reviewer attention; it is not routine generated-file
+maintenance.
+
 ## Code provenance
 
 Contributions must be original work, or derived from a source whose compatible
