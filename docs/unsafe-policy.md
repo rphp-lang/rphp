@@ -33,12 +33,12 @@ expanding the allow-list. Reducing it should be done in reviewable slices.
 
 ## Legacy baseline and enforcement
 
-The enforced production-source baseline, measured at commit `5b3ee92` over
-`src/**/*.rs`, contains 1,630 explicit `unsafe` blocks, 289 declared unsafe
-functions (including unsafe extern functions), 54 `SAFETY:` annotations, and no
-`# Safety` sections. The audit started from 1,669 blocks and centralized 39
+The enforced production-source baseline, measured at commit `0fafdd4` over
+`src/**/*.rs`, contains 1,628 explicit `unsafe` blocks, 289 declared unsafe
+functions (including unsafe extern functions), 58 `SAFETY:` annotations, and no
+`# Safety` sections. The audit started from 1,669 blocks and centralized 41
 repeated property-cache, class-constant, object-identity, generic-call, and
-static-property boundaries. This is four blocks below the earlier `d4c4965`
+static-property boundaries. This is six blocks below the earlier `d4c4965`
 inventory even after the typed-property and class-constant capabilities added
 since that checkpoint. These numbers describe debt; they are not an accepted
 soundness level. Test-only Rust is reported separately and does not provide a
