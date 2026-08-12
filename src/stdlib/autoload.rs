@@ -191,7 +191,8 @@ pub(crate) fn fn_spl_autoload(
                 }
                 IncludeFileOutcome::Executed(_)
                 | IncludeFileOutcome::AlreadyIncluded
-                | IncludeFileOutcome::Missing(_) => {}
+                | IncludeFileOutcome::Missing(_)
+                | IncludeFileOutcome::Thrown(_) => {}
             }
         }
         let Some(next) = next else {

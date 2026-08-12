@@ -1281,6 +1281,52 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     })
     .unwrap();
 
+    // CompileError extends Error
+    eg.register_class(ClassDef {
+        name: "CompileError".to_string(),
+        parent: Some("Error".to_string()),
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
+        uses: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
+
+    // ParseError extends CompileError
+    eg.register_class(ClassDef {
+        name: "ParseError".to_string(),
+        parent: Some("CompileError".to_string()),
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
+        uses: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
+
     // ArgumentCountError extends Error
     eg.register_class(ClassDef {
         name: "ArgumentCountError".to_string(),
@@ -1335,6 +1381,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         "Exception",
         "Error",
         "TypeError",
+        "CompileError",
+        "ParseError",
         "ArgumentCountError",
         "UnhandledMatchError",
     ] {

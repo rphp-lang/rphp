@@ -121,6 +121,158 @@ fn test_include_shares_variables() {
 }
 
 #[test]
+fn include_inside_function_shares_locals_without_leaking_into_global_scope() {
+    let (_dir, path) = write_temp_php(
+        "local_scope.php",
+        "<?php $seen = $shared; $shared = 'changed'; $created = 'included';",
+    );
+    let source = format!(
+        r#"<?php
+$shared = "global";
+function run_local_include($path) {{
+    $shared = "local";
+    include $path;
+    echo $seen, "|", $shared, "|", $created, "|";
+}}
+run_local_include('{}');
+echo $shared, "|";
+var_dump(isset($created));
+"#,
+        path
+    );
+
+    assert_eq!(
+        run_php(&source),
+        "local|changed|included|global|bool(false)\n"
+    );
+}
+
+#[test]
+fn global_declaration_inside_include_uses_and_updates_the_real_global() {
+    let (_dir, path) = write_temp_php(
+        "global_scope.php",
+        "<?php global $shared; echo $shared, '|'; $shared = 'changed-global';",
+    );
+    let source = format!(
+        r#"<?php
+$shared = "global";
+function run_global_include($path) {{
+    $shared = "local";
+    include $path;
+    echo $shared, "|";
+}}
+run_global_include('{}');
+echo $shared;
+"#,
+        path
+    );
+
+    assert_eq!(run_php(&source), "global|changed-global|changed-global");
+}
+
+#[test]
+fn include_inside_method_inherits_this() {
+    let (_dir, path) = write_temp_php(
+        "method_scope.php",
+        "<?php $this->value = $this->value . ':included'; return $this->value;",
+    );
+    let source = format!(
+        r#"<?php
+class IncludeOwner {{
+    public $value = "owner";
+    public function run($path) {{
+        $result = include $path;
+        return $result . "|" . $this->value;
+    }}
+}}
+echo (new IncludeOwner())->run('{}');
+"#,
+        path
+    );
+
+    assert_eq!(run_php(&source), "owner:included|owner:included");
+}
+
+#[test]
+fn include_inside_method_inherits_private_class_scope() {
+    let (_dir, path) = write_temp_php(
+        "private_scope.php",
+        "<?php return $this->secret . '|' . self::label();",
+    );
+    let source = format!(
+        r#"<?php
+class PrivateIncludeOwner {{
+    private $secret = "private";
+    private static function label() {{ return "scope"; }}
+    public function run($path) {{ return include $path; }}
+}}
+echo (new PrivateIncludeOwner())->run('{}');
+"#,
+        path
+    );
+
+    assert_eq!(run_php(&source), "private|scope");
+}
+
+#[test]
+fn exception_from_included_file_is_catchable_and_keeps_prior_scope_writes() {
+    let (_dir, path) = write_temp_php(
+        "throw.php",
+        "<?php $value = 'mutated'; throw new Exception('included');",
+    );
+    let source = format!(
+        r#"<?php
+function run_throwing_include($path) {{
+    $value = "before";
+    try {{
+        include $path;
+    }} catch (Exception $error) {{
+        echo $error->getMessage(), "|";
+    }}
+    echo $value;
+}}
+run_throwing_include('{}');
+"#,
+        path
+    );
+
+    assert_eq!(run_php(&source), "included|mutated");
+}
+
+#[test]
+fn parse_error_from_included_file_is_catchable() {
+    let (_dir, path) = write_temp_php("parse_error.php", "<?php function broken( {");
+    let source = format!(
+        r#"<?php
+try {{
+    include '{}';
+}} catch (CompileError $error) {{
+    echo "caught";
+}}
+"#,
+        path
+    );
+
+    assert_eq!(run_php(&source), "caught");
+}
+
+#[test]
+fn missing_require_throws_a_catchable_error() {
+    let output = run_php(
+        r#"<?php
+try {
+    require "/nonexistent/rphp/required.php";
+} catch (Error $error) {
+    echo "caught";
+}
+"#,
+    );
+
+    assert!(output.contains("Warning: require("), "{output}");
+    assert!(output.ends_with("caught"), "{output}");
+}
+
+#[test]
 fn test_include_function_declaration() {
     let (_dir, path) = write_temp_php(
         "func.php",

@@ -9833,7 +9833,7 @@ compatibility denominator.
 
 The full default, no-default-features, erased-generics, reified-generics, and
 all-features test matrix passes. The CI formatting and all-target check passes,
-including its unsafe-policy ratchet at 1,626 blocks against a ceiling of 1,628.
+including its unsafe-policy ratchet at 1,623 blocks against a ceiling of 1,623.
 
 #### Composer S0 vendor-autoload gate (2026-08-12)
 
@@ -9862,10 +9862,20 @@ and do not incorrectly fall back to a global function when an imported target
 is missing. String-based probes remain unaffected, matching PHP's lexical-only
 import behavior.
 
-S0 follow-up work remains: ordinary include scope and exception edge cases and
-truthful platform identity must still be closed before treating the broader
-Composer substrate as complete. Running Composer itself under RPHP remains the
-separate S5 gate.
+The ordinary include scope/exception slice is also closed for the S0 fixture.
+Includes inside functions share caller locals without leaking their bridge into
+the real global table; an explicit `global` in the included file still reads
+and updates the real global. Method includes inherit `$this` and the lexical
+class scope required for private access. Writes made before a throw remain
+visible, while included exceptions, missing `require` errors, and parse errors
+propagate through the caller's `try`/`catch`. `CompileError` and its
+`ParseError` subclass model the reference hierarchy. Method CV-name metadata is
+retained only for bodies that contain an include, avoiding a permanent cost on
+unrelated methods.
+
+Truthful platform identity is now the remaining S0 follow-up before treating
+the broader Composer substrate as complete. Running Composer itself under RPHP
+remains the separate S5 gate.
 
 Composer's generated platform check must observe truthful `PHP_VERSION_ID`,
 `PHP_VERSION`, `PHP_INT_SIZE`, extension availability and exit/error behavior.

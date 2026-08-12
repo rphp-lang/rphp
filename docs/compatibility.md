@@ -85,6 +85,13 @@ aliases, retain imports inside methods and closures, and suppress the ordinary
 namespaced-to-global fallback for an explicitly imported target. Imports remain
 lexical, so string names passed to `function_exists()` are unchanged.
 
+Includes inside functions and methods inherit caller locals, `$this`, and
+lexical private-access scope without leaking local bridge values into the real
+global table. Explicit `global` declarations still bind the real global.
+Included throws, missing required files, and parse failures propagate through
+the caller's catch table; `ParseError` is registered under `CompileError`, which
+extends `Error`.
+
 Relative to the retained `102800d` baseline, the current run adds 40 passing
 cases without losing a previous pass. The retained `0fafdd4` checkpoint isolates
 four of them: object-property chains became legal `isset` targets, intermediate

@@ -3697,8 +3697,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Include => {
-                if op_include(eg, frame, op_array, opline)? {
-                    continue;
+                match op_include(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => continue,
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    ColdResult::Done => {}
+                    ColdResult::Return => unreachable!("include cannot suspend the caller"),
                 }
                 // Refresh op_array — include may have changed frame context.
                 op_array = unsafe { (*frame).op_array() };

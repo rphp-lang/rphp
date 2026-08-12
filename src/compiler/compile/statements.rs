@@ -1272,6 +1272,12 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
+                    let include_scope_cvs = func_compiler
+                        .instructions
+                        .iter()
+                        .any(|instruction| instruction.opcode == OpCode::Include)
+                        .then(|| func_compiler.all_cvs())
+                        .unwrap_or_default();
                     let cache = (0..func_compiler.instructions.len())
                         .map(|_| InlineCache::empty())
                         .collect();
@@ -1301,7 +1307,7 @@ impl Compiler {
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
                         main_scope_vars: vec![],
-                        all_cvs: vec![],
+                        all_cvs: include_scope_cvs,
                         cache,
                         may_access_globals,
                         block_info: Vec::new(),
@@ -1500,6 +1506,12 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
+                    let include_scope_cvs = func_compiler
+                        .instructions
+                        .iter()
+                        .any(|instruction| instruction.opcode == OpCode::Include)
+                        .then(|| func_compiler.all_cvs())
+                        .unwrap_or_default();
                     let cache = (0..func_compiler.instructions.len())
                         .map(|_| InlineCache::empty())
                         .collect();
@@ -1529,7 +1541,7 @@ impl Compiler {
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
                         main_scope_vars: vec![],
-                        all_cvs: vec![],
+                        all_cvs: include_scope_cvs,
                         cache,
                         may_access_globals,
                         block_info: Vec::new(),
@@ -1637,6 +1649,12 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
+                    let include_scope_cvs = func_compiler
+                        .instructions
+                        .iter()
+                        .any(|instruction| instruction.opcode == OpCode::Include)
+                        .then(|| func_compiler.all_cvs())
+                        .unwrap_or_default();
                     let cache = (0..func_compiler.instructions.len())
                         .map(|_| InlineCache::empty())
                         .collect();
@@ -1666,7 +1684,7 @@ impl Compiler {
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
                         main_scope_vars: vec![],
-                        all_cvs: vec![],
+                        all_cvs: include_scope_cvs,
                         cache,
                         may_access_globals,
                         block_info: Vec::new(),
@@ -1813,6 +1831,12 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
+                    let include_scope_cvs = func_compiler
+                        .instructions
+                        .iter()
+                        .any(|instruction| instruction.opcode == OpCode::Include)
+                        .then(|| func_compiler.all_cvs())
+                        .unwrap_or_default();
                     let cache = (0..func_compiler.instructions.len())
                         .map(|_| InlineCache::empty())
                         .collect();
@@ -1842,7 +1866,7 @@ impl Compiler {
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
                         main_scope_vars: vec![],
-                        all_cvs: vec![],
+                        all_cvs: include_scope_cvs,
                         cache,
                         may_access_globals,
                         block_info: Vec::new(),

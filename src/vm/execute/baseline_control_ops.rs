@@ -8,6 +8,21 @@ pub(crate) enum IncludeFileOutcome {
     Executed(Value),
     AlreadyIncluded,
     Missing(std::io::Error),
+    Thrown(Value),
+}
+
+fn include_parse_error(
+    eg: &mut ExecutorGlobals,
+    caller_present: bool,
+    message: String,
+) -> IncludeFileOutcome {
+    let error = make_error_value("ParseError", &message);
+    if caller_present {
+        IncludeFileOutcome::Thrown(error)
+    } else {
+        eg.exception = Some(error);
+        IncludeFileOutcome::Executed(Value::null())
+    }
 }
 
 /// Compile, register and execute one already-resolved PHP file. Ordinary
@@ -38,15 +53,40 @@ pub(crate) fn execute_included_file(
         eg.included_files.insert(canonical.clone());
     }
 
-    let tokens = crate::lexer::Lexer::new(&source).tokenize()
-        .map_err(|e| VmError::Fatal(format!("Syntax error in {}: {}", resolved_path, e)))?;
-    let stmts = crate::parser::Parser::new(tokens).parse()
-        .map_err(|e| VmError::Fatal(format!("Parse error in {}: {}", resolved_path, e)))?;
-    let mut compile_result = crate::compiler::compile::Compiler::new()
+    let tokens = match crate::lexer::Lexer::new(&source).tokenize() {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            return Ok(include_parse_error(
+                eg,
+                caller.is_some(),
+                format!("Syntax error in {resolved_path}: {error}"),
+            ));
+        }
+    };
+    let stmts = match crate::parser::Parser::new(tokens).parse() {
+        Ok(statements) => statements,
+        Err(error) => {
+            return Ok(include_parse_error(
+                eg,
+                caller.is_some(),
+                format!("Parse error in {resolved_path}: {error}"),
+            ));
+        }
+    };
+    let mut compile_result = match crate::compiler::compile::Compiler::new()
         .with_source_path(canonical.clone())
         .with_implicit_return_value(Value::long(1))
         .compile(&stmts)
-        .map_err(|e| VmError::Fatal(format!("Compile error in {}: {}", resolved_path, e)))?;
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return Ok(include_parse_error(
+                eg,
+                caller.is_some(),
+                format!("Compile error in {resolved_path}: {error}"),
+            ));
+        }
+    };
 
     // Includes are separate compilation units, but both generic runtimes and
     // Reflection consume one executor-wide interned metadata graph. Merge the
@@ -77,6 +117,13 @@ pub(crate) fn execute_included_file(
     let main_func: &UserFunction = unsafe {
         &*(&**eg.included_functions.last().unwrap() as *const UserFunction)
     };
+    let include_caller_class = caller.and_then(|(frame, _)| get_caller_class(frame, eg));
+    if let Some(caller_class) = include_caller_class {
+        eg.method_declaring_class.insert(
+            &main_func.common as *const FunctionCommon,
+            caller_class,
+        );
+    }
 
     let scope_vars: Vec<(u32, String)> = caller.map_or_else(Vec::new, |(_, op_array)| {
         if !op_array.all_cvs.is_empty() {
@@ -85,9 +132,32 @@ pub(crate) fn execute_included_file(
             op_array.main_scope_vars.clone()
         }
     });
+    let caller_is_local_scope = caller.is_some_and(|(_, op_array)| op_array.main_scope_vars.is_empty());
+    let included_global_vars = &main_func.op_array.global_vars;
+    let caller_global_vars = caller.map(|(_, op_array)| &op_array.global_vars[..]).unwrap_or(&[]);
+    let mut globals_backup: HashMap<String, Option<Value>> = HashMap::new();
+    if caller_is_local_scope || caller.is_none() {
+        for (_, var_name) in scope_vars
+            .iter()
+            .chain(main_func.op_array.main_scope_vars.iter())
+        {
+            let explicitly_global = caller_global_vars
+                .iter()
+                .chain(included_global_vars.iter())
+                .any(|(_, global_name)| global_name == var_name);
+            if !explicitly_global {
+                globals_backup
+                    .entry(var_name.clone())
+                    .or_insert_with(|| eg.globals.get(var_name).cloned());
+            }
+        }
+    }
     if let Some((frame, op_array)) = caller {
         for (cv_idx, var_name) in &scope_vars {
-            if var_name == "this" {
+            if included_global_vars
+                .iter()
+                .any(|(_, global_name)| global_name == var_name)
+            {
                 continue;
             }
             let val = unsafe {
@@ -115,7 +185,7 @@ pub(crate) fn execute_included_file(
         for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
             if let Some(val) = eg.globals.get(var_name) {
                 let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
-                unsafe { slot_set(cv_ptr, val.clone()) };
+                unsafe { frame_slot_set(inc_frame, cv_ptr, val.clone()) };
             }
         }
     }
@@ -144,13 +214,18 @@ pub(crate) fn execute_included_file(
 
     if let Some((frame, _)) = caller {
         for (cv_idx, var_name) in &scope_vars {
-            if var_name == "this" {
-                continue;
-            }
             if let Some(val) = eg.globals.get(var_name) {
                 let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                unsafe { slot_set(cv_ptr, val.clone()) };
+                unsafe { frame_slot_set(frame, cv_ptr, val.clone()) };
             }
+        }
+    }
+
+    for (var_name, previous) in globals_backup {
+        if let Some(value) = previous {
+            globals_set(&mut eg.globals, &var_name, value);
+        } else {
+            eg.globals.remove(&var_name);
         }
     }
 
@@ -159,26 +234,7 @@ pub(crate) fn execute_included_file(
         return Ok(IncludeFileOutcome::Executed(inc_return_value));
     }
     if let Some(exc) = eg.exception.take() {
-        let (class_name, message) = if let Some(obj) = exc.as_object() {
-            let cls = obj.class_name.clone();
-            let msg = obj.get_property("message")
-                .map(|v| v.echo_to_string())
-                .unwrap_or_default();
-            (cls, msg)
-        } else {
-            (std::rc::Rc::from("Exception"), exc.echo_to_string())
-        };
-        return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
-    }
-
-    if let Some((frame, _)) = caller {
-        let new_op_array = unsafe { (*frame).op_array() };
-        for (cv_idx, var_name) in &new_op_array.main_scope_vars {
-            if let Some(val) = eg.globals.get(var_name) {
-                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                unsafe { slot_set(cv_ptr, val.clone()) };
-            }
-        }
+        return Ok(IncludeFileOutcome::Thrown(exc));
     }
 
     inc_result?;
@@ -207,12 +263,12 @@ fn write_include_result(
 
 /// Returns true if the caller should `continue` (skip opline advance).
 #[inline(never)]
-fn op_include(
+fn op_include<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
-) -> Result<bool, VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let path_str = path_val.echo_to_string();
     let is_require = (opline.extended_value & 1) != 0;
@@ -248,15 +304,31 @@ fn op_include(
     match execute_included_file(eg, &resolved_path, is_once, Some((frame, op_array)))? {
         IncludeFileOutcome::Executed(value) => {
             write_include_result(frame, opline, value);
-            Ok(false)
+            Ok(ColdResult::Done)
         }
         IncludeFileOutcome::AlreadyIncluded => {
             write_include_result(frame, opline, Value::bool(true));
-            Ok(false)
+            Ok(ColdResult::Done)
         }
-        IncludeFileOutcome::Missing(error) if is_require => Err(VmError::Fatal(format!(
-            "require({path_str}): Failed opening required '{resolved_path}' ({error})"
-        ))),
+        IncludeFileOutcome::Thrown(exception) => Ok(match throw_in_frame(eg, frame, exception) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        }),
+        IncludeFileOutcome::Missing(error) if is_require => {
+            let message = format!(
+                "require({path_str}): Failed opening required '{resolved_path}' ({error})"
+            );
+            eg.write_output(format!("Warning: {message}\n").as_bytes());
+            let exception = make_error_value("Error", &message);
+            Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            })
+        }
         IncludeFileOutcome::Missing(error) => {
             eg.write_output(
                 format!(
@@ -266,7 +338,7 @@ fn op_include(
             );
             write_include_result(frame, opline, Value::bool(false));
             unsafe { (*frame).opline = (*frame).opline.add(1) };
-            Ok(true)
+            Ok(ColdResult::Continue)
         }
     }
 }
