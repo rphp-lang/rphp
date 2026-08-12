@@ -335,6 +335,41 @@ fn test_filter_var_common_validators() {
     );
 }
 
+#[test]
+fn filter_var_validates_floats() {
+    assert_eq!(
+        run_php(
+            "<?php echo filter_var('1.25', FILTER_VALIDATE_FLOAT), ':'; echo filter_var('not-a-float', FILTER_VALIDATE_FLOAT) === false ? 'false' : 'bad';"
+        ),
+        "1.25:false"
+    );
+}
+
+#[test]
+fn output_buffer_level_starts_at_zero() {
+    assert_eq!(run_php("<?php echo ob_get_level();"), "0");
+}
+
+#[test]
+fn get_debug_type_reports_scalar_and_object_names() {
+    assert_eq!(
+        run_php(
+            "<?php class DebugTypeObject {} echo get_debug_type(null) . ':' . get_debug_type(1) . ':' . get_debug_type(new DebugTypeObject()) . ':' . get_debug_type(static fn () => null);"
+        ),
+        "null:int:DebugTypeObject:Closure"
+    );
+}
+
+#[test]
+fn array_diff_key_preserves_missing_keys_and_values() {
+    assert_eq!(
+        run_php(
+            "<?php $result = array_diff_key(['keep' => 1, 'drop' => 2, 3 => 'three'], ['drop' => 9]); echo $result['keep'] . ':' . $result[3] . ':' . count($result);"
+        ),
+        "1:three:2"
+    );
+}
+
 // === array_reverse ===
 
 #[test]

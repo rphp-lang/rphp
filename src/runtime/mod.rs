@@ -213,6 +213,10 @@ pub struct ExecutorGlobals {
     /// Class table — name/alias → shared ClassDef. `Rc` keeps metadata and
     /// inline-cache pointers stable while aliases reuse the exact identity.
     pub class_table: HashMap<String, std::rc::Rc<ClassDef>>,
+    /// Anonymous declarations become visible only when their `new class`
+    /// expression executes. Eager registration would autoload dependencies
+    /// from branches that PHP never evaluates.
+    pending_anonymous_classes: HashMap<String, ClassDef>,
     /// Cold generic declaration side table. Ordinary dispatch never reads it.
     pub generic_metadata: GenericMetadata,
     /// Constant table — name → Value (case-sensitive, like PHP)
@@ -223,6 +227,14 @@ pub struct ExecutorGlobals {
     pub regex_cache: crate::regex::RegexCache,
     /// Exception being thrown — None = no exception
     pub exception: Option<crate::value::Value>,
+    /// Request-local error mask exposed by error_reporting(). Diagnostic
+    /// routing is still intentionally minimal, but libraries observe the
+    /// getter/setter contract while temporarily suppressing warnings.
+    pub error_reporting: i64,
+    pub(crate) error_handler: Option<crate::value::Value>,
+    pub(crate) error_handler_stack: Vec<Option<crate::value::Value>>,
+    pub(crate) exception_handler: Option<crate::value::Value>,
+    pub(crate) exception_handler_stack: Vec<Option<crate::value::Value>>,
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
     pub method_declaring_class: HashMap<*const FunctionCommon, String>,
     /// Output buffer — collected output for testing, or stdout
@@ -232,6 +244,13 @@ pub struct ExecutorGlobals {
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
     pub pending_named_variadic: HashMap<usize, Vec<(String, crate::value::Value)>>,
+    /// Captures belonging to a variadic closure cannot enter their final CVs
+    /// until DoFcall has packed the overlapping raw argument prefix.
+    pub(crate) pending_closure_captures: HashMap<usize, Vec<crate::value::Value>>,
+    /// Original public arguments of active user calls. Extra arguments occupy
+    /// slots that compiled TMP operands may reuse, so argument-introspection
+    /// functions need stable storage for the lifetime of the call frame.
+    pub(crate) function_arguments: HashMap<usize, Vec<crate::value::Value>>,
     /// Active generator being executed (set during resume, used by Yield opcode)
     pub active_generator: Option<crate::vm::generator::GeneratorRef>,
     /// Global variables — shared across function calls via `global $x;`
@@ -323,7 +342,7 @@ impl ExecutorGlobals {
     pub(crate) fn reserve_stdlib_capacity(&mut self) {
         self.function_table.reserve(256);
         self.class_table.reserve(64);
-        self.method_declaring_class.reserve(96);
+        self.method_declaring_class.reserve(160);
         self.class_by_id.reserve(64);
         self.static_property_slots_by_class.reserve(64);
         self.static_property_values.reserve(16);
@@ -340,6 +359,7 @@ impl ExecutorGlobals {
             timed_out: AtomicBool::new(false),
             function_table: HashMap::new(),
             class_table: HashMap::new(),
+            pending_anonymous_classes: HashMap::new(),
             generic_metadata: GenericMetadata::default(),
             #[cfg(feature = "php-generics-reified")]
             reified_bindings: Vec::new(),
@@ -368,10 +388,17 @@ impl ExecutorGlobals {
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
+            error_reporting: 32767,
+            error_handler: None,
+            error_handler_stack: Vec::new(),
+            exception_handler: None,
+            exception_handler_stack: Vec::new(),
             method_declaring_class: HashMap::new(),
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
             pending_named_variadic: HashMap::new(),
+            pending_closure_captures: HashMap::new(),
+            function_arguments: HashMap::new(),
             active_generator: None,
             globals: HashMap::new(),
             dirty_globals: std::collections::HashSet::new(),
@@ -399,6 +426,7 @@ impl ExecutorGlobals {
             timed_out: AtomicBool::new(false),
             function_table: HashMap::new(),
             class_table: HashMap::new(),
+            pending_anonymous_classes: HashMap::new(),
             generic_metadata: GenericMetadata::default(),
             #[cfg(feature = "php-generics-reified")]
             reified_bindings: Vec::new(),
@@ -427,10 +455,17 @@ impl ExecutorGlobals {
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
+            error_reporting: 32767,
+            error_handler: None,
+            error_handler_stack: Vec::new(),
+            exception_handler: None,
+            exception_handler_stack: Vec::new(),
             method_declaring_class: HashMap::new(),
 
             output: std::cell::RefCell::new(output),
             pending_named_variadic: HashMap::new(),
+            pending_closure_captures: HashMap::new(),
+            function_arguments: HashMap::new(),
             active_generator: None,
             globals: HashMap::new(),
             dirty_globals: std::collections::HashSet::new(),
@@ -773,12 +808,8 @@ impl ExecutorGlobals {
         let mut abstract_trait_method = None;
         for trait_name in &class_def.uses {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str())
-                && let Some(method) = trait_def
-                    .methods
-                    .iter()
-                    .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+                && let Some(declaration) = self.find_effective_method(trait_def, method_name)
             {
-                let declaration = Self::method_declaration(trait_def, method);
                 if !declaration.is_abstract {
                     return Some(declaration);
                 }
@@ -847,10 +878,10 @@ impl ExecutorGlobals {
             .generic_metadata
             .method_has_parametric_signature(required.owner, required.name);
         if !parametric {
-            let check_count = required_signature
-                .param_type_hints
-                .len()
-                .max(implementation_signature.param_type_hints.len());
+            // PHP permits an implementation to add optional parameters. They
+            // are outside the declaration's callable contract, so variance
+            // checks apply only to parameters present in the requirement.
+            let check_count = required_signature.param_type_hints.len();
             for index in 0..check_count {
                 let required_parameter = required_signature.param_type_hints.get(index);
                 let implementation_parameter = implementation_signature.param_type_hints.get(index);
@@ -945,6 +976,29 @@ impl ExecutorGlobals {
             }
         }
         Ok(())
+    }
+
+    /// Register an ordinary compiled class immediately, or retain an
+    /// anonymous declaration until its expression executes.
+    pub fn register_compiled_class(&mut self, class_def: ClassDef) -> Result<(), String> {
+        if class_def.is_anonymous() {
+            let name = class_def.name.to_ascii_lowercase();
+            if self
+                .pending_anonymous_classes
+                .insert(name, class_def)
+                .is_some()
+            {
+                return Err("Duplicate anonymous class declaration".to_string());
+            }
+            Ok(())
+        } else {
+            self.register_class(class_def)
+        }
+    }
+
+    pub(crate) fn take_pending_anonymous_class(&mut self, name: &str) -> Option<ClassDef> {
+        self.pending_anonymous_classes
+            .remove(&name.to_ascii_lowercase())
     }
 
     /// Register a class definition and its methods in the function table.

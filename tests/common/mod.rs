@@ -73,7 +73,7 @@ fn run_php_with_compiler(
     }
     // Register class definitions
     for class_def in result.class_defs {
-        eg.register_class(class_def).unwrap();
+        eg.register_compiled_class(class_def).unwrap();
     }
     register(&mut eg);
     execute::execute(&mut eg, &main_func).unwrap();
@@ -96,7 +96,7 @@ pub fn run_php_silent(source: &str) {
             .unwrap();
     }
     for class_def in result.class_defs {
-        eg.register_class(class_def).unwrap();
+        eg.register_compiled_class(class_def).unwrap();
     }
     execute::execute(&mut eg, &main_func).unwrap();
 }
@@ -133,7 +133,7 @@ impl PreparedPhp {
                 .unwrap();
         }
         for class_def in result.class_defs {
-            eg.register_class(class_def).unwrap();
+            eg.register_compiled_class(class_def).unwrap();
         }
         Self {
             main_func,
@@ -177,7 +177,7 @@ pub fn run_php_expect_error(source: &str) -> execute::VmError {
         }
     }
     for class_def in result.class_defs {
-        if let Err(e) = eg.register_class(class_def) {
+        if let Err(e) = eg.register_compiled_class(class_def) {
             return execute::VmError::Fatal(format!("{}", e));
         }
     }

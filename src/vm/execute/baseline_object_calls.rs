@@ -181,6 +181,7 @@ fn op_new_obj<'a>(
         )
     };
     let dynamic_static_scope = opline._pad & NEW_FLAG_DYNAMIC_STATIC_SCOPE != 0;
+    let dynamic_class_name = opline._pad & NEW_FLAG_DYNAMIC_CLASS_NAME != 0;
     let name = if dynamic_static_scope {
         resolve_static_call_class(eg, frame, &raw_name, true).ok_or_else(|| {
             VmError::Fatal(format!("Cannot access {raw_name} when no class scope is active"))
@@ -190,7 +191,39 @@ fn op_new_obj<'a>(
     };
     let ic = &op_array.cache[ip];
 
-    if (dynamic_static_scope || ic.class_id == 0) && eg.find_class(&name).is_none() {
+    if eg.find_class(&name).is_none()
+        && let Some(class_def) = eg.take_pending_anonymous_class(&name)
+    {
+        let dependencies = class_def
+            .parent
+            .iter()
+            .chain(class_def.uses.iter())
+            .chain(class_def.implements.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        for dependency in dependencies {
+            if eg.find_class(&dependency).is_none()
+                && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?
+            {
+                if let Some(exception) = eg.exception.take() {
+                    return Ok(match throw_in_frame(eg, frame, exception) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
+                        }
+                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                    });
+                }
+                return Err(VmError::Fatal(format!(
+                    "Class dependency \"{dependency}\" not found"
+                )));
+            }
+        }
+        eg.register_class(class_def).map_err(VmError::Fatal)?;
+    }
+
+    if (dynamic_static_scope || dynamic_class_name || ic.class_id == 0)
+        && eg.find_class(&name).is_none()
+    {
         let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &name)?;
         if let Some(exception) = eg.exception.take() {
             return Ok(match throw_in_frame(eg, frame, exception) {
@@ -207,7 +240,7 @@ fn op_new_obj<'a>(
     // Literal object creation is monomorphic in ordinary PHP code. After the
     // first canonical name lookup, use the stable numeric class index instead
     // of hashing the same class name on every allocation.
-    let class_def = if !dynamic_static_scope && ic.class_id != 0 {
+    let class_def = if !dynamic_static_scope && !dynamic_class_name && ic.class_id != 0 {
         eg.class_by_id(ic.class_id)
     } else {
         eg.find_class(&name)
@@ -1550,7 +1583,8 @@ fn init_resolved_user_call_mode(
     let bound_this = resolved.bound_this;
     let signature = unsafe { &(*resolved.func_ptr).sig };
     let public_end = signature.this_offset + explicit_args;
-    let capture_end = signature.num_args + resolved.use_vars.len() as u32;
+    let parameter_cv_count = signature.parameter_cv_count();
+    let capture_end = parameter_cv_count + resolved.use_vars.len() as u32;
     let storage_slots = public_end.max(capture_end);
     let pending_call = unsafe { (*frame).call };
     let call = eg.vm_stack.push_call_frame(
@@ -1570,7 +1604,7 @@ fn init_resolved_user_call_mode(
     // push_call_frame leaves the whole requested argument prefix
     // uninitialized. Optional declared parameters between the supplied
     // arguments and closure captures must remain readable Undef slots.
-    for index in public_end..signature.num_args {
+    for index in public_end..parameter_cv_count {
         // SAFETY: `push_call_frame` allocated every declared CV, and this loop
         // initializes only the unsupplied optional-parameter suffix once.
         unsafe {
@@ -1593,10 +1627,17 @@ fn init_resolved_user_call_mode(
         }
     }
 
-    let capture_offset = signature.num_args;
-    for (index, value) in resolved.use_vars.into_iter().enumerate() {
-        let destination = unsafe { (*call).cv_mut(capture_offset + index as u32) } as *mut Value;
-        unsafe { frame_slot_init(call, destination, value) };
+    if signature.is_variadic && !resolved.use_vars.is_empty() {
+        eg.pending_closure_captures
+            .insert(call as usize, resolved.use_vars);
+    } else {
+        for (index, value) in resolved.use_vars.into_iter().enumerate() {
+            // SAFETY: call frame sizing included all non-variadic captures
+            // after parameter_cv_count, and each destination is written once.
+            let destination = unsafe { (*call).cv_mut(parameter_cv_count + index as u32) }
+                as *mut Value;
+            unsafe { frame_slot_init(call, destination, value) };
+        }
     }
     initialize_bound_this_frame(call, resolved.func_ptr, bound_this);
 }
@@ -1649,49 +1690,25 @@ fn op_init_dynamic_call<'a>(
     }
 
     if let Some(closure) = callable.as_closure() {
-        // Fast path: Closure value — direct function pointer, no string lookup.
         let func_ptr = closure.func;
-        let called_scope_class_id = closure.called_scope_class_id;
         let bound_this = closure.bound_this.clone();
-        let num_args = opline.extended_value;
-        let pending_call = unsafe { (*frame).call };
-        let call = eg.vm_stack.push_call_frame(
+        let is_method = eg.declaring_class_of(func_ptr).is_some();
+        let resolved = crate::stdlib::ResolvedCallback {
             func_ptr,
-            num_args,
-            num_args,
-            frame,
-            pending_call,
-        );
-        unsafe {
-            (*frame).call = call;
-        }
-        if called_scope_class_id != 0 {
-            publish_late_static_call_class_id(eg, call, called_scope_class_id);
-        }
-
-        // Copy captured use_vars into CV slots after declared params
-        let func = unsafe { &*func_ptr };
-        let use_var_offset = func.sig.num_args;
-        let n_captures = closure.captures.len();
-        if n_captures > 0 {
-            if !closure.has_heap_captures {
-                // Scalar-only fast path: all captures are Long/Double/Bool/Null.
-                // Raw memcpy — no clone overhead, no needs_cleanup checks.
-                unsafe {
-                    let src = closure.captures.as_ptr();
-                    let dst = (*call).cv_mut(use_var_offset) as *mut Value;
-                    std::ptr::copy_nonoverlapping(src, dst, n_captures);
-                }
-                // No heap flag needed — all scalars.
+            prepend_args: if is_method {
+                vec![bound_this.clone().unwrap_or_else(Value::null)]
             } else {
-                // General path: at least one heap capture, clone each.
-                for (i, captured) in closure.captures.iter().enumerate() {
-                    let cv_slot = unsafe { (*call).cv_mut(use_var_offset + i as u32) };
-                    unsafe { frame_slot_init(call, cv_slot as *mut Value, captured.clone()) };
-                }
-            }
-        }
-        initialize_bound_this_frame(call, func_ptr, bound_this);
+                vec![]
+            },
+            use_vars: closure.captures.clone(),
+            called_scope_class_id: closure.called_scope_class_id,
+            bound_this,
+        };
+        // Dynamic sends start at CV 0. A first-class method closure retains
+        // the hidden receiver slot, so defer it until DoFcall shifts the
+        // explicit argument prefix exactly like an array method callback.
+        init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, is_method);
+        return Ok(ColdResult::Done);
     } else if let Some(func_name) = callable.as_str() {
         // Simple string function call: $func = "my_func"; $func()
         let func_ptr = eg.find_function(func_name).ok_or_else(|| {

@@ -43,7 +43,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if func_common.plan.needs_late_static_scope() {
                         eg.discard_late_static_scope(frame as usize);
                     }
-                    eg.vm_stack.pop_call_frame(frame);
+                    pop_vm_call_frame(eg, frame);
                     frame = prev;
                     op_array = unsafe { (*frame).op_array() };
                     continue;
@@ -69,7 +69,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     let prev = unsafe { (*frame).prev_execute_data };
                                     eg.current_execute_data.set(prev);
                                     unsafe { cleanup_frame_slots(frame) };
-                                    unsafe { pop_vm_call_frame(eg, frame) };
+                                    pop_vm_call_frame(eg, frame);
                                     frame = prev;
                                 }
                                 let base_ptr = sf_op_array.instructions.as_ptr();
@@ -324,11 +324,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                             if frame == initial_frame {
                                 eg.current_execute_data.set(prev);
-                                eg.vm_stack.pop_call_frame(frame);
+                                pop_vm_call_frame(eg, frame);
                                 return Ok(());
                             }
                             eg.current_execute_data.set(prev);
-                            eg.vm_stack.pop_call_frame(frame);
+                            pop_vm_call_frame(eg, frame);
                             frame = prev;
                             op_array = unsafe { (*frame).op_array() };
             
@@ -1546,7 +1546,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                 };
                 let common = unsafe { &*(*call).func };
-                let borrowed = opline.op2 as u32 >= common.sig.this_offset
+                // SAFETY: source is resolved from the live caller op-array and
+                // dst is the compiler-sized argument slot in the pending call.
+                let borrowed = !unsafe { (*source).is_undef() }
+                    && opline.op2 as u32 >= common.sig.this_offset
                     && unsafe {
                         try_init_borrowed_heap_arg(
                             call,
@@ -1560,7 +1563,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // TMP values are consumed (not read again), so move semantics are valid.
                 // IMPORTANT: owned types (String, Array, Object, Resource, Closure) and References
                 // MUST go through clone to maintain refcount / avoid double-free.
-                if borrowed {
+                // SAFETY: source and dst are live slots established above;
+                // Undef has no owned payload and dst has not been initialized.
+                if unsafe { (*source).is_undef() } {
+                    unsafe { dst.write(Value::null()) };
+                } else if borrowed {
                     // The destination deliberately remains outside the owned
                     // heap bitmap; cleanup must not decrement the caller's Rc.
                 } else if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
@@ -1671,7 +1678,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             arg_slot as *mut Value,
                         )
                     } {
-                        let cloned = unsafe { (&*source).clone() };
+                        // SAFETY: source belongs to the live caller frame and
+                        // remains valid until this value is cloned below.
+                        let cloned = if unsafe { (*source).is_undef() } {
+                            Value::null()
+                        } else {
+                            unsafe { (&*source).clone() }
+                        };
                         unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
                     }
                 }
@@ -1696,7 +1709,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     value
                 };
                 let destination = unsafe { (*call).cv_mut(destination_index) };
-                unsafe { frame_slot_init(call, destination as *mut Value, value.clone()) };
+                let value = if value.is_undef() {
+                    Value::null()
+                } else {
+                    value.clone()
+                };
+                // SAFETY: destination_index was derived from the selected
+                // callback signature and this pending slot is uninitialized.
+                unsafe { frame_slot_init(call, destination as *mut Value, value) };
             }
 
             OpCode::SendNamed => {
@@ -1765,6 +1785,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     && !unsafe { (*call).named_args_used }
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
+                    && eg.pending_closure_captures.is_empty()
                     && matches!(opline.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
                 {
                     let user = unsafe { &*((*call).func as *const UserFunction) };
@@ -1811,7 +1832,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     if unsafe { (*call).has_heap_slots } {
                                         unsafe { cleanup_frame_slots(call) };
                                     }
-                                    eg.vm_stack.pop_call_frame(call);
+                                    pop_vm_call_frame(eg, call);
                                     unsafe { (*frame).opline = opline_ptr.add(1) };
                                     continue 'vm;
                                 }
@@ -1820,7 +1841,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     if unsafe { (*call).has_heap_slots } {
                                         unsafe { cleanup_frame_slots(call) };
                                     }
-                                    eg.vm_stack.pop_call_frame(call);
+                                    pop_vm_call_frame(eg, call);
                                     return Err(error);
                                 }
                             }
@@ -1837,6 +1858,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     && func_common_fast.plan.call == CallStrategy::Fast
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
+                    && eg.pending_closure_captures.is_empty()
                 {
                     let num_args_fast = unsafe { (*call).num_args };
                     let arity_ok = num_args_fast >= func_common_fast.sig.required_num_args
@@ -1889,7 +1911,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             };
                         }
                         unsafe { cleanup_frame_slots(call) };
-                        eg.vm_stack.pop_call_frame(call);
+                        pop_vm_call_frame(eg, call);
 
                         if let Some(exc) = eg.exception.take() {
                             match throw_in_frame(eg, frame, exc) {
@@ -1925,6 +1947,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     && unsafe { (*call).num_args } == func_common_fast.sig.required_num_args
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
+                    && eg.pending_closure_captures.is_empty()
                 {
                     let has_hole = unsafe { (*call).named_args_used } && {
                         let mut hole = false;
@@ -2007,6 +2030,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     )
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
+                    && eg.pending_closure_captures.is_empty()
                 {
                     let num_args_fast = unsafe { (*call).num_args };
                     let user = unsafe { &*((*call).func as *const UserFunction) };
@@ -3478,12 +3502,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if frame == initial_frame {
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
-                        eg.vm_stack.pop_call_frame(frame);
+                        pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
-                    eg.vm_stack.pop_call_frame(frame);
+                    pop_vm_call_frame(eg, frame);
                     frame = prev;
                     op_array = unsafe { (*frame).op_array() };
                     // No dirty_globals check: FastScalar callee never touches globals,
@@ -3574,12 +3598,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if frame == initial_frame {
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
-                        eg.vm_stack.pop_call_frame(frame);
+                        pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
-                    eg.vm_stack.pop_call_frame(frame);
+                    pop_vm_call_frame(eg, frame);
                     frame = prev;
                     op_array = unsafe { (*frame).op_array() };
                     // Fast-return functions don't sync globals themselves, but a deeper
@@ -3763,7 +3787,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
-                    eg.vm_stack.pop_call_frame(frame);
+                    pop_vm_call_frame(eg, frame);
                     frame = prev;
                     op_array = unsafe { (*frame).op_array() };
                     continue;
@@ -3787,13 +3811,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if frame == initial_frame {
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
-                    eg.vm_stack.pop_call_frame(frame);
+                    pop_vm_call_frame(eg, frame);
                     return Ok(());
                 }
 
                 eg.current_execute_data.set(prev);
                 unsafe { cleanup_frame_slots(frame) };
-                eg.vm_stack.pop_call_frame(frame);
+                pop_vm_call_frame(eg, frame);
                 frame = prev;
                 op_array = unsafe { (*frame).op_array() };
                 // After callee returns, selectively re-read globals that the callee modified.
@@ -3868,6 +3892,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::CreateClosure => {
                 op_create_closure(eg, frame, op_array, opline);
+            }
+
+            OpCode::CreateFirstClassCallable => {
+                match op_create_first_class_callable(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::ClosureUseVar => {

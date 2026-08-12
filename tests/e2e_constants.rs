@@ -29,6 +29,32 @@ echo Values::label() . ':' . Values::class . ':' . MissingClass::class;
 }
 
 #[test]
+fn class_name_literals_resolve_inside_nested_property_defaults() {
+    let out = run_php(
+        r#"<?php
+namespace App;
+use Vendor\Attribute as Alias;
+class Defaults {
+    public array $values = [Alias::class => Alias::class, Local::class => Local::class];
+}
+$values = (new Defaults())->values;
+echo $values[Alias::class] . ':' . $values[Local::class];
+"#,
+    );
+    assert_eq!(out, "Vendor\\Attribute:App\\Local");
+}
+
+#[test]
+fn php_url_component_constants_are_available() {
+    assert_eq!(
+        run_php(
+            "<?php echo PHP_URL_SCHEME . PHP_URL_HOST . PHP_URL_PORT . PHP_URL_USER . PHP_URL_PASS . PHP_URL_PATH . PHP_URL_QUERY . PHP_URL_FRAGMENT;"
+        ),
+        "01234567"
+    );
+}
+
+#[test]
 fn test_class_constants_are_composed_and_late_static_reads_are_cached_by_class() {
     let out = run_php(
         r#"<?php
@@ -1046,4 +1072,43 @@ fn test_fully_qualified_builtin_constant_uses_global_lookup() {
         run_php("<?php echo \\PHP_EOL === PHP_EOL ? 'yes' : 'no';"),
         "yes"
     );
+}
+
+#[test]
+fn test_error_constants_are_available_in_property_defaults() {
+    assert_eq!(
+        run_php(
+            "<?php class ErrorLevels { public array $levels = [E_ERROR, E_DEPRECATED, E_ALL]; } echo implode('|', (new ErrorLevels())->levels);"
+        ),
+        "1|8192|32767"
+    );
+}
+
+#[test]
+fn included_property_default_resolves_an_imported_class_constant() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "rphp-cross-file-constant-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("Level.php"),
+        "<?php namespace Fixture; class Level { public const INFO = 'info'; }",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("Handler.php"),
+        "<?php namespace Fixture; use Fixture\\Level as ImportedLevel; class Handler { public $level = ImportedLevel::INFO; }",
+    )
+    .unwrap();
+    let main = directory.join("main.php");
+    let source = "<?php require __DIR__ . '/Level.php'; require __DIR__ . '/Handler.php'; echo (new Fixture\\Handler())->level;";
+    let out =
+        run_php_with_source_context(source, main.to_str().unwrap(), directory.to_str().unwrap());
+    std::fs::remove_dir_all(directory).unwrap();
+    assert_eq!(out, "info");
 }

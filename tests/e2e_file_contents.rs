@@ -2,6 +2,14 @@ mod common;
 
 use common::run_php;
 
+#[test]
+fn dirname_supports_multiple_levels() {
+    assert_eq!(
+        run_php("<?php echo dirname('/one/two/three/file.php', 3), ':', dirname('file.php');"),
+        "/one:."
+    );
+}
+
 struct TemporaryPath(std::path::PathBuf);
 
 impl TemporaryPath {

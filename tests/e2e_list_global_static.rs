@@ -308,3 +308,22 @@ test();
         "initialized modified "
     );
 }
+
+#[test]
+fn test_method_local_static_variable() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Counter {
+    public function next() {
+        static $count = 0;
+        return ++$count;
+    }
+}
+$counter = new Counter();
+echo $counter->next(), '|', $counter->next();
+"#,
+        ),
+        "1|2"
+    );
+}

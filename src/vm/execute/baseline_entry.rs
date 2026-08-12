@@ -24,7 +24,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
 
     eg.current_execute_data.set(unsafe { (*frame).prev_execute_data });
     unsafe { cleanup_frame_slots(frame) };
-    eg.vm_stack.pop_call_frame(frame);
+    pop_vm_call_frame(eg, frame);
 
     // Check for uncaught exception that propagated through execute_ex
     if let Some(exc) = eg.exception.take() {
@@ -419,8 +419,7 @@ where
     // Always restore and pop the callback frame, including fatal/error paths.
     eg.current_execute_data.set(saved_execute_data);
     unsafe { cleanup_frame_slots(frame) };
-    eg.discard_late_static_scope(frame as usize);
-    eg.vm_stack.pop_call_frame(frame);
+    pop_vm_call_frame(eg, frame);
 
     execution_result?;
 
@@ -746,7 +745,7 @@ fn cleanup_detached_generator_frames(eg: &mut ExecutorGlobals, root: *mut Execut
             cleanup_pending_calls(eg, frame);
             cleanup_frame_slots(frame);
         }
-        unsafe { pop_vm_call_frame(eg, frame) };
+        pop_vm_call_frame(eg, frame);
         if frame == root {
             break;
         }

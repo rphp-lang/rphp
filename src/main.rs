@@ -64,7 +64,8 @@ fn read_source(action: CliAction) -> Result<String, String> {
                 Ok(format!("<?php {code}"))
             }
         }
-        CliAction::File(file) => std::fs::read_to_string(&file)
+        CliAction::File(file) => std::fs::read(&file)
+            .map(|bytes| rphp::lexer::decode_php_source(&bytes))
             .map_err(|error| format!("could not read file '{file}': {error}")),
         CliAction::Stdin => read_stdin(),
         CliAction::Help | CliAction::Version => unreachable!("handled before reading input"),
@@ -73,11 +74,11 @@ fn read_source(action: CliAction) -> Result<String, String> {
 
 fn read_stdin() -> Result<String, String> {
     use std::io::Read;
-    let mut buf = String::new();
+    let mut buf = Vec::new();
     std::io::stdin()
-        .read_to_string(&mut buf)
+        .read_to_end(&mut buf)
         .map_err(|error| format!("could not read standard input: {error}"))?;
-    Ok(buf)
+    Ok(rphp::lexer::decode_php_source(&buf))
 }
 
 fn main() {
@@ -161,7 +162,7 @@ fn main() {
 
     // Register class definitions
     for class_def in result.class_defs {
-        if let Err(e) = eg.register_class(class_def) {
+        if let Err(e) = eg.register_compiled_class(class_def) {
             eprintln!("Fatal error: {}", e);
             std::process::exit(255);
         }

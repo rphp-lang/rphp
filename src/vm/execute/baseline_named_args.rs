@@ -63,7 +63,11 @@ fn op_send_named<'a>(
         }
 
         let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-        let cloned = val.clone();
+        let cloned = if val.is_undef() {
+            Value::null()
+        } else {
+            val.clone()
+        };
         eg.pending_named_variadic
             .entry(call_key)
             .or_insert_with(Vec::new)
@@ -111,7 +115,11 @@ fn op_send_named<'a>(
                 } else {
                     // By-value: same logic as SendVal
                     let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                    let cloned = val.clone();
+                    let cloned = if val.is_undef() {
+                        Value::null()
+                    } else {
+                        val.clone()
+                    };
                     let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
                 }

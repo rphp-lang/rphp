@@ -20,6 +20,82 @@ impl Default for MemberModifiers {
 }
 
 impl Parser {
+    fn parse_anonymous_class_body(
+        &mut self,
+    ) -> Result<(Vec<ClassProperty>, Vec<ClassConstant>, Vec<ClassMethod>), String> {
+        let mut properties = Vec::new();
+        let mut constants = Vec::new();
+        let mut methods = Vec::new();
+        let previous_class_body = self.in_class_body;
+        let previous_class_scope = self.class_scope_active;
+        self.in_class_body = true;
+        self.class_scope_active = true;
+
+        while self.peek() != Token::RBrace && !self.at_eof() {
+            let modifiers = self.parse_member_modifiers();
+            if self.peek() == Token::Function {
+                self.advance();
+                let token = self.advance();
+                let method_name = Self::token_as_named_arg_label(&token)
+                    .ok_or_else(|| format!("Expected method name, got {token:?}"))?;
+                let generic_params = self.parse_generic_parameters()?;
+                self.push_generic_scope(&generic_params);
+                self.expect(&Token::LParen)?;
+                let params = self.parse_param_list()?;
+                self.expect(&Token::RParen)?;
+                let return_type = self.parse_return_type()?;
+                let body = self.parse_method_body(&modifiers, &method_name)?;
+                self.pop_generic_scope();
+                methods.push(ClassMethod {
+                    visibility: modifiers.visibility,
+                    name: method_name,
+                    params,
+                    body,
+                    is_static: modifiers.is_static,
+                    is_final: modifiers.is_final,
+                    is_abstract: modifiers.is_abstract,
+                    return_type,
+                    generic_params,
+                });
+            } else if self.peek() == Token::Const {
+                constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
+            } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
+                if modifiers.is_abstract {
+                    return Err("Properties cannot be declared abstract".into());
+                }
+                let type_hint = self.try_parse_type_hint()?;
+                let name = match self.advance() {
+                    Token::Variable(name) => name,
+                    token => return Err(format!("Expected property variable, got {token:?}")),
+                };
+                let default = if self.peek() == Token::Assign {
+                    self.advance();
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                self.expect(&Token::Semicolon)?;
+                properties.push(ClassProperty {
+                    visibility: modifiers.visibility,
+                    name,
+                    type_hint,
+                    default,
+                    is_static: modifiers.is_static,
+                    is_readonly: modifiers.is_readonly,
+                });
+            } else {
+                return Err(format!(
+                    "Unexpected token in anonymous class body: {:?}",
+                    self.peek()
+                ));
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        self.in_class_body = previous_class_body;
+        self.class_scope_active = previous_class_scope;
+        Ok((properties, constants, methods))
+    }
+
     /// Parse try { } catch (Type $e) { } finally { }
     fn parse_try_catch(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'try'
@@ -312,8 +388,66 @@ impl Parser {
         let mut properties = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
+        let mut uses = Vec::new();
+        let mut trait_aliases = Vec::new();
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            if self.peek() == Token::Use {
+                self.advance();
+                loop {
+                    uses.push(self.parse_generic_ancestor()?);
+                    if self.peek() == Token::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                if self.peek() == Token::LBrace {
+                    self.advance();
+                    while self.peek() != Token::RBrace && !self.at_eof() {
+                        let first = self.parse_qualified_name()?;
+                        let (trait_name, method) = if self.peek() == Token::DoubleColon {
+                            self.advance();
+                            let token = self.advance();
+                            let method = Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                                format!("Expected trait method name, got {token:?}")
+                            })?;
+                            (Some(first), method)
+                        } else {
+                            (None, first)
+                        };
+                        self.expect(&Token::As)?;
+                        let visibility = match self.peek() {
+                            Token::Public => Some(Visibility::Public),
+                            Token::Protected => Some(Visibility::Protected),
+                            Token::Private => Some(Visibility::Private),
+                            _ => None,
+                        };
+                        if visibility.is_some() {
+                            self.advance();
+                        }
+                        let alias = if self.peek() == Token::Semicolon {
+                            None
+                        } else {
+                            let token = self.advance();
+                            Some(Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                                format!("Expected trait method alias, got {token:?}")
+                            })?)
+                        };
+                        self.expect(&Token::Semicolon)?;
+                        trait_aliases.push(TraitAlias {
+                            trait_name,
+                            method,
+                            alias,
+                            visibility,
+                        });
+                    }
+                    self.expect(&Token::RBrace)?;
+                } else {
+                    self.expect(&Token::Semicolon)?;
+                }
+                continue;
+            }
             let modifiers = self.parse_member_modifiers();
 
             if self.peek() == Token::Function {
@@ -382,6 +516,8 @@ impl Parser {
             properties,
             constants,
             methods,
+            uses,
+            trait_aliases,
             generic_params,
         })
     }
@@ -792,6 +928,12 @@ impl Parser {
     /// Desugars to Closure with auto-captured use vars and body = [Return(expr)]
     fn parse_arrow_function(&mut self, is_static: bool) -> Result<Expr, String> {
         self.advance(); // consume 'fn'
+        let returns_by_ref = if self.peek() == Token::Ampersand {
+            self.advance();
+            true
+        } else {
+            false
+        };
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
         self.expect(&Token::LParen)?;
@@ -811,6 +953,7 @@ impl Parser {
         let body = vec![Stmt::Return(Some(expr))];
         Ok(Expr::Closure {
             is_static,
+            returns_by_ref,
             params,
             use_vars: free_vars.into_iter().map(|name| (name, false)).collect(),
             body,
@@ -852,6 +995,10 @@ impl Parser {
                 Self::collect_free_vars(inner, bound, out);
             }
             Expr::AssignTarget { target, expr } => {
+                Self::collect_free_vars(target, bound, out);
+                Self::collect_free_vars(expr, bound, out);
+            }
+            Expr::CompoundAssignExpression { target, expr, .. } => {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);
             }
@@ -934,10 +1081,28 @@ impl Parser {
             Expr::Cast { expr: inner, .. } => {
                 Self::collect_free_vars(inner, bound, out);
             }
+            Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => {
+                Self::collect_free_vars(target, bound, out);
+            }
             Expr::Instanceof { expr: inner, .. } => {
                 Self::collect_free_vars(inner, bound, out);
             }
+            Expr::DynamicInstanceof { expr, class } => {
+                Self::collect_free_vars(expr, bound, out);
+                Self::collect_free_vars(class, bound, out);
+            }
             Expr::New { args, .. } => {
+                for arg in args {
+                    Self::collect_free_vars(arg.expr(), bound, out);
+                }
+            }
+            Expr::DynamicNew { class, args } => {
+                Self::collect_free_vars(class, bound, out);
+                for arg in args {
+                    Self::collect_free_vars(arg.expr(), bound, out);
+                }
+            }
+            Expr::AnonymousNew { args, .. } => {
                 for arg in args {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
@@ -992,6 +1157,12 @@ impl Parser {
     /// Parse closure: function($a, $b) use($c) { ... }
     fn parse_closure(&mut self, is_static: bool) -> Result<Expr, String> {
         self.advance(); // consume 'function'
+        let returns_by_ref = if self.peek() == Token::Ampersand {
+            self.advance();
+            true
+        } else {
+            false
+        };
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
         self.expect(&Token::LParen)?;
@@ -1042,6 +1213,7 @@ impl Parser {
 
         Ok(Expr::Closure {
             is_static,
+            returns_by_ref,
             params,
             use_vars,
             body,

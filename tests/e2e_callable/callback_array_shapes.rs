@@ -337,6 +337,22 @@ echo implode(',', array_map($formatter->format(...), ['a', 'b']));
 }
 
 #[test]
+fn test_first_class_method_callable_is_a_typed_closure() {
+    let out = run_php(
+        r#"<?php
+class TypedCallable {
+    private \Closure $callback;
+    public function __construct() { $this->callback = $this->format(...); }
+    private function format($value) { return strtoupper($value); }
+    public function run() { return ($this->callback)('ok'); }
+}
+echo (new TypedCallable())->run();
+"#,
+    );
+    assert_eq!(out, "OK");
+}
+
+#[test]
 fn test_first_class_static_method_callable_works_with_array_map() {
     let out = run_php(
         r#"<?php
@@ -373,10 +389,11 @@ class DynamicHandler {
 }
 $handler = new DynamicHandler();
 $methods = ['service' => 'format'];
-echo $handler->{$methods['service']}('rphp');
+$method = $methods['service'];
+echo $handler->{$method}('rphp'), '|', $handler->$method('kernel');
 "#,
     );
-    assert_eq!(out, "RPHP");
+    assert_eq!(out, "RPHP|KERNEL");
 }
 
 #[test]

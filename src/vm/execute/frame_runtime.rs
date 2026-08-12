@@ -399,6 +399,10 @@ unsafe fn try_copy_scalar_arg(
     }
 
     let destination = (call as *mut Value).add(CALL_FRAME_SLOTS + send.op2 as usize);
+    if value.is_undef() {
+        Value::write_null(destination);
+        return true;
+    }
     Value::raw_copy(source, destination);
     true
 }

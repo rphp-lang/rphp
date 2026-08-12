@@ -1,0 +1,22 @@
+{
+    "name": "rphp/symfony-warmed-kernel-fixture",
+    "version": "1.0.0",
+    "description": "Pinned Symfony 7.4 warmed FrameworkBundle kernel diagnostic",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2",
+        "symfony/framework-bundle": "7.4.16"
+    },
+    "autoload": {
+        "psr-4": {
+            "Rphp\\SymfonyKernelFixture\\": "src/"
+        }
+    },
+    "config": {
+        "platform": {
+            "php": "8.2.0",
+            "ext-xml": "8.2.0"
+        },
+        "sort-packages": true
+    }
+}

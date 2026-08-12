@@ -1105,6 +1105,18 @@ impl SignatureInfo {
         idx + self.this_offset
     }
 
+    /// Number of CV slots occupied by declared parameters. `num_args`
+    /// intentionally excludes the variadic bucket from public fixed arity,
+    /// while closure captures must be placed after that bucket.
+    #[inline]
+    pub fn parameter_cv_count(&self) -> u32 {
+        if self.is_variadic {
+            self.num_args.max(self.variadic_cv_index + 1)
+        } else {
+            self.num_args
+        }
+    }
+
     /// Scalar ABI selected solely from declarations. Structural eligibility
     /// (arity, refs, globals, generators, try/finally) is checked by callers.
     #[inline]

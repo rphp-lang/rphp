@@ -1,6 +1,16 @@
 mod common;
 use common::{run_php, run_php_expect_error};
 
+#[test]
+fn nested_trait_method_satisfies_an_interface_contract() {
+    assert_eq!(
+        run_php(
+            "<?php interface Reader { public function read(): string; } trait InnerReader { public function read(): string { return 'ok'; } } trait OuterReader { use InnerReader; } class NestedReader implements Reader { use OuterReader; } echo (new NestedReader())->read();"
+        ),
+        "ok"
+    );
+}
+
 // ─── Basic trait usage ────────────────────────────────────────────
 
 #[test]
@@ -638,4 +648,22 @@ class Reader {
         }
         other => panic!("Expected private visibility error, got: {other:?}"),
     }
+}
+
+#[test]
+fn trait_can_compose_another_trait() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait InnerGreeting { public function greeting() { return 'nested'; } }
+trait OuterGreeting {
+    use InnerGreeting { greeting as private nestedGreeting; }
+    public function greeting() { return $this->nestedGreeting(); }
+}
+class NestedGreeter { use OuterGreeting; }
+echo (new NestedGreeter())->greeting();
+"#,
+        ),
+        "nested"
+    );
 }

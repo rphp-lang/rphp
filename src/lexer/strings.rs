@@ -343,11 +343,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn is_identifier_start(byte: u8) -> bool {
-        byte == b'_' || byte.is_ascii_alphabetic()
+        byte == b'_' || byte.is_ascii_alphabetic() || byte >= b'\x80'
     }
 
     fn is_identifier_continue(byte: u8) -> bool {
-        byte == b'_' || byte.is_ascii_alphanumeric()
+        byte == b'_' || byte.is_ascii_alphanumeric() || byte >= b'\x80'
     }
 
     pub(super) fn emit_string_parts(tokens: &mut Vec<Token>, parts: &[StringPart]) {

@@ -573,6 +573,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_numeric", fn_is_numeric, 1, 1, "value");
     reg!("is_object", fn_is_object, 1, 1, "value");
     reg!("gettype", fn_gettype, 1, 1, "value");
+    reg!("get_debug_type", fn_get_debug_type, 1, 1, "value");
 
     // --- Reflection / class introspection ---
     reg!("get_class", fn_get_class, 1, 0, "object");
@@ -687,6 +688,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "class",
         "allow_string"
     );
+    reg!(
+        "class_implements",
+        fn_class_implements,
+        2,
+        1,
+        "object_or_class",
+        "autoload"
+    );
 
     // --- Math functions ---
     reg_direct!("abs", fn_abs, direct_abs, 1, 1, "num");
@@ -749,6 +758,42 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "error_levels"
     );
     reg!("restore_error_handler", fn_restore_error_handler, 0, 0);
+    reg!("get_error_handler", fn_get_error_handler, 0, 0);
+    reg!(
+        "set_exception_handler",
+        fn_set_exception_handler,
+        1,
+        1,
+        "callback"
+    );
+    reg!(
+        "restore_exception_handler",
+        fn_restore_exception_handler,
+        0,
+        0
+    );
+    reg!("get_exception_handler", fn_get_exception_handler, 0, 0);
+    reg_var!(
+        "register_shutdown_function",
+        fn_register_shutdown_function,
+        1,
+        "callback"
+    );
+    reg!("error_reporting", fn_error_reporting, 1, 0, "error_level");
+    reg!(
+        "error_log",
+        fn_error_log,
+        4,
+        1,
+        "message",
+        "message_type",
+        "destination",
+        "additional_headers"
+    );
+    reg!("ob_get_level", fn_ob_get_level, 0, 0);
+    reg!("func_num_args", fn_func_num_args, 0, 0);
+    reg!("func_get_arg", fn_func_get_arg, 1, 1, "position");
+    reg!("func_get_args", fn_func_get_args, 0, 0);
 
     // --- Callable functions ---
     reg_var!("call_user_func", fn_call_user_func, 1, "callback");
@@ -838,7 +883,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_readable", fn_is_readable, 1, 1, "filename");
     reg!("is_writable", fn_is_writable, 1, 1, "filename");
     reg!("is_writeable", fn_is_writable, 1, 1, "filename");
-    reg!("dirname", fn_dirname, 1, 1, "path");
+    reg!("dirname", fn_dirname, 2, 1, "path", "levels");
     reg!("basename", fn_basename, 2, 1, "path", "suffix");
     reg!("realpath", fn_realpath, 1, 1, "path");
     reg!("pathinfo", fn_pathinfo, 1, 1, "path");
@@ -1016,6 +1061,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg_ref!("usort", fn_usort, 2, 2, 0b1, "array", "callback");
     reg!("array_diff", fn_array_diff, 2, 2, "array1", "array2");
+    reg!("array_diff_key", fn_array_diff_key, 2, 2, "array", "arrays");
     reg!(
         "array_intersect",
         fn_array_intersect,
@@ -1175,6 +1221,50 @@ fn fn_throwable_get_message(
     ret!(rv, Value::string(""));
 }
 
+fn fn_throwable_get_file(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0)
+        .as_object()
+        .and_then(|object| object.get_property("file").cloned())
+        .unwrap_or_else(|| Value::string(""));
+    ret!(rv, value);
+}
+
+fn fn_throwable_get_line(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0)
+        .as_object()
+        .and_then(|object| object.get_property("line").cloned())
+        .unwrap_or_else(|| Value::long(0));
+    ret!(rv, value);
+}
+
+fn fn_throwable_get_trace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0)
+        .as_object()
+        .and_then(|object| object.get_property("trace").cloned())
+        .unwrap_or_else(|| Value::array(PhpArray::new()));
+    ret!(rv, value);
+}
+
+fn fn_throwable_get_trace_as_string(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::string(""));
+}
+
 fn fn_closure_bind(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -1242,6 +1332,21 @@ fn fn_closure_bind(
     ret!(rv, Value::closure(rebound));
 }
 
+fn fn_array_iterator_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let values = arg_opt!(ed, 1)
+        .filter(|value| value.value_type() == ValueType::Array)
+        .cloned()
+        .unwrap_or_else(|| Value::array(PhpArray::new()));
+    if let Some(mut object) = arg!(ed, 0).as_object_mut() {
+        object.set_property("__rphp_iterator_values", values);
+    }
+    Ok(())
+}
+
 #[cfg(feature = "value-errors")]
 #[cold]
 fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
@@ -1249,6 +1354,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
 
     eg.register_class(ClassDef {
         name: "ValueError".to_string(),
+        source_file: None,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -1326,6 +1432,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // Throwable — proper interface (PHP 8 compatible)
     eg.register_class(ClassDef {
         name: "Throwable".to_string(),
+        source_file: None,
         parent: None,
         implements: vec![],
         is_interface: true,
@@ -1350,6 +1457,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // Exception implements Throwable
     eg.register_class(ClassDef {
         name: "Exception".to_string(),
+        source_file: None,
         parent: None,
         implements: vec!["Throwable".to_string()],
         is_interface: false,
@@ -1393,6 +1501,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // RuntimeException extends Exception
     eg.register_class(ClassDef {
         name: "RuntimeException".to_string(),
+        source_file: None,
         parent: Some("Exception".to_string()),
         implements: vec![],
         is_interface: false,
@@ -1417,6 +1526,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // Error implements Throwable
     eg.register_class(ClassDef {
         name: "Error".to_string(),
+        source_file: None,
         parent: None,
         implements: vec!["Throwable".to_string()],
         is_interface: false,
@@ -1460,6 +1570,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // TypeError extends Error
     eg.register_class(ClassDef {
         name: "TypeError".to_string(),
+        source_file: None,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -1484,6 +1595,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // CompileError extends Error
     eg.register_class(ClassDef {
         name: "CompileError".to_string(),
+        source_file: None,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -1508,6 +1620,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // ParseError extends CompileError
     eg.register_class(ClassDef {
         name: "ParseError".to_string(),
+        source_file: None,
         parent: Some("CompileError".to_string()),
         implements: vec![],
         is_interface: false,
@@ -1532,6 +1645,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // ArgumentCountError extends Error
     eg.register_class(ClassDef {
         name: "ArgumentCountError".to_string(),
+        source_file: None,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -1556,6 +1670,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // UnhandledMatchError extends Error
     eg.register_class(ClassDef {
         name: "UnhandledMatchError".to_string(),
+        source_file: None,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -1606,6 +1721,16 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
         reg_method!(class, "getcode", fn_throwable_get_code, 1, 0);
         reg_method!(class, "getprevious", fn_throwable_get_previous, 1, 0);
+        reg_method!(class, "getfile", fn_throwable_get_file, 1, 0);
+        reg_method!(class, "getline", fn_throwable_get_line, 1, 0);
+        reg_method!(class, "gettrace", fn_throwable_get_trace, 1, 0);
+        reg_method!(
+            class,
+            "gettraceasstring",
+            fn_throwable_get_trace_as_string,
+            1,
+            0
+        );
     }
 
     funcs.extend(reflection::register(eg));
@@ -1616,6 +1741,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     let empty_internal_type =
         |name: &str, implements: Vec<String>, is_interface: bool, is_final: bool| ClassDef {
             name: name.to_string(),
+            source_file: None,
             parent: None,
             implements,
             is_interface,
@@ -1660,10 +1786,69 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // instanceof and the iterable pseudo-type.
     eg.register_class(empty_internal_type("Traversable", vec![], true, false))
         .unwrap();
+    for (name, parents) in [
+        ("IteratorAggregate", vec!["Traversable".to_string()]),
+        ("Countable", vec![]),
+        ("ArrayAccess", vec![]),
+        ("Stringable", vec![]),
+        ("Serializable", vec![]),
+        ("JsonSerializable", vec![]),
+        ("SessionHandlerInterface", vec![]),
+        ("SessionUpdateTimestampHandlerInterface", vec![]),
+    ] {
+        eg.register_class(empty_internal_type(name, parents, true, false))
+            .unwrap();
+    }
     eg.register_class(empty_internal_type(
         "Iterator",
         vec!["Traversable".to_string()],
         true,
+        false,
+    ))
+    .unwrap();
+    eg.register_class(empty_internal_type(
+        "RecursiveIterator",
+        vec!["Iterator".to_string()],
+        true,
+        false,
+    ))
+    .unwrap();
+    for name in ["ArrayIterator", "ArrayObject"] {
+        let mut class = empty_internal_type(
+            name,
+            vec![
+                "IteratorAggregate".to_string(),
+                "ArrayAccess".to_string(),
+                "Countable".to_string(),
+            ],
+            false,
+            false,
+        );
+        class.properties.push(PropertyDefinition::new(
+            "__rphp_iterator_values".to_string(),
+            Some(Value::array(PhpArray::new())),
+            Visibility::Private,
+            name.to_string(),
+        ));
+        eg.register_class(class).unwrap();
+        reg_method!(
+            name,
+            "__construct",
+            fn_array_iterator_construct,
+            2,
+            0,
+            "array"
+        );
+    }
+    eg.register_class(empty_internal_type(
+        "SplObjectStorage",
+        vec![
+            "Iterator".to_string(),
+            "ArrayAccess".to_string(),
+            "Countable".to_string(),
+            "Serializable".to_string(),
+        ],
+        false,
         false,
     ))
     .unwrap();
@@ -3422,7 +3607,13 @@ fn fn_is_null(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Null));
+    ret!(
+        rv,
+        Value::bool(matches!(
+            arg!(ed, 0).value_type(),
+            ValueType::Null | ValueType::Undef
+        ))
+    );
 }
 
 fn fn_is_bool(
@@ -3487,6 +3678,36 @@ fn fn_gettype(
             }
         }
         _ => "unknown type",
+    };
+    ret!(rv, Value::string(name));
+}
+
+fn fn_get_debug_type(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0);
+    let name = match value.value_type() {
+        ValueType::Undef | ValueType::Null => "null".to_string(),
+        ValueType::True | ValueType::False => "bool".to_string(),
+        ValueType::Long => "int".to_string(),
+        ValueType::Double => "float".to_string(),
+        ValueType::String => "string".to_string(),
+        ValueType::Array => "array".to_string(),
+        ValueType::Object => value
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| "object".to_string()),
+        ValueType::Closure => "Closure".to_string(),
+        ValueType::Resource => {
+            if resource::is_open_for_request(eg, value.as_resource_id().unwrap()) {
+                "resource (stream)".to_string()
+            } else {
+                "resource (closed)".to_string()
+            }
+        }
+        ValueType::Reference => value.dereferenced().type_name().to_string(),
     };
     ret!(rv, Value::string(name));
 }
@@ -3601,6 +3822,52 @@ fn fn_is_subclass_of(
         .is_some_and(|(class, target)| std::ptr::eq(class, target));
     let is_subclass = !same_identity && eg.class_is_a(&class_name, &target);
     ret!(rv, Value::bool(is_subclass));
+}
+
+fn fn_class_implements(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0);
+    let class_name = if let Some(object) = value.as_object() {
+        object.class_name.to_string()
+    } else if let Some(name) = value.as_str() {
+        name.to_string()
+    } else {
+        ret!(rv, Value::bool(false));
+    };
+    let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
+    if eg.find_class(&class_name).is_none()
+        && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
+    {
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(false));
+        }
+        return Ok(());
+    }
+
+    let mut result = PhpArray::new();
+    let mut classes = vec![class_name];
+    let mut interfaces = Vec::new();
+    while let Some(class_name) = classes.pop() {
+        if let Some(class) = eg.find_class(&class_name) {
+            interfaces.extend(class.implements.iter().cloned());
+            if let Some(parent) = &class.parent {
+                classes.push(parent.clone());
+            }
+        }
+    }
+    while let Some(interface_name) = interfaces.pop() {
+        if result.get_str(&interface_name).is_some() {
+            continue;
+        }
+        result.set_str(&interface_name, Value::string(interface_name.clone()));
+        if let Some(interface) = eg.find_class(&interface_name) {
+            interfaces.extend(interface.implements.iter().cloned());
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 // ============================================================================
@@ -3943,19 +4210,193 @@ fn fn_unset_func(
 /// diagnostics directly as return values, so retaining the callback is not yet
 /// observable; accepting the PHP API keeps warning-guarded library code valid.
 fn fn_set_error_handler(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::null());
+    let previous = eg.error_handler.clone().unwrap_or_else(Value::null);
+    eg.error_handler_stack.push(eg.error_handler.take());
+    eg.error_handler = arg_opt!(ed, 0)
+        .filter(|handler| handler.value_type() != ValueType::Null)
+        .cloned();
+    ret!(rv, previous);
 }
 
 fn fn_restore_error_handler(
     _ed: *mut ExecuteData,
     rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let restored = eg.error_handler_stack.pop();
+    if let Some(handler) = restored {
+        eg.error_handler = handler;
+        ret!(rv, Value::bool(true));
+    }
+    ret!(rv, Value::bool(false));
+}
+
+fn fn_get_error_handler(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, eg.error_handler.clone().unwrap_or_else(Value::null));
+}
+
+fn fn_set_exception_handler(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let previous = eg.exception_handler.clone().unwrap_or_else(Value::null);
+    eg.exception_handler_stack.push(eg.exception_handler.take());
+    eg.exception_handler = arg_opt!(ed, 0)
+        .filter(|handler| handler.value_type() != ValueType::Null)
+        .cloned();
+    ret!(rv, previous);
+}
+
+fn fn_restore_exception_handler(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let restored = eg.exception_handler_stack.pop();
+    if let Some(handler) = restored {
+        eg.exception_handler = handler;
+        ret!(rv, Value::bool(true));
+    }
+    ret!(rv, Value::bool(false));
+}
+
+fn fn_get_exception_handler(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, eg.exception_handler.clone().unwrap_or_else(Value::null));
+}
+
+/// The S2 CLI fixture only needs registration to be accepted; invocation at
+/// request teardown remains outside this compatibility slice.
+fn fn_register_shutdown_function(
+    _ed: *mut ExecuteData,
+    _rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    Ok(())
+}
+
+fn fn_error_reporting(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let previous = eg.error_reporting;
+    if let Some(level) = arg_opt!(ed, 0).and_then(Value::as_long) {
+        eg.error_reporting = level;
+    }
+    ret!(rv, Value::long(previous));
+}
+
+/// Write the default error-log destination to the process diagnostic stream.
+/// File/mail destinations remain outside the current compatibility envelope.
+fn fn_error_log(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let message = arg_str!(ed, 0);
+    let message_type = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
+    if message_type != 0 {
+        ret!(rv, Value::bool(false));
+    }
+    eprintln!("{message}");
     ret!(rv, Value::bool(true));
+}
+
+/// No output buffer is active until the buffering API itself is implemented.
+/// Exposing the observable level lets request kernels record their entry state.
+fn fn_ob_get_level(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::long(0));
+}
+
+fn caller_argument(ed: *mut ExecuteData, index: u32, eg: &ExecutorGlobals) -> Option<Value> {
+    // SAFETY: internal handlers receive a live frame whose predecessor remains
+    // live for the handler call. The argument count bounds every CV selected
+    // below, including the raw pre-pack variadic tail.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        if caller.is_null() || index >= (*caller).num_args {
+            return None;
+        }
+        if let Some(arguments) = eg.function_arguments.get(&(caller as usize)) {
+            return arguments.get(index as usize).cloned();
+        }
+        let function = &*(*caller).func;
+        let value = if function.sig.is_variadic && index >= function.sig.public_arity() {
+            let offset = index - function.sig.public_arity();
+            return (*caller)
+                .cv(function.sig.variadic_cv_index)
+                .as_array()
+                .and_then(|arguments| arguments.get_value_at(offset as usize).cloned());
+        } else {
+            (*caller).cv(function.sig.param_cv_index(index))
+        };
+        Some(value.dereferenced().clone())
+    }
+}
+
+fn caller_num_args(ed: *mut ExecuteData) -> Option<u32> {
+    // SAFETY: `ed` is the live internal-function frame for this handler; its
+    // predecessor, when non-null, remains allocated until the handler returns.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        (!caller.is_null()).then(|| (*caller).num_args)
+    }
+}
+
+fn fn_func_num_args(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let count = caller_num_args(ed).map_or(-1, i64::from);
+    ret!(rv, Value::long(count));
+}
+
+fn fn_func_get_arg(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(index) = arg!(ed, 0)
+        .as_long()
+        .and_then(|index| u32::try_from(index).ok())
+    else {
+        ret!(rv, Value::bool(false));
+    };
+    ret!(
+        rv,
+        caller_argument(ed, index, eg).unwrap_or_else(|| Value::bool(false))
+    );
+}
+
+fn fn_func_get_args(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let count = caller_num_args(ed).unwrap_or(0);
+    let mut arguments = PhpArray::with_packed_capacity(count as usize);
+    for index in 0..count {
+        arguments.push(caller_argument(ed, index, eg).unwrap_or_else(Value::null));
+    }
+    ret!(rv, Value::array(arguments));
 }
 
 // ============================================================================
@@ -4654,9 +5095,14 @@ fn resolve_callback(
     match val.value_type() {
         ValueType::Closure => {
             let closure = val.as_closure().unwrap();
+            let method_callable = eg.declaring_class_of(closure.func).is_some();
             Some(ResolvedCallback {
                 func_ptr: closure.func,
-                prepend_args: vec![],
+                prepend_args: if method_callable {
+                    vec![closure.bound_this.clone().unwrap_or_else(Value::null)]
+                } else {
+                    vec![]
+                },
                 use_vars: closure.captures.clone(),
                 called_scope_class_id: closure.called_scope_class_id,
                 bound_this: closure.bound_this.clone(),
@@ -5495,21 +5941,32 @@ fn fn_is_dir(
     );
 }
 
-/// dirname($path): string
+/// dirname($path, $levels = 1): string
 fn fn_dirname(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
-    let p = std::path::Path::new(path.as_ref());
-    let dir = p
-        .parent()
-        .map(|d| d.to_string_lossy().into_owned())
-        .unwrap_or_else(|| ".".to_string());
-    // PHP returns "." for paths without directory component, empty parent → "."
-    let dir = if dir.is_empty() { ".".to_string() } else { dir };
-    ret!(rv, Value::string(dir));
+    let levels = arg_opt!(ed, 1).and_then(Value::as_long).unwrap_or(1);
+    if levels < 1 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "dirname(): Argument #2 ($levels) must be greater than or equal to 1",
+        ));
+        return Ok(());
+    }
+    let mut current = std::path::PathBuf::from(path.as_ref());
+    for _ in 0..levels {
+        let next = current.parent().map(std::path::Path::to_path_buf);
+        current = match next {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            Some(_) => std::path::PathBuf::from("."),
+            None if current.has_root() => current,
+            None => std::path::PathBuf::from("."),
+        };
+    }
+    ret!(rv, Value::string(current.to_string_lossy().into_owned()));
 }
 
 /// basename($path, $suffix = ""): string
@@ -5948,6 +6405,7 @@ fn fn_filter_var(
 ) -> Result<(), VmError> {
     const FILTER_VALIDATE_INT: i64 = 257;
     const FILTER_VALIDATE_BOOL: i64 = 258;
+    const FILTER_VALIDATE_FLOAT: i64 = 259;
     const FILTER_VALIDATE_IP: i64 = 275;
     const FILTER_NULL_ON_FAILURE: i64 = 134_217_728;
     const FILTER_FLAG_IPV4: i64 = 1_048_576;
@@ -5988,6 +6446,15 @@ fn fn_filter_var(
                 _ => invalid(),
             }
         }
+        FILTER_VALIDATE_FLOAT => match value.value_type() {
+            ValueType::Double => value.clone(),
+            ValueType::Long => Value::double(value.as_long().unwrap_or_default() as f64),
+            ValueType::String => value
+                .as_str()
+                .and_then(|source| source.parse::<f64>().ok())
+                .map_or_else(invalid, Value::double),
+            _ => invalid(),
+        },
         FILTER_VALIDATE_IP => {
             let parsed = value
                 .as_str()
@@ -6564,6 +7031,27 @@ fn fn_array_diff(
         ret!(rv, Value::array(result));
     }
     ret!(rv, Value::array(PhpArray::new()));
+}
+
+fn fn_array_diff_key(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let (Some(left), Some(right)) = (arg!(ed, 0).as_array(), arg!(ed, 1).as_array()) else {
+        ret!(rv, Value::array(PhpArray::new()));
+    };
+    let mut result = PhpArray::new();
+    for (key, value) in left.iter() {
+        let exists = match &key {
+            ArrayKey::Int(index) => right.get_int(*index).is_some(),
+            ArrayKey::String(name) => right.get_str(name).is_some(),
+        };
+        if !exists {
+            result.set(key, value.clone());
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 /// array_intersect($array1, $array2): array

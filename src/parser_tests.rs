@@ -158,6 +158,73 @@ fn test_parse_trailing_commas_in_call_arguments() {
 }
 
 #[test]
+fn test_parse_reference_returning_arrow_and_reference_call_assignment() {
+    let source = "<?php $reference = &bind(fn &() => $object->value)();";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
+fn test_parse_reference_assignment_to_dynamic_property() {
+    let tokens = Lexer::new("<?php $object->$name = &$value;")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &statements[0],
+        Stmt::ExprStmt(Expr::AssignTarget { target, expr })
+            if matches!(target.as_ref(), Expr::DynamicPropertyAccess { .. })
+                && matches!(expr.as_ref(), Expr::Variable(name) if name == "value")
+    ));
+}
+
+#[test]
+fn test_parse_unobserved_attribute_groups_without_hash_comment_confusion() {
+    let source = "<?php #[Marker(values: [']'])] class C { public function run(#[Sensitive] string $value): void {} }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
+fn test_parse_coalesce_assignment_on_comparison_rhs() {
+    let tokens = Lexer::new("<?php $result = 0 > $value ??= 1;")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let Stmt::Assign { expr, .. } = &statements[0] else {
+        panic!("unexpected statement: {:?}", statements[0]);
+    };
+    let Expr::BinaryOp { right, .. } = expr else {
+        panic!("unexpected assignment expression: {expr:?}");
+    };
+    assert!(matches!(right.as_ref(), Expr::CoalesceAssign { .. }));
+}
+
+#[test]
+fn test_parse_empty_anonymous_class_ancestry() {
+    let source =
+        "<?php $error = new class('message') extends RuntimeException implements Throwable {};";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
+fn test_parse_scientific_float_without_decimal_point() {
+    let tokens = Lexer::new("<?php echo 1e4, 2E-2;").tokenize().unwrap();
+    assert!(
+        tokens
+            .iter()
+            .any(|token| matches!(token, Token::Float(value) if *value == 10_000.0))
+    );
+    assert!(
+        tokens
+            .iter()
+            .any(|token| matches!(token, Token::Float(value) if *value == 0.02))
+    );
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_static_first_class_callable() {
     let tokens = Lexer::new("<?php $callable = self::handleError(...);")
         .tokenize()

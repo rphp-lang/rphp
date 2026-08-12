@@ -1,6 +1,36 @@
 // -- is_callable with string --
 
 #[test]
+fn closure_values_are_instances_of_closure() {
+    let out = run_php("<?php $closure = static function () {}; echo $closure instanceof Closure ? 'yes' : 'no';");
+    assert_eq!(out, "yes");
+}
+
+#[test]
+fn variadic_closure_arguments_do_not_overwrite_captures() {
+    let out = run_php(
+        "<?php $captured = 'kept'; $closure = static function (...$args) use ($captured) { return $captured . ':' . implode(',', $args); }; echo $closure('a', 'b', 'c');",
+    );
+    assert_eq!(out, "kept:a,b,c");
+}
+
+#[test]
+fn closure_declared_in_method_retains_protected_visibility_scope() {
+    let out = run_php(
+        "<?php class ScopedParent { protected string $value = 'ok'; public function reader(object $target): Closure { return static fn () => $target->value; } } class ScopedChild extends ScopedParent {} $object = new ScopedChild(); echo $object->reader($object)();",
+    );
+    assert_eq!(out, "ok");
+}
+
+#[test]
+fn dynamic_call_expands_a_sole_unpack_argument() {
+    let out = run_php(
+        "<?php $callable = static fn ($a, $b, $c) => $a . $b . $c; $args = ['a', 'b', 'c']; echo $callable(...$args);",
+    );
+    assert_eq!(out, "abc");
+}
+
+#[test]
 fn test_is_callable_existing_function() {
     let out = run_php(
         r#"<?php

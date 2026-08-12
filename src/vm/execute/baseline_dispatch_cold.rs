@@ -1041,7 +1041,14 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
     }
 
     resolve_static_property_read_cache_miss(
-        eg, frame, result_ptr, cache, class_id, raw_class, prop,
+        eg,
+        frame,
+        result_ptr,
+        cache,
+        class_id,
+        raw_class,
+        prop,
+        opline._pad & FETCH_OBJ_SILENT != 0,
     )
 }
 
@@ -1178,6 +1185,16 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             "Cannot use \"::class\" on string".to_string(),
         ));
     }
+    if dynamic_owner
+        && !dynamic_name
+        && constant.is_some_and(|name| name.eq_ignore_ascii_case("class"))
+        && let Some(object) = class_value.as_object()
+    {
+        let class_name = object.class_name.clone();
+        drop(object);
+        set_result(Value::string(class_name.to_string()));
+        return Ok(ColdResult::Done);
+    }
     let scoped_owner = raw_class.eq_ignore_ascii_case("self")
         || raw_class.eq_ignore_ascii_case("static")
         || raw_class.eq_ignore_ascii_case("parent");
@@ -1207,7 +1224,13 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     let class_id = if dynamic_owner && !LATE_STATIC {
         class_value
             .as_object()
-            .map(|object| object.class_id)
+            .map(|object| {
+                if object.class_id == 0 {
+                    eg.class_id_of(&object.class_name)
+                } else {
+                    object.class_id
+                }
+            })
             .unwrap_or_else(|| eg.class_id_of(raw_class))
     } else {
         static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class)
@@ -1646,6 +1669,7 @@ fn resolve_static_property_read_cache_miss<'a>(
     class_id: u32,
     raw_class: &str,
     property: &str,
+    silent: bool,
 ) -> Result<ColdResult<'a>, VmError> {
     let resolved =
         resolve_static_property(eg, frame, class_id, raw_class, property, false)?;
@@ -1653,6 +1677,12 @@ fn resolve_static_property_read_cache_miss<'a>(
         .static_property_value(resolved.storage_slot)
         .ok_or_else(|| VmError::Fatal("Invalid static property storage slot".into()))?;
     if stored.is_undef() {
+        if silent {
+            // SAFETY: result_ptr is the compiler-owned output slot for this
+            // live frame and has been prepared for one result write.
+            unsafe { frame_tmp_set(frame, result_ptr, Value::null()) };
+            return Ok(ColdResult::Done);
+        }
         let definition = unsafe { &*resolved.definition };
         return Ok(static_property_throw(
             eg,
@@ -1741,9 +1771,13 @@ fn op_instanceof(
     let class_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let target = class_name.as_str().unwrap_or("");
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    let is_instance = obj_val
-        .as_object()
-        .is_some_and(|object| eg.class_is_a(&object.class_name, target));
+    let is_instance = if obj_val.value_type() == ValueType::Closure {
+        eg.class_is_a("Closure", target)
+    } else {
+        obj_val
+            .as_object()
+            .is_some_and(|object| eg.class_is_a(&object.class_name, target))
+    };
     unsafe { frame_result_set(frame, result_ptr, opline.result_type, Value::bool(is_instance)) };
 }
 
@@ -1871,7 +1905,9 @@ fn op_create_closure(
     let called_scope_class_id = if common.plan.needs_late_static_scope() {
         late_static_call_class_id(eg, frame)
     } else {
-        0
+        get_caller_class(frame, eg)
+            .as_deref()
+            .map_or(0, |class| eg.class_id_of(class))
     };
     let is_static = (opline._pad & crate::vm::instruction::CLOSURE_FLAG_STATIC) != 0;
     let bound_this = closure_bound_this(frame, op_array, is_static);
@@ -1886,6 +1922,58 @@ fn op_create_closure(
     };
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
     unsafe { frame_tmp_set(frame, result_ptr, Value::closure(closure)) };
+}
+
+#[inline(never)]
+fn op_create_first_class_callable<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: opline operands and result identify compiler-allocated slots in
+    // this live frame; the read is cloned before callback resolution mutates VM state.
+    let callable = unsafe {
+        (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone()
+    };
+    let caller_class = get_caller_class(frame, eg);
+    let Some(resolved) = crate::stdlib::resolve_callback_with_cache(
+        &callable,
+        eg,
+        caller_class.as_deref(),
+        None,
+    ) else {
+        let error = make_error_value("TypeError", "Failed to create closure from callable");
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+        });
+    };
+
+    let bound_this = resolved.bound_this.or_else(|| {
+        resolved
+            .prepend_args
+            .first()
+            .filter(|value| value.value_type() == ValueType::Object)
+            .cloned()
+    });
+    let has_heap_captures = resolved.use_vars.iter().any(Value::needs_cleanup);
+    let closure = PhpClosure {
+        identity: std::rc::Rc::new(()),
+        func: resolved.func_ptr,
+        called_scope_class_id: resolved.called_scope_class_id,
+        is_static: bound_this.is_none(),
+        bound_this,
+        captures: resolved.use_vars,
+        has_heap_captures,
+    };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+    // SAFETY: result_ptr is the prepared compiler-owned result slot and is
+    // initialized exactly once with the newly owned closure.
+    unsafe { frame_tmp_set(frame, result_ptr, Value::closure(closure)) };
+    Ok(ColdResult::Done)
 }
 
 #[inline(never)]

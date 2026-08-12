@@ -266,6 +266,7 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_SILENT;
                 self.instructions.push(fetch);
                 (
                     current,
@@ -293,6 +294,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_SILENT;
                 self.instructions.push(fetch);
                 (
                     current,
@@ -324,6 +326,7 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_SILENT;
                 self.instructions.push(fetch);
                 (
                     current,
@@ -996,6 +999,7 @@ impl Compiler {
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
+                self.class_defs.extend(func_compiler.class_defs);
                 self.generic_declarations
                     .extend(nested_generic_declarations);
                 self.functions.push((resolved_name, user_func));
@@ -2041,6 +2045,7 @@ impl Compiler {
                         method.is_static,
                     );
                     self.functions.extend(func_compiler.functions);
+                    self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
                         method.name.clone(),
                         method.visibility,
@@ -2143,6 +2148,8 @@ impl Compiler {
                 )?;
                 self.class_defs.push(ClassDef {
                     name: resolved_class,
+                    source_file: (!self.source_file.is_empty())
+                        .then(|| self.source_file.clone()),
                     parent: resolved_parent,
                     implements: resolved_implements,
                     is_interface: false,
@@ -2282,6 +2289,7 @@ impl Compiler {
                         cp.return_type_hint,
                     );
                     self.functions.extend(func_compiler.functions);
+                    self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
                         method.name.clone(),
                         method.visibility,
@@ -2298,6 +2306,8 @@ impl Compiler {
                     self.compile_class_constants(&resolved_iface, None, constants)?;
                 self.class_defs.push(ClassDef {
                     name: resolved_iface,
+                    source_file: (!self.source_file.is_empty())
+                        .then(|| self.source_file.clone()),
                     parent: None,
                     implements: resolved_extends,
                     is_interface: true,
@@ -2323,6 +2333,8 @@ impl Compiler {
                 properties,
                 constants,
                 methods,
+                uses,
+                trait_aliases,
                 generic_params,
             } => {
                 let resolved_trait = self.resolve_name(name);
@@ -2431,6 +2443,7 @@ impl Compiler {
                         method.is_static,
                     );
                     self.functions.extend(func_compiler.functions);
+                    self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
                         method.name.clone(),
                         method.visibility,
@@ -2486,8 +2499,26 @@ impl Compiler {
 
                 let compiled_constants =
                     self.compile_class_constants(&resolved_trait, None, constants)?;
+                let resolved_uses = uses
+                    .iter()
+                    .map(|used_trait| self.resolve_name(&used_trait.name))
+                    .collect();
+                let resolved_trait_aliases = trait_aliases
+                    .iter()
+                    .map(|adaptation| TraitMethodAlias {
+                        trait_name: adaptation
+                            .trait_name
+                            .as_ref()
+                            .map(|name| self.resolve_name(name)),
+                        method: adaptation.method.clone(),
+                        alias: adaptation.alias.clone(),
+                        visibility: adaptation.visibility,
+                    })
+                    .collect();
                 self.class_defs.push(ClassDef {
                     name: resolved_trait,
+                    source_file: (!self.source_file.is_empty())
+                        .then(|| self.source_file.clone()),
                     parent: None,
                     implements: vec![],
                     is_interface: false,
@@ -2495,8 +2526,8 @@ impl Compiler {
                     is_final: false,
                     is_trait: true,
                     is_enum: false,
-                    uses: vec![],
-                    trait_aliases: vec![],
+                    uses: resolved_uses,
+                    trait_aliases: resolved_trait_aliases,
                     properties: compiled_props,
                     static_properties: compiled_static_props,
                     constants: compiled_constants,
@@ -2615,6 +2646,7 @@ impl Compiler {
                         method.is_static,
                     );
                     self.functions.extend(func_compiler.functions);
+                    self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
                         method.name.clone(),
                         method.visibility,
@@ -2665,6 +2697,8 @@ impl Compiler {
                     self.compile_class_constants(&resolved_enum, None, constants)?;
                 self.class_defs.push(ClassDef {
                     name: resolved_enum,
+                    source_file: (!self.source_file.is_empty())
+                        .then(|| self.source_file.clone()),
                     parent: None,
                     implements: vec![],
                     is_interface: false,

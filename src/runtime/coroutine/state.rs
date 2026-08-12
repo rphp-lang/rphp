@@ -78,6 +78,7 @@ pub(super) struct CoroutineExecutionState {
     pub(super) current_execute_data: *mut ExecuteData,
     pub(super) exception: Option<Value>,
     pending_named_variadic: HashMap<usize, Vec<(String, Value)>>,
+    function_arguments: HashMap<usize, Vec<Value>>,
     active_generator: Option<crate::vm::generator::GeneratorRef>,
     pending_invoke_this: Option<Value>,
 }
@@ -89,6 +90,7 @@ impl CoroutineExecutionState {
             current_execute_data: std::ptr::null_mut(),
             exception: None,
             pending_named_variadic: HashMap::new(),
+            function_arguments: HashMap::new(),
             active_generator: None,
             pending_invoke_this: None,
         }
@@ -113,6 +115,9 @@ impl CoroutineExecutionState {
                 &mut self.pending_named_variadic,
                 &mut eg.pending_named_variadic,
             );
+        }
+        if !self.function_arguments.is_empty() || !eg.function_arguments.is_empty() {
+            std::mem::swap(&mut self.function_arguments, &mut eg.function_arguments);
         }
         if self.active_generator.is_some() || eg.active_generator.is_some() {
             std::mem::swap(&mut self.active_generator, &mut eg.active_generator);
@@ -139,6 +144,7 @@ impl CoroutineExecutionState {
         self.current_execute_data = std::ptr::null_mut();
         self.exception = None;
         self.pending_named_variadic.clear();
+        self.function_arguments.clear();
         self.active_generator = None;
         self.pending_invoke_this = None;
     }

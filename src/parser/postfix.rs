@@ -1,4 +1,58 @@
 impl Parser {
+    /// Parse the variable/property/dimension expression that supplies a
+    /// dynamic class name. A following `(` belongs to the constructor, not to
+    /// the final property as an ordinary dynamic call.
+    fn parse_dynamic_new_class_expression(&mut self, mut expr: Expr) -> Result<Expr, String> {
+        loop {
+            match self.peek() {
+                Token::LBracket if self.peek_at(1) != Token::RBracket => {
+                    self.advance();
+                    let index = self.parse_expr()?;
+                    self.expect(&Token::RBracket)?;
+                    expr = Expr::ArrayAccess {
+                        array: Box::new(expr),
+                        index: Box::new(index),
+                    };
+                }
+                Token::Arrow | Token::NullSafe => {
+                    let nullsafe = matches!(self.peek(), Token::NullSafe);
+                    self.advance();
+                    if self.peek() == Token::LBrace {
+                        self.advance();
+                        let property = self.parse_expr()?;
+                        self.expect(&Token::RBrace)?;
+                        expr = Expr::DynamicPropertyAccess {
+                            object: Box::new(expr),
+                            property: Box::new(property),
+                            nullsafe,
+                        };
+                        continue;
+                    }
+                    if let Token::Variable(property) = self.peek() {
+                        self.advance();
+                        expr = Expr::DynamicPropertyAccess {
+                            object: Box::new(expr),
+                            property: Box::new(Expr::Variable(property)),
+                            nullsafe,
+                        };
+                        continue;
+                    }
+                    let token = self.advance();
+                    let property = Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                        format!("Expected property name in dynamic class expression, got {token:?}")
+                    })?;
+                    expr = Expr::PropertyAccess {
+                        object: Box::new(expr),
+                        property,
+                        nullsafe,
+                    };
+                }
+                _ => break,
+            }
+        }
+        Ok(expr)
+    }
+
     /// Parse a statically named member after a class-like owner. The shared
     /// postfix loop in `parse_power` continues the resulting expression.
     fn parse_named_static_access(&mut self, class_name: String) -> Result<Expr, String> {
@@ -191,6 +245,40 @@ impl Parser {
                                 object: Box::new(expr),
                                 property: Box::new(member),
                                 nullsafe: false,
+                            };
+                        }
+                        continue;
+                    }
+                    if let Token::Variable(member_name) = self.peek() {
+                        self.advance();
+                        let member = Expr::Variable(member_name);
+                        if self.peek() == Token::LParen {
+                            if nullsafe {
+                                return Err(
+                                    "Dynamic nullsafe method calls are not supported yet".into()
+                                );
+                            }
+                            self.advance();
+                            let args = self.parse_call_args()?;
+                            expr = Expr::DynamicCall {
+                                callable: Box::new(Expr::ArrayLiteral(vec![
+                                    ArrayElement {
+                                        key: None,
+                                        value: expr,
+                                    },
+                                    ArrayElement {
+                                        key: None,
+                                        value: member,
+                                    },
+                                ])),
+                                args,
+                                generic_args: Vec::new(),
+                            };
+                        } else {
+                            expr = Expr::DynamicPropertyAccess {
+                                object: Box::new(expr),
+                                property: Box::new(member),
+                                nullsafe,
                             };
                         }
                         continue;

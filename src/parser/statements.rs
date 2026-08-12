@@ -249,10 +249,11 @@ impl Parser {
                         self.advance();
                         let target = self.parse_expr()?;
                         if !self.is_empty_array_dimension_suffix() {
-                            return Err(
-                                "Only an appended array element can currently be bound by reference"
-                                    .into(),
-                            );
+                            self.expect(&Token::Semicolon)?;
+                            return Ok(Stmt::Assign {
+                                var: var_name,
+                                expr: target,
+                            });
                         }
                         if !matches!(
                             &target,
@@ -729,9 +730,7 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Global(vars))
             }
-            Token::Static
-                if !self.in_class_body && matches!(self.peek_at(1), Token::Variable(_)) =>
-            {
+            Token::Static if matches!(self.peek_at(1), Token::Variable(_)) => {
                 // static $var = expr; (function-level static variable)
                 self.advance(); // consume 'static'
                 let mut vars = Vec::new();
@@ -1053,6 +1052,12 @@ impl Parser {
                     property,
                     expr: *expr,
                 }),
+                target @ Expr::DynamicPropertyAccess {
+                    nullsafe: false, ..
+                } => Ok(Stmt::ExprStmt(Expr::AssignTarget {
+                    target: Box::new(target),
+                    expr,
+                })),
                 target @ Expr::ArrayAccess { .. } => {
                     let (root, mut indices) = Self::split_array_access(target);
                     if indices.len() == 1

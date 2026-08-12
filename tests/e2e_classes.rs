@@ -1,6 +1,89 @@
 /// Tests for classes and objects (basic)
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
+
+#[test]
+fn reflection_object_exposes_the_declaring_source_file() {
+    let file = "/tmp/rphp-reflection-object-source.php";
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php class ReflectedSource {} echo (new ReflectionObject(new ReflectedSource()))->getFileName();",
+            file,
+            "/tmp",
+        ),
+        file
+    );
+}
+
+#[test]
+fn instanceof_accepts_a_runtime_class_name() {
+    assert_eq!(
+        run_php(
+            "<?php class RuntimeType {} $class = RuntimeType::class; $value = new RuntimeType(); echo $value instanceof $class ? 'yes' : 'no';"
+        ),
+        "yes"
+    );
+}
+
+#[test]
+fn interface_implementation_may_add_a_typed_optional_parameter() {
+    assert_eq!(
+        run_php(
+            "<?php interface Clearable { public function clear(): bool; } class Cache implements Clearable { public function clear(string $prefix = ''): bool { return $prefix === ''; } } echo (new Cache())->clear() ? 'yes' : 'no';"
+        ),
+        "yes"
+    );
+}
+
+#[test]
+fn reflection_property_reads_initialization_and_writes_private_storage() {
+    assert_eq!(
+        run_php(
+            "<?php class ReflectedProperty { private string $value; } $object = new ReflectedProperty(); $property = new ReflectionProperty($object, 'value'); echo $property->isInitialized($object) ? 'set' : 'unset'; $property->setValue($object, 'ok'); echo ':' . $property->getValue($object);"
+        ),
+        "unset:ok"
+    );
+}
+
+#[test]
+fn reflection_class_exposes_name_parent_empty_attributes_and_interfaces() {
+    assert_eq!(
+        run_php(
+            "<?php interface ReflectedInterface {} class ReflectedParent implements ReflectedInterface {} class ReflectedChild extends ReflectedParent {} $class = new ReflectionClass(ReflectedChild::class); $interfaces = class_implements($class->name); echo $class->name . ':' . count($class->getAttributes(null, ReflectionAttribute::IS_INSTANCEOF)) . ':' . $class->getParentClass()->name . ':' . (isset($interfaces['ReflectedInterface']) ? 'yes' : 'no');"
+        ),
+        "ReflectedChild:0:ReflectedParent:yes"
+    );
+}
+
+#[test]
+fn empty_anonymous_class_preserves_parent_and_interfaces() {
+    assert_eq!(
+        run_php(
+            "<?php interface AnonymousMarker {} class AnonymousParent { public function value(): string { return 'ok'; } } $object = new class extends AnonymousParent implements AnonymousMarker {}; echo $object->value() . ':' . ($object instanceof AnonymousMarker ? 'yes' : 'no');"
+        ),
+        "ok:yes"
+    );
+}
+
+#[test]
+fn anonymous_class_compiles_promoted_properties_and_methods() {
+    assert_eq!(
+        run_php(
+            "<?php class AnonymousHeader { public array $values = ['ok' => true]; } $checker = new class(new AnonymousHeader()) { public function __construct(private AnonymousHeader $header) {} public function __invoke(string $key): bool { return array_key_exists($key, $this->header->values); } }; echo $checker('ok') ? 'yes' : 'no';"
+        ),
+        "yes"
+    );
+}
+
+#[test]
+fn dynamic_new_accepts_property_and_dimension_class_expression() {
+    assert_eq!(
+        run_php(
+            "<?php class DynamicallyMade { public string $value = 'ok'; } class DynamicFactory { public array $types = ['result' => DynamicallyMade::class]; public function make(): object { return new $this->types['result'](); } } echo (new DynamicFactory())->make()->value;"
+        ),
+        "ok"
+    );
+}
 
 #[test]
 fn test_class_basic_property() {
@@ -475,5 +558,25 @@ echo LateFactoryChild::make()->kind();
 "#,
         ),
         "child"
+    );
+}
+
+#[test]
+fn variable_class_instantiation_rekeys_the_constructor_cache() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DynamicFirst {
+    public function __construct(public $value) {}
+}
+class DynamicSecond {
+    public function __construct(public $value) {}
+}
+function make($class, $value) { return new $class($value); }
+echo make(DynamicFirst::class, 'first')->value, '|';
+echo make(DynamicSecond::class, 'second')->value;
+"#,
+        ),
+        "first|second"
     );
 }

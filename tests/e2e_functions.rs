@@ -3,6 +3,26 @@ mod common;
 use common::{make_eg_with_capture, run_php, run_php_expect_error, run_php_with_functions};
 
 #[test]
+fn undefined_variables_are_passed_as_null_arguments() {
+    assert_eq!(
+        run_php(
+            "<?php function acceptsNull($value) { return is_null($value) ? 'null' : 'value'; } echo (is_null($missing) ? 'null' : 'value') . ':' . acceptsNull(value: $alsoMissing) . ':' . ($thirdMissing === null ? 'null' : 'value');"
+        ),
+        "null:null:null"
+    );
+}
+
+#[test]
+fn function_argument_introspection_sees_extra_arguments() {
+    assert_eq!(
+        run_php(
+            "<?php function inspectArguments($first) { echo func_num_args() . ':' . func_get_arg(1) . ':' . implode(',', func_get_args()); } inspectArguments('a', 'b');"
+        ),
+        "2:b:a,b"
+    );
+}
+
+#[test]
 fn function_results_continue_through_postfix_method_and_property_chains() {
     let out = run_php(
         r#"<?php

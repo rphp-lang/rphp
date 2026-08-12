@@ -16,13 +16,49 @@ impl Parser {
         } else if self.peek() == Token::Assign {
             // Handle assignment as expression: $var = expr
             self.finish_assignment_expression(expr)
+        } else if Self::compound_assign_op(&self.peek()).is_some() {
+            self.finish_compound_assignment_expression(expr)
         } else {
             Ok(expr)
         }
     }
 
+    fn finish_compound_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
+        if !matches!(
+            &target,
+            Expr::Variable(_)
+                | Expr::ArrayAccess { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::StaticProperty { .. }
+        ) {
+            return Err("Invalid compound assignment target".into());
+        }
+        let op = Self::compound_assign_op(&self.advance())
+            .ok_or_else(|| "Expected compound assignment operator".to_string())?;
+        let expr = self.parse_expr()?;
+        Ok(Expr::CompoundAssignExpression {
+            target: Box::new(target),
+            op,
+            expr: Box::new(expr),
+        })
+    }
+
     fn finish_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
         self.expect(&Token::Assign)?;
+        // General reference assignment uses the same writable-target grammar.
+        // Reference identity is not modeled for this expression form yet, but
+        // accepting the marker keeps declarations containing property and
+        // dynamic-property reference assignments loadable.
+        if self.peek() == Token::Ampersand {
+            self.advance();
+        }
         let expr = Box::new(self.parse_expr()?);
         match target {
             Expr::Variable(var) => Ok(Expr::Assign { var, expr }),
@@ -161,7 +197,7 @@ impl Parser {
 
     /// Null coalesce: ?? (right-associative)
     fn parse_null_coalesce(&mut self) -> Result<Expr, String> {
-        let left = self.parse_logical_or()?;
+        let left = self.parse_logical_xor()?;
 
         if self.peek() == Token::QuestionQuestion {
             self.advance();
@@ -176,6 +212,21 @@ impl Parser {
         } else {
             Ok(left)
         }
+    }
+
+    /// Keyword `xor`: both operands are evaluated and converted to bool.
+    fn parse_logical_xor(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_logical_or()?;
+        while self.peek() == Token::LogicalXor {
+            self.advance();
+            let right = self.parse_logical_or()?;
+            left = Expr::BinaryOp {
+                op: BinOp::LogicalXor,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
     }
 
     /// Logical OR: || (left-associative)
@@ -226,10 +277,7 @@ impl Parser {
     }
 
     fn finish_variable_assignment(&mut self, operand: Expr) -> Result<Expr, String> {
-        if self.peek() != Token::Assign {
-            return Ok(operand);
-        }
-        self.finish_assignment_expression(operand)
+        self.finish_assignment_tail(operand)
     }
 
     /// Bitwise OR: | (left-associative)
@@ -291,19 +339,27 @@ impl Parser {
             // instanceof has same precedence as comparison operators
             if self.peek() == Token::Instanceof {
                 self.advance();
-                let class_name = if self.peek() == Token::Backslash
+                left = if self.peek() == Token::Backslash
                     || matches!(self.peek(), Token::Identifier(_))
                 {
-                    self.parse_qualified_name()?
+                    Expr::Instanceof {
+                        expr: Box::new(left),
+                        class_name: self.parse_qualified_name()?,
+                    }
+                } else if matches!(self.peek(), Token::Variable(_)) {
+                    let class = match self.advance() {
+                        Token::Variable(name) => Expr::Variable(name),
+                        _ => unreachable!(),
+                    };
+                    Expr::DynamicInstanceof {
+                        expr: Box::new(left),
+                        class: Box::new(class),
+                    }
                 } else {
                     return Err(format!(
                         "Expected class name after instanceof, got {:?}",
                         self.peek()
                     ));
-                };
-                left = Expr::Instanceof {
-                    expr: Box::new(left),
-                    class_name,
                 };
                 continue;
             }
@@ -336,10 +392,7 @@ impl Parser {
     /// forms such as `false !== $position = strrpos(...)`.
     fn parse_comparison_operand(&mut self) -> Result<Expr, String> {
         let operand = self.parse_concat()?;
-        if self.peek() != Token::Assign {
-            return Ok(operand);
-        }
-        self.finish_assignment_expression(operand)
+        self.finish_assignment_tail(operand)
     }
 
     /// Concat: . (left-associative, lower than additive in PHP 8)
@@ -349,6 +402,7 @@ impl Parser {
         while self.peek() == Token::Dot {
             self.advance();
             let right = self.parse_shift()?;
+            let right = self.finish_assignment_tail(right)?;
             left = Expr::BinaryOp {
                 op: BinOp::Concat,
                 left: Box::new(left),
@@ -432,6 +486,30 @@ impl Parser {
             Token::Bang => {
                 self.advance();
                 let mut expr = self.parse_unary()?;
+                // `instanceof` binds tighter than logical negation in PHP:
+                // `!$value instanceof Type` means `!($value instanceof Type)`.
+                if self.peek() == Token::Instanceof {
+                    self.advance();
+                    expr = if self.peek() == Token::Backslash
+                        || matches!(self.peek(), Token::Identifier(_))
+                    {
+                        Expr::Instanceof {
+                            expr: Box::new(expr),
+                            class_name: self.parse_qualified_name()?,
+                        }
+                    } else if let Token::Variable(class_name) = self.peek() {
+                        self.advance();
+                        Expr::DynamicInstanceof {
+                            expr: Box::new(expr),
+                            class: Box::new(Expr::Variable(class_name)),
+                        }
+                    } else {
+                        return Err(format!(
+                            "Expected class name after instanceof, got {:?}",
+                            self.peek()
+                        ));
+                    };
+                }
                 // PHP permits `!$value ??= $fallback` and applies `!` to the
                 // value produced by the coalescing assignment.
                 if self.peek() == Token::QuestionQuestionAssign {
@@ -566,19 +644,35 @@ impl Parser {
             }
             Token::PlusPlus => {
                 self.advance();
-                let name = match self.advance() {
-                    Token::Variable(n) => n,
-                    other => return Err(format!("Expected variable after ++, got {:?}", other)),
-                };
-                Ok(Expr::PreInc(name))
+                let target = self.parse_power()?;
+                match target {
+                    Expr::Variable(name) => Ok(Expr::PreInc(name)),
+                    Expr::PropertyAccess {
+                        nullsafe: false, ..
+                    }
+                    | Expr::DynamicPropertyAccess {
+                        nullsafe: false, ..
+                    }
+                    | Expr::StaticProperty { .. }
+                    | Expr::ArrayAccess { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
+                    other => Err(format!("Invalid increment target: {other:?}")),
+                }
             }
             Token::MinusMinus => {
                 self.advance();
-                let name = match self.advance() {
-                    Token::Variable(n) => n,
-                    other => return Err(format!("Expected variable after --, got {:?}", other)),
-                };
-                Ok(Expr::PreDec(name))
+                let target = self.parse_power()?;
+                match target {
+                    Expr::Variable(name) => Ok(Expr::PreDec(name)),
+                    Expr::PropertyAccess {
+                        nullsafe: false, ..
+                    }
+                    | Expr::DynamicPropertyAccess {
+                        nullsafe: false, ..
+                    }
+                    | Expr::StaticProperty { .. }
+                    | Expr::ArrayAccess { .. } => Ok(Expr::PreDecTarget(Box::new(target))),
+                    other => Err(format!("Invalid decrement target: {other:?}")),
+                }
             }
             Token::Print => {
                 self.advance();
@@ -738,6 +832,61 @@ impl Parser {
             }
             Token::New => {
                 self.advance(); // consume 'new'
+                if self.peek() == Token::Class {
+                    self.advance();
+                    let args = if self.peek() == Token::LParen {
+                        self.advance();
+                        self.parse_call_args()?
+                    } else {
+                        Vec::new()
+                    };
+                    let parent = if self.peek() == Token::Extends {
+                        self.advance();
+                        Some(self.parse_generic_ancestor()?)
+                    } else {
+                        None
+                    };
+                    let implements = if self.peek() == Token::Implements {
+                        self.advance();
+                        let mut interfaces = Vec::new();
+                        loop {
+                            interfaces.push(self.parse_generic_ancestor()?);
+                            if self.peek() == Token::Comma {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        interfaces
+                    } else {
+                        Vec::new()
+                    };
+                    self.expect(&Token::LBrace)?;
+                    let (properties, constants, methods) = self.parse_anonymous_class_body()?;
+                    return Ok(Expr::AnonymousNew {
+                        args,
+                        parent,
+                        implements,
+                        properties,
+                        constants,
+                        methods,
+                    });
+                }
+                if let Token::Variable(class_name) = self.peek() {
+                    self.advance();
+                    let class = self
+                        .parse_dynamic_new_class_expression(Expr::Variable(class_name))?;
+                    let args = if self.peek() == Token::LParen {
+                        self.advance();
+                        self.parse_call_args()?
+                    } else {
+                        Vec::new()
+                    };
+                    return Ok(Expr::DynamicNew {
+                        class: Box::new(class),
+                        args,
+                    });
+                }
                 let class_name = match self.peek() {
                     Token::Backslash | Token::Identifier(_) => self.parse_qualified_name()?,
                     Token::Static if self.class_scope_active => {

@@ -167,6 +167,10 @@ pub enum OpCode {
     IssetObj = 146,
     /// Unset one object property: op1=object, op2=CONST property name.
     UnsetObj = 147,
+    /// Resolve a PHP callable and materialize a real Closure value. Unlike an
+    /// array callable, the result satisfies Closure type declarations while
+    /// retaining the receiver and lexical called-class scope.
+    CreateFirstClassCallable = 148,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

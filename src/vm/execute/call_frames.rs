@@ -96,8 +96,9 @@ unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
 
 #[cold]
 #[inline(never)]
-unsafe fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
+fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
+    eg.function_arguments.remove(&(call as usize));
     eg.vm_stack.pop_call_frame(call);
 }
 
@@ -196,6 +197,7 @@ unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteDat
         let next = (*call).call;
         let call_key = call as usize;
         eg.pending_named_variadic.remove(&call_key);
+        eg.pending_closure_captures.remove(&call_key);
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
         eg.discard_generic_member_call(call_key);
         let _ = take_pending_invoke_this(eg, call_key);
@@ -221,6 +223,7 @@ unsafe fn cleanup_call_and_throw<'a>(
 ) -> ThrowResult<'a> {
     let call_key = call as usize;
     eg.pending_named_variadic.remove(&call_key);
+    eg.pending_closure_captures.remove(&call_key);
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     eg.discard_generic_member_call(call_key);
     #[cfg(feature = "php-generics-reified")]
@@ -358,7 +361,7 @@ fn throw_in_frame<'a>(
                         cleanup_pending_calls(eg, frame);
                         cleanup_frame_slots(frame);
                     };
-                    unsafe { pop_vm_call_frame(eg, frame) };
+                    pop_vm_call_frame(eg, frame);
                     frame = prev;
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };
@@ -385,7 +388,7 @@ fn throw_in_frame<'a>(
                         cleanup_pending_calls(eg, frame);
                         cleanup_frame_slots(frame);
                     };
-                    unsafe { pop_vm_call_frame(eg, frame) };
+                    pop_vm_call_frame(eg, frame);
                     frame = prev;
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };

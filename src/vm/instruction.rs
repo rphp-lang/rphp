@@ -80,6 +80,9 @@ pub const NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE: u16 = 1;
 /// runtime called-class scope before autoload, allocation and constructor lookup.
 pub const NEW_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 1;
 
+/// NewObj class name is a runtime expression rather than a literal class name.
+pub const NEW_FLAG_DYNAMIC_CLASS_NAME: u16 = 1 << 2;
+
 /// InitArray flag: at least one compile-time literal string key guarantees
 /// general hash storage rather than packed integer storage.
 pub const ARRAY_INIT_HASH_HINT: u16 = 1;

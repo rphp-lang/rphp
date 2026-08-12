@@ -2,6 +2,104 @@
 mod common;
 use common::run_php;
 
+#[test]
+fn error_reporting_is_request_local_and_uses_namespaced_function_fallback() {
+    assert_eq!(
+        run_php(
+            "<?php namespace App; echo error_reporting(), ':'; echo error_reporting(5), ':'; echo error_reporting();"
+        ),
+        "32767:32767:5"
+    );
+}
+
+#[test]
+fn error_log_default_destination_uses_namespaced_function_fallback() {
+    assert_eq!(
+        run_php("<?php namespace App; var_dump(error_log('rphp-test'));"),
+        "bool(true)\n"
+    );
+}
+
+#[test]
+fn invokable_object_satisfies_callable_parameter_and_return_types() {
+    assert_eq!(
+        run_php(
+            "<?php class Handler { public function __invoke(): string { return 'OK'; } } function keep(callable $handler): callable { return $handler; } echo keep(new Handler())();"
+        ),
+        "OK"
+    );
+}
+
+#[test]
+fn reflection_function_exposes_anonymous_and_bound_closure_identity() {
+    assert_eq!(
+        run_php(
+            "<?php $anonymous = function () {}; $anonymousReflection = new ReflectionFunction($anonymous); var_dump($anonymousReflection->isAnonymous()); echo count($anonymousReflection->getAttributes()), ':'; class Bound { public function named() {} public function callback() { return $this->named(...); } } $bound = new Bound(); $reflection = new ReflectionFunction($bound->callback()); var_dump($reflection->isAnonymous()); echo ($reflection->getClosureThis() === $bound ? 'bound:' : 'missing:') . $reflection->getClosureCalledClass()->name;"
+        ),
+        "bool(true)\n0:bool(false)\nbound:Bound"
+    );
+}
+
+#[test]
+fn reflection_function_parameters_expose_controller_metadata_surface() {
+    assert_eq!(
+        run_php(
+            "<?php function reflected(string $name, ?int $count = null, bool ...$flags) {} $parameters = (new ReflectionFunction('reflected'))->getParameters(); foreach ($parameters as $parameter) { $type = $parameter->getType(); echo $parameter->getName(), ':', $type?->getName(), ':', (int) $type?->isBuiltin(), ':', (int) $parameter->allowsNull(), ':', (int) $parameter->isDefaultValueAvailable(), ':', (int) $parameter->isVariadic(), '|'; }"
+        ),
+        "name:string:1:0:0:0|count:int:1:1:1:0|flags:bool:1:0:0:1|"
+    );
+}
+
+#[test]
+fn reflection_class_lazy_ghost_eagerly_runs_initializer_on_real_instance() {
+    assert_eq!(
+        run_php(
+            "<?php class LazyService { public string $value; public function __construct(string $value) { $this->value = $value; } } $service = (new ReflectionClass(LazyService::class))->newLazyGhost(static function ($ghost) { $ghost->__construct('OK'); }); echo $service->value;"
+        ),
+        "OK"
+    );
+}
+
+#[test]
+fn core_iterator_and_collection_interfaces_are_registered() {
+    assert_eq!(
+        run_php(
+            "<?php echo interface_exists('IteratorAggregate', false) ? 'yes' : 'no'; echo ':'; echo interface_exists('ArrayAccess', false) ? 'yes' : 'no';"
+        ),
+        "yes:yes"
+    );
+}
+
+#[test]
+fn spl_object_storage_is_a_core_collection_type() {
+    assert_eq!(
+        run_php(
+            "<?php $storage = new SplObjectStorage(); echo $storage instanceof Iterator ? 'iterator:' : 'missing:'; echo $storage instanceof ArrayAccess ? 'array-access' : 'missing';"
+        ),
+        "iterator:array-access"
+    );
+}
+
+#[test]
+fn array_iterator_participates_in_foreach() {
+    assert_eq!(
+        run_php(
+            "<?php $iterator = new ArrayIterator(['first' => 1, 'second' => 2]); foreach ($iterator as $key => $value) echo $key . ':' . $value . '|';"
+        ),
+        "first:1|second:2|"
+    );
+}
+
+#[test]
+fn error_and_exception_handler_stacks_restore_previous_callbacks() {
+    assert_eq!(
+        run_php(
+            "<?php set_error_handler('strlen'); echo get_error_handler(), ':'; set_error_handler(null); restore_error_handler(); echo get_error_handler(), ':'; set_exception_handler('trim'); echo get_exception_handler();"
+        ),
+        "strlen:strlen:trim"
+    );
+}
+
 // ========== isset() ==========
 
 #[test]

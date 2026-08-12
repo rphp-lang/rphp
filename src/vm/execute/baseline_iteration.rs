@@ -82,7 +82,13 @@ fn op_foreach_init<'a>(
         let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
         unsafe { frame_tmp_set_long(frame, pos_ptr, 0) };
     } else {
-        let is_empty = match arr_val.as_array() {
+        let iterator_values = arr_val.as_object().and_then(|object| {
+            matches!(object.class_name.as_ref(), "ArrayIterator" | "ArrayObject")
+                .then(|| object.get_property("__rphp_iterator_values").cloned())
+                .flatten()
+        });
+        let iterable = iterator_values.as_ref().unwrap_or(arr_val);
+        let is_empty = match iterable.as_array() {
             Some(arr) => arr.is_empty(),
             None => {
                 eg.write_output(b"\nWarning: foreach() argument must be of type array|object, ");
@@ -106,7 +112,7 @@ fn op_foreach_init<'a>(
             return Ok(ColdResult::Continue);
         }
         // Copy array to result TMP
-        let cloned = arr_val.clone();
+        let cloned = iterable.clone();
         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
         unsafe { frame_result_set(frame, result_ptr, opline.result_type, cloned) };
         // Set position TMP to 0
@@ -333,7 +339,7 @@ fn op_yield<'a>(
     }
     eg.current_execute_data.set(prev);
     unsafe { cleanup_frame_slots(frame) };
-    unsafe { pop_vm_call_frame(eg, frame) };
+    pop_vm_call_frame(eg, frame);
     Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }))
 }
 
@@ -427,7 +433,7 @@ fn op_yield_from<'a>(
                     }
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
-                    unsafe { pop_vm_call_frame(eg, frame) };
+                    pop_vm_call_frame(eg, frame);
                     return Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }));
                 }
             }
@@ -494,7 +500,7 @@ fn op_yield_from<'a>(
             }
             eg.current_execute_data.set(prev);
             unsafe { cleanup_frame_slots(frame) };
-            unsafe { pop_vm_call_frame(eg, frame) };
+            pop_vm_call_frame(eg, frame);
             return Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }));
         } else {
             eg.active_generator = Some(gen_ref);

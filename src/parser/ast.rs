@@ -58,6 +58,8 @@ pub enum Expr {
     PostDec(String),       // $i--
     PreInc(String),        // ++$i
     PreDec(String),        // --$i
+    PreIncTarget(Box<Expr>), // ++self::$value, ++$object->property
+    PreDecTarget(Box<Expr>), // --self::$value, --$object->property
     Not(Box<Expr>),        // !expr
     UnaryMinus(Box<Expr>), // -$x
     ErrorSuppress(Box<Expr>), // @expr
@@ -90,6 +92,11 @@ pub enum Expr {
         target: Box<Expr>,
         expr: Box<Expr>,
     },
+    CompoundAssignExpression {
+        target: Box<Expr>,
+        op: BinOp,
+        expr: Box<Expr>,
+    },
     Elvis {
         // $a ?: $b (evaluates lhs once)
         left: Box<Expr>,
@@ -103,6 +110,7 @@ pub enum Expr {
     Closure {
         // [static] function($x) use($y) { ... }: ReturnType
         is_static: bool,
+        returns_by_ref: bool,
         params: Vec<Param>,
         use_vars: Vec<(String, bool)>, // (name, captured by reference)
         body: Vec<Stmt>,
@@ -114,6 +122,19 @@ pub enum Expr {
         class_name: String,
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
+    },
+    DynamicNew {
+        // new $class(args)
+        class: Box<Expr>,
+        args: Vec<CallArg>,
+    },
+    AnonymousNew {
+        args: Vec<CallArg>,
+        parent: Option<GenericAncestor>,
+        implements: Vec<GenericAncestor>,
+        properties: Vec<ClassProperty>,
+        constants: Vec<ClassConstant>,
+        methods: Vec<ClassMethod>,
     },
     PropertyAccess {
         // $obj->prop or $obj?->prop
@@ -191,6 +212,11 @@ pub enum Expr {
         expr: Box<Expr>,
         class_name: String,
     },
+    DynamicInstanceof {
+        // $obj instanceof $className
+        expr: Box<Expr>,
+        class: Box<Expr>,
+    },
     Constant(String), // FOO, PHP_INT_MAX — named constant reference
     MagicConstant {
         name: String,
@@ -253,9 +279,16 @@ impl Expr {
             | Expr::Instanceof { expr, .. }
             | Expr::Assign { expr, .. }
             | Expr::Print(expr) => expr.contains_yield(),
+            Expr::DynamicInstanceof { expr, class } => {
+                expr.contains_yield() || class.contains_yield()
+            }
             Expr::AssignTarget { target, expr } => {
                 target.contains_yield() || expr.contains_yield()
             }
+            Expr::CompoundAssignExpression { target, expr, .. } => {
+                target.contains_yield() || expr.contains_yield()
+            }
+            Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => target.contains_yield(),
             Expr::Isset(expressions) => expressions.iter().any(Expr::contains_yield),
             Expr::Match { expr, arms } => {
                 expr.contains_yield()
@@ -271,6 +304,12 @@ impl Expr {
             Expr::FunctionCall { args, .. }
             | Expr::New { args, .. }
             | Expr::StaticCall { args, .. } => args.iter().any(CallArg::contains_yield),
+            Expr::DynamicNew { class, args } => {
+                class.contains_yield() || args.iter().any(CallArg::contains_yield)
+            }
+            Expr::AnonymousNew { args, .. } => {
+                args.iter().any(CallArg::contains_yield)
+            }
             Expr::MethodCall { object, args, .. } => {
                 object.contains_yield() || args.iter().any(CallArg::contains_yield)
             }
@@ -339,6 +378,7 @@ pub enum BinOp {
     GreaterEqual,
     And,        // &&
     Or,         // ||
+    LogicalXor, // xor
     Spaceship,  // <=>
     Pow,        // **
     BitwiseAnd, // &
@@ -543,6 +583,8 @@ pub enum Stmt {
         properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
+        uses: Vec<GenericAncestor>,
+        trait_aliases: Vec<TraitAlias>,
         generic_params: Vec<GenericParameter>,
     },
     AssignProp {

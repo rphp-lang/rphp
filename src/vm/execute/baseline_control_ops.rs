@@ -25,6 +25,54 @@ fn include_parse_error(
     }
 }
 
+fn imported_class_name(statements: &[crate::parser::Stmt], alias: &str) -> Option<String> {
+    for statement in statements {
+        match statement {
+            crate::parser::Stmt::UseDecl {
+                kind: crate::parser::UseKind::Class,
+                imports,
+            } => {
+                if let Some((name, _)) = imports
+                    .iter()
+                    .find(|(_, imported_alias)| imported_alias.eq_ignore_ascii_case(alias))
+                {
+                    return Some(name.trim_start_matches('\\').to_string());
+                }
+            }
+            crate::parser::Stmt::Namespace { body, .. } => {
+                if let Some(name) = imported_class_name(body, alias) {
+                    return Some(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn unavailable_class_constant_owner(error: &str) -> Option<&str> {
+    let marker = "class constant ";
+    let remainder = error.rsplit_once(marker)?.1;
+    remainder.split_once("::").map(|(owner, _)| owner)
+}
+
+fn compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
+    let mut known = eg.constant_table.borrow().clone();
+    for (registered_name, class) in &eg.class_table {
+        for constant in &class.constants {
+            known.insert(
+                format!("{}::{}", class.name, constant.name),
+                constant.value.clone(),
+            );
+            known.insert(
+                format!("{registered_name}::{}", constant.name),
+                constant.value.clone(),
+            );
+        }
+    }
+    known
+}
+
 /// Compile, register and execute one already-resolved PHP file. Ordinary
 /// include opcodes provide their caller frame for the existing scope bridge;
 /// internal loaders deliberately execute without borrowing an internal frame
@@ -44,8 +92,8 @@ pub(crate) fn execute_included_file(
         return Ok(IncludeFileOutcome::AlreadyIncluded);
     }
 
-    let source = match std::fs::read_to_string(&resolved_path) {
-        Ok(s) => s,
+    let source = match std::fs::read(&resolved_path) {
+        Ok(bytes) => crate::lexer::decode_php_source(&bytes),
         Err(error) => return Ok(IncludeFileOutcome::Missing(error)),
     };
 
@@ -73,18 +121,42 @@ pub(crate) fn execute_included_file(
             ));
         }
     };
-    let mut compile_result = match crate::compiler::compile::Compiler::new()
-        .with_source_path(canonical.clone())
-        .with_implicit_return_value(Value::long(1))
-        .compile(&stmts)
-    {
-        Ok(result) => result,
-        Err(error) => {
-            return Ok(include_parse_error(
-                eg,
-                caller.is_some(),
-                format!("Compile error in {resolved_path}: {error}"),
-            ));
+    let mut compile_attempts = 0usize;
+    let mut compile_result = loop {
+        let compiler = crate::compiler::compile::Compiler::new()
+            .with_source_path(canonical.clone())
+            .with_implicit_return_value(Value::long(1))
+            .with_known_constants(compilation_constants(eg));
+        match compiler.compile(&stmts) {
+            Ok(result) => break result,
+            Err(error) if compile_attempts < 16 => {
+                let Some(owner) = unavailable_class_constant_owner(&error) else {
+                    return Ok(include_parse_error(
+                        eg,
+                        caller.is_some(),
+                        format!("Compile error in {resolved_path}: {error}"),
+                    ));
+                };
+                let class_name = imported_class_name(&stmts, owner)
+                    .unwrap_or_else(|| owner.trim_start_matches('\\').to_string());
+                let loaded = eg.find_class(&class_name).is_some()
+                    || crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?;
+                if !loaded {
+                    return Ok(include_parse_error(
+                        eg,
+                        caller.is_some(),
+                        format!("Compile error in {resolved_path}: {error}"),
+                    ));
+                }
+                compile_attempts += 1;
+            }
+            Err(error) => {
+                return Ok(include_parse_error(
+                    eg,
+                    caller.is_some(),
+                    format!("Compile error in {resolved_path}: {error}"),
+                ));
+            }
         }
     };
 
@@ -107,10 +179,16 @@ pub(crate) fn execute_included_file(
         let _ = eg.register_function(&name, ptr);
     }
     for class_def in compile_result.class_defs {
+        if class_def.is_anonymous() {
+            eg.register_compiled_class(class_def)
+                .map_err(VmError::Fatal)?;
+            continue;
+        }
         let dependencies = class_def
             .parent
             .iter()
             .chain(class_def.uses.iter())
+            .chain(class_def.implements.iter())
             .cloned()
             .collect::<Vec<_>>();
         for dependency in dependencies {
@@ -232,7 +310,7 @@ pub(crate) fn execute_included_file(
 
     eg.current_execute_data.set(prev_ed);
     unsafe { cleanup_frame_slots(inc_frame) };
-    unsafe { pop_vm_call_frame(eg, inc_frame) };
+    pop_vm_call_frame(eg, inc_frame);
 
     if let Some((frame, _)) = caller {
         for (cv_idx, var_name) in &scope_vars {

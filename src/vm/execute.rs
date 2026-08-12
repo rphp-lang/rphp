@@ -26,8 +26,8 @@ use super::instruction::{
     CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
     CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, CLASS_CONST_COMPILE_TIME_NAME,
     CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_OBJ_SILENT, Instruction,
-    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
+    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, NEW_FLAG_DYNAMIC_CLASS_NAME,
+    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
 };
 use super::opcode::OpCode;
 use super::quick::{
@@ -425,10 +425,23 @@ fn check_type_hint_in_scopes(
         ParamTypeHint::Bool => matches!(val.value_type(), ValueType::True | ValueType::False),
         ParamTypeHint::Array => val.value_type() == ValueType::Array,
         ParamTypeHint::Callable => {
-            // Simplified: string (function name), array [obj, method], or closure
-            matches!(val.value_type(), ValueType::String | ValueType::Array)
+            matches!(
+                val.value_type(),
+                ValueType::String | ValueType::Array | ValueType::Closure
+            ) || val.as_object().is_some_and(|object| {
+                eg.find_method_info(&object.class_name, "__invoke")
+                    .is_some_and(|(visibility, is_static, _)| {
+                        visibility == crate::parser::Visibility::Public && !is_static
+                    })
+            })
         }
         ParamTypeHint::ClassName(class_name) => {
+            if val.value_type() == ValueType::Closure
+                && (class_name.eq_ignore_ascii_case("Closure")
+                    || class_name.eq_ignore_ascii_case("object"))
+            {
+                return true;
+            }
             if class_name.eq_ignore_ascii_case("iterable") {
                 return val.as_array().is_some()
                     || val
@@ -1947,6 +1960,7 @@ fn execute_full_call<'a>(
     // Extract named variadic args eagerly so no error path can leak them.
     let call_key = call as usize;
     let pending_named = eg.pending_named_variadic.remove(&call_key);
+    let pending_closure_captures = eg.pending_closure_captures.remove(&call_key);
 
     // SendVal filled CV 0..N-1 for a dynamically resolved invokable object.
     // Make room for the hidden method receiver before validating arguments.
@@ -2053,13 +2067,41 @@ fn execute_full_call<'a>(
         }
         if let Some(err) = type_error {
             unsafe { cleanup_frame_slots(call) };
-            unsafe { pop_vm_call_frame(eg, call) };
+            pop_vm_call_frame(eg, call);
             return Ok(match throw_in_frame(eg, frame, err) {
                 ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                 ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
             });
         }
     }
+
+    let original_user_arguments = (func_common.fn_type == FunctionType::User
+        && !func_common.sig.is_variadic
+        && num_args > public_max)
+        .then(|| {
+            let mut arguments = Vec::with_capacity(num_args as usize);
+            for index in 0..num_args {
+                let cv_index = if func_common.sig.is_variadic && index >= public_max {
+                    func_common.sig.variadic_cv_index + index - public_max
+                } else {
+                    func_common.sig.param_cv_index(index)
+                };
+                // SAFETY: the live call frame reserves the complete supplied
+                // argument prefix, and cv_index maps one member of that prefix.
+                let value = unsafe { (*call).cv(cv_index) };
+                let value = if value.is_reference() {
+                    unsafe { &*value.as_ref_ptr() }
+                } else {
+                    value
+                };
+                arguments.push(if value.is_undef() {
+                    Value::null()
+                } else {
+                    value.clone()
+                });
+            }
+            arguments
+        });
 
     if func_common.sig.is_variadic {
         let extra_count = num_args.saturating_sub(public_max);
@@ -2086,7 +2128,7 @@ fn execute_full_call<'a>(
                             ),
                         );
                         unsafe { cleanup_frame_slots(call) };
-                        unsafe { pop_vm_call_frame(eg, call) };
+                        pop_vm_call_frame(eg, call);
                         return Ok(match throw_in_frame(eg, frame, type_err) {
                             ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                             ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
@@ -2104,6 +2146,20 @@ fn execute_full_call<'a>(
                 Value::array(variadic_arr),
             );
         }
+    }
+
+    if let Some(captures) = pending_closure_captures {
+        let capture_offset = func_common.sig.parameter_cv_count();
+        for (index, value) in captures.into_iter().enumerate() {
+            // SAFETY: closure frame sizing includes every capture after the
+            // declared parameter CVs; each destination is initialized once.
+            let destination = unsafe { (*call).cv_mut(capture_offset + index as u32) };
+            unsafe { frame_slot_set(call, destination as *mut Value, value) };
+        }
+    }
+
+    if let Some(arguments) = original_user_arguments {
+        eg.function_arguments.insert(call_key, arguments);
     }
 
     match unsafe { (*(*call).func).fn_type } {
@@ -2154,7 +2210,7 @@ fn execute_full_call<'a>(
                     #[cfg(feature = "php-generics-reified")]
                     eg.discard_active_reified_binding_scope(call as usize);
                     unsafe { cleanup_frame_slots(call) };
-                    unsafe { pop_vm_call_frame(eg, call) };
+                    pop_vm_call_frame(eg, call);
                     let error = make_error_value(
                         "TypeError",
                         &format!(
@@ -2180,7 +2236,7 @@ fn execute_full_call<'a>(
                     };
                 }
                 unsafe { cleanup_frame_slots(call) };
-                unsafe { pop_vm_call_frame(eg, call) };
+                pop_vm_call_frame(eg, call);
                 Ok(ColdResult::Done)
             } else {
                 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -2226,7 +2282,7 @@ fn execute_full_call<'a>(
                 };
             }
             unsafe { cleanup_frame_slots(call) };
-            unsafe { pop_vm_call_frame(eg, call) };
+            pop_vm_call_frame(eg, call);
             if let Some(exc) = eg.exception.take() {
                 return Ok(match throw_in_frame(eg, frame, exc) {
                     ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
@@ -2312,6 +2368,11 @@ fn value_to_array_key(val: &Value) -> Result<ArrayKey, VmError> {
 
 /// PHP === comparison: same type and same value (recursive for arrays).
 pub(crate) fn values_identical(a: &Value, b: &Value) -> bool {
+    if matches!(a.value_type(), ValueType::Undef | ValueType::Null)
+        && matches!(b.value_type(), ValueType::Undef | ValueType::Null)
+    {
+        return true;
+    }
     if a.value_type() != b.value_type() {
         return false;
     }

@@ -15,15 +15,23 @@ use super::generic_parameters::{
     generic_variance_cases, is_generic, type_parameter_reference_parameter,
 };
 use super::{
-    class_construct, function_construct, generic_arguments, generic_runtime_modes,
-    method_construct, object_construct, reflection_compound_types,
-    reflection_type_generic_arguments, reflection_type_has_generic_arguments, reflection_type_name,
+    class_construct, class_file_name, class_get_attributes, class_get_parent, class_new_lazy_ghost,
+    function_construct, function_get_closure_called_class, function_get_closure_this,
+    function_get_parameters, function_is_anonymous, generic_arguments, generic_runtime_modes,
+    method_construct, object_construct, parameter_allows_null, parameter_get_attributes,
+    parameter_get_declaring_class, parameter_get_default_value, parameter_get_name,
+    parameter_get_type, parameter_is_default_available, parameter_is_variadic, property_construct,
+    property_get_value, property_is_initialized, property_set_value, reflection_compound_types,
+    reflection_type_allows_null, reflection_type_generic_arguments,
+    reflection_type_has_generic_arguments, reflection_type_is_builtin, reflection_type_name,
     reflection_type_to_string,
 };
-use crate::compiler::compile::{ClassDef, PropertyDefinition};
+use crate::compiler::compile::{ClassConstantDefinition, ClassDef, PropertyDefinition};
 use crate::compiler::make_internal_method;
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
+use crate::value::Value;
+use crate::vm::function::ParamTypeHint;
 use crate::vm::function::{FunctionCommon, InternalFunction};
 
 fn register_reflection_class(
@@ -58,6 +66,7 @@ fn register_reflection_class_kind(
 ) {
     eg.register_class(ClassDef {
         name: name.to_string(),
+        source_file: None,
         parent: parent.map(str::to_owned),
         implements: implements.iter().map(|name| (*name).to_string()).collect(),
         is_interface: false,
@@ -83,6 +92,7 @@ fn register_reflection_class_kind(
 fn register_reflection_interface(eg: &mut ExecutorGlobals, name: &str) {
     eg.register_class(ClassDef {
         name: name.to_string(),
+        source_file: None,
         parent: None,
         implements: vec![],
         is_interface: true,
@@ -121,6 +131,7 @@ fn register_generic_variance(eg: &mut ExecutorGlobals) {
         .collect();
     eg.register_class(ClassDef {
         name: "ReflectionGenericVariance".to_string(),
+        source_file: None,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -174,6 +185,36 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         false,
         &["Reflector"],
     );
+    eg.register_class(ClassDef {
+        name: "ReflectionAttribute".to_string(),
+        source_file: None,
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: true,
+        is_trait: false,
+        is_enum: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: vec![ClassConstantDefinition {
+            name: "IS_INSTANCEOF".to_string(),
+            value: Value::long(2),
+            visibility: Visibility::Public,
+            declaring_class: "ReflectionAttribute".to_string(),
+            type_hint: ParamTypeHint::Int,
+            is_final: false,
+        }],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
     for class in ["ReflectionFunction", "ReflectionMethod"] {
         register_reflection_class(eg, class, Some("ReflectionFunctionAbstract"), false, false);
     }
@@ -192,7 +233,54 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         false,
         false,
     );
+    eg.register_class(ClassDef {
+        name: "ReflectionProperty".to_string(),
+        source_file: None,
+        parent: None,
+        implements: vec!["Reflector".to_string()],
+        is_interface: false,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: [
+            ("IS_PUBLIC", 1),
+            ("IS_PROTECTED", 2),
+            ("IS_PRIVATE", 4),
+            ("IS_STATIC", 16),
+            ("IS_READONLY", 128),
+        ]
+        .into_iter()
+        .map(|(name, value)| ClassConstantDefinition {
+            name: name.to_string(),
+            value: Value::long(value),
+            visibility: Visibility::Public,
+            declaring_class: "ReflectionProperty".to_string(),
+            type_hint: ParamTypeHint::Int,
+            is_final: false,
+        })
+        .collect(),
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
     register_reflection_class(eg, "ReflectionException", Some("Exception"), false, false);
+    register_reflection_class_with_interfaces(
+        eg,
+        "ReflectionParameter",
+        None,
+        false,
+        false,
+        &["Reflector"],
+    );
     register_reflection_class(eg, "ReflectionType", None, true, false);
     register_reflection_class_with_interfaces(
         eg,
@@ -221,6 +309,112 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         ["name"]
     );
     register_method!(
+        "ReflectionFunction",
+        "isanonymous",
+        function_is_anonymous,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunction",
+        "getclosurethis",
+        function_get_closure_this,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunction",
+        "getclosurecalledclass",
+        function_get_closure_called_class,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunction",
+        "getparameters",
+        function_get_parameters,
+        1,
+        0,
+        []
+    );
+    for class in ["ReflectionFunction", "ReflectionMethod"] {
+        register_method!(
+            class,
+            "getattributes",
+            class_get_attributes,
+            3,
+            0,
+            ["name", "flags"]
+        );
+    }
+    register_method!(
+        "ReflectionParameter",
+        "getname",
+        parameter_get_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "gettype",
+        parameter_get_type,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "isvariadic",
+        parameter_is_variadic,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "isdefaultvalueavailable",
+        parameter_is_default_available,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "getdefaultvalue",
+        parameter_get_default_value,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "allowsnull",
+        parameter_allows_null,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "getattributes",
+        parameter_get_attributes,
+        3,
+        0,
+        ["name", "flags"]
+    );
+    register_method!(
+        "ReflectionParameter",
+        "getdeclaringclass",
+        parameter_get_declaring_class,
+        1,
+        0,
+        []
+    );
+    register_method!(
         "ReflectionClass",
         "__construct",
         class_construct,
@@ -237,12 +431,68 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         ["object"]
     );
     register_method!(
+        "ReflectionClass",
+        "getattributes",
+        class_get_attributes,
+        3,
+        0,
+        ["name", "flags"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "getparentclass",
+        class_get_parent,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClass",
+        "newlazyghost",
+        class_new_lazy_ghost,
+        3,
+        1,
+        ["initializer", "options"]
+    );
+    register_method!(
         "ReflectionMethod",
         "__construct",
         method_construct,
         3,
         2,
         ["class", "method"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "__construct",
+        property_construct,
+        3,
+        2,
+        ["class", "property"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "isinitialized",
+        property_is_initialized,
+        2,
+        0,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "getvalue",
+        property_get_value,
+        2,
+        0,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "setvalue",
+        property_set_value,
+        3,
+        2,
+        ["object", "value"]
     );
     for class in [
         "ReflectionFunction",
@@ -270,6 +520,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         []
     );
     for class in ["ReflectionClass", "ReflectionObject"] {
+        register_method!(class, "getfilename", class_file_name, 1, 0, []);
         register_method!(
             class,
             "getgenericargumentsforparentclass",
@@ -305,6 +556,21 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     }
     for class in ["ReflectionNamedType", "ReflectionTypeParameterReference"] {
         register_method!(class, "getname", reflection_type_name, 1, 0, []);
+    }
+    register_method!(
+        "ReflectionNamedType",
+        "isbuiltin",
+        reflection_type_is_builtin,
+        1,
+        0,
+        []
+    );
+    for class in [
+        "ReflectionNamedType",
+        "ReflectionUnionType",
+        "ReflectionIntersectionType",
+    ] {
+        register_method!(class, "allowsnull", reflection_type_allows_null, 1, 0, []);
     }
     register_method!(
         "ReflectionTypeParameterReference",

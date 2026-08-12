@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Global closure counter — ensures unique names across nested compilers.
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
+/// Global anonymous-class counter — nested compilers must not reuse names.
+static ANONYMOUS_CLASS_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use super::OpArray;
 use crate::generics::{
@@ -26,7 +28,7 @@ use crate::vm::instruction::{
     ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
     CALL_FLAG_EXACT_SCALAR_ARGS, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
     CLASS_CONST_DYNAMIC_OWNER, FETCH_OBJ_SILENT, InlineCache, Instruction, KnownScalarType,
-    NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
 };
 use crate::vm::opcode::OpCode;
 
@@ -1190,6 +1192,9 @@ pub struct TraitMethodAlias {
 
 pub struct ClassDef {
     pub name: String,
+    /// Canonical source unit that declared this class-like symbol. Built-ins
+    /// have no source file and expose `false` through Reflection.
+    pub source_file: Option<String>,
     pub parent: Option<String>,
     pub implements: Vec<String>,
     pub is_interface: bool,
@@ -1225,6 +1230,11 @@ pub struct ClassDef {
 }
 
 impl ClassDef {
+    #[inline]
+    pub fn is_anonymous(&self) -> bool {
+        self.name.starts_with("class@anonymous#")
+    }
+
     #[inline]
     pub fn method_is_abstract(&self, method_name: &str) -> bool {
         self.abstract_methods
@@ -1434,6 +1444,11 @@ impl Compiler {
         self
     }
 
+    pub fn with_known_constants(mut self, constants: HashMap<String, Value>) -> Self {
+        self.known_constants = constants;
+        self
+    }
+
     fn child_compiler(&self) -> Self {
         let mut child = Self::new();
         child.generic_use_sites = Rc::clone(&self.generic_use_sites);
@@ -1450,6 +1465,7 @@ impl Compiler {
         child.dynamic_static_scope = self.dynamic_static_scope;
         child.source_file = self.source_file.clone();
         child.source_directory = self.source_directory.clone();
+        child.known_constants = self.known_constants.clone();
         child
     }
 
@@ -2218,11 +2234,74 @@ impl Compiler {
         expr: &Expr,
         known: &HashMap<String, Value>,
     ) -> Result<Value, String> {
+        // Constant expressions can contain class-constant reads at any depth
+        // (for example in an array property default).  The context-free
+        // evaluator below deliberately knows nothing about this source unit's
+        // `use` table, so expose imported class names as additional keys for
+        // the duration of this evaluation rather than only resolving a
+        // top-level ClassConstant node.
+        let mut imported = known.clone();
+        for (alias, class_name) in &self.use_map {
+            imported.insert(format!("{alias}::class"), Value::string(class_name.clone()));
+            let prefix = format!("{class_name}::");
+            for (name, value) in known {
+                if let Some(constant) = name.strip_prefix(&prefix) {
+                    imported.insert(format!("{alias}::{constant}"), value.clone());
+                }
+            }
+        }
+        self.collect_class_name_literals(expr, &mut imported);
         Self::eval_const_expr_with_context(
             expr,
-            known,
+            &imported,
             Some((self.source_file.as_str(), self.source_directory.as_str())),
         )
+    }
+
+    fn collect_class_name_literals(&self, expr: &Expr, known: &mut HashMap<String, Value>) {
+        match expr {
+            Expr::ClassConstant {
+                class_name,
+                constant,
+            } if constant.eq_ignore_ascii_case("class") => {
+                known.insert(
+                    format!("{class_name}::{constant}"),
+                    Value::string(self.resolve_name(class_name)),
+                );
+            }
+            Expr::BinaryOp { left, right, .. }
+            | Expr::NullCoalesce { left, right }
+            | Expr::Elvis { left, right } => {
+                self.collect_class_name_literals(left, known);
+                self.collect_class_name_literals(right, known);
+            }
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.collect_class_name_literals(condition, known);
+                self.collect_class_name_literals(then_expr, known);
+                self.collect_class_name_literals(else_expr, known);
+            }
+            Expr::UnaryMinus(inner)
+            | Expr::Not(inner)
+            | Expr::BitwiseNot(inner)
+            | Expr::Cast { expr: inner, .. } => self.collect_class_name_literals(inner, known),
+            Expr::ArrayLiteral(elements) => {
+                for element in elements {
+                    if let Some(key) = &element.key {
+                        self.collect_class_name_literals(key, known);
+                    }
+                    self.collect_class_name_literals(&element.value, known);
+                }
+            }
+            Expr::ArrayAccess { array, index } => {
+                self.collect_class_name_literals(array, known);
+                self.collect_class_name_literals(index, known);
+            }
+            _ => {}
+        }
     }
 
     /// Evaluate a constant expression with the source-unit context needed by
@@ -2530,6 +2609,7 @@ impl Compiler {
             ))),
             BinOp::And => Ok(Value::bool(left.is_truthy() && right.is_truthy())),
             BinOp::Or => Ok(Value::bool(left.is_truthy() || right.is_truthy())),
+            BinOp::LogicalXor => Ok(Value::bool(left.is_truthy() ^ right.is_truthy())),
             BinOp::Identical | BinOp::NotIdentical => {
                 let identical = left.structurally_equal(right);
                 Ok(Value::bool(if op == BinOp::Identical {
@@ -2869,6 +2949,25 @@ impl Compiler {
                 self.instructions.push(fetch);
                 (result, OpType::Tmp)
             }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: _,
+            } => {
+                let (object_op, object_type) = self.compile_isset_object_base(object);
+                let (property_op, property_type) = self.compile_expr(property);
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object_op;
+                fetch.op1_type = object_type;
+                fetch.op2 = property_op;
+                fetch.op2_type = property_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_SILENT;
+                self.instructions.push(fetch);
+                (result, OpType::Tmp)
+            }
             Expr::ArrayAccess { array, index } => {
                 let (array_op, array_type) = self.compile_isset_object_base(array);
                 let (index_op, index_type) = self.compile_expr(index);
@@ -3050,6 +3149,36 @@ impl Compiler {
 
                         return (tmp, OpType::Tmp);
                     }
+                    BinOp::LogicalXor => {
+                        let (left, left_type) = self.compile_expr(left);
+                        let left_bool = self.alloc_tmp();
+                        let mut bool_left = Instruction::new(OpCode::BoolNot);
+                        bool_left.op1 = left;
+                        bool_left.op1_type = left_type;
+                        bool_left.result = left_bool;
+                        bool_left.result_type = OpType::Tmp;
+                        self.instructions.push(bool_left);
+
+                        let (right, right_type) = self.compile_expr(right);
+                        let right_bool = self.alloc_tmp();
+                        let mut bool_right = Instruction::new(OpCode::BoolNot);
+                        bool_right.op1 = right;
+                        bool_right.op1_type = right_type;
+                        bool_right.result = right_bool;
+                        bool_right.result_type = OpType::Tmp;
+                        self.instructions.push(bool_right);
+
+                        let result = self.alloc_tmp();
+                        let mut compare = Instruction::new(OpCode::IsNotIdentical);
+                        compare.op1 = left_bool;
+                        compare.op1_type = OpType::Tmp;
+                        compare.op2 = right_bool;
+                        compare.op2_type = OpType::Tmp;
+                        compare.result = result;
+                        compare.result_type = OpType::Tmp;
+                        self.instructions.push(compare);
+                        return (result, OpType::Tmp);
+                    }
                     _ => {}
                 }
 
@@ -3080,7 +3209,7 @@ impl Compiler {
                     BinOp::BitwiseXor => OpCode::BitwiseXor,
                     BinOp::ShiftLeft => OpCode::ShiftLeft,
                     BinOp::ShiftRight => OpCode::ShiftRight,
-                    BinOp::And | BinOp::Or => unreachable!(), // handled above
+                    BinOp::And | BinOp::Or | BinOp::LogicalXor => unreachable!(), // handled above
                 };
 
                 // For > and >=, swap operands (PHP convention)
@@ -3109,6 +3238,48 @@ impl Compiler {
                         (null, OpType::Const)
                     }
                 }
+            }
+            Expr::CompoundAssignExpression { target, op, expr } => {
+                let (left, left_type, writeback) =
+                    match self.compile_foreach_reference_source(target) {
+                        Ok(source) => source,
+                        Err(error) => {
+                            self.deferred_error = Some(error);
+                            let null = self.add_literal(Value::null());
+                            return (null, OpType::Const);
+                        }
+                    };
+                let (right, right_type) = self.compile_expr(expr);
+                let opcode = match op {
+                    BinOp::Add => OpCode::Add,
+                    BinOp::Sub => OpCode::Sub,
+                    BinOp::Mul => OpCode::Mul,
+                    BinOp::Div => OpCode::Div,
+                    BinOp::Mod => OpCode::Mod,
+                    BinOp::Concat => OpCode::Concat,
+                    BinOp::Pow => OpCode::Pow,
+                    BinOp::BitwiseAnd => OpCode::BitwiseAnd,
+                    BinOp::BitwiseOr => OpCode::BitwiseOr,
+                    BinOp::BitwiseXor => OpCode::BitwiseXor,
+                    BinOp::ShiftLeft => OpCode::ShiftLeft,
+                    BinOp::ShiftRight => OpCode::ShiftRight,
+                    _ => {
+                        self.deferred_error = Some("Invalid compound assignment operator".into());
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    }
+                };
+                let result = self.alloc_tmp();
+                let mut operation = Instruction::new(opcode);
+                operation.op1 = left;
+                operation.op1_type = left_type;
+                operation.op2 = right;
+                operation.op2_type = right_type;
+                operation.result = result;
+                operation.result_type = OpType::Tmp;
+                self.instructions.push(operation);
+                self.emit_foreach_reference_source_writeback(writeback, result);
+                (result, OpType::Tmp)
             }
             Expr::PostInc(name) => {
                 let cv_idx = self.resolve_cv(name);
@@ -3153,6 +3324,33 @@ impl Compiler {
                 instr.result = tmp;
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
+            }
+            Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => {
+                let (left, left_type, writeback) =
+                    match self.compile_foreach_reference_source(target) {
+                        Ok(source) => source,
+                        Err(error) => {
+                            self.deferred_error = Some(error);
+                            let null = self.add_literal(Value::null());
+                            return (null, OpType::Const);
+                        }
+                    };
+                let one = self.add_literal(Value::long(1));
+                let result = self.alloc_tmp();
+                let mut operation = Instruction::new(if matches!(expr, Expr::PreIncTarget(_)) {
+                    OpCode::Add
+                } else {
+                    OpCode::Sub
+                });
+                operation.op1 = left;
+                operation.op1_type = left_type;
+                operation.op2 = one;
+                operation.op2_type = OpType::Const;
+                operation.result = result;
+                operation.result_type = OpType::Tmp;
+                self.instructions.push(operation);
+                self.emit_foreach_reference_source_writeback(writeback, result);
+                (result, OpType::Tmp)
             }
             Expr::Ternary {
                 condition,
@@ -3804,7 +4002,9 @@ impl Compiler {
             }
             Expr::NullCoalesce { left, right } => {
                 // $a ?? $b → isset($a) ? $a : $b
-                let (l_op, l_type) = self.compile_expr(left);
+                // Property reads in a coalescing probe are silent: an
+                // uninitialized typed property behaves like an unset value.
+                let (l_op, l_type) = self.compile_isset_object_base(left);
                 let tmp = self.alloc_tmp();
 
                 // Check if left is set (not null/undef)
@@ -3957,6 +4157,7 @@ impl Compiler {
             }
             Expr::Closure {
                 is_static,
+                returns_by_ref: _,
                 params,
                 use_vars,
                 body,
@@ -4068,6 +4269,7 @@ impl Compiler {
                 );
 
                 self.functions.extend(func_compiler.functions);
+                self.class_defs.extend(func_compiler.class_defs);
                 self.generic_declarations
                     .extend(nested_generic_declarations);
                 self.functions.push((closure_name.clone(), user_func));
@@ -4166,6 +4368,99 @@ impl Compiler {
                 self.instructions.push(do_fcall);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
+                (tmp, OpType::Tmp)
+            }
+            Expr::DynamicNew { class, args } => {
+                let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        CallArg::Positional(expr) | CallArg::Unpack(expr) => {
+                            let (op, op_type) = self.compile_expr(expr);
+                            (op, op_type, None)
+                        }
+                        CallArg::Named { name, value } => {
+                            let (op, op_type) = self.compile_expr(value);
+                            let name_idx = self.add_literal(Value::string(name.clone()));
+                            (op, op_type, Some(name_idx))
+                        }
+                    })
+                    .collect();
+                let (class, class_type) = self.compile_expr(class);
+                let tmp = self.alloc_tmp();
+                let mut new_obj = Instruction::new(OpCode::NewObj);
+                new_obj.op1 = class;
+                new_obj.op1_type = class_type;
+                new_obj.result = tmp;
+                new_obj.result_type = OpType::Tmp;
+                new_obj.extended_value = args.len() as u32;
+                new_obj._pad |= NEW_FLAG_DYNAMIC_CLASS_NAME;
+                self.instructions.push(new_obj);
+
+                self.emit_precompiled_call_args(&compiled_args, 1);
+                let discard = self.alloc_tmp();
+                let mut do_fcall = Instruction::new(OpCode::DoFcall);
+                do_fcall.result = discard;
+                do_fcall.result_type = OpType::Tmp;
+                self.instructions.push(do_fcall);
+
+                (tmp, OpType::Tmp)
+            }
+            Expr::AnonymousNew {
+                args,
+                parent,
+                implements,
+                properties,
+                constants,
+                methods,
+            } => {
+                let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        CallArg::Positional(expr) | CallArg::Unpack(expr) => {
+                            let (op, op_type) = self.compile_expr(expr);
+                            (op, op_type, None)
+                        }
+                        CallArg::Named { name, value } => {
+                            let (op, op_type) = self.compile_expr(value);
+                            let name_idx = self.add_literal(Value::string(name.clone()));
+                            (op, op_type, Some(name_idx))
+                        }
+                    })
+                    .collect();
+                let sequence = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let class_name = format!("class@anonymous#{sequence}");
+                let declaration = Stmt::Class {
+                    name: format!("\\{class_name}"),
+                    parent: parent.clone(),
+                    implements: implements.clone(),
+                    is_abstract: false,
+                    is_final: false,
+                    properties: properties.clone(),
+                    constants: constants.clone(),
+                    methods: methods.clone(),
+                    uses: Vec::new(),
+                    trait_aliases: Vec::new(),
+                    generic_params: Vec::new(),
+                };
+                if let Err(error) = self.compile_stmt(&declaration) {
+                    self.deferred_error = Some(error);
+                }
+
+                let name_idx = self.add_literal(Value::string(class_name));
+                let tmp = self.alloc_tmp();
+                let mut new_obj = Instruction::new(OpCode::NewObj);
+                new_obj.op1 = name_idx;
+                new_obj.op1_type = OpType::Const;
+                new_obj.result = tmp;
+                new_obj.result_type = OpType::Tmp;
+                new_obj.extended_value = args.len() as u32;
+                self.instructions.push(new_obj);
+                self.emit_precompiled_call_args(&compiled_args, 1);
+                let discard = self.alloc_tmp();
+                let mut do_fcall = Instruction::new(OpCode::DoFcall);
+                do_fcall.result = discard;
+                do_fcall.result_type = OpType::Tmp;
+                self.instructions.push(do_fcall);
                 (tmp, OpType::Tmp)
             }
             Expr::PropertyAccess {
@@ -4513,6 +4808,24 @@ impl Compiler {
             } => {
                 // Compile the callable expression (e.g. $var, $arr[0])
                 let (callable_op, callable_type) = self.compile_expr(callable);
+                if generic_args.is_empty()
+                    && let [CallArg::Unpack(array)] = args.as_slice()
+                {
+                    // A sole unpack is exactly call_user_func_array's runtime
+                    // protocol: the array determines positional/named arity,
+                    // so no undersized pending frame is created first.
+                    let (array_op, array_type) = self.compile_expr(array);
+                    let tmp = self.alloc_tmp();
+                    let mut call = Instruction::new(OpCode::CallUserFuncArray);
+                    call.op1 = callable_op;
+                    call.op1_type = callable_type;
+                    call.op2 = array_op;
+                    call.op2_type = array_type;
+                    call.result = tmp;
+                    call.result_type = OpType::Tmp;
+                    self.instructions.push(call);
+                    return (tmp, OpType::Tmp);
+                }
                 let compiled_args = args
                     .iter()
                     .any(CallArg::contains_yield)
@@ -4569,6 +4882,20 @@ impl Compiler {
                 self.instructions.push(inst);
                 (tmp, OpType::Tmp)
             }
+            Expr::DynamicInstanceof { expr, class } => {
+                let (obj_op, obj_type) = self.compile_expr(expr);
+                let (class_op, class_type) = self.compile_expr(class);
+                let tmp = self.alloc_tmp();
+                let mut inst = Instruction::new(OpCode::Instanceof);
+                inst.op1 = obj_op;
+                inst.op1_type = obj_type;
+                inst.op2 = class_op;
+                inst.op2_type = class_type;
+                inst.result = tmp;
+                inst.result_type = OpType::Tmp;
+                self.instructions.push(inst);
+                (tmp, OpType::Tmp)
+            }
             Expr::Assign { var, expr } => {
                 let (op, op_type) = self.compile_expr(expr);
                 let cv_idx = self.resolve_cv(var);
@@ -4593,7 +4920,17 @@ impl Compiler {
                     }
                 }
             }
-            Expr::FirstClassCallable(callable) => self.compile_expr(callable),
+            Expr::FirstClassCallable(callable) => {
+                let (callable, callable_type) = self.compile_expr(callable);
+                let result = self.alloc_tmp();
+                let mut create = Instruction::new(OpCode::CreateFirstClassCallable);
+                create.op1 = callable;
+                create.op1_type = callable_type;
+                create.result = result;
+                create.result_type = OpType::Tmp;
+                self.instructions.push(create);
+                (result, OpType::Tmp)
+            }
             Expr::Constant(name) => {
                 // Fetch a named constant at runtime
                 let runtime_name = name.strip_prefix('\\').unwrap_or(name);

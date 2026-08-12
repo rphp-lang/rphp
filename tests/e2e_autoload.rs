@@ -131,6 +131,23 @@ var_dump(class_exists('Project\\LoadedClass', false));
 }
 
 #[test]
+fn included_class_autoloads_implemented_interface_before_constant_composition() {
+    let dir = TempPhpDir::new();
+    let contract = dir.write(
+        "Contract.php",
+        "<?php namespace Fixture; interface Contract { public const VALUE = 'inherited'; }",
+    );
+    let service = dir.write(
+        "Service.php",
+        "<?php namespace Fixture; class Service implements Contract {}",
+    );
+    let source = format!(
+        "<?php function load_contract($class) {{ if ($class === 'Fixture\\\\Contract') require '{contract}'; }} spl_autoload_register('load_contract'); require '{service}'; echo Fixture\\Service::VALUE;"
+    );
+    assert_eq!(run_php(&source), "inherited");
+}
+
+#[test]
 fn new_expression_invokes_registered_autoloaders_before_class_resolution() {
     let dir = TempPhpDir::new();
     std::fs::write(

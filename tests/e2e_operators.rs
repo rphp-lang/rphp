@@ -9,6 +9,16 @@ use rphp::parser::Parser;
 // === Logical operators ===
 
 #[test]
+fn logical_not_applies_after_instanceof() {
+    assert_eq!(
+        run_php(
+            "<?php interface NegatedType {} class NegatedValue implements NegatedType {} $value = new NegatedValue(); echo (!$value instanceof NegatedType ? 'bad' : 'yes') . ':' . (!$value instanceof Stringable ? 'yes' : 'bad');"
+        ),
+        "yes:yes"
+    );
+}
+
+#[test]
 fn test_e2e_and_both_true() {
     assert_eq!(
         run_php("<?php if (1 && 1) { echo \"yes\"; } else { echo \"no\"; }"),
@@ -53,6 +63,16 @@ fn test_e2e_or_right_true() {
     assert_eq!(
         run_php("<?php if (0 || 1) { echo \"yes\"; } else { echo \"no\"; }"),
         "yes"
+    );
+}
+
+#[test]
+fn test_e2e_keyword_xor_uses_boolean_truthiness_and_evaluates_both_sides() {
+    assert_eq!(
+        run_php(
+            "<?php function side($value) { echo $value; return $value; } echo ':'; echo side('L') xor side('') ? 'yes' : 'no';"
+        ),
+        ":Lyes"
     );
 }
 
@@ -256,6 +276,26 @@ fn test_e2e_null_coalescing_assign_properties() {
 }
 
 #[test]
+fn test_e2e_null_coalescing_silently_initializes_typed_object_property() {
+    assert_eq!(
+        run_php(
+            "<?php class Box { protected string $value; public function get() { $before = $this->value ?? 'unset'; $this->value ??= 'ready'; return $before . ':' . $this->value; } } echo (new Box())->get();"
+        ),
+        "unset:ready"
+    );
+}
+
+#[test]
+fn test_e2e_null_coalescing_silently_initializes_typed_static_property() {
+    assert_eq!(
+        run_php(
+            r"<?php class Factory { private static \Closure $make; public static function get() { self::$make ??= static fn () => 'ready'; return (self::$make)(); } } echo Factory::get();"
+        ),
+        "ready"
+    );
+}
+
+#[test]
 fn test_e2e_null_coalescing_assignment_is_value_producing() {
     assert_eq!(
         run_php(
@@ -308,6 +348,46 @@ echo FactoryHolder::resolve();
 }
 
 #[test]
+fn test_e2e_coalesce_assignment_binds_on_comparison_rhs() {
+    assert_eq!(
+        run_php(
+            "<?php $value = null; $result = 0 > $value ??= 1; echo $result ? 'yes' : 'no'; echo '|', $value;"
+        ),
+        "no|1"
+    );
+}
+
+#[test]
+fn test_e2e_coalesce_assignment_binds_on_concat_rhs() {
+    assert_eq!(
+        run_php(
+            "<?php class Suffix { public $value; } $suffix = new Suffix(); $path = 'prefix-' . $suffix->value ??= 'generated'; echo $path, '|', $suffix->value;"
+        ),
+        "prefix-generated|generated"
+    );
+}
+
+#[test]
+fn test_e2e_prefix_increment_mutable_member_targets() {
+    assert_eq!(
+        run_php(
+            "<?php class Counts { public static $shared = 100; public $own = 4; } $counts = new Counts(); echo ++Counts::$shared, '|', ++$counts->own;"
+        ),
+        "101|5"
+    );
+}
+
+#[test]
+fn test_e2e_compound_assignment_expression_on_array_target() {
+    assert_eq!(
+        run_php(
+            "<?php $error = ['type' => 7]; if ($error && $error['type'] &= 3) { echo $error['type']; }"
+        ),
+        "3"
+    );
+}
+
+#[test]
 fn test_e2e_dynamic_object_property_read_and_coalesce_assignment() {
     assert_eq!(
         run_php(
@@ -318,10 +398,13 @@ class DynamicProperties {
 $object = new DynamicProperties();
 $property = 'values';
 echo $object->{$property}['ready'], '|';
-echo $object->{$property}['missing'] ??= 'created';
+echo $object->$property['missing'] ??= 'created', '|';
+$dynamic = 'extra';
+$object->{$dynamic} = 'assigned';
+echo $object->$dynamic;
 "#,
         ),
-        "yes|created"
+        "yes|created|assigned"
     );
 }
 

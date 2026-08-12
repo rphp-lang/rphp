@@ -23,8 +23,9 @@ coroutines, experimental generic types, and the native JIT are opt-in Cargo
 features.
 
 RPHP is not yet a drop-in replacement for PHP. Major gaps include complete
-language and standard-library compatibility, most extensions, Composer and
-framework support, web SAPIs, databases, Redis, cURL, production-grade cycle
+language and standard-library compatibility, most extensions, broad Composer
+and framework support beyond the pinned compatibility gates, web SAPIs,
+databases, Redis, cURL, production-grade cycle
 collection, and broad JIT coverage. See the [compatibility status](docs/compatibility.md)
 for the current support contract.
 

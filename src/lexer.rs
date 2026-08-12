@@ -88,6 +88,7 @@ pub enum Token {
     GreaterEqual,           // >=
     AmpAmp,                 // &&
     PipePipe,               // ||
+    LogicalXor,             // xor
     Bang,                   // !
     PlusAssign,             // +=
     MinusAssign,            // -=
@@ -142,6 +143,40 @@ enum StringPart {
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
+}
+
+/// PHP source is byte-oriented and may legally contain non-UTF-8 bytes in
+/// identifiers and string literals. Preserve ordinary UTF-8 while mapping an
+/// isolated legacy byte to the Unicode code point with the same value. This
+/// gives the String-based frontend a deterministic representation and keeps a
+/// raw identifier and the same raw class-map key equal.
+pub fn decode_php_source(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len());
+    let mut remaining = bytes;
+
+    while !remaining.is_empty() {
+        match std::str::from_utf8(remaining) {
+            Ok(valid) => {
+                output.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid_up_to = error.valid_up_to();
+                if valid_up_to > 0 {
+                    output.push_str(std::str::from_utf8(&remaining[..valid_up_to]).unwrap());
+                    remaining = &remaining[valid_up_to..];
+                }
+
+                let invalid_length = error.error_len().unwrap_or(remaining.len());
+                for byte in &remaining[..invalid_length] {
+                    output.push(char::from(*byte));
+                }
+                remaining = &remaining[invalid_length..];
+            }
+        }
+    }
+
+    output
 }
 
 impl<'a> Lexer<'a> {
@@ -444,7 +479,7 @@ impl<'a> Lexer<'a> {
                 b'0'..=b'9' => {
                     tokens.push(self.read_number()?);
                 }
-                b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
+                b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'\x80'..=b'\xff' => {
                     let identifier_start = self.pos;
                     let ident = self.read_identifier();
                     let is_member_name = matches!(
@@ -530,6 +565,7 @@ impl<'a> Lexer<'a> {
                         "include_once" => tokens.push(Token::IncludeOnce),
                         "require" => tokens.push(Token::Require),
                         "require_once" => tokens.push(Token::RequireOnce),
+                        "xor" => tokens.push(Token::LogicalXor),
                         _ => tokens.push(Token::Identifier(ident)),
                     }
                 }
@@ -571,6 +607,14 @@ impl<'a> Lexer<'a> {
             if self.pos >= self.src.len() {
                 break;
             }
+            // Attributes remain a separate metadata milestone, but their
+            // balanced syntax must not be mistaken for a `#` line comment.
+            // Skip the group as one lexical unit so unobserved attributes do
+            // not prevent loading otherwise supported declarations.
+            if self.starts_with(b"#[") {
+                self.skip_attribute_group()?;
+                continue;
+            }
             // Skip // and # line comments
             if self.starts_with(b"//") || self.src[self.pos] == b'#' {
                 while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
@@ -600,6 +644,51 @@ impl<'a> Lexer<'a> {
             break;
         }
         Ok(())
+    }
+
+    fn skip_attribute_group(&mut self) -> Result<(), String> {
+        let start = self.pos;
+        self.pos += 2;
+        let mut bracket_depth = 1usize;
+        let mut quote = None;
+
+        while self.pos < self.src.len() {
+            let byte = self.src[self.pos];
+            if let Some(active_quote) = quote {
+                if byte == b'\\' {
+                    self.pos = (self.pos + 2).min(self.src.len());
+                    continue;
+                }
+                self.pos += 1;
+                if byte == active_quote {
+                    quote = None;
+                }
+                continue;
+            }
+
+            match byte {
+                b'\'' | b'"' => {
+                    quote = Some(byte);
+                    self.pos += 1;
+                }
+                b'[' => {
+                    bracket_depth += 1;
+                    self.pos += 1;
+                }
+                b']' => {
+                    bracket_depth -= 1;
+                    self.pos += 1;
+                    if bracket_depth == 0 {
+                        return Ok(());
+                    }
+                }
+                _ => self.pos += 1,
+            }
+        }
+
+        Err(format!(
+            "Unterminated attribute starting at position {start}"
+        ))
     }
 
     fn starts_with(&self, prefix: &[u8]) -> bool {
@@ -651,12 +740,30 @@ impl<'a> Lexer<'a> {
                         .map_err(|_| format!("Invalid binary literal at position {}", start))?;
                     return Ok(Token::Integer(n));
                 }
+                b'o' | b'O' => {
+                    self.pos += 2; // skip 0o
+                    let octal_start = self.pos;
+                    while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'7') {
+                        self.pos += 1;
+                    }
+                    if self.pos == octal_start {
+                        return Err(format!(
+                            "Expected octal digits after 0o at position {}",
+                            start
+                        ));
+                    }
+                    let literal = std::str::from_utf8(&self.src[octal_start..self.pos]).unwrap();
+                    let number = i64::from_str_radix(literal, 8)
+                        .map_err(|_| format!("Invalid octal literal at position {}", start))?;
+                    return Ok(Token::Integer(number));
+                }
                 _ => {}
             }
         }
         while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
             self.pos += 1;
         }
+        let mut is_float = false;
         // Check for decimal point followed by digit → float
         if self.pos < self.src.len()
             && self.src[self.pos] == b'.'
@@ -665,24 +772,27 @@ impl<'a> Lexer<'a> {
                 .get(self.pos + 1)
                 .map_or(false, |c| c.is_ascii_digit())
         {
+            is_float = true;
             self.pos += 1; // skip '.'
             while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
                 self.pos += 1;
             }
-            // Scientific notation
-            if self.pos < self.src.len()
-                && (self.src[self.pos] == b'e' || self.src[self.pos] == b'E')
-            {
-                self.pos += 1;
-                if self.pos < self.src.len()
-                    && (self.src[self.pos] == b'+' || self.src[self.pos] == b'-')
-                {
-                    self.pos += 1;
-                }
+        }
+        // Scientific notation is valid with or without a decimal point.
+        if self.pos < self.src.len() && matches!(self.src[self.pos], b'e' | b'E') {
+            let mut exponent = self.pos + 1;
+            if matches!(self.src.get(exponent), Some(b'+' | b'-')) {
+                exponent += 1;
+            }
+            if self.src.get(exponent).is_some_and(u8::is_ascii_digit) {
+                is_float = true;
+                self.pos = exponent + 1;
                 while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
                     self.pos += 1;
                 }
             }
+        }
+        if is_float {
             let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
             let f: f64 = s
                 .parse()
@@ -700,11 +810,13 @@ impl<'a> Lexer<'a> {
     fn read_identifier(&mut self) -> String {
         let start = self.pos;
         while self.pos < self.src.len()
-            && (self.src[self.pos].is_ascii_alphanumeric() || self.src[self.pos] == b'_')
+            && (self.src[self.pos].is_ascii_alphanumeric()
+                || self.src[self.pos] == b'_'
+                || self.src[self.pos] >= b'\x80')
         {
             self.pos += 1;
         }
-        String::from_utf8(self.src[start..self.pos].to_vec()).unwrap()
+        decode_php_source(&self.src[start..self.pos])
     }
 
     fn is_value_token(tok: Option<&Token>) -> bool {
@@ -1020,5 +1132,25 @@ mod tests {
             .tokenize()
             .unwrap_err();
         assert!(error.contains("shallower than the closing marker"));
+    }
+
+    #[test]
+    fn legacy_source_bytes_are_consistent_in_identifiers_and_strings() {
+        let source = decode_php_source(b"<?php class \xa9 {} echo '\xa9';");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+
+        assert!(tokens.contains(&Token::Identifier("©".into())));
+        assert!(tokens.contains(&Token::StringLiteral("©".into())));
+    }
+
+    #[test]
+    fn explicit_octal_integer_literal() {
+        let tokens = Lexer::new("<?php echo 0o777; echo 0O20;")
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.contains(&Token::Integer(511)));
+        assert!(tokens.contains(&Token::Integer(16)));
+        assert!(Lexer::new("<?php echo 0o8;").tokenize().is_err());
     }
 }
