@@ -1856,6 +1856,7 @@ fn op_create_closure(
         0
     };
     let closure = PhpClosure {
+        identity: std::rc::Rc::new(()),
         func: func_ptr,
         called_scope_class_id,
         captures: Vec::with_capacity(opline.extended_value as usize),

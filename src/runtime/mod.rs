@@ -168,6 +168,28 @@ pub fn resolve_property_key(
 
 include!("property_definitions.rs");
 include!("class_constants.rs");
+
+/// One callback in the request-local SPL autoload stack. Callback resolution
+/// happens at registration time so visibility and callable identity do not
+/// depend on the later class lookup's lexical scope.
+#[derive(Clone)]
+pub(crate) struct AutoloadEntry {
+    pub(crate) callback: Value,
+    pub(crate) func_ptr: *const FunctionCommon,
+    pub(crate) prepend_args: Vec<Value>,
+    pub(crate) use_vars: Vec<Value>,
+}
+
+/// Cold request-local SPL state. Executors that never register an autoloader
+/// keep this behind a null `Option<Box<_>>` and allocate nothing.
+#[derive(Default)]
+pub(crate) struct AutoloadState {
+    /// Immutable callback snapshot. Lookups clone one `Rc` without allocating;
+    /// the rare register/unregister operation publishes a replacement slice.
+    pub(crate) entries: std::rc::Rc<[AutoloadEntry]>,
+    pub(crate) active_classes: std::collections::HashSet<String>,
+}
+
 /// Minimal ExecutorGlobals for vertical slice.
 /// Will grow as we implement more features.
 pub struct ExecutorGlobals {
@@ -215,6 +237,8 @@ pub struct ExecutorGlobals {
     pub included_files: std::collections::HashSet<String>,
     /// Owned storage for functions/data from included files (prevents dangling pointers)
     pub included_functions: Vec<Box<crate::vm::function::UserFunction>>,
+    /// Lazily allocated SPL autoload stack and recursion guard.
+    pub(crate) autoload: Option<Box<AutoloadState>>,
     /// Monotonically increasing counter for class IDs
     next_class_id: u32,
     /// Stable boxed ClassDef pointers indexed by class ID. Slot zero is
@@ -345,6 +369,7 @@ impl ExecutorGlobals {
             pending_invoke_this: None,
             included_files: std::collections::HashSet::new(),
             included_functions: Vec::new(),
+            autoload: None,
             next_class_id: 1,
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
@@ -403,6 +428,7 @@ impl ExecutorGlobals {
             pending_invoke_this: None,
             included_files: std::collections::HashSet::new(),
             included_functions: Vec::new(),
+            autoload: None,
             next_class_id: 1,
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),

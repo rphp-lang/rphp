@@ -120,6 +120,8 @@ macro_rules! ret {
     }};
 }
 
+mod autoload;
+
 /// Read a borrowed argument for the frame-free internal ABI, following PHP
 /// references with the same semantics as `arg!` on an ExecuteData frame.
 #[inline(always)]
@@ -544,11 +546,57 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("get_class", fn_get_class, 1, 0, "object");
     reg!(
         "class_exists",
-        fn_class_exists,
+        autoload::fn_class_exists,
         2,
         1,
         "class_name",
         "autoload"
+    );
+    reg!(
+        "interface_exists",
+        autoload::fn_interface_exists,
+        2,
+        1,
+        "interface",
+        "autoload"
+    );
+    reg!(
+        "trait_exists",
+        autoload::fn_trait_exists,
+        2,
+        1,
+        "trait",
+        "autoload"
+    );
+    reg!(
+        "enum_exists",
+        autoload::fn_enum_exists,
+        2,
+        1,
+        "enum",
+        "autoload"
+    );
+    reg!(
+        "spl_autoload_register",
+        autoload::fn_spl_autoload_register,
+        3,
+        1,
+        "callback",
+        "throw",
+        "prepend"
+    );
+    reg!(
+        "spl_autoload_unregister",
+        autoload::fn_spl_autoload_unregister,
+        1,
+        1,
+        "callback"
+    );
+    reg!(
+        "spl_autoload_functions",
+        autoload::fn_spl_autoload_functions,
+        0,
+        0
     );
     reg!(
         "method_exists",
@@ -2821,20 +2869,6 @@ fn fn_get_class(
     ret!(rv, Value::bool(false));
 }
 
-fn fn_class_exists(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let name = arg_str!(ed, 0);
-    let lower = name.to_ascii_lowercase();
-    let found = eg
-        .class_table
-        .iter()
-        .any(|(k, cd)| k.to_ascii_lowercase() == lower && !cd.is_interface && !cd.is_trait);
-    ret!(rv, Value::bool(found));
-}
-
 fn fn_method_exists(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -2844,16 +2878,24 @@ fn fn_method_exists(
     let method_name = arg_str!(ed, 1);
 
     // Resolve the class name: from object or string
-    let class_name: String = if let Some(obj) = first.as_object() {
-        obj.class_name.to_string()
+    let (class_name, needs_autoload): (String, bool) = if let Some(obj) = first.as_object() {
+        (obj.class_name.to_string(), false)
     } else if let Some(s) = first.as_str() {
-        s.to_string()
+        (s.to_string(), true)
     } else {
         ret!(rv, Value::bool(false));
     };
 
-    // Look up method in class hierarchy (own + parent chain + traits)
-    let found = find_method_in_class_hierarchy(eg, &class_name, &method_name).is_some();
+    if needs_autoload && !autoload::ensure_symbol_loaded(eg, &class_name)? {
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(false));
+        }
+        return Ok(());
+    }
+
+    // method_exists() includes abstract and non-public declarations; callback
+    // resolution deliberately uses the stricter callable-only helper below.
+    let found = method_declared_in_class_hierarchy(eg, &class_name, &method_name);
     ret!(rv, Value::bool(found));
 }
 
@@ -3746,6 +3788,40 @@ fn find_class_case_insensitive<'a>(
         })
 }
 
+/// PHP's method_exists() is a declaration probe, not a callability check: it
+/// sees abstract, private and protected methods across the full hierarchy.
+fn method_declared_in_class_hierarchy(
+    eg: &ExecutorGlobals,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let mut current = find_class_case_insensitive(eg, class_name);
+    while let Some(class) = current {
+        if class
+            .methods
+            .iter()
+            .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+        {
+            return true;
+        }
+        if class.uses.iter().any(|trait_name| {
+            find_class_case_insensitive(eg, trait_name).is_some_and(|trait_def| {
+                trait_def
+                    .methods
+                    .iter()
+                    .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+            })
+        }) {
+            return true;
+        }
+        current = class
+            .parent
+            .as_deref()
+            .and_then(|parent| find_class_case_insensitive(eg, parent));
+    }
+    false
+}
+
 /// Search for a method in a class hierarchy and return its direct function
 /// pointer. This avoids rebuilding `class::method` strings and looking the
 /// method up a second time in the global function table.
@@ -3798,6 +3874,7 @@ fn find_method_in_class_hierarchy<'a>(
 }
 
 /// Result of resolving a callback: func pointer + args to prepend (e.g. $this, use_vars).
+#[derive(Clone)]
 pub(crate) struct ResolvedCallback {
     pub(crate) func_ptr: *const FunctionCommon,
     /// Args to prepend before user-supplied args.
@@ -4140,7 +4217,7 @@ pub(crate) fn resolve_callback_with_cache(
 /// Resolve a callback from the legacy stdlib wrapper. Only array callbacks
 /// need the caller's lexical class for visibility checks.
 #[inline]
-fn resolve_callback_at_callsite(
+pub(super) fn resolve_callback_at_callsite(
     val: &Value,
     eg: &ExecutorGlobals,
     ed: *mut ExecuteData,
@@ -4184,7 +4261,7 @@ fn call_resolved_with_array(
 /// handlers retain their direct slice ABI and every other callable shape uses
 /// the canonical receiver/capture-aware frame path.
 #[inline]
-fn call_resolved_with_values(
+pub(super) fn call_resolved_with_values(
     eg: &mut ExecutorGlobals,
     resolved: &ResolvedCallback,
     args: &[Value],

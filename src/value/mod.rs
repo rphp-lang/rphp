@@ -3080,6 +3080,8 @@ mod php_array_tests;
 /// PHP closure — function pointer + captured values.
 /// Stored behind Box in Value, like String and Array.
 pub struct PhpClosure {
+    /// Shared identity token retained when the closure value is copied.
+    pub(crate) identity: Rc<()>,
     /// Direct pointer to the resolved function. No string lookup needed at call time.
     pub func: *const FunctionCommon,
     /// Late-called class captured when a class-scoped closure is created.
@@ -3095,6 +3097,7 @@ pub struct PhpClosure {
 impl Clone for PhpClosure {
     fn clone(&self) -> Self {
         Self {
+            identity: self.identity.clone(),
             func: self.func,
             called_scope_class_id: self.called_scope_class_id,
             captures: self.captures.clone(),
@@ -3104,6 +3107,13 @@ impl Clone for PhpClosure {
 }
 
 impl PhpClosure {
+    /// PHP callback registries compare closures by object identity, not by
+    /// function body or captures.
+    #[inline]
+    pub(crate) fn same_identity(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.identity, &other.identity)
+    }
+
     /// Recover the user function guaranteed by normal closure construction.
     ///
     /// Keeping the checked pointer cast here gives generic calls and
@@ -3122,6 +3132,7 @@ impl PhpClosure {
 impl std::fmt::Debug for PhpClosure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PhpClosure")
+            .field("identity", &Rc::as_ptr(&self.identity))
             .field("func", &self.func)
             .field("called_scope_class_id", &self.called_scope_class_id)
             .field("captures", &self.captures.len())
