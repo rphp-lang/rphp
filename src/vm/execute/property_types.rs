@@ -122,7 +122,7 @@ fn prepare_property_assignment(
         &value,
         &definition.type_hint,
         eg,
-        &definition.declaring_class,
+        &definition.type_scope,
         called_class,
     ) {
         return Ok(value);
@@ -133,8 +133,51 @@ fn prepare_property_assignment(
     Err(format!(
         "Cannot assign {} to property {}::${} of type {}",
         value.type_name(),
-        definition.declaring_class,
+        definition.type_scope,
         definition.name,
         definition.type_hint.display_name()
     ))
+}
+
+/// Whether a warmed instance-property write cache can accept this exact value
+/// without scalar coercion. Generic definitions retain their own runtime
+/// boundary because a substituted contract may be stricter than its erased
+/// PropertyDefinition.
+#[inline(always)]
+fn instance_property_cache_accepts_exact_non_generic_write(
+    cache: &crate::vm::instruction::InlineCache,
+    value: &Value,
+    eg: &ExecutorGlobals,
+    called_class: &str,
+) -> bool {
+    if cache.property_flags() == 3 {
+        return true;
+    }
+    if cache.property_flags() != 2 {
+        return false;
+    }
+    let definition = unsafe { &*cache.typed_instance_property_definition() };
+    definition.generic_declaration.is_none()
+        && property_type_matches_exact(
+            value,
+            &definition.type_hint,
+            eg,
+            &definition.type_scope,
+            called_class,
+        )
+}
+
+/// Long-only plans may write any i64 once the cache proves a non-generic exact
+/// `int` property. This restores the established property-plan/JIT admission
+/// without allowing `float`, unions or reified `T` to bypass their guards.
+#[inline(always)]
+fn instance_property_cache_accepts_long_write(
+    cache: &crate::vm::instruction::InlineCache,
+) -> bool {
+    if cache.property_flags() == 3 {
+        return true;
+    }
+    cache.property_flags() == 2
+        && cache.typed_instance_property_tag()
+            == crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT
 }

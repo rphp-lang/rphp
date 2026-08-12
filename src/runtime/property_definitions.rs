@@ -266,6 +266,7 @@ fn merge_trait_static_property_definitions(
 
         let mut definition = property.clone();
         definition.declaring_class = trait_name.to_string();
+        definition.type_scope = class_name.to_string();
         if let Some(index) = existing {
             // A first trait declaration in this class overrides inherited
             // metadata and receives a fresh storage slot.
@@ -309,6 +310,7 @@ fn merge_trait_property_definitions(
         }
         let mut addition = property.clone();
         addition.declaring_class = trait_name.to_string();
+        addition.type_scope = class_name.to_string();
         additions.push(addition);
     }
     target.extend(additions);

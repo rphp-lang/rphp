@@ -818,6 +818,16 @@ impl ExecutorGlobals {
             }
         }
 
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        if let Some(declaration) = self.generic_metadata.find_class_like_index(&class_name) {
+            for property in &mut class_def.properties {
+                property.generic_declaration = self
+                    .generic_metadata
+                    .instance_property_requires_generic_guard(declaration, &property.name)
+                    .then_some(declaration);
+            }
+        }
+
         // Do NOT inherit method stubs from interfaces — interface methods are contracts,
         // not implementations. The implementing class must provide its own body.
         // (Interface stub functions exist only in the interface's own ClassDef for type info.)
@@ -895,10 +905,7 @@ impl ExecutorGlobals {
             .iter()
             .map(|property| {
                 property.default.clone().unwrap_or_else(|| {
-                    // Instance typed-property initialization is activated with
-                    // its read/write guards in a separate slice. Readonly
-                    // properties already use the undef sentinel today.
-                    if property.is_readonly {
+                    if property.is_typed() {
                         crate::value::Value::undef()
                     } else {
                         crate::value::Value::null()
@@ -964,6 +971,21 @@ impl ExecutorGlobals {
         } else {
             Some(unsafe { &*ptr })
         }
+    }
+
+    /// Stable declaration pointer for one object-layout slot. Class
+    /// definitions are boxed before publication and their property vectors
+    /// are immutable afterwards, so inline caches may retain this pointer.
+    #[inline(always)]
+    pub(crate) fn instance_property_definition(
+        &self,
+        class_id: u32,
+        property_slot: usize,
+    ) -> Option<*const PropertyDefinition> {
+        self.class_by_id(class_id)?
+            .properties
+            .get(property_slot)
+            .map(|definition| definition as *const PropertyDefinition)
     }
 
     /// Resolve one class-local declaration index to its canonical mutable

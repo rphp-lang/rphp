@@ -9639,6 +9639,88 @@ binding, assignment expressions, increment/decrement, `unset` and
 specialization remains the final step after these runtime semantics are
 complete.
 
+### Typed dual-runtime instance-property checkpoint (2026-08-12)
+
+Declared instance properties now use the same canonical `PropertyDefinition`
+as static properties. A typed declaration without a default starts as
+uninitialized, including `mixed`, and a read raises a catchable `Error` before
+the result is discarded or a warmed getter plan can bypass it. Untyped
+declarations retain their null default. Writes enforce unions, nullable,
+class, `self` and `parent` contracts before mutation, apply PHP weak scalar
+conversion at the file boundary, retain strict-mode `int` to `float` widening,
+and dereference a reference source so the property stores the assigned value.
+Promoted properties and inherited readonly initialization use the same path;
+the PHP 8.4 protected-set family scope permits a parent constructor or method
+to initialize its declaration on a child object.
+
+Property metadata now carries a separate lexical `type_scope`. Trait
+composition rewrites that scope to each consuming class while retaining the
+trait as declaration provenance, so trait `self` and `parent` types cannot leak
+one consumer's meaning into another. A generic-origin marker distinguishes a
+plain typed property from an inherited `T` that happens to erase to the same
+scalar. Bound-erased mode therefore checks the selected erased contract and
+reified mode checks the substituted runtime contract without duplicating the
+ordinary typed-property machinery.
+
+The 16-byte inline cache and instruction layouts do not grow. Assignment-only
+cache state uses the existing property flag bits plus a tagged stable
+declaration pointer. Generic-origin contracts are tagged complex at cache
+publication, so an exact `int` write decides entirely from the warmed cache and
+never dereferences cold metadata; generic checks remain authoritative. The
+exact path is adjacent to the untyped dispatch branch, while coercions, unions
+and exception construction stay cold in the extracted
+`instance_property_cache.rs` boundary. Constructor, quick, hot and Long
+property-method plans accept only proofs compatible with the value kind they
+publish.
+
+Forty balanced pairs with six warmups produce these final all-features release
+ratios. The four typed/untyped equivalence lanes use a five-percent ceiling.
+The last column compares the established untyped property workload with exact
+checkpoint `d4c4965` under the stricter one-percent regression gate.
+
+| Host | Read | Write | Method | Constructor | Untyped exact baseline |
+|---|---:|---:|---:|---:|---:|
+| ARM64 | -2.787% | +0.924% | -1.804% | +2.796% | -0.748% |
+| x86-64, CPU 2 | +0.160% | -3.050% | +0.098% | +2.716% | +0.148% |
+
+Default, erased, reified and all-features matrices plus the
+all-feature/all-target check pass on both architectures. Local coroutine-I/O
+tests were repeated with loopback access after the filesystem/network sandbox
+correctly refused socket creation; all 313 library tests then pass. No
+dependency, `Value`, frame, JIT backend or native IR operation changed.
+General reference binding, assignment expressions, increment/decrement,
+`unset` and a dedicated `ReflectionProperty` surface remain separate work.
+Generics-aware JIT specialization remains last.
+
+### Planned compatibility gate after typed instance properties
+
+Immediately after the typed instance-property slice, pause feature expansion
+for a reproducible upstream PHP compatibility run. Pin one public `php-src`
+commit and run RPHP against the unmodified PHPT cases under `Zend/tests` and
+`tests/lang`; keep the upstream checkout and generated run artifacts outside
+the repository. Record the RPHP commit, upstream commit, build features, host
+architecture, runner command and timeout policy so later results can be
+compared against the same baseline.
+
+Publish both an overall result and a classified breakdown: pass, fail, skip,
+unsupported-by-runner and timeout/crash. The headline pass rate is
+`pass / (pass + fail)` and must never silently count skipped, unsupported or
+timed-out cases as passes. Also publish the raw machine-readable manifest and
+the failing PHPT paths, grouped at least by parse/compile/runtime/output
+mismatch, so the number is auditable and directly drives the next
+compatibility backlog. A smaller supported-surface rate may be reported beside
+the overall rate, but it must use an explicit, versioned exclusion manifest
+rather than removing failures after inspection.
+
+The runner must understand the relevant PHPT sections (`FILE`, `EXPECT`,
+`EXPECTF`, `EXPECTREGEX`, `SKIPIF`, `INI`, `ENV`, `ARGS`, `STDIN`, `CLEAN` and
+required extension declarations), preserve exit status and standard streams,
+isolate temporary files, and bound each case. First validate the harness with
+reference PHP on the same pinned checkout; harness disagreements are runner
+bugs, not RPHP compatibility failures. Commit only the dependency-free runner,
+versioned exclusions and generated summary/manifest suitable for publication,
+not upstream PHP sources, host details or bulky build output.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

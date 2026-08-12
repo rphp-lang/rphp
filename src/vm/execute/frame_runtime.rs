@@ -565,8 +565,10 @@ unsafe fn try_execute_single_long_property_plan(
     let property = &plan.properties[0];
     let cache = &callee.op_array.cache[property.cache_ip as usize];
     let flags = cache.property_flags();
+    let required = property.required_flags as u32;
     if cache.class_id != class_id
-        || flags & property.required_flags as u32 != property.required_flags as u32
+        || (flags & required != required
+            && !(required == 3 && instance_property_cache_accepts_long_write(cache)))
     {
         return false;
     }
@@ -669,8 +671,10 @@ unsafe fn try_execute_multi_long_property_plan(
     for (index, property) in plan.properties.iter().enumerate() {
         let cache = &callee.op_array.cache[property.cache_ip as usize];
         let flags = cache.property_flags();
+        let required = property.required_flags as u32;
         if cache.class_id != class_id
-            || flags & property.required_flags as u32 != property.required_flags as u32
+            || (flags & required != required
+                && !(required == 3 && instance_property_cache_accepts_long_write(cache)))
         {
             return false;
         }
@@ -875,9 +879,15 @@ pub(crate) unsafe fn try_execute_direct_property_getter(
         return false;
     }
     let property_slot = cache.property_slot();
+    let property = &*receiver.object_property_slot_unchecked(property_slot);
+    if property.is_undef() {
+        // A getter cache is shared by all instances of the class. The
+        // baseline read must construct the catchable uninitialized typed
+        // property Error for a different, not-yet-initialized receiver.
+        return false;
+    }
 
     if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
-        let property = &*receiver.object_property_slot_unchecked(property_slot);
         let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
         if property.needs_cleanup() || property.is_reference() {
             frame_slot_set(caller, result_ptr, property.clone());

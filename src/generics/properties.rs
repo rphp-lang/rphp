@@ -6,6 +6,40 @@ use super::{
 use crate::value::Value;
 
 impl GenericMetadata {
+    fn type_contains_runtime_generic_contract(expected: &GenericType) -> bool {
+        match expected {
+            GenericType::Parameter(_) => true,
+            GenericType::Named { arguments, .. } => {
+                !arguments.is_empty()
+                    || arguments
+                        .iter()
+                        .any(Self::type_contains_runtime_generic_contract)
+            }
+            GenericType::Nullable(inner) => Self::type_contains_runtime_generic_contract(inner),
+            GenericType::Union(parts) | GenericType::Intersection(parts) => parts
+                .iter()
+                .any(Self::type_contains_runtime_generic_contract),
+            _ => false,
+        }
+    }
+
+    /// Whether an instance property originated from a parameterized contract,
+    /// before inheritance substitution potentially turns it into an ordinary
+    /// scalar. This distinguishes `T` forwarded as `int` from a plain `int`
+    /// declaration: only the former needs the generic runtime/error boundary.
+    pub fn instance_property_requires_generic_guard(&self, declaration: u32, name: &str) -> bool {
+        let Some(child) = self.declarations.get(declaration as usize) else {
+            return false;
+        };
+        if let Some(property) = self.find_instance_property(child, name) {
+            return Self::type_contains_runtime_generic_contract(&property.value_type);
+        }
+        self.ancestor_bindings_scoped_from(child, &[])
+            .into_iter()
+            .filter_map(|(ancestor, _, _)| self.find_instance_property(ancestor, name))
+            .any(|property| Self::type_contains_runtime_generic_contract(&property.value_type))
+    }
+
     /// Produce one fully substituted instance-property type. Executors may
     /// cache the owned result because it contains no metadata-table borrows.
     pub fn reified_instance_property_type(

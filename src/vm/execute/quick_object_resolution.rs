@@ -227,13 +227,19 @@ unsafe fn quick_long_property_slots(
         }
         if cache.property_flags() & property.required_flags as u32
             != property.required_flags as u32
+            && !(property.required_flags == 3
+                && instance_property_cache_accepts_long_write(cache))
         {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             {
                 if property.required_flags != 3 {
                     return None;
                 }
-                let declaration = cache.generic_property_declaration()?;
+                let declaration = if cache.property_flags() == 2 {
+                    (&*cache.typed_instance_property_definition()).generic_declaration?
+                } else {
+                    cache.generic_property_declaration()?
+                };
                 let instruction = user.op_array.instructions.get(cache_ip)?;
                 let name = user
                     .op_array

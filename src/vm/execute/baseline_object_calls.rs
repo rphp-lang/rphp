@@ -101,10 +101,21 @@ unsafe fn try_execute_property_init_constructor(
         if cache.class_id != class_id {
             return None;
         }
-        if cache.property_flags() != 3 {
+        let argument = &*arguments[assignment.argument as usize];
+        let called_class = object.object_class_name_unchecked();
+        if !instance_property_cache_accepts_exact_non_generic_write(
+            cache,
+            argument,
+            eg,
+            called_class,
+        ) {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             {
-                let declaration = cache.generic_property_declaration()?;
+                let declaration = if cache.property_flags() == 2 {
+                    (&*cache.typed_instance_property_definition()).generic_declaration?
+                } else {
+                    cache.generic_property_declaration()?
+                };
                 let instruction = callee
                     .op_array
                     .instructions
@@ -114,7 +125,6 @@ unsafe fn try_execute_property_init_constructor(
                     .literals
                     .get(instruction.op2 as usize)?
                     .as_str()?;
-                let argument = &*arguments[assignment.argument as usize];
                 if eg
                     .check_cached_generic_property_value(
                         object,
@@ -370,6 +380,14 @@ fn finish_cached_fetch_obj_r(
     opline: &Instruction,
     property_ptr: *const Value,
 ) -> CachedFetchObjResult {
+    let property = unsafe { &*property_ptr };
+    // A class cache is shared by every instance. Another object of the same
+    // class may still hold the typed-property undef sentinel even after this
+    // site was warmed by an initialized instance; let the cold path produce
+    // the catchable PHP Error with declaration metadata.
+    if property.is_undef() {
+        return CachedFetchObjResult::Miss;
+    }
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
@@ -379,7 +397,6 @@ fn finish_cached_fetch_obj_r(
             && strlen.op1_type == opline.result_type
             && strlen.op1 == opline.result
             && matches!(strlen.result_type, OpType::Tmp | OpType::Var);
-        let property = unsafe { &*property_ptr };
         if consumes_fetch && property.value_type() == ValueType::String {
             let length = unsafe { property.as_str().unwrap_unchecked().len() as i64 };
             let result_ptr = unsafe {
@@ -456,12 +473,12 @@ fn try_cached_fetch_obj_r(
 }
 
 #[inline(never)]
-fn op_fetch_obj_r_slow(
+fn op_fetch_obj_r_slow<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
@@ -540,6 +557,10 @@ fn op_fetch_obj_r_slow(
             }
         }
 
+        let declared_slot = obj.property_slot(&key);
+        let definition = declared_slot.and_then(|slot| {
+            eg.instance_property_definition(obj.class_id, slot)
+        });
         let (found_val, dynamic_position) = if cache_dynamic_std_class {
             match obj.get_dynamic_property_with_position(&key) {
                 Some((value, position)) => (Some(value.clone()), position),
@@ -557,6 +578,24 @@ fn op_fetch_obj_r_slow(
         }
         drop(obj); // Release borrow before potential magic method call
         if let Some(val) = found_val {
+            if val.is_undef()
+                && definition.is_some_and(|definition| unsafe { (&*definition).is_typed() })
+            {
+                let definition = unsafe { &*definition.unwrap() };
+                let error = make_error_value(
+                    "Error",
+                    &format!(
+                        "Typed property {}::${} must not be accessed before initialization",
+                        definition.type_scope, definition.name
+                    ),
+                );
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
             unsafe { frame_slot_set(frame, result_ptr, val) };
         } else {
             // Property not found — try __get magic method
@@ -567,10 +606,11 @@ fn op_fetch_obj_r_slow(
             }
         }
     }
-    Ok(())
+    Ok(ColdResult::Done)
 }
 
-#[inline(never)]
+include!("instance_property_cache.rs");
+
 fn op_assign_obj_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -579,12 +619,17 @@ fn op_assign_obj_prop<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
-    let cloned = val.clone();
+    let val = if val.is_reference() {
+        unsafe { &*val.as_ref_ptr() }
+    } else {
+        val
+    };
+    let mut assigned = val.clone();
     let name = prop_name.as_str().unwrap_or("").to_string();
     let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let obj = unsafe { &*obj_ptr };
 
-    if let Some(mut php_obj) = obj.as_object_mut() {
+    if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
 
         // Same receiver-in-scope guard as FetchObjR — only allow
@@ -655,10 +700,10 @@ fn op_assign_obj_prop<'a>(
                         ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                     }
                 } else {
-                    // First initialization — only allowed from declaring class scope
-                    let in_declaring_scope = caller_class.as_ref().map_or(false, |cc| {
-                        cc.eq_ignore_ascii_case(&php_obj.class_name)
-                    });
+                    // PHP 8.4+ readonly writes are protected(set): first
+                    // initialization is available to the receiver's class
+                    // family, including a parent constructor on a child object.
+                    let in_declaring_scope = receiver_in_scope;
                     if !in_declaring_scope {
                         let err = make_error_value("Error", &format!(
                             "Cannot initialize readonly property {}::${} from {}",
@@ -674,55 +719,80 @@ fn op_assign_obj_prop<'a>(
                 }
             }
         }
-        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-        let generic_declaration = eg
-            .check_generic_property_value(obj, &php_obj.class_name, &name, val)
-            .map_err(VmError::Fatal)?;
         // Resolve storage key (mangled for private properties)
         let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
-
-        // Cache: if public, not enum, not readonly, key == name → mark for write fast path.
-        if prop_is_public && prop_is_writable && key == name && php_obj.class_id != 0 {
-            let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
-            let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
-            if let Some(slot) = php_obj.property_slot(&key) {
-                #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-                if let Some(declaration) = generic_declaration {
-                    #[cfg(all(
-                        feature = "php-generics-erased",
-                        not(feature = "php-generics-reified")
-                    ))]
-                    if eg
-                        .generic_metadata
-                        .property_erases_to_mixed(declaration, &name)
-                    {
-                        // An unbounded parameter erases to `mixed`; after the
-                        // declaration is proven once, its write is identical
-                        // to the ordinary property fast path.
-                        ic_mut.set_property(php_obj.class_id, slot, 3);
-                    } else {
-                        ic_mut.set_generic_property(declaration, php_obj.class_id, slot);
+        let declared_slot = php_obj.property_slot(&key);
+        let definition = declared_slot.and_then(|slot| {
+            eg.instance_property_definition(php_obj.class_id, slot)
+        });
+        let object_class_id = php_obj.class_id;
+        let object_class_name = php_obj.class_name.clone();
+        let prop_exists = php_obj.contains_property(&key);
+        drop(php_obj);
+        if let Some(definition_ptr) = definition {
+            let definition_ref = unsafe { &*definition_ptr };
+            #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+            if let Some(declaration) = definition_ref.generic_declaration
+                && let Err(message) = eg.check_cached_generic_property_value(
+                    obj,
+                    &definition_ref.name,
+                    &assigned,
+                    declaration,
+                )
+            {
+                return Ok(object_property_throw(
+                    eg,
+                    frame,
+                    "TypeError",
+                    message,
+                ));
+            }
+            if definition_ref.is_typed() && definition_ref.generic_declaration.is_none() {
+                assigned = match prepare_property_assignment(
+                    assigned,
+                    definition_ref,
+                    eg,
+                    op_array.strict_types,
+                    &object_class_name,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return Ok(object_property_throw(
+                            eg,
+                            frame,
+                            "TypeError",
+                            message,
+                        ));
                     }
-                    #[cfg(feature = "php-generics-reified")]
-                    ic_mut.set_generic_property(declaration, php_obj.class_id, slot);
-                } else {
-                    ic_mut.set_property(php_obj.class_id, slot, 3);
-                }
-                #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
-                ic_mut.set_property(php_obj.class_id, slot, 3);
+                };
             }
         }
 
-        let prop_exists = php_obj.contains_property(&key);
+        // Cache: if public, not enum, not readonly, key == name → mark for write fast path.
+        if prop_is_public && prop_is_writable && key == name && object_class_id != 0 {
+            let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+            let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
+            if let Some(slot) = declared_slot {
+                if let Some(definition) = definition
+                    && unsafe { (&*definition).is_typed() }
+                {
+                    ic_mut.set_typed_instance_property(definition, object_class_id, slot);
+                } else {
+                    ic_mut.set_property(object_class_id, slot, 3);
+                }
+            }
+        }
+
         if prop_exists {
-            php_obj.set_property(&key, cloned);
+            if let Some(mut php_obj) = obj.as_object_mut() {
+                php_obj.set_property(&key, assigned);
+            }
         } else {
-            drop(php_obj); // Release borrow before potential magic method call
             // Property not found — try __set magic method
-            if call_magic_method(eg, obj, "__set", &[Value::string(name.clone()), cloned.clone()])?.is_none() {
+            if call_magic_method(eg, obj, "__set", &[Value::string(name.clone()), assigned.clone()])?.is_none() {
                 // No __set — fall back to direct insert
                 if let Some(mut php_obj) = obj.as_object_mut() {
-                    php_obj.set_property(&key, cloned);
+                    php_obj.set_property(&key, assigned);
                 }
             }
         }

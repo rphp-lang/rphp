@@ -1487,11 +1487,34 @@ unsafe fn try_execute_virtual_object_array_pipeline(
             .op_array
             .cache
             .get(assignment.cache_ip as usize)?;
-        if cache.class_id != virtual_object.class_id || cache.property_flags() != 3 {
+        if cache.class_id != virtual_object.class_id {
             return None;
         }
         let slot = cache.property_slot();
         let value = *constructor_values.get(assignment.argument as usize)?;
+        let accepts_value = match value {
+            VirtualPropertyValue::Long(value) => {
+                let value = Value::long(value);
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    &value,
+                    eg,
+                    &class_def.name,
+                )
+            }
+            VirtualPropertyValue::Borrowed(pointer) if !pointer.is_null() => {
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    &*pointer,
+                    eg,
+                    &class_def.name,
+                )
+            }
+            VirtualPropertyValue::Borrowed(_) | VirtualPropertyValue::Empty => false,
+        };
+        if !accepts_value {
+            return None;
+        }
         if let Some(index) = virtual_object.property_slots[..virtual_object.property_count as usize]
             .iter()
             .position(|existing| *existing == slot)

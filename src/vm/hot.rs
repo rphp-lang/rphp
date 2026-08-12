@@ -1234,8 +1234,7 @@ pub fn execute_hot_frame(
                 let ip =
                     unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
                 let ic = &op_array.cache[ip];
-                // Need both read-safe (bit 0) and write-safe (bit 1)
-                if ic.property_flags() != 3 || ic.class_id != obj_class_id || obj_class_id == 0 {
+                if ic.class_id != obj_class_id || obj_class_id == 0 {
                     return bailout(frame, opline_ptr, HotBailReason::ObjAssignCacheMiss);
                 }
                 // Read the source value
@@ -1257,9 +1256,43 @@ pub fn execute_hot_frame(
                 if src_val.needs_cleanup() || src_val.is_reference() {
                     return bailout(frame, opline_ptr, HotBailReason::ObjAssignHeapSrc);
                 }
+                let typed_definition = if ic.property_flags() == 2 {
+                    Some(unsafe { &*ic.typed_instance_property_definition() })
+                } else {
+                    None
+                };
+                let typed_exact = typed_definition.is_some_and(|definition| {
+                    if definition.generic_declaration.is_some() {
+                        return false;
+                    }
+                    match ic.typed_instance_property_tag() {
+                        crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT => {
+                            src_val.value_type() == ValueType::Long
+                        }
+                        crate::vm::instruction::InlineCache::TYPED_PROPERTY_FLOAT => {
+                            matches!(src_val.value_type(), ValueType::Long | ValueType::Double)
+                        }
+                        crate::vm::instruction::InlineCache::TYPED_PROPERTY_BOOL => {
+                            matches!(src_val.value_type(), ValueType::True | ValueType::False)
+                        }
+                        _ => false,
+                    }
+                });
+                if ic.property_flags() != 3 && !typed_exact {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjAssignCacheMiss);
+                }
                 // Write scalar value directly to the cached declared-property slot.
-                let mut new_val = Value::undef();
-                unsafe { Value::raw_copy(src_val as *const Value, &mut new_val as *mut Value) };
+                let new_val = if ic.property_flags() == 2
+                    && ic.typed_instance_property_tag()
+                        == crate::vm::instruction::InlineCache::TYPED_PROPERTY_FLOAT
+                    && src_val.value_type() == ValueType::Long
+                {
+                    Value::double(unsafe { src_val.raw_long() } as f64)
+                } else {
+                    let mut copied = Value::undef();
+                    unsafe { Value::raw_copy(src_val as *const Value, &mut copied as *mut Value) };
+                    copied
+                };
                 unsafe { obj_val.object_set_property_slot_unchecked(ic.property_slot(), new_val) };
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;

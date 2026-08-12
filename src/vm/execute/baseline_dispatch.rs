@@ -2374,7 +2374,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::FetchObjR => {
                 match try_cached_fetch_obj_r(frame, op_array, opline) {
                     CachedFetchObjResult::Miss => {
-                        op_fetch_obj_r_slow(eg, frame, op_array, opline)?;
+                        match op_fetch_obj_r_slow(eg, frame, op_array, opline)? {
+                            ColdResult::NewFrame(nf, no) => {
+                                frame = nf;
+                                op_array = no;
+                                continue;
+                            }
+                            ColdResult::Unhandled(exc) => {
+                                eg.exception = Some(exc);
+                                return Ok(());
+                            }
+                            _ => {}
+                        }
                     }
                     CachedFetchObjResult::Complete => {}
                     CachedFetchObjResult::CompleteAndSkipNext => {
@@ -2391,13 +2402,70 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
                     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
                     let ic = &op_array.cache[ip];
+                    let cache_matches = ic.class_id == obj_class_id && obj_class_id != 0;
+                    let property_flags = ic.property_flags();
                     // flags == 3: read-safe + write-safe declared property slot.
-                    if ic.property_flags() == 3 && ic.class_id == obj_class_id && obj_class_id != 0 {
+                    if property_flags == 3 && cache_matches {
                         let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
+                        let val = if val.is_reference() {
+                            unsafe { &*val.as_ref_ptr() }
+                        } else {
+                            val
+                        };
                         let cloned = val.clone();
                         unsafe {
                             obj_val.object_set_property_slot_unchecked(ic.property_slot(), cloned);
                         };
+                    } else if property_flags == 2
+                        && cache_matches
+                        && ic.typed_instance_property_tag()
+                            == crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT
+                        && {
+                            let source = unsafe {
+                                &*(*frame).get_op_ptr(
+                                    opline.result as u32,
+                                    opline.result_type,
+                                    op_array,
+                                )
+                            };
+                            let source = if source.is_reference() {
+                                unsafe { &*source.as_ref_ptr() }
+                            } else {
+                                source
+                            };
+                            if source.value_type() != ValueType::Long {
+                                false
+                            } else {
+                                unsafe {
+                                    obj_val.object_set_property_slot_unchecked(
+                                        ic.property_slot(),
+                                        Value::long(source.raw_long()),
+                                    );
+                                }
+                                true
+                            }
+                        }
+                    {
+                    } else if let Some(result) = try_assign_cached_typed_instance_property(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        obj_val,
+                        obj_class_id,
+                    )? {
+                        match result {
+                            ColdResult::NewFrame(nf, no) => {
+                                frame = nf;
+                                op_array = no;
+                                continue;
+                            }
+                            ColdResult::Unhandled(exc) => {
+                                eg.exception = Some(exc);
+                                return Ok(());
+                            }
+                            _ => {}
+                        }
                     } else {
                         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
                         {

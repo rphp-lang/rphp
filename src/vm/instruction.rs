@@ -318,6 +318,54 @@ impl InlineCache {
         self.func = ((definition as usize) | tag) as *const FunctionCommon;
     }
 
+    /// Typed instance writes use the write-safe bit without the read-safe bit.
+    /// Fetch and assignment have separate opcode-local cache entries, so this
+    /// state cannot be mistaken for a readable property cache. The tagged
+    /// declaration pointer keeps the full guard available without enlarging
+    /// the 16-byte cache entry.
+    #[inline]
+    pub fn set_typed_instance_property(
+        &mut self,
+        definition: *const PropertyDefinition,
+        class_id: u32,
+        slot: usize,
+    ) {
+        debug_assert!(!definition.is_null());
+        debug_assert_eq!(definition as usize & Self::TYPED_PROPERTY_TAG_MASK, 0);
+        self.set_property(class_id, slot, 2);
+        let definition_ref = unsafe { &*definition };
+        // Generic-origin contracts must never acquire an exact scalar tag:
+        // their substituted bound/reified check remains authoritative even
+        // when the erased declaration currently looks like `int` or another
+        // scalar. Encoding that distinction on cache fill lets the warmed
+        // exact path avoid dereferencing cold declaration metadata.
+        let tag = if definition_ref.generic_declaration.is_some() {
+            Self::TYPED_PROPERTY_COMPLEX
+        } else {
+            match definition_ref.type_hint {
+                super::function::ParamTypeHint::Int => Self::TYPED_PROPERTY_INT,
+                super::function::ParamTypeHint::Float => Self::TYPED_PROPERTY_FLOAT,
+                super::function::ParamTypeHint::String => Self::TYPED_PROPERTY_STRING,
+                super::function::ParamTypeHint::Bool => Self::TYPED_PROPERTY_BOOL,
+                super::function::ParamTypeHint::Array => Self::TYPED_PROPERTY_ARRAY,
+                _ => Self::TYPED_PROPERTY_COMPLEX,
+            }
+        };
+        self.func = ((definition as usize) | tag) as *const FunctionCommon;
+    }
+
+    #[inline(always)]
+    pub fn typed_instance_property_definition(&self) -> *const PropertyDefinition {
+        debug_assert_eq!(self.property_flags(), 2);
+        (self.func as usize & !Self::TYPED_PROPERTY_TAG_MASK) as *const PropertyDefinition
+    }
+
+    #[inline(always)]
+    pub fn typed_instance_property_tag(&self) -> usize {
+        debug_assert_eq!(self.property_flags(), 2);
+        self.func as usize & Self::TYPED_PROPERTY_TAG_MASK
+    }
+
     #[inline(always)]
     pub fn typed_static_property_definition(&self) -> *const PropertyDefinition {
         debug_assert_eq!(self.property_flags(), 1);
@@ -520,7 +568,10 @@ impl InlineCache {
 #[cfg(test)]
 mod inline_cache_tests {
     use super::InlineCache;
+    use crate::compiler::compile::PropertyDefinition;
+    use crate::parser::Visibility;
     use crate::value::ObjectLayout;
+    use crate::vm::function::ParamTypeHint;
 
     #[test]
     fn dynamic_property_marker_does_not_alias_a_declared_slot() {
@@ -556,6 +607,55 @@ mod inline_cache_tests {
 
         cache.set_property(7, 3, 1);
         assert_eq!(cache.generic_property_declaration(), None);
+    }
+
+    #[test]
+    fn typed_instance_property_cache_is_distinct_from_read_and_generic_states() {
+        let definition = Box::new(PropertyDefinition::declared(
+            "number".into(),
+            None,
+            Visibility::Public,
+            "Counter".into(),
+            ParamTypeHint::Int,
+            false,
+            false,
+        ));
+        let definition_ptr = &*definition as *const PropertyDefinition;
+        let mut cache = InlineCache::empty();
+        cache.set_typed_instance_property(definition_ptr, 7, 3);
+
+        assert_eq!(cache.class_id, 7);
+        assert_eq!(cache.property_slot(), 3);
+        assert_eq!(cache.property_flags(), 2);
+        assert_eq!(cache.typed_instance_property_definition(), definition_ptr);
+        assert_eq!(
+            cache.typed_instance_property_tag(),
+            InlineCache::TYPED_PROPERTY_INT
+        );
+        assert_eq!(cache.generic_property_declaration(), None);
+        assert_eq!(std::mem::size_of::<InlineCache>(), 16);
+
+        let mut generic_definition = PropertyDefinition::declared(
+            "value".into(),
+            None,
+            Visibility::Public,
+            "Box".into(),
+            ParamTypeHint::Int,
+            false,
+            true,
+        );
+        generic_definition.generic_declaration = Some(11);
+        let generic_definition = Box::new(generic_definition);
+        let generic_definition_ptr = &*generic_definition as *const PropertyDefinition;
+        cache.set_typed_instance_property(generic_definition_ptr, 9, 4);
+        assert_eq!(
+            cache.typed_instance_property_definition(),
+            generic_definition_ptr
+        );
+        assert_eq!(
+            cache.typed_instance_property_tag(),
+            InlineCache::TYPED_PROPERTY_COMPLEX
+        );
     }
 
     #[test]

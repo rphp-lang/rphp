@@ -1022,6 +1022,10 @@ pub struct PropertyDefinition {
     pub default: Option<Value>,
     pub visibility: Visibility,
     pub declaring_class: String,
+    /// Lexical class scope used by `self`/`parent` property contracts. This is
+    /// normally the declaring class; trait composition rewrites it to the
+    /// consuming class while preserving `declaring_class` as provenance.
+    pub type_scope: String,
     /// Erased PHP runtime contract. Generic metadata retains the richer
     /// parameterized form outside this storage-oriented declaration table.
     pub type_hint: ParamTypeHint,
@@ -1030,6 +1034,11 @@ pub struct PropertyDefinition {
     /// mode (for example `Box<int>`). Its full type stays interned in the
     /// executor-wide GenericMetadata graph.
     pub requires_reified_check: bool,
+    /// Runtime-local class declaration used by warmed instance-property
+    /// writes. Registration rewrites inherited definitions to the concrete
+    /// receiver declaration, so one cached definition pointer carries both
+    /// the erased PHP contract and the bound/reified generic lookup key.
+    pub(crate) generic_declaration: Option<u32>,
 }
 
 impl PropertyDefinition {
@@ -1040,14 +1049,17 @@ impl PropertyDefinition {
         visibility: Visibility,
         declaring_class: String,
     ) -> Self {
+        let type_scope = declaring_class.clone();
         Self {
             name,
             default,
             visibility,
             declaring_class,
+            type_scope,
             type_hint: ParamTypeHint::None,
             is_readonly: false,
             requires_reified_check: false,
+            generic_declaration: None,
         }
     }
 
@@ -1060,14 +1072,17 @@ impl PropertyDefinition {
         is_readonly: bool,
         requires_reified_check: bool,
     ) -> Self {
+        let type_scope = declaring_class.clone();
         Self {
             name,
             default,
             visibility,
             declaring_class,
+            type_scope,
             type_hint,
             is_readonly,
             requires_reified_check,
+            generic_declaration: None,
         }
     }
 

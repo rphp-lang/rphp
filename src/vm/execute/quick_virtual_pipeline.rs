@@ -210,13 +210,41 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
             .op_array
             .cache
             .get(assignment.cache_ip as usize)?;
-        if cache.class_id != new_cache.class_id || cache.property_flags() != 3 {
+        if cache.class_id != new_cache.class_id || assignment.argument >= argument_count {
+            return None;
+        }
+        let accepts_value = match constructor_arguments[assignment.argument as usize] {
+            QuickVirtualValueSource::Long(source) => {
+                let value = Value::long(quick_long_operand(slots, source));
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    &value,
+                    eg,
+                    &class_def.name,
+                )
+            }
+            QuickVirtualValueSource::StringLiteral(literal) => {
+                let value = caller_op_array.literals.get(literal as usize)?;
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    value,
+                    eg,
+                    &class_def.name,
+                )
+            }
+            QuickVirtualValueSource::StringSlot(slot) => {
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    string_state.value(slot),
+                    eg,
+                    &class_def.name,
+                )
+            }
+        };
+        if !accepts_value {
             return None;
         }
         let property_slot = cache.property_slot();
-        if assignment.argument >= argument_count {
-            return None;
-        }
         if let Some(index) = property_slots[..property_count]
             .iter()
             .position(|existing| *existing == property_slot)
