@@ -351,3 +351,18 @@ fn test_e2e_switch_default_fallthrough_to_case() {
         "db"
     );
 }
+#[test]
+fn test_empty_statements_and_loop_body_are_noops() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+;
+$i = 0;
+while ($i++ < 2);
+;;
+echo $i;
+"#,
+        ),
+        "3"
+    );
+}

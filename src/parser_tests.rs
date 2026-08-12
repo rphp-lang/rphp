@@ -85,6 +85,16 @@ fn test_parse_standalone_print_statement() {
 }
 
 #[test]
+fn test_parse_empty_statement() {
+    let tokens = Lexer::new("<?php ; echo 1; ;").tokenize().unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert_eq!(
+        stmts,
+        vec![Stmt::Noop, Stmt::Echo(vec![Expr::Integer(1)]), Stmt::Noop,]
+    );
+}
+
+#[test]
 fn test_parse_abstract_method_contract() {
     let tokens = Lexer::new(
         "<?php abstract class Shape { abstract protected static function area(int $scale): int; }",

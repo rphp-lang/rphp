@@ -22,6 +22,10 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek() {
+            Token::Semicolon => {
+                self.advance();
+                Ok(Stmt::Noop)
+            }
             Token::Declare => {
                 self.advance(); // consume 'declare'
                 self.expect(&Token::LParen)?;

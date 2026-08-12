@@ -5,6 +5,7 @@ impl Compiler {
             return Err(err);
         }
         match stmt {
+            Stmt::Noop => {}
             Stmt::Echo(expressions) => {
                 for expr in expressions {
                     let (operand, op_type) = self.compile_expr(expr);

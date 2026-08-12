@@ -338,6 +338,7 @@ pub struct Param {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
+    Noop,
     Echo(Vec<Expr>),
     Assign {
         var: String,
