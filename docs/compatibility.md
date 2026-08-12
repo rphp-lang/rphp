@@ -10,24 +10,26 @@ Passing a script is evidence only for the exercised behavior.
 The latest reproducible upstream baseline runs the unmodified `Zend/tests` and
 `tests/lang` suites from PHP 8.4.21 commit
 `7a64ae0507799547fbbd39b067bd3dd2c35e8fec` against all-features RPHP commit
-`e107bf2cf7eee416a3294144273315e7fc2c06c5`. The recorded run used arm64 and a
+`42ea7188f25fbebd8354a7cebf3a65161ee5dfc2`. The recorded run used arm64 and a
 three-second per-process timeout. It discovered 5,259 PHPT cases.
 
-| Suite | Pass | Fail | Skip | Unsupported | Timeout | Crash | Headline pass rate |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 480 | 4,134 | 86 | 258 | 0 | 7 | 10.403% |
-| `tests/lang` | 42 | 226 | 10 | 16 | 0 | 0 | 15.672% |
-| **Combined** | **522** | **4,360** | **96** | **274** | **0** | **7** | **10.692%** |
+| Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `Zend/tests` | 480 | 4,133 | 86 | 1 | 258 | 0 | 7 | 10.405% |
+| `tests/lang` | 42 | 226 | 10 | 0 | 16 | 0 | 0 | 15.672% |
+| **Combined** | **522** | **4,359** | **96** | **1** | **274** | **0** | **7** | **10.695%** |
 
 The headline follows the published gate definition exactly:
-`pass / (pass + fail)`. It does not count skips, unsupported cases, timeouts or
-crashes as passes. A stricter whole-corpus view is 522 / 5,259, or **9.926%**;
-including crashes in the attempted denominator gives **10.677%**. These numbers
-are intentionally pre-alpha and are not a claim of PHP 8.4 compatibility.
+`pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
+unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
+is 522 / 5,259, or **9.926%**; including crashes in the attempted denominator
+gives **10.679%**. These numbers are intentionally pre-alpha and are not a
+claim of PHP 8.4 compatibility.
 
 The largest failure groups are 2,147 parse failures, 1,362 runtime failures,
-713 output mismatches, 129 compile failures, eight failed `SKIPIF` evaluations and
-one expected-failure mismatch. Seven cases terminate by signal. Of the 96
+713 output mismatches, 129 compile failures and eight failed `SKIPIF`
+evaluations; one known upstream expected failure is reported separately. Seven
+cases terminate by signal. Of the 96
 skips, 65 require unavailable extensions and 31 are selected by `SKIPIF`.
 Unsupported cases remain in the total: 269 require per-process `INI` behavior
 that the RPHP CLI does not expose, while five require PHPDBG or CGI/header
@@ -50,19 +52,35 @@ now parses. The retained `f6a20c1`, `1bc6650`, `18e4dde`, `81de421`, `7ab1941`,
 `21f2d98` and `67a924d` results isolate the earlier syntax, abstract-method,
 shared-contract and string-literal uplifts.
 
+An audit found that the earlier runner did not preserve php-src's generated
+`.php` basename and section-ending newline, omitted the `%0` `EXPECTF`
+placeholder, and did not reproduce the reference CLI's INI defaults. Schema 2
+fixes those issues and reports upstream `XFAIL` separately. A full oracle run
+through the corrected runner on the exact official PHP 8.4.21 CLI produced
+5,132 passes, zero ordinary failures, 121 skips, five unsupported SAPI sections
+and the one upstream `XFAIL`. The set of 522 RPHP passes is byte-for-byte
+unchanged from `e107bf2`; the correction therefore validates the low strict
+rate instead of inflating it.
+
+The largest first-error parser clusters in the retained raw audit are property
+hook or braced-member shapes (232), reference assignment expressions (154),
+anonymous classes (79), unpacking expressions (74), returned-by-reference
+declarations (56), and dynamic class/member access (50). PHPT is an exact-output
+conformance suite: a correct rejection with different diagnostic text still
+fails, so this strict percentage is deliberately lower than feature reach.
+
 The dependency-free project runner supports `FILE`, `FILEEOF`,
 `FILE_EXTERNAL`, `EXPECT`, `EXPECTF`, `EXPECTREGEX`, `SKIPIF`, `INI`, `ENV`,
 `ARGS`, `STDIN`, `CLEAN` and extension declarations, with explicit capability
 classification where the runtime cannot execute a section. Its expectation and
-section handling was compared on the same pinned checkout with the official
-`run-tests.php` under the official PHP 8.4.21 CLI image; both runners passed the
-same five representative cases, 5/5.
+section handling are continuously covered by local fixtures and the complete
+oracle result above.
 
 The complete machine-readable result is committed as
-[`e107bf2-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/e107bf2-arm64-manifest.jsonl),
+[`42ea718-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/42ea718-arm64-manifest.jsonl),
 with aggregate metadata in
-[`e107bf2-arm64-summary.json`](../tests/php-src/results/php-8.4.21/e107bf2-arm64-summary.json).
-Every upstream path remains visible with its pass/fail/skip/unsupported/
+[`42ea718-arm64-summary.json`](../tests/php-src/results/php-8.4.21/42ea718-arm64-summary.json).
+Every upstream path remains visible with its pass/fail/skip/XFAIL/unsupported/
 timeout/crash status and classification.
 
 To reproduce the run from an external checkout pinned to the commit above:
