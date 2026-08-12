@@ -10,39 +10,40 @@ Passing a script is evidence only for the exercised behavior.
 The latest reproducible upstream baseline runs the unmodified `Zend/tests` and
 `tests/lang` suites from PHP 8.4.21 commit
 `7a64ae0507799547fbbd39b067bd3dd2c35e8fec` against all-features RPHP commit
-`81de4219e9d1a168aa257fb14f269d5175ad472a`. The recorded run used arm64 and a
+`7ab19418a95fc5528ed2671affaa978d9317ef39`. The recorded run used arm64 and a
 three-second per-process timeout. It discovered 5,259 PHPT cases.
 
 | Suite | Pass | Fail | Skip | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 377 | 4,237 | 86 | 258 | 0 | 7 | 8.171% |
-| `tests/lang` | 39 | 229 | 10 | 16 | 0 | 0 | 14.552% |
-| **Combined** | **416** | **4,466** | **96** | **274** | **0** | **7** | **8.521%** |
+| `Zend/tests` | 382 | 4,232 | 86 | 258 | 0 | 7 | 8.279% |
+| `tests/lang` | 40 | 228 | 10 | 16 | 0 | 0 | 14.925% |
+| **Combined** | **422** | **4,460** | **96** | **274** | **0** | **7** | **8.644%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, unsupported cases, timeouts or
-crashes as passes. A stricter whole-corpus view is 416 / 5,259, or **7.910%**;
-including crashes in the attempted denominator gives **8.509%**. These numbers
+crashes as passes. A stricter whole-corpus view is 422 / 5,259, or **8.024%**;
+including crashes in the attempted denominator gives **8.632%**. These numbers
 are intentionally pre-alpha and are not a claim of PHP 8.4 compatibility.
 
-The largest failure groups are 2,453 parse failures, 1,227 runtime failures,
-674 output mismatches, 103 compile failures, eight failed `SKIPIF` evaluations and
+The largest failure groups are 2,427 parse failures, 1,240 runtime failures,
+680 output mismatches, 104 compile failures, eight failed `SKIPIF` evaluations and
 one expected-failure mismatch. Seven cases terminate by signal. Of the 96
 skips, 65 require unavailable extensions and 31 are selected by `SKIPIF`.
 Unsupported cases remain in the total: 269 require per-process `INI` behavior
 that the RPHP CLI does not expose, while five require PHPDBG or CGI/header
 sections outside this CLI gate.
 
-Relative to the retained `1a5a270` baseline, this run adds 66 passing cases
-without losing a previous pass, reduces parser failures by 368 and reduces
+Relative to the retained `1a5a270` baseline, this run adds 72 passing cases
+without losing a previous pass, reduces parser failures by 394 and reduces
 signal-terminated cases from 14 to 7. The measured change covers standard
 comma-separated `echo`, standalone `print` statements and generator-safe call
-argument suspension, plus body-less abstract class and trait method contracts.
+argument suspension, empty/no-op statements, plus body-less abstract class and
+trait method contracts.
 Interface and abstract declarations now share compile-time LSP validation for
 arity, variadics, reference mode, visibility, staticness and declared types. It
 does not infer support for the remaining downstream behavior of every case that
-now parses. The retained `f6a20c1`, `1bc6650` and `18e4dde` results isolate the
-earlier syntax and abstract-method uplifts from the shared contract validation.
+now parses. The retained `f6a20c1`, `1bc6650`, `18e4dde` and `81de421` results
+isolate the earlier syntax, abstract-method and shared-contract uplifts.
 
 The dependency-free project runner supports `FILE`, `FILEEOF`,
 `FILE_EXTERNAL`, `EXPECT`, `EXPECTF`, `EXPECTREGEX`, `SKIPIF`, `INI`, `ENV`,
@@ -53,9 +54,9 @@ section handling was compared on the same pinned checkout with the official
 same five representative cases, 5/5.
 
 The complete machine-readable result is committed as
-[`81de421-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/81de421-arm64-manifest.jsonl),
+[`7ab1941-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/7ab1941-arm64-manifest.jsonl),
 with aggregate metadata in
-[`81de421-arm64-summary.json`](../tests/php-src/results/php-8.4.21/81de421-arm64-summary.json).
+[`7ab1941-arm64-summary.json`](../tests/php-src/results/php-8.4.21/7ab1941-arm64-summary.json).
 Every upstream path remains visible with its pass/fail/skip/unsupported/
 timeout/crash status and classification.
 
