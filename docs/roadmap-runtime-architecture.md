@@ -2626,6 +2626,56 @@ If these gates cannot be met without adding overhead to normal PHP, keep the
 primitive opt-in and continue compatibility work rather than weakening the
 pay-for-use contract.
 
+## Planned Symfony first-application lifecycle gate
+
+The detailed language, Composer, Reflection, standard-library and extension
+inventory lives in Interphase 5.58 of the performance and compatibility
+roadmap. Runtime work uses the pinned Symfony 7.4 LTS fixture from that section
+and keeps three different claims separate: loading a reference-PHP-built
+container, cold-building the container under RPHP, and serving it through an
+RPHP HTTP adapter. Only the second is the first framework compatibility
+checkpoint; only the third is an API/runtime checkpoint.
+
+The initial request is synthetic and runs in a short-lived CLI process. The
+HTTP adapter then maps method, URI, query, headers, cookies, uploads and body
+into PHP superglobals and `php://input`, publishes status/headers/body and runs
+kernel termination. Repeated requests additionally reset superglobals,
+handlers, output buffers, request-owned resources, services and coroutine
+state. A warmed container is process-persistent metadata; request values must
+not become persistent roots accidentally.
+
+One-request SAPI work may precede cycle collection. A long-lived Symfony
+worker may not be declared production-ready until the collector/root registry,
+unsafe audit, cancellation/unwind and leak/stress gates are complete. FPM/CGI
+protocol compatibility is independent of the first native HTTP adapter and is
+not allowed to delay the in-memory kernel milestones.
+
+## Unsafe invariant audit and enforcement
+
+Before the production memory lifecycle and native extension boundaries are
+declared stable, close the gap between the implementation and
+`docs/unsafe-policy.md`. The canonical production-source inventory and CI
+ratchet are now established: feature work cannot silently grow the 1,628-block
+ceiling, newly added unsafe blocks require adjacent concrete proofs, new unsafe
+functions require caller contracts, and any baseline increase requires an
+explicit security review. The ratchet's adversarial self-test is part of CI;
+this preventive checkpoint does not by itself make the legacy inventory sound.
+
+The architectural audit starts with the contracts shared by every executor:
+`Value` representation and ownership, frame/slot/stack lifetimes, stable
+instruction and metadata pointers, coroutine suspension, and quick/JIT
+publication and side exits. Repeated raw operations should move behind narrow
+checked owner or pointer types where this preserves the measured hot path. The
+large baseline dispatcher is audited by semantic operation family; mechanically
+adding identical comments is not completion.
+
+Enable `deny(unsafe_op_in_unsafe_fn)` in each completed module and eventually
+crate-wide. Production readiness requires concrete `# Safety` sections for all
+remaining unsafe functions, local proofs for all remaining unsafe operations,
+and focused Miri/sanitizer/fuzz/stress/ABI coverage where applicable. The full
+inventory, staged order and performance gates live in Interphase 5.59 of the
+performance and compatibility roadmap.
+
 ## Planned production memory lifecycle and cycle collector
 
 The current `Value` contract uses deterministic reference counting and Rust
