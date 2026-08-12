@@ -1058,6 +1058,146 @@ fn static_property_class_id<const LATE_STATIC: bool>(
 }
 
 #[inline(never)]
+fn op_fetch_class_const<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    op_fetch_class_const_impl::<false>(eg, frame, op_array, opline)
+}
+
+#[inline(never)]
+fn op_fetch_late_class_const<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    op_fetch_class_const_impl::<true>(eg, frame, op_array, opline)
+}
+
+#[inline(always)]
+fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let class_name =
+        unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    let constant_name =
+        unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+    let raw_class = class_name.as_str().unwrap_or("");
+    let constant = constant_name.as_str().unwrap_or("");
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let cache = unsafe {
+        &mut *(op_array.cache.as_ptr().add(ip)
+            as *mut crate::vm::instruction::InlineCache)
+    };
+    let class_id = static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class);
+
+    if constant.eq_ignore_ascii_case("class") {
+        let Some(class) = eg.class_by_id(class_id) else {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Class \"{}\" not found", raw_class),
+            ));
+        };
+        unsafe { slot_set(result_ptr, Value::string(class.name.clone())) };
+        return Ok(ColdResult::Done);
+    }
+
+    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 1 {
+        let class = eg
+            .class_by_id(class_id)
+            .expect("cached class constant owner must stay registered");
+        let definition = class
+            .constants
+            .get(cache.property_slot())
+            .expect("cached class constant index must stay valid");
+        unsafe { slot_set(result_ptr, definition.value.clone()) };
+        return Ok(ColdResult::Done);
+    }
+    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 2 {
+        let value = clone_static_property_value(unsafe {
+            eg.static_property_value_unchecked(cache.property_slot())
+        });
+        unsafe { slot_set(result_ptr, value) };
+        return Ok(ColdResult::Done);
+    }
+
+    let Some(class) = eg.class_by_id(class_id) else {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Class \"{}\" not found", raw_class),
+        ));
+    };
+    if class.is_trait {
+        let message = format!("Cannot access trait constant {}::{} directly", class.name, constant);
+        return Ok(static_property_throw(eg, frame, "Error", message));
+    }
+    let display_class = class.name.clone();
+    let Some((constant_index, definition)) = eg.find_class_constant(class_id, constant) else {
+        // Enum cases occupy immutable static storage but share PHP's
+        // `Enum::Case` syntax with class constants. Preserve their existing
+        // representation while keeping a distinct cache tag.
+        if class.is_enum
+            && let Some(case_index) = class
+                .static_properties
+                .iter()
+                .position(|case| case.name == constant)
+            && let Some(storage_slot) = eg.static_property_storage_slot(class_id, case_index)
+        {
+            let value = clone_static_property_value(unsafe {
+                eg.static_property_value_unchecked(storage_slot)
+            });
+            cache.set_property(class_id, storage_slot, 2);
+            unsafe { slot_set(result_ptr, value) };
+            return Ok(ColdResult::Done);
+        }
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Undefined constant {}::{}", display_class, constant),
+        ));
+    };
+    let caller = get_caller_class(frame, eg);
+    if !eg.check_visibility(
+        caller.as_deref(),
+        &definition.declaring_class,
+        definition.visibility,
+    ) {
+        let visibility = match definition.visibility {
+            Visibility::Private => "private",
+            Visibility::Protected => "protected",
+            Visibility::Public => unreachable!(),
+        };
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!(
+                "Cannot access {} constant {}::{}",
+                visibility, display_class, constant
+            ),
+        ));
+    }
+    let value = definition.value.clone();
+    cache.set_property(class_id, constant_index, 1);
+    unsafe { slot_set(result_ptr, value) };
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
 fn op_assign_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,

@@ -718,7 +718,9 @@ fn mark_embedded_late_static_properties(op_array: &mut OpArray, embedded: bool) 
     for instruction in &mut op_array.instructions {
         if matches!(
             instruction.opcode,
-            OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
+            OpCode::FetchLateStaticProp
+                | OpCode::AssignLateStaticProp
+                | OpCode::FetchLateClassConst
         ) && instruction.op1_type == OpType::Const
             && op_array
                 .literals
@@ -772,7 +774,10 @@ pub fn make_user_function_full(
     let needs_late_static_scope = op_array.instructions.iter().any(|instruction| {
         matches!(
             instruction.opcode,
-            OpCode::InitLateStaticCall | OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
+            OpCode::InitLateStaticCall
+                | OpCode::FetchLateStaticProp
+                | OpCode::AssignLateStaticProp
+                | OpCode::FetchLateClassConst
         )
     });
     let is_fast_scalar = !is_variadic
@@ -926,6 +931,7 @@ pub fn make_user_function_typed(
                 OpCode::InitLateStaticCall
                     | OpCode::FetchLateStaticProp
                     | OpCode::AssignLateStaticProp
+                    | OpCode::FetchLateClassConst
             )
         });
     let has_fast_scalar_shape = !is_variadic
@@ -5077,7 +5083,9 @@ pub fn finalize_user_method(
         for instruction in &mut function.op_array.instructions {
             if matches!(
                 instruction.opcode,
-                OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
+                OpCode::FetchLateStaticProp
+                    | OpCode::AssignLateStaticProp
+                    | OpCode::FetchLateClassConst
             ) {
                 instruction._pad &= !LATE_STATIC_PROP_EMBEDDED_SCOPE;
             }

@@ -784,7 +784,7 @@ impl Compiler {
             } => {
                 let (val_op, val_type) = self.compile_expr(expr);
                 let (resolved, dynamic_static_scope) =
-                    self.resolve_static_property_owner(class_name);
+                    self.resolve_static_member_owner(class_name);
                 let class_idx = self.add_literal(Value::string(resolved));
                 let prop_idx = self.add_literal(Value::string(property.clone()));
                 let mut assign = Instruction::new(if dynamic_static_scope {
@@ -870,12 +870,14 @@ impl Compiler {
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
                 // Also record known compile-time constants for property default resolution.
-                if let Ok(ct_val) =
-                    Self::eval_const_expr_with_constants(value, &self.known_constants)
-                {
-                    self.known_constants.insert(name.clone(), ct_val);
-                }
-                let (val_op, val_type) = self.compile_expr(value);
+                let compile_time =
+                    Self::eval_const_expr_with_constants(value, &self.known_constants).ok();
+                let (val_op, val_type) = if let Some(ct_val) = compile_time {
+                    self.known_constants.insert(name.clone(), ct_val.clone());
+                    (self.add_literal(ct_val), OpType::Const)
+                } else {
+                    self.compile_expr(value)
+                };
                 let name_idx = self.add_literal(Value::string(name.clone()));
                 let mut instr = Instruction::new(OpCode::FetchConst);
                 instr.op1 = name_idx;
@@ -947,6 +949,7 @@ impl Compiler {
                 is_final,
                 uses,
                 properties,
+                constants,
                 methods,
                 generic_params,
             } => {
@@ -1198,6 +1201,11 @@ impl Compiler {
                     implements.iter().map(|i| self.resolve_name(&i.name)).collect();
                 let resolved_uses: Vec<String> =
                     uses.iter().map(|u| self.resolve_name(&u.name)).collect();
+                let compiled_constants = self.compile_class_constants(
+                    &resolved_class,
+                    resolved_parent.as_deref(),
+                    constants,
+                )?;
                 self.class_defs.push(ClassDef {
                     name: resolved_class,
                     parent: resolved_parent,
@@ -1210,6 +1218,7 @@ impl Compiler {
                     uses: resolved_uses,
                     properties: compiled_props,
                     static_properties: compiled_static_props,
+                    constants: compiled_constants,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props,
@@ -1225,6 +1234,7 @@ impl Compiler {
             Stmt::Interface {
                 name,
                 extends,
+                constants,
                 methods,
                 generic_params,
             } => {
@@ -1340,6 +1350,8 @@ impl Compiler {
                 // For interface "extends", all parent interfaces become the implements list
                 let resolved_extends: Vec<String> =
                     extends.iter().map(|e| self.resolve_name(&e.name)).collect();
+                let compiled_constants =
+                    self.compile_class_constants(&resolved_iface, None, constants)?;
                 self.class_defs.push(ClassDef {
                     name: resolved_iface,
                     parent: None,
@@ -1352,6 +1364,7 @@ impl Compiler {
                     uses: vec![],
                     properties: vec![],
                     static_properties: vec![],
+                    constants: compiled_constants,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
@@ -1363,6 +1376,7 @@ impl Compiler {
             Stmt::Trait {
                 name,
                 properties,
+                constants,
                 methods,
                 generic_params,
             } => {
@@ -1516,6 +1530,8 @@ impl Compiler {
                     }
                 }
 
+                let compiled_constants =
+                    self.compile_class_constants(&resolved_trait, None, constants)?;
                 self.class_defs.push(ClassDef {
                     name: resolved_trait,
                     parent: None,
@@ -1528,6 +1544,7 @@ impl Compiler {
                     uses: vec![],
                     properties: compiled_props,
                     static_properties: compiled_static_props,
+                    constants: compiled_constants,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
@@ -1544,6 +1561,7 @@ impl Compiler {
                 name,
                 backing_type,
                 cases,
+                constants,
                 methods,
             } => {
                 let resolved_enum = self.resolve_name(name);
@@ -1659,10 +1677,18 @@ impl Compiler {
                         }
                     }
                     let obj = Value::object(PhpObject::dynamic(
-                        name.clone(),
+                        resolved_enum.clone(),
                         0, // assigned at runtime registration
                         props,
                     ));
+                    self.known_constants.insert(
+                        format!("{}::{}", resolved_enum, case_name),
+                        obj.clone(),
+                    );
+                    if name != &resolved_enum {
+                        self.known_constants
+                            .insert(format!("{}::{}", name, case_name), obj.clone());
+                    }
                     compiled_props.push(PropertyDefinition::new(
                         case_name.clone(),
                         Some(obj),
@@ -1671,6 +1697,8 @@ impl Compiler {
                     ));
                 }
 
+                let compiled_constants =
+                    self.compile_class_constants(&resolved_enum, None, constants)?;
                 self.class_defs.push(ClassDef {
                     name: resolved_enum,
                     parent: None,
@@ -1683,6 +1711,7 @@ impl Compiler {
                     uses: vec![],
                     properties: vec![],
                     static_properties: compiled_props,
+                    constants: compiled_constants,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
@@ -1693,5 +1722,101 @@ impl Compiler {
             }
         }
         Ok(())
+    }
+
+    fn compile_class_constants(
+        &mut self,
+        owner: &str,
+        parent: Option<&str>,
+        constants: &[ClassConstant],
+    ) -> Result<Vec<ClassConstantDefinition>, String> {
+        let mut names = std::collections::HashSet::new();
+        for constant in constants {
+            if !names.insert(constant.name.as_str()) {
+                return Err(format!(
+                    "Cannot redefine class constant {}::{}",
+                    owner, constant.name
+                ));
+            }
+        }
+
+        let mut known = self.known_constants.clone();
+        known.insert("self::class".into(), Value::string(owner.to_string()));
+        if let Some(parent) = parent {
+            known.insert("parent::class".into(), Value::string(parent.to_string()));
+            let prefix = format!("{}::", parent);
+            for (name, value) in &self.known_constants {
+                if let Some(constant) = name.strip_prefix(&prefix) {
+                    known.insert(format!("parent::{}", constant), value.clone());
+                }
+            }
+        }
+
+        let mut values = vec![None; constants.len()];
+        let mut remaining = constants.len();
+        while remaining != 0 {
+            let mut progressed = false;
+            for (index, constant) in constants.iter().enumerate() {
+                if values[index].is_some() {
+                    continue;
+                }
+                let Ok(value) = Self::eval_const_expr_with_constants(&constant.value, &known)
+                else {
+                    continue;
+                };
+                known.insert(format!("self::{}", constant.name), value.clone());
+                known.insert(format!("{}::{}", owner, constant.name), value.clone());
+                self.known_constants
+                    .insert(format!("{}::{}", owner, constant.name), value.clone());
+                values[index] = Some(value);
+                remaining -= 1;
+                progressed = true;
+            }
+            if !progressed {
+                let constant = constants
+                    .iter()
+                    .enumerate()
+                    .find(|(index, _)| values[*index].is_none())
+                    .map(|(_, constant)| constant)
+                    .expect("remaining class constant");
+                let reason = Self::eval_const_expr_with_constants(&constant.value, &known)
+                    .expect_err("unresolved class constant expression");
+                return Err(format!(
+                    "Cannot use non-constant expression as value for class constant {}::{}: {}",
+                    owner, constant.name, reason
+                ));
+            }
+        }
+
+        constants
+            .iter()
+            .zip(values)
+            .map(|(constant, value)| {
+                let type_hint = self.resolve_declared_property_type_hint(
+                    self.convert_type_hint(&constant.type_hint),
+                    owner,
+                    parent,
+                );
+                let value = value.expect("resolved class constant");
+                let value_type = value.value_type();
+                let value = normalize_property_default(value, &type_hint).ok_or_else(|| {
+                    format!(
+                        "Cannot use value of type {:?} for class constant {}::{} of type {}",
+                        value_type,
+                        owner,
+                        constant.name,
+                        type_hint.display_name()
+                    )
+                })?;
+                Ok(ClassConstantDefinition {
+                    name: constant.name.clone(),
+                    value,
+                    visibility: constant.visibility,
+                    declaring_class: owner.to_string(),
+                    type_hint,
+                    is_final: constant.is_final,
+                })
+            })
+            .collect()
     }
 }

@@ -15,7 +15,8 @@ use crate::generics::{
     PendingGenericUseSite,
 };
 use crate::parser::{
-    BinOp, CallArg, CastType, Expr, GenericAncestor, ListTarget, Param, Stmt, TypeHint, Visibility,
+    BinOp, CallArg, CastType, ClassConstant, Expr, GenericAncestor, ListTarget, Param, Stmt,
+    TypeHint, Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -1128,10 +1129,22 @@ fn property_default_matches_exact(value: &Value, hint: &ParamTypeHint) -> bool {
         ParamTypeHint::Intersection(parts) => parts
             .iter()
             .all(|part| property_default_matches_exact(value, part)),
-        ParamTypeHint::Callable
-        | ParamTypeHint::Void
-        | ParamTypeHint::Never
-        | ParamTypeHint::ClassName(_) => false,
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable") => {
+            value.value_type() == ValueType::Array
+        }
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("object") => {
+            value.value_type() == ValueType::Object
+        }
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("false") => {
+            value.value_type() == ValueType::False
+        }
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("true") => {
+            value.value_type() == ValueType::True
+        }
+        ParamTypeHint::ClassName(name) => value
+            .as_object()
+            .is_some_and(|object| object.class_name.eq_ignore_ascii_case(name)),
+        ParamTypeHint::Callable | ParamTypeHint::Void | ParamTypeHint::Never => false,
     }
 }
 
@@ -1155,6 +1168,16 @@ fn normalize_property_default(value: Value, hint: &ParamTypeHint) -> Option<Valu
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ClassConstantDefinition {
+    pub name: String,
+    pub value: Value,
+    pub visibility: Visibility,
+    pub declaring_class: String,
+    pub type_hint: ParamTypeHint,
+    pub is_final: bool,
+}
+
 pub struct ClassDef {
     pub name: String,
     pub parent: Option<String>,
@@ -1171,6 +1194,8 @@ pub struct ClassDef {
     /// storage can build on this separate declaration table without widening
     /// ordinary objects.
     pub static_properties: Vec<PropertyDefinition>,
+    /// Immutable class/interface/trait constants declared by this owner.
+    pub constants: Vec<ClassConstantDefinition>,
     /// Shared declared-property storage-key → numeric slot layout.
     /// Rebuilt after inheritance and trait properties are merged.
     pub property_layout: std::rc::Rc<ObjectLayout>,
@@ -2029,11 +2054,87 @@ impl Compiler {
                     )),
                 }
             }
-            Expr::UnaryMinus(inner) => match inner.as_ref() {
-                Expr::Integer(n) => Ok(Value::long(-n)),
-                Expr::Float(f) => Ok(Value::double(-f)),
-                _ => Err("unsupported unary expression".to_string()),
-            },
+            Expr::ClassConstant {
+                class_name,
+                constant,
+            } => known
+                .get(&format!("{}::{}", class_name, constant))
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "class constant {}::{} is not available in this constant expression",
+                        class_name, constant
+                    )
+                }),
+            Expr::BinaryOp { op, left, right } => {
+                let left = Self::eval_const_expr_with_constants(left, known)?;
+                // Preserve PHP's short-circuit rules even though constant
+                // evaluation itself has no observable side effects.
+                match op {
+                    BinOp::And if !left.is_truthy() => return Ok(Value::bool(false)),
+                    BinOp::Or if left.is_truthy() => return Ok(Value::bool(true)),
+                    _ => {}
+                }
+                let right = Self::eval_const_expr_with_constants(right, known)?;
+                Self::eval_const_binary(*op, &left, &right)
+            }
+            Expr::Not(inner) => Ok(Value::bool(
+                !Self::eval_const_expr_with_constants(inner, known)?.is_truthy(),
+            )),
+            Expr::UnaryMinus(inner) => {
+                let value = Self::eval_const_expr_with_constants(inner, known)?;
+                if let Some(number) = value.as_long() {
+                    Ok(number
+                        .checked_neg()
+                        .map(Value::long)
+                        .unwrap_or_else(|| Value::double(-(number as f64))))
+                } else if let Some(number) = value.as_double() {
+                    Ok(Value::double(-number))
+                } else {
+                    Err("unsupported unary expression".to_string())
+                }
+            }
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                if Self::eval_const_expr_with_constants(condition, known)?.is_truthy() {
+                    Self::eval_const_expr_with_constants(then_expr, known)
+                } else {
+                    Self::eval_const_expr_with_constants(else_expr, known)
+                }
+            }
+            Expr::Elvis { left, right } => {
+                let left = Self::eval_const_expr_with_constants(left, known)?;
+                if left.is_truthy() {
+                    Ok(left)
+                } else {
+                    Self::eval_const_expr_with_constants(right, known)
+                }
+            }
+            Expr::NullCoalesce { left, right } => {
+                let left = Self::eval_const_expr_with_constants(left, known)?;
+                if left.value_type() == ValueType::Null {
+                    Self::eval_const_expr_with_constants(right, known)
+                } else {
+                    Ok(left)
+                }
+            }
+            Expr::New {
+                class_name,
+                args,
+                generic_args,
+            } if class_name.eq_ignore_ascii_case("stdClass")
+                && args.is_empty()
+                && generic_args.is_empty() =>
+            {
+                Ok(Value::object(crate::value::PhpObject::dynamic(
+                    "stdClass".into(),
+                    0,
+                    HashMap::new(),
+                )))
+            }
             Expr::ArrayLiteral(elements) => {
                 let mut arr = crate::value::PhpArray::new();
                 for elem in elements {
@@ -2055,10 +2156,172 @@ impl Compiler {
                 }
                 Ok(Value::array(arr))
             }
+            Expr::ArrayAccess { array, index } => {
+                let array = Self::eval_const_expr_with_constants(array, known)?;
+                let index = Self::eval_const_expr_with_constants(index, known)?;
+                let array = array
+                    .as_array()
+                    .ok_or_else(|| "constant expression cannot index a non-array".to_string())?;
+                let value = if let Some(index) = index.as_long() {
+                    array.get_int(index)
+                } else if let Some(index) = index.as_str() {
+                    array.get_str(index)
+                } else {
+                    None
+                };
+                value
+                    .cloned()
+                    .ok_or_else(|| "undefined array key in constant expression".to_string())
+            }
             _ => Err(format!(
                 "expression {:?} is not a compile-time constant",
                 expr
             )),
+        }
+    }
+
+    fn eval_const_binary(op: BinOp, left: &Value, right: &Value) -> Result<Value, String> {
+        let integer_pair = || left.as_long().zip(right.as_long());
+        let numeric_pair = || left.to_double().zip(right.to_double());
+        let unsupported = || format!("unsupported operands for {:?} in constant expression", op);
+
+        match op {
+            BinOp::Add => {
+                if let Some((left, right)) = integer_pair() {
+                    Ok(left
+                        .checked_add(right)
+                        .map(Value::long)
+                        .unwrap_or_else(|| Value::double(left as f64 + right as f64)))
+                } else if let Some((left, right)) = numeric_pair() {
+                    Ok(Value::double(left + right))
+                } else {
+                    Err(unsupported())
+                }
+            }
+            BinOp::Sub => {
+                if let Some((left, right)) = integer_pair() {
+                    Ok(left
+                        .checked_sub(right)
+                        .map(Value::long)
+                        .unwrap_or_else(|| Value::double(left as f64 - right as f64)))
+                } else if let Some((left, right)) = numeric_pair() {
+                    Ok(Value::double(left - right))
+                } else {
+                    Err(unsupported())
+                }
+            }
+            BinOp::Mul => {
+                if let Some((left, right)) = integer_pair() {
+                    Ok(left
+                        .checked_mul(right)
+                        .map(Value::long)
+                        .unwrap_or_else(|| Value::double(left as f64 * right as f64)))
+                } else if let Some((left, right)) = numeric_pair() {
+                    Ok(Value::double(left * right))
+                } else {
+                    Err(unsupported())
+                }
+            }
+            BinOp::Div => {
+                let (left_number, right_number) = numeric_pair().ok_or_else(unsupported)?;
+                if right_number == 0.0 {
+                    return Err("division by zero in constant expression".into());
+                }
+                if let Some((left, right)) = integer_pair()
+                    && let Some(quotient) = left.checked_div(right)
+                    && left.checked_rem(right) == Some(0)
+                {
+                    return Ok(Value::long(quotient));
+                }
+                Ok(Value::double(left_number / right_number))
+            }
+            BinOp::Mod => {
+                let (left, right) = integer_pair().ok_or_else(unsupported)?;
+                if right == 0 {
+                    return Err("division by zero in constant expression".into());
+                }
+                Ok(Value::long(left.checked_rem(right).unwrap_or(0)))
+            }
+            BinOp::Concat => Ok(Value::string(format!(
+                "{}{}",
+                left.echo_to_string(),
+                right.echo_to_string()
+            ))),
+            BinOp::And => Ok(Value::bool(left.is_truthy() && right.is_truthy())),
+            BinOp::Or => Ok(Value::bool(left.is_truthy() || right.is_truthy())),
+            BinOp::Identical | BinOp::NotIdentical => {
+                let identical = left.structurally_equal(right);
+                Ok(Value::bool(if op == BinOp::Identical {
+                    identical
+                } else {
+                    !identical
+                }))
+            }
+            BinOp::Equal | BinOp::NotEqual => {
+                let equal = if let Some((left, right)) = numeric_pair() {
+                    left == right
+                } else {
+                    left.structurally_equal(right)
+                };
+                Ok(Value::bool(if op == BinOp::Equal { equal } else { !equal }))
+            }
+            BinOp::Less
+            | BinOp::LessEqual
+            | BinOp::Greater
+            | BinOp::GreaterEqual
+            | BinOp::Spaceship => {
+                let ordering = if let Some((left, right)) = numeric_pair() {
+                    left.partial_cmp(&right)
+                } else if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
+                    Some(left.cmp(right))
+                } else {
+                    None
+                }
+                .ok_or_else(unsupported)?;
+                match op {
+                    BinOp::Less => Ok(Value::bool(ordering.is_lt())),
+                    BinOp::LessEqual => Ok(Value::bool(!ordering.is_gt())),
+                    BinOp::Greater => Ok(Value::bool(ordering.is_gt())),
+                    BinOp::GreaterEqual => Ok(Value::bool(!ordering.is_lt())),
+                    BinOp::Spaceship => Ok(Value::long(match ordering {
+                        std::cmp::Ordering::Less => -1,
+                        std::cmp::Ordering::Equal => 0,
+                        std::cmp::Ordering::Greater => 1,
+                    })),
+                    _ => unreachable!(),
+                }
+            }
+            BinOp::Pow => {
+                if let Some((base, exponent)) = integer_pair()
+                    && let Ok(exponent) = u32::try_from(exponent)
+                    && let Some(value) = base.checked_pow(exponent)
+                {
+                    return Ok(Value::long(value));
+                }
+                let (base, exponent) = numeric_pair().ok_or_else(unsupported)?;
+                Ok(Value::double(base.powf(exponent)))
+            }
+            BinOp::BitwiseAnd | BinOp::BitwiseOr | BinOp::BitwiseXor => {
+                let (left, right) = integer_pair().ok_or_else(unsupported)?;
+                Ok(Value::long(match op {
+                    BinOp::BitwiseAnd => left & right,
+                    BinOp::BitwiseOr => left | right,
+                    BinOp::BitwiseXor => left ^ right,
+                    _ => unreachable!(),
+                }))
+            }
+            BinOp::ShiftLeft | BinOp::ShiftRight => {
+                let (left, right) = integer_pair().ok_or_else(unsupported)?;
+                let shift = u32::try_from(right)
+                    .ok()
+                    .filter(|shift| *shift < i64::BITS)
+                    .ok_or_else(unsupported)?;
+                Ok(Value::long(if op == BinOp::ShiftLeft {
+                    left.wrapping_shl(shift)
+                } else {
+                    left.wrapping_shr(shift)
+                }))
+            }
         }
     }
 
@@ -2214,6 +2477,9 @@ impl Compiler {
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
                 ParamTypeHint::ClassName(parent_name.unwrap_or("parent").to_string())
             }
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("static") => {
+                ParamTypeHint::ClassName(class_name.to_string())
+            }
             ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
                 self.resolve_declared_property_type_hint(*inner, class_name, parent_name),
             )),
@@ -2280,7 +2546,7 @@ impl Compiler {
         compiler.instructions[bind_idx].op2 = skip_label;
     }
 
-    fn resolve_static_property_owner(&self, class_name: &str) -> (String, bool) {
+    fn resolve_static_member_owner(&self, class_name: &str) -> (String, bool) {
         let pseudo_class = class_name.to_ascii_lowercase();
         let dynamic_static_scope = pseudo_class == "static"
             || (self.dynamic_static_scope && matches!(pseudo_class.as_str(), "self" | "parent"));
@@ -3625,8 +3891,7 @@ impl Compiler {
                 class_name,
                 property,
             } => {
-                let (resolved, dynamic_static_scope) =
-                    self.resolve_static_property_owner(class_name);
+                let (resolved, dynamic_static_scope) = self.resolve_static_member_owner(class_name);
                 let class_idx = self.add_literal(Value::string(resolved));
                 let prop_idx = self.add_literal(Value::string(property.clone()));
                 let tmp = self.alloc_tmp();
@@ -3638,6 +3903,32 @@ impl Compiler {
                 fetch.op1 = class_idx;
                 fetch.op1_type = OpType::Const;
                 fetch.op2 = prop_idx;
+                fetch.op2_type = OpType::Const;
+                fetch.result = tmp;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (tmp, OpType::Tmp)
+            }
+            Expr::ClassConstant {
+                class_name,
+                constant,
+            } => {
+                let (resolved, dynamic_static_scope) = self.resolve_static_member_owner(class_name);
+                if constant.eq_ignore_ascii_case("class") && !dynamic_static_scope {
+                    let literal = self.add_literal(Value::string(resolved));
+                    return (literal, OpType::Const);
+                }
+                let class_idx = self.add_literal(Value::string(resolved));
+                let constant_idx = self.add_literal(Value::string(constant.clone()));
+                let tmp = self.alloc_tmp();
+                let mut fetch = Instruction::new(if dynamic_static_scope {
+                    OpCode::FetchLateClassConst
+                } else {
+                    OpCode::FetchClassConst
+                });
+                fetch.op1 = class_idx;
+                fetch.op1_type = OpType::Const;
+                fetch.op2 = constant_idx;
                 fetch.op2_type = OpType::Const;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;

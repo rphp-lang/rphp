@@ -126,6 +126,11 @@ pub enum Expr {
         class_name: String,
         property: String,
     },
+    ClassConstant {
+        // ClassName::CONSTANT, self::CONSTANT, parent::CONSTANT, static::CONSTANT
+        class_name: String,
+        constant: String,
+    },
     Throw(Box<Expr>), // throw expr (PHP 8 expression)
     Assign {
         // $var = expr (used in expressions like $a = $b ?? $c)
@@ -227,6 +232,7 @@ impl Expr {
             | Expr::PreInc(_)
             | Expr::PreDec(_)
             | Expr::StaticProperty { .. }
+            | Expr::ClassConstant { .. }
             | Expr::Constant(_) => false,
         }
     }
@@ -409,6 +415,7 @@ pub enum Stmt {
         is_abstract: bool,
         is_final: bool,
         properties: Vec<ClassProperty>,
+        constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
         uses: Vec<GenericAncestor>, // trait names from `use Foo<T>, Bar<U>;`
         generic_params: Vec<GenericParameter>,
@@ -416,12 +423,14 @@ pub enum Stmt {
     Interface {
         name: String,
         extends: Vec<GenericAncestor>,
+        constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>, // all public, abstract (no body)
         generic_params: Vec<GenericParameter>,
     },
     Trait {
         name: String,
         properties: Vec<ClassProperty>,
+        constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
         generic_params: Vec<GenericParameter>,
     },
@@ -477,6 +486,7 @@ pub enum Stmt {
         name: String,
         backing_type: Option<TypeHint>,
         cases: Vec<(String, Option<Expr>)>, // (case_name, optional_value)
+        constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
     },
     Include {
@@ -511,6 +521,15 @@ pub struct ClassProperty {
     pub default: Option<Expr>,
     pub is_static: bool,
     pub is_readonly: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassConstant {
+    pub visibility: Visibility,
+    pub name: String,
+    pub value: Expr,
+    pub type_hint: Option<TypeHint>,
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

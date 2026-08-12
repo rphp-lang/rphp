@@ -151,6 +151,10 @@ pub enum OpCode {
     AssignStaticProp = 140,
     /// Assign a declared static property through PHP's runtime called class.
     AssignLateStaticProp = 141,
+    /// Read an immutable class-like constant through an explicit lexical owner.
+    FetchClassConst = 142,
+    /// Read an immutable class-like constant through PHP's runtime called class.
+    FetchLateClassConst = 143,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

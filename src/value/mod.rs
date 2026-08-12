@@ -3722,7 +3722,7 @@ impl Value {
 
     /// Structural equality check for compile-time constant values.
     /// Used for trait property collision detection.
-    /// Supports scalars, null, and arrays (recursive). Objects always return false.
+    /// Supports scalars, null, arrays (recursive), and identical object handles.
     pub fn structurally_equal(&self, other: &Value) -> bool {
         if self.value_type() != other.value_type() {
             return false;
@@ -3742,6 +3742,9 @@ impl Value {
                     .zip(b.iter())
                     .all(|((ka, va), (kb, vb))| ka == kb && va.structurally_equal(vb))
             }
+            ValueType::Object => unsafe {
+                self.object_identity_unchecked() == other.object_identity_unchecked()
+            },
             _ => false,
         }
     }

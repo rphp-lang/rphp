@@ -520,7 +520,7 @@ impl Parser {
                     });
                 }
                 if self.peek() == Token::DoubleColon {
-                    return self.parse_named_static_access(name, false);
+                    return self.parse_named_static_access(name);
                 }
                 if self.peek() == Token::LParen {
                     self.advance();
@@ -557,7 +557,7 @@ impl Parser {
                 }
                 // Static access: ClassName::method() or ClassName::$prop
                 if self.peek() == Token::DoubleColon {
-                    return self.parse_named_static_access(name, false);
+                    return self.parse_named_static_access(name);
                 }
                 // Check if this is a function call (followed by `(`)
                 if self.peek() == Token::LParen {
@@ -584,7 +584,7 @@ impl Parser {
                         self.peek()
                     ));
                 }
-                self.parse_named_static_access("static".to_string(), true)
+                self.parse_named_static_access("static".to_string())
             }
             Token::Match => {
                 return self.parse_match_expr();
@@ -657,11 +657,7 @@ impl Parser {
     /// Parse a statically named member after a class-like owner. Keeping the
     /// fully-qualified, ordinary and late-static entry points here prevents
     /// their turbofish/postfix grammar from drifting apart.
-    fn parse_named_static_access(
-        &mut self,
-        class_name: String,
-        late_static_owner: bool,
-    ) -> Result<Expr, String> {
+    fn parse_named_static_access(&mut self, class_name: String) -> Result<Expr, String> {
         self.expect(&Token::DoubleColon)?;
         if let Token::Variable(_) = self.peek() {
             let property = match self.advance() {
@@ -685,12 +681,9 @@ impl Parser {
             if !generic_args.is_empty() {
                 return Err("Generic type arguments must be followed by a method call".into());
             }
-            if late_static_owner {
-                return Err("Late-static constant access is not supported yet".into());
-            }
-            let expr = Expr::StaticProperty {
+            let expr = Expr::ClassConstant {
                 class_name,
-                property: member,
+                constant: member,
             };
             return self.parse_postfix_chain(expr);
         }

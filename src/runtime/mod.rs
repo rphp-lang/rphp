@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::compiler::compile::{ClassDef, PropertyDefinition};
+use crate::compiler::compile::{ClassConstantDefinition, ClassDef, PropertyDefinition};
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 use crate::generics::GenericType;
 use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
@@ -165,6 +165,7 @@ pub fn resolve_property_key(
 }
 
 include!("property_definitions.rs");
+include!("class_constants.rs");
 /// Minimal ExecutorGlobals for vertical slice.
 /// Will grow as we implement more features.
 pub struct ExecutorGlobals {
@@ -954,6 +955,11 @@ impl ExecutorGlobals {
                         class_name, parent_name
                     ));
                 }
+                merge_parent_constant_definitions(
+                    &class_name,
+                    &mut class_def.constants,
+                    &parent.constants,
+                )?;
             }
         }
 
@@ -1023,6 +1029,12 @@ impl ExecutorGlobals {
         let mut composed_static_trait_names = std::collections::HashSet::new();
         for trait_name in &trait_names {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
+                merge_trait_constant_definitions(
+                    &class_name,
+                    trait_name,
+                    &mut class_def.constants,
+                    &trait_def.constants,
+                )?;
                 merge_trait_property_definitions(
                     &mut class_def.properties,
                     &trait_def.properties,
@@ -1067,6 +1079,23 @@ impl ExecutorGlobals {
             } else {
                 return Err(format!("Trait not found: {}", trait_name));
             }
+        }
+
+        // Interface constants are inherited without being copied into source
+        // declarations. Flatten them once at class registration so reads and
+        // their inline caches are an indexed lookup thereafter.
+        for interface_name in &class_def.implements {
+            // A small set of built-in interface contracts is registered by
+            // the stdlib without a userland ClassDef. They have no userland
+            // constants to inherit, so keep the existing contract path.
+            let Some(interface) = self.class_table.get(interface_name.as_str()) else {
+                continue;
+            };
+            merge_interface_constant_definitions(
+                &class_name,
+                &mut class_def.constants,
+                &interface.constants,
+            )?;
         }
 
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -1492,6 +1521,22 @@ impl ExecutorGlobals {
     #[inline]
     pub fn class_id_of(&self, class_name: &str) -> u32 {
         self.class_table.get(class_name).map_or(0, |cd| cd.class_id)
+    }
+
+    /// Resolve one immutable constant in the flattened class-like table.
+    /// Returning the stable index lets VM call sites cache the result without
+    /// retaining a pointer into metadata owned by the class registry.
+    #[inline]
+    pub fn find_class_constant(
+        &self,
+        class_id: u32,
+        constant_name: &str,
+    ) -> Option<(usize, &ClassConstantDefinition)> {
+        self.class_by_id(class_id)?
+            .constants
+            .iter()
+            .enumerate()
+            .find(|(_, constant)| constant.name == constant_name)
     }
 
     /// Cold metadata query used by Reflection to distinguish an ancestor

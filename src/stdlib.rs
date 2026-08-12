@@ -954,6 +954,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
         uses: vec![],
         properties: vec![],
         static_properties: vec![],
+        constants: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
@@ -1025,6 +1026,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         uses: vec![],
         properties: vec![],
         static_properties: vec![],
+        constants: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
@@ -1052,6 +1054,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             "Exception".to_string(),
         )],
         static_properties: vec![],
+        constants: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
@@ -1079,6 +1082,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             "Error".to_string(),
         )],
         static_properties: vec![],
+        constants: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
@@ -1101,6 +1105,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         uses: vec![],
         properties: vec![],
         static_properties: vec![],
+        constants: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
@@ -1123,6 +1128,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         uses: vec![],
         properties: vec![],
         static_properties: vec![],
+        constants: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
@@ -1145,6 +1151,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         uses: vec![],
         properties: vec![],
         static_properties: vec![],
+        constants: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
@@ -1196,6 +1203,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             uses: vec![],
             properties: vec![],
             static_properties: vec![],
+            constants: vec![],
             property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
             property_defaults: std::rc::Rc::from([]),
             readonly_props: vec![],
@@ -3230,6 +3238,15 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 }
 
 fn var_dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
+    var_dump_value_inner(val, indent, eg, &mut std::collections::HashSet::new())
+}
+
+fn var_dump_value_inner(
+    val: &Value,
+    indent: usize,
+    eg: &ExecutorGlobals,
+    visited_objects: &mut std::collections::HashSet<usize>,
+) -> String {
     let prefix = "  ".repeat(indent);
     match val.value_type() {
         ValueType::Null => format!("{}NULL\n", prefix),
@@ -3250,10 +3267,52 @@ fn var_dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
                     ArrayKey::String(k) => format!("[\"{}\"]", k),
                 };
                 out.push_str(&format!("{}  {}=>\n", prefix, key_str));
-                out.push_str(&var_dump_value(v, indent + 1, eg));
+                out.push_str(&var_dump_value_inner(v, indent + 1, eg, visited_objects));
             }
             out.push_str(&format!("{}}}\n", prefix));
             out
+        }
+        ValueType::Object => {
+            let identity = unsafe { val.object_identity_unchecked() };
+            if !visited_objects.insert(identity) {
+                return format!("{}*RECURSION*\n", prefix);
+            }
+            let object = val.as_object().unwrap();
+            let output = if eg
+                .class_table
+                .get(object.class_name.as_ref())
+                .is_some_and(|class| class.is_enum)
+            {
+                let case = object
+                    .get_property("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                format!("{}enum({}::{})\n", prefix, object.class_name, case)
+            } else {
+                let mut properties = Vec::new();
+                object.for_each_property(|name, value| {
+                    properties.push((name.to_string(), value.clone()));
+                });
+                let mut out = format!(
+                    "{}object({})#1 ({}) {{\n",
+                    prefix,
+                    object.class_name,
+                    properties.len()
+                );
+                for (name, value) in properties {
+                    out.push_str(&format!("{}  [\"{}\"]=>\n", prefix, name));
+                    out.push_str(&var_dump_value_inner(
+                        &value,
+                        indent + 1,
+                        eg,
+                        visited_objects,
+                    ));
+                }
+                out.push_str(&format!("{}}}\n", prefix));
+                out
+            };
+            visited_objects.remove(&identity);
+            output
         }
         ValueType::Resource => {
             let id = val.as_resource_id().unwrap();

@@ -2,6 +2,96 @@ mod common;
 use common::*;
 
 // ============================================================================
+// class-like constants
+// ============================================================================
+
+#[test]
+fn test_class_constants_support_forward_references_types_and_class_name() {
+    let out = run_php(
+        r#"<?php
+class Values {
+    public const FIRST = self::SECOND;
+    public const SECOND = 42, TEXT = "ok";
+    public const COMPUTED = self::FIRST + 1;
+    public const MESSAGE = self::TEXT . "!";
+    final protected const string LABEL = "typed";
+
+    public static function label() {
+        return self::LABEL;
+    }
+}
+echo Values::FIRST . ':' . Values::SECOND . ':' . Values::COMPUTED . ':';
+echo Values::MESSAGE . ':';
+echo Values::label() . ':' . Values::class . ':' . MissingClass::class;
+"#,
+    );
+    assert_eq!(out, "42:42:43:ok!:typed:Values:MissingClass");
+}
+
+#[test]
+fn test_class_constants_are_composed_and_late_static_reads_are_cached_by_class() {
+    let out = run_php(
+        r#"<?php
+interface Numbered { public const INTERFACE_VALUE = 7; }
+trait Tagged {
+    protected const TRAIT_VALUE = 8;
+    private const PRIVATE_VALUE = 9;
+    public static function privateValue() { return self::PRIVATE_VALUE; }
+}
+class ConstantBase {
+    protected const VALUE = 10;
+    public static function value() { return static::VALUE; }
+}
+class ConstantChild extends ConstantBase implements Numbered {
+    use Tagged;
+    public const VALUE = 11;
+    public static function combined() {
+        return self::INTERFACE_VALUE + self::TRAIT_VALUE;
+    }
+}
+echo ConstantBase::value() . ':' . ConstantChild::value() . ':';
+echo ConstantChild::value() . ':' . ConstantChild::combined() . ':';
+echo ConstantChild::privateValue() . ':' . ConstantChild::INTERFACE_VALUE;
+"#,
+    );
+    assert_eq!(out, "10:11:11:15:9:7");
+}
+
+#[test]
+fn test_class_constant_visibility_errors_are_catchable() {
+    let out = run_php(
+        r#"<?php
+class SecretConstants {
+    private const PRIVATE_VALUE = 1;
+    protected const PROTECTED_VALUE = 2;
+}
+try { echo SecretConstants::PRIVATE_VALUE; } catch (Error $error) { echo "private"; }
+echo ':';
+try { echo SecretConstants::PROTECTED_VALUE; } catch (Error $error) { echo "protected"; }
+"#,
+    );
+    assert_eq!(out, "private:protected");
+}
+
+#[test]
+fn test_final_and_typed_class_constant_contracts_are_validated() {
+    let final_error = run_php_expect_error(
+        r#"<?php
+class FinalConstantBase { final public const VALUE = 1; }
+class FinalConstantChild extends FinalConstantBase { public const VALUE = 2; }
+"#,
+    );
+    assert!(format!("{final_error:?}").contains("cannot override final constant"));
+
+    let type_error = run_php_expect_error(
+        r#"<?php
+class TypedConstant { public const int VALUE = "wrong"; }
+"#,
+    );
+    assert!(format!("{type_error:?}").contains("for class constant TypedConstant::VALUE"));
+}
+
+// ============================================================================
 // const keyword
 // ============================================================================
 

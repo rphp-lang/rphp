@@ -133,6 +133,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
 
         let mut properties = Vec::new();
+        let mut constants = Vec::new();
         let mut methods = Vec::new();
         let mut uses = Vec::new();
 
@@ -186,6 +187,8 @@ impl Parser {
                     return_type,
                     generic_params,
                 });
+            } else if self.peek() == Token::Const {
+                constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
                 if modifiers.is_abstract {
@@ -211,9 +214,6 @@ impl Parser {
                     is_static: modifiers.is_static,
                     is_readonly: modifiers.is_readonly,
                 });
-            } else if matches!(self.peek(), Token::Const) {
-                // Class constants — not yet implemented
-                return Err(format!("Unexpected token in class body: {:?}", self.peek()));
             } else {
                 return Err(format!("Unexpected token in class body: {:?}", self.peek()));
             }
@@ -238,6 +238,7 @@ impl Parser {
             is_abstract,
             is_final,
             properties,
+            constants,
             methods,
             uses,
             generic_params,
@@ -256,6 +257,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
 
         let mut properties = Vec::new();
+        let mut constants = Vec::new();
         let mut methods = Vec::new();
 
         while self.peek() != Token::RBrace && !self.at_eof() {
@@ -289,6 +291,8 @@ impl Parser {
                     return_type,
                     generic_params: method_generic_params,
                 });
+            } else if self.peek() == Token::Const {
+                constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
                 if modifiers.is_abstract {
@@ -324,6 +328,7 @@ impl Parser {
         Ok(Stmt::Trait {
             name,
             properties,
+            constants,
             methods,
             generic_params,
         })
@@ -356,10 +361,13 @@ impl Parser {
         };
         self.expect(&Token::LBrace)?;
 
+        let mut constants = Vec::new();
         let mut methods = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
             let modifiers = self.parse_member_modifiers();
-            if self.peek() == Token::Function {
+            if self.peek() == Token::Const {
+                constants.extend(self.parse_class_constant_declaration(&modifiers, true)?);
+            } else if self.peek() == Token::Function {
                 self.advance(); // consume 'function'
                 let method_name = match self.advance() {
                     Token::Identifier(n) => n,
@@ -412,6 +420,7 @@ impl Parser {
         Ok(Stmt::Interface {
             name,
             extends,
+            constants,
             methods,
             generic_params,
         })
@@ -434,6 +443,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
 
         let mut cases = Vec::new();
+        let mut constants = Vec::new();
         let mut methods = Vec::new();
 
         let prev_in_class = self.in_class_body;
@@ -457,7 +467,9 @@ impl Parser {
             } else {
                 // Method in enum
                 let modifiers = self.parse_member_modifiers();
-                if self.peek() == Token::Function {
+                if self.peek() == Token::Const {
+                    constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
+                } else if self.peek() == Token::Function {
                     self.advance();
                     let method_name = match self.advance() {
                         Token::Identifier(n) => n,
@@ -502,6 +514,7 @@ impl Parser {
             name,
             backing_type,
             cases,
+            constants,
             methods,
         })
     }
@@ -543,6 +556,106 @@ impl Parser {
             }
         }
         modifiers
+    }
+
+    fn parse_class_constant_declaration(
+        &mut self,
+        modifiers: &MemberModifiers,
+        in_interface: bool,
+    ) -> Result<Vec<ClassConstant>, String> {
+        if modifiers.is_static {
+            return Err("Class constants cannot be declared static".into());
+        }
+        if modifiers.is_abstract {
+            return Err("Class constants cannot be declared abstract".into());
+        }
+        if modifiers.is_readonly {
+            return Err("Class constants cannot be declared readonly".into());
+        }
+        if modifiers.is_final && modifiers.visibility == Visibility::Private {
+            return Err("Private class constants cannot be final".into());
+        }
+        if in_interface && modifiers.visibility != Visibility::Public {
+            return Err("Access type for interface constants must be public".into());
+        }
+
+        self.expect(&Token::Const)?;
+        let type_hint = self.try_parse_class_constant_type()?;
+        let mut constants = Vec::new();
+        loop {
+            let name = match self.advance() {
+                Token::Identifier(name) => name,
+                other => return Err(format!("Expected class constant name, got {:?}", other)),
+            };
+            self.expect(&Token::Assign)?;
+            let value = self.parse_expr()?;
+            constants.push(ClassConstant {
+                visibility: modifiers.visibility,
+                name,
+                value,
+                type_hint: type_hint.clone(),
+                is_final: modifiers.is_final,
+            });
+            if self.peek() != Token::Comma {
+                break;
+            }
+            self.advance();
+        }
+        self.expect(&Token::Semicolon)?;
+        Ok(constants)
+    }
+
+    fn try_parse_class_constant_type(&mut self) -> Result<Option<TypeHint>, String> {
+        if matches!(self.peek(), Token::Identifier(_)) && self.peek_at(1) == Token::Assign {
+            return Ok(None);
+        }
+
+        let hint = if self.peek() == Token::Question {
+            self.advance();
+            TypeHint::Nullable(Box::new(self.parse_base_type_hint()?))
+        } else if matches!(
+            self.peek(),
+            Token::Identifier(_)
+                | Token::ArrayKw
+                | Token::Null
+                | Token::True
+                | Token::False
+                | Token::Static
+        ) {
+            let first = self.parse_base_type_hint()?;
+            self.maybe_parse_compound_type(first)?
+        } else {
+            return Ok(None);
+        };
+
+        if Self::class_constant_type_is_forbidden(&hint) {
+            return Err(format!(
+                "Class constant type {} is not permitted",
+                match hint {
+                    TypeHint::Void => "void",
+                    TypeHint::Never => "never",
+                    TypeHint::Callable => "callable",
+                    _ => "declaration",
+                }
+            ));
+        }
+        Ok(Some(hint))
+    }
+
+    fn class_constant_type_is_forbidden(hint: &TypeHint) -> bool {
+        match hint {
+            TypeHint::Void | TypeHint::Never | TypeHint::Callable => true,
+            TypeHint::Nullable(inner) | TypeHint::GenericParameter { erased: inner, .. } => {
+                Self::class_constant_type_is_forbidden(inner)
+            }
+            TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
+                parts.iter().any(Self::class_constant_type_is_forbidden)
+            }
+            TypeHint::GenericApplication { arguments, .. } => arguments
+                .iter()
+                .any(Self::class_constant_type_is_forbidden),
+            _ => false,
+        }
     }
 
     fn parse_method_body(
@@ -770,7 +883,7 @@ impl Parser {
                     Self::collect_free_vars(&arm.body, bound, out);
                 }
             }
-            Expr::StaticProperty { .. } => {}
+            Expr::StaticProperty { .. } | Expr::ClassConstant { .. } => {}
             // Literals and constants — no variables
             Expr::Integer(_)
             | Expr::Float(_)

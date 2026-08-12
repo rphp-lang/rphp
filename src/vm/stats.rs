@@ -573,6 +573,8 @@ mod inner {
             139 => Some("FetchLateStaticProp"),
             140 => Some("AssignStaticProp"),
             141 => Some("AssignLateStaticProp"),
+            142 => Some("FetchClassConst"),
+            143 => Some("FetchLateClassConst"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),

@@ -425,6 +425,8 @@ impl Parser {
             },
             Token::ArrayKw => Ok(TypeHint::Array),
             Token::Null => Ok(TypeHint::Null),
+            Token::True => Ok(TypeHint::ClassName("true".to_string())),
+            Token::False => Ok(TypeHint::ClassName("false".to_string())),
             Token::Static => {
                 if self.peek() == Token::Less {
                     if !cfg!(any(
