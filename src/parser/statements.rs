@@ -77,8 +77,15 @@ impl Parser {
                 }
             }
             Token::Use if !self.in_class_body => {
-                // Top-level use declaration: use App\Models\User; or use App\Models\User as Alias;
+                // Top-level class/function import. Their alias tables are
+                // separate in PHP even when the source alias is identical.
                 self.advance(); // consume 'use'
+                let kind = if self.peek() == Token::Function {
+                    self.advance();
+                    UseKind::Function
+                } else {
+                    UseKind::Class
+                };
                 let mut imports = Vec::new();
                 loop {
                     let fqn = self.parse_qualified_name()?;
@@ -105,7 +112,7 @@ impl Parser {
                     }
                 }
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::UseDecl { imports })
+                Ok(Stmt::UseDecl { kind, imports })
             }
             Token::Const => {
                 self.advance(); // consume 'const'

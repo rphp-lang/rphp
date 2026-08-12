@@ -294,7 +294,7 @@ impl Compiler {
                 func_compiler.lexical_static_parent = None;
                 func_compiler.dynamic_static_scope = false;
                 func_compiler.known_ref_args = self.build_known_ref_args();
-                let resolved_name = self.resolve_name(name);
+                let resolved_name = self.resolve_function_declaration_name(name);
                 self.record_generic_declaration(
                     crate::generics::GenericDeclarationKind::Function,
                     resolved_name.clone(),
@@ -1047,17 +1047,29 @@ impl Compiler {
             Stmt::Namespace { name, body } => {
                 let prev_ns = self.current_namespace.clone();
                 let prev_use_map = self.use_map.clone();
+                let prev_function_use_map = self.function_use_map.clone();
                 self.current_namespace = Some(name.clone());
                 self.use_map.clear();
+                self.function_use_map.clear();
                 for stmt in body {
                     self.compile_stmt(stmt)?;
                 }
                 self.current_namespace = prev_ns;
                 self.use_map = prev_use_map;
+                self.function_use_map = prev_function_use_map;
             }
-            Stmt::UseDecl { imports } => {
+            Stmt::UseDecl { kind, imports } => {
                 for (fqn, alias) in imports {
-                    self.use_map.insert(alias.clone(), fqn.clone());
+                    let fqn = fqn.strip_prefix('\\').unwrap_or(fqn).to_string();
+                    match kind {
+                        UseKind::Class => {
+                            self.use_map.insert(alias.clone(), fqn);
+                        }
+                        UseKind::Function => {
+                            self.function_use_map
+                                .insert(alias.to_ascii_lowercase(), fqn);
+                        }
+                    }
                 }
             }
             Stmt::Const { name, value } => {

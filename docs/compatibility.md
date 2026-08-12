@@ -79,6 +79,12 @@ Composer loader object, direct static PSR-4 class autoloading, and a Composer
 static-call autoload, and both forms of `strtr()`; it does not claim that
 Composer itself or Symfony runs under RPHP.
 
+`use function` imports have their own case-insensitive alias table, separate
+from class imports. Direct calls support default, explicit and comma-separated
+aliases, retain imports inside methods and closures, and suppress the ordinary
+namespaced-to-global fallback for an explicitly imported target. Imports remain
+lexical, so string names passed to `function_exists()` are unchanged.
+
 Relative to the retained `102800d` baseline, the current run adds 40 passing
 cases without losing a previous pass. The retained `0fafdd4` checkpoint isolates
 four of them: object-property chains became legal `isset` targets, intermediate

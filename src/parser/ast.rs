@@ -371,6 +371,12 @@ pub struct Param {
     pub promotion: Option<(Visibility, bool)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UseKind {
+    Class,
+    Function,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Noop,
@@ -499,7 +505,8 @@ pub enum Stmt {
         body: Vec<Stmt>, // if braced: namespace App { ... }, else: rest of file
     },
     UseDecl {
-        // use App\Models\User; or use App\Models\User as U;
+        // use App\Models\User; or use function App\Helpers\slug as make_slug;
+        kind: UseKind,
         imports: Vec<(String, String)>, // (fully_qualified, alias)
     },
     Const {

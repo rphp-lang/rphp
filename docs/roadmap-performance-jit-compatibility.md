@@ -9854,10 +9854,18 @@ resolution and preserve catchable loader exceptions. `strtr()` covers both the
 three-argument byte map and the longest-key-first replacement-array form used
 by Composer's PSR-4 path normalization.
 
-S0 follow-up work remains: ordinary include scope and exception edge cases,
-namespace function-import edges, and truthful platform identity must still be
-closed before treating the broader Composer substrate as complete. Running
-Composer itself under RPHP remains the separate S5 gate.
+Namespace function imports now use a distinct alias table from class imports,
+so identical class/function aliases can coexist. Imported calls are
+case-insensitive, support default, explicit and comma-separated aliases,
+preserve global built-in lowering, survive nested method/closure compilation,
+and do not incorrectly fall back to a global function when an imported target
+is missing. String-based probes remain unaffected, matching PHP's lexical-only
+import behavior.
+
+S0 follow-up work remains: ordinary include scope and exception edge cases and
+truthful platform identity must still be closed before treating the broader
+Composer substrate as complete. Running Composer itself under RPHP remains the
+separate S5 gate.
 
 Composer's generated platform check must observe truthful `PHP_VERSION_ID`,
 `PHP_VERSION`, `PHP_INT_SIZE`, extension availability and exit/error behavior.

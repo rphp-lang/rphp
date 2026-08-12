@@ -16,7 +16,7 @@ use crate::generics::{
 };
 use crate::parser::{
     BinOp, CallArg, CastType, ClassConstant, Expr, GenericAncestor, ListTarget, Param, Stmt,
-    TypeHint, Visibility,
+    TypeHint, UseKind, Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -1271,6 +1271,8 @@ pub struct Compiler {
     current_namespace: Option<String>,
     /// Use aliases: alias → fully qualified name
     use_map: HashMap<String, String>,
+    /// Function imports have a distinct, case-insensitive alias namespace.
+    function_use_map: HashMap<String, String>,
     /// Lexical class targets used only by generic owner metadata. Static-call
     /// bytecode keeps the original pseudo name for PHP forwarding semantics.
     lexical_static_class: Option<String>,
@@ -1380,6 +1382,7 @@ impl Compiler {
             strict_types: false,
             current_namespace: None,
             use_map: HashMap::new(),
+            function_use_map: HashMap::new(),
             lexical_static_class: None,
             lexical_static_parent: None,
             dynamic_static_scope: false,
@@ -1428,6 +1431,7 @@ impl Compiler {
         child.strict_types = self.strict_types;
         child.current_namespace = self.current_namespace.clone();
         child.use_map = self.use_map.clone();
+        child.function_use_map = self.function_use_map.clone();
         child.lexical_static_class = self.lexical_static_class.clone();
         child.lexical_static_parent = self.lexical_static_parent.clone();
         child.dynamic_static_scope = self.dynamic_static_scope;
@@ -1955,7 +1959,8 @@ impl Compiler {
         }
     }
 
-    /// Resolve a class/function name against current namespace and use map.
+    /// Resolve a class-like/type name against the current namespace and class
+    /// import map.
     /// Rules:
     /// - Fully qualified names (starting with \) are used as-is (without leading \)
     /// - Names in the use map are replaced with their fully qualified target
@@ -1983,6 +1988,40 @@ impl Compiler {
         }
         // Global namespace: use as-is
         name.to_string()
+    }
+
+    /// Resolve a source-level function name. Function imports are separate
+    /// from class aliases and apply only to unqualified calls.
+    fn resolve_function_name(&self, name: &str) -> String {
+        if let Some(fully_qualified) = name.strip_prefix('\\') {
+            return fully_qualified.to_string();
+        }
+        if !name.contains('\\')
+            && let Some(fqn) = self.function_use_map.get(&name.to_ascii_lowercase())
+        {
+            return fqn.clone();
+        }
+        if let Some(namespace) = &self.current_namespace {
+            return format!("{namespace}\\{name}");
+        }
+        name.to_string()
+    }
+
+    fn resolve_function_declaration_name(&self, name: &str) -> String {
+        if let Some(fully_qualified) = name.strip_prefix('\\') {
+            return fully_qualified.to_string();
+        }
+        if let Some(namespace) = &self.current_namespace {
+            return format!("{namespace}\\{name}");
+        }
+        name.to_string()
+    }
+
+    fn has_function_import(&self, name: &str) -> bool {
+        !name.contains('\\')
+            && self
+                .function_use_map
+                .contains_key(&name.to_ascii_lowercase())
     }
 
     /// Look up ref_args for a function: check user functions, known_ref_args, then builtins.
@@ -3383,14 +3422,17 @@ impl Compiler {
                     }
                 }
 
-                let resolved = self.resolve_name(name);
+                let resolved = self.resolve_function_name(name);
                 let ref_args = self.lookup_ref_args(&resolved);
                 let name_idx = self.add_literal(Value::string(resolved.clone()));
 
                 // For unqualified function calls in a namespace, PHP falls back to global.
                 // Store the original unqualified name as a fallback literal.
                 // Qualified/FQ names (containing \) get no fallback.
-                let fallback_idx = if self.current_namespace.is_some() && !name.contains('\\') {
+                let fallback_idx = if self.current_namespace.is_some()
+                    && !name.contains('\\')
+                    && !self.has_function_import(name)
+                {
                     self.add_literal(Value::string(name.clone()))
                 } else {
                     0 // no fallback
@@ -4513,9 +4555,14 @@ impl Compiler {
     /// Whether a source-level function name unambiguously addresses a global
     /// builtin. An unqualified name inside a namespace must retain the normal
     /// fallback lookup because a namespaced user function may shadow it.
-    fn unambiguous_global_function_name<'a>(&self, name: &'a str) -> Option<&'a str> {
+    fn unambiguous_global_function_name<'a>(&'a self, name: &'a str) -> Option<&'a str> {
         if let Some(fully_qualified) = name.strip_prefix('\\') {
             return Some(fully_qualified);
+        }
+        if !name.contains('\\')
+            && let Some(imported) = self.function_use_map.get(&name.to_ascii_lowercase())
+        {
+            return (!imported.contains('\\')).then_some(imported.as_str());
         }
         if self.current_namespace.is_none() && !name.contains('\\') {
             Some(name)

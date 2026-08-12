@@ -89,6 +89,102 @@ echo $u->name;
     assert_eq!(out, "Charlie");
 }
 
+#[test]
+fn namespace_function_imports_are_case_insensitive_and_separate_from_classes() {
+    let output = run_php(
+        r#"<?php
+namespace Library;
+function imported() { return "function"; }
+class imported { public static function value() { return "class"; } }
+
+namespace Application;
+use Library\imported as Shared;
+use function Library\imported as Shared;
+
+echo Shared(), "|", SHARED(), "|", Shared::value();
+"#,
+    );
+
+    assert_eq!(output, "function|function|class");
+}
+
+#[test]
+fn class_import_does_not_rewrite_a_same_named_function_declaration() {
+    let output = run_php(
+        r#"<?php
+namespace Library;
+class Shared { public static function value() { return "class"; } }
+
+namespace Application;
+use Library\Shared;
+function Shared() { return "function"; }
+
+echo Shared(), "|", Shared::value();
+"#,
+    );
+
+    assert_eq!(output, "function|class");
+}
+
+#[test]
+fn namespace_function_imports_support_global_builtins_and_comma_aliases() {
+    let output = run_php(
+        r#"<?php
+namespace Helpers;
+function first() { return "first"; }
+function second() { return "second"; }
+
+namespace Application;
+use function strlen as width;
+use function Helpers\first, Helpers\second as renamed;
+
+echo width("abc"), "|", first(), "|", renamed(), "|";
+var_dump(function_exists("width"));
+"#,
+    );
+
+    assert_eq!(output, "3|first|second|bool(false)\n");
+}
+
+#[test]
+fn namespace_function_imports_are_preserved_in_methods_and_closures() {
+    let output = run_php(
+        r#"<?php
+namespace Helpers;
+function decorate($value) { return $value . "!"; }
+
+namespace Application;
+use function Helpers\decorate as finish;
+
+class Runner {
+    public static function run() { return FINISH("method"); }
+}
+$closure = static fn($value) => finish($value);
+echo Runner::run(), "|", $closure("closure");
+"#,
+    );
+
+    assert_eq!(output, "method!|closure!");
+}
+
+#[test]
+fn missing_imported_function_does_not_fall_back_to_global_builtin() {
+    let output = run_php(
+        r#"<?php
+namespace Application;
+use function Missing\strlen as strlen;
+
+try {
+    strlen("abc");
+} catch (\Error $error) {
+    echo "caught";
+}
+"#,
+    );
+
+    assert_eq!(output, "caught");
+}
+
 // ─── Fully qualified names ────────────────────────────────────────
 
 #[test]
