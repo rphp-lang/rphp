@@ -5,7 +5,7 @@
 # copied into the tree for publication.
 set -eu
 
-PHP_SRC_COMMIT=7a64ae0507799547fbbd39b067bd3dd2c35e8fec
+PHP_SRC_COMMIT=${RPHP_PHPT_PHP_SRC_COMMIT:-7a64ae0507799547fbbd39b067bd3dd2c35e8fec}
 
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
     echo "usage: $0 PHP_SRC_ROOT RPHP_BINARY OUTPUT_DIR [JOBS]" >&2
@@ -79,16 +79,17 @@ if [ "$failed" -ne 0 ]; then
     exit 1
 fi
 
-runner_commit=$(git -C "$script_root" rev-parse HEAD)
+runner_commit=${RPHP_PHPT_RUNNER_COMMIT:-$(git -C "$script_root" rev-parse HEAD)}
 rphp_commit=${RPHP_PHPT_RPHP_COMMIT:-$runner_commit}
-architecture=$(uname -m)
+architecture=${RPHP_PHPT_ARCHITECTURE:-$(uname -m)}
+features=${RPHP_PHPT_FEATURES:-all-features}
 "$reference_php" "$runner" merge \
     --manifest "$output_dir/manifest.jsonl" \
     --summary "$output_dir/summary.json" \
     --rphp-commit "$rphp_commit" \
     --runner-commit "$runner_commit" \
     --php-src-commit "$PHP_SRC_COMMIT" \
-    --features all-features \
+    --features "$features" \
     --architecture "$architecture" \
     --target-label "$target_kind" \
     --timeout "$timeout" \

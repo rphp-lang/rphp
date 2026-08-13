@@ -11,6 +11,7 @@ const PENDING_STACK_PAGE_SIZE: usize = 16 * 1024;
 /// VM stack page — linked list of pages
 struct VmStackPage {
     prev: *mut VmStackPage,
+    allocation_size: usize,
     // data follows after header
 }
 
@@ -186,14 +187,23 @@ impl VmStack {
         self.top = frame as *mut Value;
     }
 
-    fn extend(&mut self, _needed: usize) {
-        let page = Self::alloc_page(self.page_size);
+    fn extend(&mut self, needed: usize) {
+        let allocation_size = self.page_size.max(
+            needed
+                .checked_add(size_of::<VmStackPage>())
+                .expect("VM stack page size overflow"),
+        );
+        let page = Self::alloc_page(allocation_size);
+        // SAFETY: alloc_page returns an initialized page header owned by this
+        // stack. Linking it preserves the acyclic current-to-previous chain.
         unsafe {
             (*(page)).prev = self.current_page;
         }
         self.current_page = page;
+        // SAFETY: allocation_size includes the page header plus every byte
+        // requested by the caller, so top..end is valid frame storage.
         self.top = unsafe { (page as *mut u8).add(size_of::<VmStackPage>()) as *mut Value };
-        self.end = unsafe { (page as *mut u8).add(self.page_size) as *mut Value };
+        self.end = unsafe { (page as *mut u8).add(allocation_size) as *mut Value };
     }
 
     fn alloc_page(size: usize) -> *mut VmStackPage {
@@ -204,6 +214,7 @@ impl VmStack {
         }
         unsafe {
             (*(ptr as *mut VmStackPage)).prev = std::ptr::null_mut();
+            (*(ptr as *mut VmStackPage)).allocation_size = size;
         }
         ptr as *mut VmStackPage
     }
@@ -213,8 +224,11 @@ impl Drop for VmStack {
     fn drop(&mut self) {
         let mut page = self.current_page;
         while !page.is_null() {
+            // SAFETY: every linked page was allocated by alloc_page, and its
+            // header remains live until this iteration deallocates that page.
             let prev = unsafe { (*page).prev };
-            let layout = std::alloc::Layout::from_size_align(self.page_size, 4096).unwrap();
+            let allocation_size = unsafe { (*page).allocation_size };
+            let layout = std::alloc::Layout::from_size_align(allocation_size, 4096).unwrap();
             unsafe {
                 std::alloc::dealloc(page as *mut u8, layout);
             }

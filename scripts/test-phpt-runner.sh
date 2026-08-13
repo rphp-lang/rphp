@@ -23,6 +23,9 @@ cp -R "$script_root/tests/php-src/runner-fixtures/." "$fixture_copy/"
     --summary "$fixture_copy/summary.json" \
     --target-label reference-php \
     "$fixture_copy/shard.jsonl"
+"$php_bin" "$script_root/scripts/phpt-coverage-map.php" \
+    "$fixture_copy/manifest.jsonl" \
+    "$fixture_copy/coverage-map.json"
 
 "$php_bin" -r '
 $summary = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
@@ -73,6 +76,20 @@ if ($summary["schema_version"] !== 5
     exit(1);
 }
 ' "$fixture_copy/summary.json"
+
+"$php_bin" -r '
+$map = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
+$groupTotal = array_sum(array_column($map["groups"], "total"));
+if ($map["schema_version"] !== 1
+    || $map["total"] !== 14
+    || $groupTotal !== 14
+    || $map["hazards"] !== []
+    || $map["manifest_sha256"] !== hash_file("sha256", $argv[2])
+) {
+    fwrite(STDERR, "unexpected PHPT coverage map\n");
+    exit(1);
+}
+' "$fixture_copy/coverage-map.json" "$fixture_copy/manifest.jsonl"
 
 "$php_bin" -r '
 require $argv[1];

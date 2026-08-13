@@ -1,0 +1,23 @@
+# PHPT gate capabilities for php-src 8.2.33.
+#
+# The upstream corpus is pinned to commit
+# 651db3ebfa622cae0c4e6b39766812efbd274ced. Unsupported capabilities remain
+# explicit statuses and are never removed from the case count or counted as
+# passes.
+
+runtime-cli:INI
+  RPHP has no per-process INI contract yet. Tests with a non-empty INI section
+  are classified unsupported/runtime-cli-ini.
+
+runtime-cli:ARGS
+  RPHP does not yet publish script arguments. No selected 8.2.33 case uses a
+  non-empty ARGS section, but the runner keeps the classification explicit.
+
+runtime-extension:EXTENSIONS
+  RPHP does not advertise PHP extension modules. A declared extension that is
+  unavailable is a normal PHPT skip and remains visible in the manifest.
+
+runner:PHPDBG,POST_RAW,GET,EXPECTHEADERS
+  These request a debugger or CGI/header transport rather than the selected
+  CLI runtime. They are classified unsupported/section until those execution
+  modes have their own compatibility gates.

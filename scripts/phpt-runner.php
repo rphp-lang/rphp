@@ -42,7 +42,8 @@ usage:
       [--target-kind rphp|php] [--timeout SECONDS]
       [--shard-index N --shard-count N] PATH...
   phpt-runner.php merge --manifest FILE --summary FILE
-      [--rphp-commit HASH] [--php-src-commit HASH] [--features LABEL]
+      [--rphp-commit HASH] [--runner-commit HASH] [--php-src-commit HASH]
+      [--features LABEL]
       [--architecture LABEL] [--target-label LABEL] [--timeout SECONDS]
       SHARD.jsonl...
 

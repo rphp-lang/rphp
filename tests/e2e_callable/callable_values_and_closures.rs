@@ -94,6 +94,26 @@ echo array_merge([], ...$methods)[0];
 }
 
 #[test]
+fn unpacked_calls_grow_the_vm_stack_for_large_argument_lists() {
+    let out = run_php(
+        r#"<?php
+function first_value($first) { return $first; }
+function delayed_first_value($first) { yield $first; }
+
+$arguments = range(1, 20000);
+echo first_value(...$arguments), '|';
+
+$generator = delayed_first_value(...$arguments);
+echo $generator->current(), '|';
+
+$generator = call_user_func_array('delayed_first_value', $arguments);
+echo $generator->current();
+"#,
+    );
+    assert_eq!(out, "1|1|1");
+}
+
+#[test]
 fn test_is_callable_existing_function() {
     let out = run_php(
         r#"<?php
