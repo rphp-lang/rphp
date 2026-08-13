@@ -248,17 +248,20 @@ A milestone may advance only when:
 4. Remove the superseded special mechanism and remeasure after convergence.
 5. Repeat by execution-weighted impact; keep new coroutine expansion deferred.
 
-Completion checkpoint (2026-08-13): the next profiled M1/M5 structural slice
-is accepted. Closure-valued `Value` copies now share one immutable payload and
-captured environment instead of allocating and cloning both on every copy.
-Exact output, lifecycle and reference-capture tests, allocation telemetry, the
-full feature matrix and dual-architecture target/corpus/holdout gates pass
-against the integrated compatibility baseline. The 250,000-copy target improves
-by 22.69% on ARM64 and 8.84% on x86-64; retained-copy peak RSS falls by 72.23%
-and 74.29%. Detailed method, distributions and semantic boundaries are in
-[`performance-closure-ownership.md`](performance-closure-ownership.md). The
-next goal returns to scorecard/profile selection rather than extending shared
-ownership to mutable representations without new evidence.
+Completion checkpoint (2026-08-13): the profiled declared-object M1/M5 slice is
+accepted. Common one-to-four-slot objects now reuse bounded thread-local
+property storage while their identity-bearing owner and PHP lifecycle remain
+canonical. Exact output, clone/destructor/reference/dynamic-property/Reflection
+tests, allocation telemetry, the full feature matrix and dual-architecture
+target/corpus/holdout gates pass against the integrated compatibility baseline.
+The million-object target reduces property-storage allocations from a
+source-accounted 1,000,000 to 2 and improves by 15.87% on ARM64 and 2.69% on
+x86-64; median ARM64 peak RSS is unchanged. Detailed method, distributions and
+semantic boundaries are in
+[`performance-declared-object-lifecycle.md`](performance-declared-object-lifecycle.md).
+The next goal returns to scorecard/profile selection; removing the remaining
+identity-bearing owner allocation requires separate evidence and a broader
+identity/destructor design.
 
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.

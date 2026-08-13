@@ -663,6 +663,7 @@ pub struct PhpObject {
     pub generator: Option<GeneratorRef>,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: [(); 72] = [(); std::mem::size_of::<PhpObject>()];
 
 thread_local! {
@@ -674,7 +675,7 @@ thread_local! {
         Rc::new(ObjectLayout::empty()),
     );
 
-    /// One bounded reusable declared-property buffer per common object width.
+    /// One bounded thread-local declared-property buffer per common width.
     /// PHP evaluates a replacement object before releasing the previous CV, so
     /// one slot per width still covers the steady state after two allocations.
     static DECLARED_PROPERTY_STORAGE_POOL: RefCell<[Option<Vec<Value>>; 5]> =
@@ -729,7 +730,7 @@ impl PhpObject {
         }
     }
 
-    /// Materialize immutable class defaults into request-owned slots, reusing
+    /// Materialize immutable class defaults into object-owned slots, reusing
     /// one bounded buffer for the common small declared-object widths.
     pub(crate) fn with_layout_from_defaults(
         class_id: u32,
@@ -934,7 +935,7 @@ impl Drop for PhpObject {
         values.clear();
         // Retain only the exact small buffer created by the declared-default
         // materializer. Other internal constructors may supply a wider Vec;
-        // keeping it would make request-local retention unbounded.
+        // keeping it would make thread-local retention unbounded.
         if values.capacity() != width {
             return;
         }
@@ -988,9 +989,13 @@ mod declared_property_storage_tests {
 
     #[test]
     fn nested_heap_properties_drop_before_the_buffer_is_returned() {
-        let child_layout = Rc::new(ObjectLayout::new("Child", Vec::new()));
+        let child_layout = Rc::new(ObjectLayout::new("Child", vec!["value".to_string()]));
         let parent_layout = Rc::new(ObjectLayout::new("Parent", vec!["child".to_string()]));
-        let child = Value::object(PhpObject::with_layout_from_defaults(2, child_layout, &[]));
+        let child = Value::object(PhpObject::with_layout_from_defaults(
+            2,
+            child_layout,
+            &[Value::long(3)],
+        ));
         let parent = PhpObject::with_layout_from_defaults(1, Rc::clone(&parent_layout), &[child]);
         drop(parent);
 
