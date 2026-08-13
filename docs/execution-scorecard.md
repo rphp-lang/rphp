@@ -300,6 +300,15 @@ The exact integrated baseline, semantic envelope, rejected code-layout
 variants and complete distributions are recorded in
 [`performance-packed-array-reserve.md`](performance-packed-array-reserve.md).
 
+Ownership completion note (2026-08-13): the next M1/M5 measurement found that
+copying a closure-valued `Value` allocated and cloned its immutable payload and
+capture vector. Sharing one owner improves the 250,000-copy target by 22.69%
+on ARM64 and 8.84% on physical x86-64, reduces retained-copy peak RSS by 72.23%
+and 74.29%, and keeps both application corpora plus the independent routing
+holdout below the one-percent regression ceiling after confirmation. The exact
+baseline, allocation counters, lifecycle envelope and distributions are in
+[`performance-closure-ownership.md`](performance-closure-ownership.md).
+
 ## Reproduction
 
 Run the complete timing and telemetry scorecard, including the structural

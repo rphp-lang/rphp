@@ -249,14 +249,16 @@ A milestone may advance only when:
 5. Repeat by execution-weighted impact; keep new coroutine expansion deferred.
 
 Completion checkpoint (2026-08-13): the next profiled M1/M5 structural slice
-is accepted. The existing typed packed-array append kernel now issues one
-bounded packed-only capacity request for proven large unit loops. Exact output,
-fallback tests, telemetry, the full feature matrix and 100-pair ARM64/x86-64
-target/corpus/holdout gates pass against the integrated baseline. Detailed
-method, distributions and code-layout rejection evidence are in
-[`performance-packed-array-reserve.md`](performance-packed-array-reserve.md).
-The next goal returns to scorecard/profile selection rather than extending this
-kernel without new evidence.
+is accepted. Closure-valued `Value` copies now share one immutable payload and
+captured environment instead of allocating and cloning both on every copy.
+Exact output, lifecycle and reference-capture tests, allocation telemetry, the
+full feature matrix and dual-architecture target/corpus/holdout gates pass
+against the integrated compatibility baseline. The 250,000-copy target improves
+by 22.69% on ARM64 and 8.84% on x86-64; retained-copy peak RSS falls by 72.23%
+and 74.29%. Detailed method, distributions and semantic boundaries are in
+[`performance-closure-ownership.md`](performance-closure-ownership.md). The
+next goal returns to scorecard/profile selection rather than extending shared
+ownership to mutable representations without new evidence.
 
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.
