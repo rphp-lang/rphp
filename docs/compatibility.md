@@ -7,45 +7,81 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-## Official php-src PHPT baseline
+## Official PHP 8.2 php-src PHPT contract baseline
 
-The latest reproducible upstream baseline runs the unmodified `Zend/tests` and
-`tests/lang` suites from PHP 8.4.21 commit
-`7a64ae0507799547fbbd39b067bd3dd2c35e8fec` against all-features RPHP commit
-`80137b6bbea3bbcb3241a269e0d6b6af3bd86890`, using runner commit
-`12a17e489f666b42de3660d663da8183306f89ba`. The recorded run used arm64 and a
-three-second per-process timeout. It discovered 5,259 PHPT cases.
+The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
+suites from PHP 8.2.33 commit
+`651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
+`d7e980a0e7e183e230d6f9cc04ef768608ff6d44`, using the same runner commit. The
+recorded run used arm64 and a three-second per-process timeout. It discovered
+4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 583 | 4,033 | 86 | 1 | 258 | 0 | 4 | 12.630% |
-| `tests/lang` | 44 | 224 | 10 | 0 | 16 | 0 | 0 | 16.418% |
-| **Combined** | **627** | **4,257** | **96** | **1** | **274** | **0** | **4** | **12.838%** |
+| `Zend/tests` | 855 | 2,894 | 65 | 1 | 221 | 5 | 10 | 22.806% |
+| `tests/lang` | 86 | 182 | 10 | 0 | 16 | 0 | 0 | 32.090% |
+| **Combined** | **941** | **3,076** | **75** | **1** | **237** | **5** | **10** | **23.425%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 627 / 5,259, or **11.922%**; including crashes in the attempted denominator
-gives **12.827%**. These numbers are intentionally pre-alpha and are not a
-claim of PHP 8.4 compatibility.
+is 941 / 4,345, or **21.657%**; including crashes and timeouts in the attempted
+denominator gives **23.338%**. These numbers are intentionally pre-alpha and do
+not support a complete PHP 8.2 claim.
 
-The schema-4 execution profile makes the strict score less easy to mistake for
-language coverage. Of 4,888 attempted cases, eight fail during `SKIPIF` before
-the test body, 2,180 are rejected in the observed parse/compile stage, and
-2,700 (**55.237%**) execute the test's `FILE` section past that stage. This is
-not a second compatibility score: invalid-source PHPT cases are supposed to
-stop in the front end, and reaching runtime says nothing about correct
-semantics or diagnostic text. Exact negative-test passes are now counted in
-the observed front-end bucket instead of being mistaken for runtime reach.
+The schema-5 execution profile makes the strict score less easy to mistake for
+language coverage. Of 4,032 attempted cases, six fail during `SKIPIF` before
+the test body, 706 are rejected in the observed parse/compile stage, and 3,320
+(**82.341%**) execute the test's `FILE` section past that stage. This is not a
+second compatibility score: invalid-source PHPT cases are supposed to stop in
+the front end, and reaching runtime says nothing about correct semantics or
+diagnostic text.
 
-The largest failure groups are 2,035 parse failures, 1,248 runtime failures,
-821 output mismatches, 145 compile failures and eight failed `SKIPIF`
-evaluations; one known upstream expected failure is reported separately. Four
-cases terminate by signal. Of the 96 skips, 65 require unavailable extensions
-and 31 are selected by `SKIPIF`.
-Unsupported cases remain in the total: 269 require per-process `INI` behavior
-that the RPHP CLI does not expose, while five require PHPDBG or CGI/header
-sections outside this CLI gate.
+The largest failure groups are 1,222 runtime failures, 1,157 output mismatches,
+579 parse failures, 127 compile failures and six failed `SKIPIF` evaluations.
+Ten cases terminate by signal and five time out. Of the 75 skips, 45 require
+unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
+remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
+does not expose, while three require PHPDBG or CGI/header sections outside this
+CLI gate.
+
+The complete official PHP 8.2.33 CLI oracle run produced 4,255 passes, zero
+ordinary failures, 86 skips, the one upstream `XFAIL`, three unsupported SAPI
+sections, zero timeouts and zero crashes. Five representative cases also pass
+through php-src's official `run-tests.php`. Repeated RPHP executions before and
+after rebasing onto the current performance checkpoint produced the identical
+manifest SHA-256
+`d8e8c74e6bc88e52595d0fea8b244999e8db661eddf9325077d6d8d60ba68a54`.
+The first two pre-fix runs differed on one large unpacked generator call: it
+alternated between an exact pass and a signal termination because VM stack
+growth ignored an oversized frame request. VM pages now retain and deallocate
+their actual allocation size; 1,000 focused repetitions pass without a crash.
+
+The authoritative per-path result is
+[`d7e980a-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/d7e980a-arm64-manifest.jsonl),
+with aggregate metadata in
+[`d7e980a-arm64-summary.json`](../tests/php-src/results/php-8.2.33/d7e980a-arm64-summary.json),
+a directory/status navigation map and exact hazard list in
+[`d7e980a-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/d7e980a-arm64-coverage-map.json),
+and the full reference aggregate in
+[`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
+with image and official-runner cross-checks in
+[`reference-validation.json`](../tests/php-src/results/php-8.2.33/reference-validation.json).
+Every upstream path remains visible; the rollup never replaces the manifest.
+
+To reproduce the RPHP contract run from the exact external checkout:
+
+```sh
+cargo build --locked --release --all-features
+RPHP_PHPT_PHP_SRC_COMMIT=651db3ebfa622cae0c4e6b39766812efbd274ced \
+RPHP_PHPT_TIMEOUT=3 scripts/run-php-src-phpt.sh \
+  /path/to/php-src target/release/rphp /tmp/rphp-phpt-results 4
+```
+
+### Retained PHP 8.4 trend history
+
+The older PHP 8.4.21 audit remains useful as a non-contract trend line. Its
+counts are not directly comparable with the PHP 8.2.33 contract corpus.
 
 Relative to the retained `c470183` baseline, this run adds 24 passing cases
 without losing a previous pass. PHP class aliases now share the exact
@@ -72,6 +108,8 @@ autoloads string owners and sees abstract or non-public declarations instead of
 using the stricter callback-callability test. Object-method callbacks can load
 classes through ordinary unmodified `require`, matching Composer's primary
 loader shape.
+
+## Composer and Symfony gates
 
 The reproducible Composer S0 gate now pins Composer 2.8.12 by version and PHAR
 SHA-256, generates `vendor/` under reference PHP, and runs the resulting
@@ -156,6 +194,11 @@ environment and secrets loader services do not redefine the fixture. The full
 normalized cache file manifest is still compared. This admits only the named
 short-lived Symfony CLI kernel; an HTTP SAPI, request superglobals and
 repeated-worker isolation remain S4 work.
+
+## Retained implementation and PHP 8.4 trend notes
+
+The following implementation notes and pass-set comparisons describe retained
+checkpoints from the PHP 8.4.21 trend audit.
 
 `use function` imports have their own case-insensitive alias table, separate
 from class imports. Direct calls support default, explicit and comma-separated

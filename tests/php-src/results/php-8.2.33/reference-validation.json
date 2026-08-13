@@ -1,0 +1,34 @@
+{
+  "schema_version": 2,
+  "php_src_commit": "651db3ebfa622cae0c4e6b39766812efbd274ced",
+  "runner_commit": "d7e980a0e7e183e230d6f9cc04ef768608ff6d44",
+  "reference_php": "8.2.33",
+  "reference_image": "php:8.2.33-cli",
+  "reference_image_digest": "sha256:9ad9d18a8cbbd491779df1513d140da27bf278fb65ea6c5a8b1904afc7c60074",
+  "architecture": "arm64",
+  "full_project_runner": {
+    "total": 4345,
+    "pass": 4255,
+    "fail": 0,
+    "skip": 86,
+    "xfail": 1,
+    "unsupported": 3,
+    "timeout": 0,
+    "crash": 0
+  },
+  "cases": [
+    "Zend/tests/001.phpt",
+    "Zend/tests/bug66660.phpt",
+    "Zend/tests/generators/generator_with_arg_unpacking.phpt",
+    "Zend/tests/traits/constant_016.phpt",
+    "tests/lang/comments2.phpt"
+  ],
+  "project_runner": {
+    "pass": 5,
+    "fail": 0
+  },
+  "official_run_tests": {
+    "pass": 5,
+    "fail": 0
+  }
+}
