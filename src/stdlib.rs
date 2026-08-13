@@ -1489,7 +1489,6 @@ fn bind_closure_value(
         return Ok(());
     };
     let mut rebound = source.clone();
-    rebound.identity = std::rc::Rc::new(());
 
     rebound.bound_this = match new_this.value_type() {
         ValueType::Null => None,

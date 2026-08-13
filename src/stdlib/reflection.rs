@@ -2141,7 +2141,6 @@ fn method_get_closure(
     return_value(
         rv,
         Value::closure(PhpClosure {
-            identity: Rc::new(()),
             func: function as *const FunctionCommon,
             called_scope_class_id,
             is_static,

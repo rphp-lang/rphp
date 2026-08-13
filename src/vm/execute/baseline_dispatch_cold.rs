@@ -1972,7 +1972,6 @@ fn op_create_closure(
     let is_static = (opline._pad & crate::vm::instruction::CLOSURE_FLAG_STATIC) != 0;
     let bound_this = closure_bound_this(frame, op_array, is_static);
     let closure = PhpClosure {
-        identity: std::rc::Rc::new(()),
         func: func_ptr,
         called_scope_class_id,
         is_static,
@@ -2034,7 +2033,6 @@ fn op_create_first_class_callable<'a>(
     });
     let has_heap_captures = resolved.use_vars.iter().any(Value::needs_cleanup);
     let closure = PhpClosure {
-        identity: std::rc::Rc::new(()),
         func: resolved.func_ptr,
         called_scope_class_id: resolved.called_scope_class_id,
         is_static: bound_this.is_none(),
@@ -2079,11 +2077,7 @@ fn op_closure_use_var(
         value.clone()
     };
     let closure_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
-    let closure = unsafe { &mut *closure_ptr }
-        .as_closure_mut()
-        .expect("ClosureUseVar: op1 must be a closure");
-    if cloned_value.needs_cleanup() {
-        closure.has_heap_captures = true;
-    }
-    closure.captures.push(cloned_value);
+    // SAFETY: ClosureUseVar targets the live CreateClosure result TMP, which
+    // remains initialized and exclusively owned during this bytecode sequence.
+    unsafe { &mut *closure_ptr }.push_closure_capture(cloned_value);
 }

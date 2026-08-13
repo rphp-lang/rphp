@@ -110,7 +110,7 @@ mod inner {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-    const VALUE_KIND_COUNT: usize = 11;
+    const VALUE_KIND_COUNT: usize = 12;
     const OPCODE_KIND_COUNT: usize = 256;
 
     static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -168,6 +168,8 @@ mod inner {
         [const { AtomicU64::new(0) }; VALUE_KIND_COUNT];
     static VALUE_DROPS: [AtomicU64; VALUE_KIND_COUNT] =
         [const { AtomicU64::new(0) }; VALUE_KIND_COUNT];
+    static CLOSURE_PAYLOAD_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+    static CLOSURE_CAPTURE_STORAGE_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
     static OPCODE_COUNTS: [AtomicU64; OPCODE_KIND_COUNT] =
         [const { AtomicU64::new(0) }; OPCODE_KIND_COUNT];
 
@@ -238,6 +240,8 @@ mod inner {
         for counter in &VALUE_DROPS {
             counter.store(0, Ordering::Relaxed);
         }
+        CLOSURE_PAYLOAD_ALLOCATIONS.store(0, Ordering::Relaxed);
+        CLOSURE_CAPTURE_STORAGE_ALLOCATIONS.store(0, Ordering::Relaxed);
         for counter in &OPCODE_COUNTS {
             counter.store(0, Ordering::Relaxed);
         }
@@ -481,6 +485,20 @@ mod inner {
     }
 
     #[inline]
+    pub fn inc_closure_payload_allocation() {
+        if enabled() {
+            CLOSURE_PAYLOAD_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_closure_capture_storage_allocation() {
+        if enabled() {
+            CLOSURE_CAPTURE_STORAGE_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
     pub fn inc_opcode(opcode: usize) {
         if enabled() && opcode < OPCODE_KIND_COUNT {
             OPCODE_COUNTS[opcode].fetch_add(1, Ordering::Relaxed);
@@ -500,6 +518,7 @@ mod inner {
             8 => "object",
             9 => "resource",
             10 => "reference",
+            11 => "closure",
             _ => "unknown",
         }
     }
@@ -896,6 +915,17 @@ mod inner {
                 let _ = writeln!(err, "{}={}", value_kind_name(idx), count);
             }
         }
+        let _ = writeln!(err, "-- closure ownership --");
+        let _ = writeln!(
+            err,
+            "closure_payload_allocations={}",
+            CLOSURE_PAYLOAD_ALLOCATIONS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "closure_capture_storage_allocations={}",
+            CLOSURE_CAPTURE_STORAGE_ALLOCATIONS.load(Ordering::Relaxed)
+        );
 
         let mut opcodes = Vec::new();
         for (idx, counter) in OPCODE_COUNTS.iter().enumerate() {
@@ -1208,6 +1238,24 @@ pub fn inc_value_drop(kind: usize) {
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_value_drop(_kind: usize) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_closure_payload_allocation() {
+    inner::inc_closure_payload_allocation();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_closure_payload_allocation() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_closure_capture_storage_allocation() {
+    inner::inc_closure_capture_storage_allocation();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_closure_capture_storage_allocation() {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

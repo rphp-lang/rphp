@@ -3367,11 +3367,66 @@ impl std::fmt::Debug for PhpArray {
 #[path = "php_array_tests.rs"]
 mod php_array_tests;
 
+#[cfg(test)]
+mod closure_ownership_tests {
+    use super::{PhpClosure, PhpObject, Value};
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    fn closure_with_capture(capture: Value) -> Value {
+        Value::closure(PhpClosure {
+            func: std::ptr::null(),
+            called_scope_class_id: 0,
+            is_static: true,
+            bound_this: None,
+            captures: vec![capture],
+            has_heap_captures: true,
+        })
+    }
+
+    #[test]
+    fn copied_closures_share_immutable_payload_and_capture_ownership() {
+        let captured = Value::object(PhpObject::dynamic(
+            "Captured".to_string(),
+            0,
+            HashMap::new(),
+        ));
+        let closure = closure_with_capture(captured.clone());
+        let copy = closure.clone();
+
+        assert!(std::ptr::eq(
+            closure.as_closure().unwrap(),
+            copy.as_closure().unwrap()
+        ));
+        assert!(
+            closure
+                .as_closure()
+                .unwrap()
+                .same_identity(copy.as_closure().unwrap())
+        );
+        assert_eq!(captured.object_strong_count(), Some(2));
+
+        drop(copy);
+        assert_eq!(captured.object_strong_count(), Some(2));
+        drop(closure);
+        assert_eq!(captured.object_strong_count(), Some(1));
+    }
+
+    #[test]
+    fn capture_construction_rejects_a_published_closure() {
+        let mut closure = closure_with_capture(Value::long(1));
+        let _published = closure.clone();
+
+        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            closure.push_closure_capture(Value::long(2));
+        }));
+        assert!(rejected.is_err());
+    }
+}
+
 /// PHP closure — function pointer + captured values.
-/// Stored behind Box in Value, like String and Array.
+/// Stored behind `Rc` in `Value`, like strings, arrays, and objects.
 pub struct PhpClosure {
-    /// Shared identity token retained when the closure value is copied.
-    pub(crate) identity: Rc<()>,
     /// Direct pointer to the resolved function. No string lookup needed at call time.
     pub func: *const FunctionCommon,
     /// Late-called class captured when a class-scoped closure is created.
@@ -3393,7 +3448,6 @@ pub struct PhpClosure {
 impl Clone for PhpClosure {
     fn clone(&self) -> Self {
         Self {
-            identity: self.identity.clone(),
             func: self.func,
             called_scope_class_id: self.called_scope_class_id,
             is_static: self.is_static,
@@ -3419,7 +3473,7 @@ impl PhpClosure {
     /// function body or captures.
     #[inline]
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.identity, &other.identity)
+        std::ptr::eq(self, other)
     }
 
     /// Recover the user function guaranteed by normal closure construction.
@@ -3440,7 +3494,6 @@ impl PhpClosure {
 impl std::fmt::Debug for PhpClosure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PhpClosure")
-            .field("identity", &Rc::as_ptr(&self.identity))
             .field("func", &self.func)
             .field("called_scope_class_id", &self.called_scope_class_id)
             .field("is_static", &self.is_static)
@@ -3457,6 +3510,8 @@ pub struct Value {
     type_info: u32,
     _not_send: PhantomData<*mut ()>,
 }
+
+const _: [(); 16] = [(); std::mem::size_of::<Value>()];
 
 #[repr(C)]
 union ValueData {
@@ -3627,12 +3682,17 @@ impl Value {
     }
 
     /// Create a closure value from a PhpClosure.
+    /// Clone = Rc refcount bump; binding creates a distinct payload and identity.
     #[inline]
     pub fn closure(c: PhpClosure) -> Self {
-        let boxed = Box::new(c);
+        if c.captures.capacity() != 0 {
+            stats::inc_closure_capture_storage_allocation();
+        }
+        let closure = Rc::new(c);
+        stats::inc_closure_payload_allocation();
         Self {
             data: ValueData {
-                ptr: Box::into_raw(boxed) as *mut u8,
+                ptr: Rc::into_raw(closure) as *mut u8,
             },
             type_info: ValueType::Closure as u32,
             _not_send: PhantomData,
@@ -3649,14 +3709,29 @@ impl Value {
         }
     }
 
-    /// Get mutable closure reference. Only valid for Closure values.
+    /// Add one capture while the closure payload is still uniquely owned by
+    /// the compiler-created temporary.
+    ///
+    /// Closure bytecode fills the reserved capture vector immediately after
+    /// construction and before the value can be copied or published. Keeping
+    /// this transition here prevents general closure mutation after sharing.
     #[inline]
-    pub fn as_closure_mut(&mut self) -> Option<&mut PhpClosure> {
-        if self.value_type() == ValueType::Closure {
-            Some(unsafe { &mut *(self.data.ptr as *mut PhpClosure) })
-        } else {
-            None
+    pub(crate) fn push_closure_capture(&mut self, value: Value) {
+        assert_eq!(self.value_type(), ValueType::Closure);
+        let needs_cleanup = value.needs_cleanup();
+        // SAFETY: the type check proves that the active union field is the raw
+        // pointer stored by `Rc::into_raw` in `Value::closure`. The
+        // CreateClosure/ClosureUseVar sequence retains the only strong owner
+        // until all captures are appended, and no weak handles are exposed.
+        let mut owner = std::mem::ManuallyDrop::new(unsafe {
+            Rc::from_raw(self.data.ptr as *const PhpClosure)
+        });
+        let closure = Rc::get_mut(&mut owner)
+            .expect("ClosureUseVar requires a uniquely owned construction temporary");
+        if needs_cleanup {
+            closure.has_heap_captures = true;
         }
+        closure.captures.push(value);
     }
 
     /// Get the Rc<RefCell<PhpObject>> for shared access.
@@ -4524,8 +4599,18 @@ impl Clone for Value {
                 }
             }
             ValueType::Closure => {
-                let c = unsafe { &*(self.data.ptr as *const PhpClosure) };
-                Value::closure(c.clone())
+                // Closure payloads are immutable after construction. Copies
+                // retain identity and captures through one Rc increment.
+                // SAFETY: every closure pointer comes from `Rc::into_raw` in
+                // `Value::closure`; this clone creates the matching new owner.
+                unsafe {
+                    Rc::increment_strong_count(self.data.ptr as *const PhpClosure);
+                    Self {
+                        data: ValueData { ptr: self.data.ptr },
+                        type_info: self.type_info,
+                        _not_send: PhantomData,
+                    }
+                }
             }
             ValueType::Reference => {
                 // Clone a reference: clone the TARGET value (dereference + deep clone)
@@ -4567,7 +4652,9 @@ impl Drop for Value {
                 unsafe { Rc::decrement_strong_count(self.data.ptr as *const ResourceHandle) };
             }
             ValueType::Closure => {
-                unsafe { drop(Box::from_raw(self.data.ptr as *mut PhpClosure)) };
+                // SAFETY: closure construction stores the raw pointer returned
+                // by `Rc::into_raw`; each clone has incremented the same count.
+                unsafe { Rc::decrement_strong_count(self.data.ptr as *const PhpClosure) };
             }
             ValueType::Reference if self.is_owned_reference() => {
                 // SAFETY: owned references store the raw pointer produced by
