@@ -13,6 +13,29 @@ fn error_reporting_is_request_local_and_uses_namespaced_function_fallback() {
 }
 
 #[test]
+fn error_suppression_follows_a_called_frame_and_restores_the_request_mask() {
+    assert_eq!(
+        run_php(
+            "<?php error_reporting(E_ALL); function inspectMaskedWarning() { echo $forgotten; throw new RuntimeException('stop'); } try { @inspectMaskedWarning(); } catch (RuntimeException $error) {} echo 'mask=', error_reporting();"
+        ),
+        "mask=32767"
+    );
+}
+
+#[test]
+fn explicit_reporting_change_inside_suppressed_call_reenables_warning_and_persists() {
+    let output = run_php(
+        "<?php error_reporting(E_NOTICE); function revealMaskedWarning() { error_reporting(E_ALL); echo $forgotten; throw new RuntimeException('stop'); } try { @revealMaskedWarning(); } catch (RuntimeException $error) {} echo 'mask=', error_reporting();",
+    );
+
+    assert!(
+        output.contains("Warning: Undefined variable $forgotten"),
+        "{output}"
+    );
+    assert!(output.ends_with("mask=32767"), "{output}");
+}
+
+#[test]
 fn error_log_default_destination_uses_namespaced_function_fallback() {
     assert_eq!(
         run_php("<?php namespace App; var_dump(error_log('rphp-test'));"),

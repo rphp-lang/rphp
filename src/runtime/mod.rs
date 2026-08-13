@@ -231,6 +231,9 @@ pub struct ExecutorGlobals {
     /// routing is still intentionally minimal, but libraries observe the
     /// getter/setter contract while temporarily suppressing warnings.
     pub error_reporting: i64,
+    /// Suppressed call frame and the reporting mask to restore when it leaves.
+    /// This cold sidecar keeps the ordinary ExecuteData layout unchanged.
+    error_suppression_frames: Vec<(usize, i64)>,
     pub(crate) error_handler: Option<crate::value::Value>,
     pub(crate) error_handler_levels: i64,
     pub(crate) error_handler_stack: Vec<(Option<crate::value::Value>, i64)>,
@@ -343,7 +346,36 @@ pub struct ExecutorGlobals {
     static_generic_property_contracts: Vec<Box<StaticGenericPropertyContract>>,
 }
 
+const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
+
 impl ExecutorGlobals {
+    pub(crate) fn begin_error_suppression(&mut self, frame: usize) {
+        self.error_suppression_frames
+            .push((frame, self.error_reporting));
+        // PHP 8.2 leaves fatal error classes visible under @.
+        self.error_reporting = PHP_82_SUPPRESSED_ERROR_REPORTING;
+    }
+
+    pub(crate) fn end_error_suppression(&mut self, frame: usize) {
+        if let Some(index) = self
+            .error_suppression_frames
+            .iter()
+            .rposition(|(candidate, _)| *candidate == frame)
+        {
+            let (_, reporting) = self.error_suppression_frames.remove(index);
+            self.error_reporting = reporting;
+        }
+    }
+
+    pub(crate) fn set_error_reporting(&mut self, level: i64) {
+        self.error_reporting = level;
+        // An explicit error_reporting() call inside @ persists after every
+        // active suppression scope is restored, as it does in PHP.
+        for (_, reporting) in &mut self.error_suppression_frames {
+            *reporting = level;
+        }
+    }
+
     /// Reserve the stable built-in registry envelope immediately before stdlib
     /// registration. Executors that never install stdlib stay allocation-lazy;
     /// normal executors avoid repeated hash-table growth while installing the
@@ -401,6 +433,7 @@ impl ExecutorGlobals {
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             error_reporting: 32767,
+            error_suppression_frames: Vec::new(),
             error_handler: None,
             error_handler_levels: 32767,
             error_handler_stack: Vec::new(),
@@ -471,6 +504,7 @@ impl ExecutorGlobals {
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             error_reporting: 32767,
+            error_suppression_frames: Vec::new(),
             error_handler: None,
             error_handler_levels: 32767,
             error_handler_stack: Vec::new(),

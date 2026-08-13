@@ -6020,7 +6020,7 @@ fn fn_error_reporting(
 ) -> Result<(), VmError> {
     let previous = eg.error_reporting;
     if let Some(level) = arg_opt!(ed, 0).and_then(Value::as_long) {
-        eg.error_reporting = level;
+        eg.set_error_reporting(level);
     }
     ret!(rv, Value::long(previous));
 }

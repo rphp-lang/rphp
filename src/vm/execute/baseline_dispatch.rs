@@ -199,13 +199,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             } else {
                                 op_array.source_file.as_str()
                             };
-                            eg.write_output(
-                                format!(
-                                    "\nWarning: Undefined variable ${name} in {file} on line {}\n",
-                                    opline.extended_value
-                                )
-                                .as_bytes(),
-                            );
+                            if eg.error_reporting & 2 != 0 {
+                                eg.write_output(
+                                    format!(
+                                        "\nWarning: Undefined variable ${name} in {file} on line {}\n",
+                                        opline.extended_value
+                                    )
+                                    .as_bytes(),
+                                );
+                            }
                         }
                     }
                 } else if val.value_type() == ValueType::String {
@@ -1788,6 +1790,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         continue 'vm;
                     }
                 }
+                let suppressed_call = opline._pad & CALL_FLAG_ERROR_SUPPRESS != 0;
+                if suppressed_call {
+                    eg.begin_error_suppression(call as usize);
+                }
                 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
                 let generic_member_contract =
                     eg.take_pending_generic_member_call(call as usize);
@@ -1815,6 +1821,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // activations. The already-created root frame supplies the
                 // canonical argument ABI; all recursive descendants avoid it.
                 if func_common_fast.fn_type == FunctionType::User
+                    && !suppressed_call
                     && !has_generic_member_contract
                     && unsafe { (*call).num_args } == 1
                     && !unsafe { (*call).named_args_used }
@@ -1890,6 +1897,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // It only avoids the generic type/variadic/class validation
                 // path when the constructor proved those features absent.
                 if func_common_fast.fn_type == FunctionType::Internal
+                    && !suppressed_call
                     && func_common_fast.plan.call == CallStrategy::Fast
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
@@ -1971,6 +1979,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 if func_common_fast.fn_type == FunctionType::User
+                    && !suppressed_call
                     && !has_generic_member_contract
                     && (func_common_fast.plan.call == CallStrategy::FastScalar
                         || (func_common_fast.plan.call == CallStrategy::FastTypedScalar
@@ -2058,6 +2067,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // ── Fast path for simple user function calls ──
                 if func_common_fast.fn_type == FunctionType::User
+                    && !suppressed_call
                     && !has_generic_member_contract
                     && matches!(
                         func_common_fast.plan.call,

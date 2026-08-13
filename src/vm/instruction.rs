@@ -46,6 +46,11 @@ pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA: u16 = 1 << 8;
 /// called class instead of reusing the ordinary unqualified call cache.
 pub const CALL_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 9;
 
+/// DoFcall flag: callee execution is under PHP's `@` operator. Runtime installs
+/// the suppressed reporting mask for the callee frame and restores it when
+/// that frame returns or unwinds.
+pub const CALL_FLAG_ERROR_SUPPRESS: u16 = 1 << 10;
+
 /// Late-static property flag: the called class lives in the compact frame's
 /// embedded scope slot. Wide frames and instance methods use the resolver.
 pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;

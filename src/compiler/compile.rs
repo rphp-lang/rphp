@@ -26,10 +26,10 @@ use crate::value::{
 };
 use crate::vm::instruction::{
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
-    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_EXACT_SCALAR_ARGS, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_OBJ_SILENT,
-    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
-    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
+    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
+    FETCH_DIM_ISSET, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
+    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
 };
 use crate::vm::opcode::OpCode;
 
@@ -4159,11 +4159,16 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
-            // Preserve the operator boundary in the AST so the future general
-            // warning subsystem can install a scoped reporting mask. RPHP's
-            // current warning surface has no central handler yet, so the
-            // expression retains ordinary evaluation and value semantics.
-            Expr::ErrorSuppress(inner) => self.compile_expr(inner),
+            Expr::ErrorSuppress(inner) => {
+                let first_instruction = self.instructions.len();
+                let result = self.compile_expr(inner);
+                for instruction in &mut self.instructions[first_instruction..] {
+                    if instruction.opcode == OpCode::DoFcall {
+                        instruction._pad |= CALL_FLAG_ERROR_SUPPRESS;
+                    }
+                }
+                result
+            }
             Expr::Cast { cast_type, expr } => {
                 let (inner_op, inner_type) = self.compile_expr(expr);
                 let tmp = self.alloc_tmp();
