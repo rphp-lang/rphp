@@ -272,7 +272,7 @@
 {"path":"Zend/tests/bug28377.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug28442.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug28444.phpt","status":"fail","category":"output"}
-{"path":"Zend/tests/bug29015.phpt","status":"fail","category":"output"}
+{"path":"Zend/tests/bug29015.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug29104.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug29210.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug29368.phpt","status":"fail","category":"output"}
@@ -355,8 +355,8 @@
 {"path":"Zend/tests/bug34678.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug34786.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug34873.phpt","status":"pass","category":"pass"}
-{"path":"Zend/tests/bug34879.phpt","status":"fail","category":"output"}
-{"path":"Zend/tests/bug34893.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/bug34879.phpt","status":"pass","category":"pass"}
+{"path":"Zend/tests/bug34893.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug35017.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug35106.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug35163.phpt","status":"fail","category":"output"}
@@ -376,7 +376,7 @@
 {"path":"Zend/tests/bug36268.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug36513.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug36568.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
-{"path":"Zend/tests/bug36759.phpt","status":"fail","category":"output"}
+{"path":"Zend/tests/bug36759.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug37046.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug37138.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug37144.phpt","status":"pass","category":"pass"}
@@ -392,7 +392,7 @@
 {"path":"Zend/tests/bug38220.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug38234.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug38287.phpt","status":"pass","category":"pass"}
-{"path":"Zend/tests/bug38461.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/bug38461.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug38469.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug38623.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug38624.phpt","status":"fail","category":"runtime"}
@@ -464,7 +464,7 @@
 {"path":"Zend/tests/bug43183.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug43200.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug43200_2.phpt","status":"pass","category":"pass"}
-{"path":"Zend/tests/bug43201.phpt","status":"crash","category":"runtime","reason":"target terminated by signal or crash exit"}
+{"path":"Zend/tests/bug43201.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug43332_1.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug43332_2.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug43343.phpt","status":"fail","category":"parse"}
@@ -541,7 +541,7 @@
 {"path":"Zend/tests/bug48215.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug48215_2.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug48228.phpt","status":"fail","category":"runtime"}
-{"path":"Zend/tests/bug48248.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/bug48248.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug48408.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug48409.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug48428.phpt","status":"pass","category":"pass"}
@@ -581,8 +581,8 @@
 {"path":"Zend/tests/bug52355.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug52361.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug52484.phpt","status":"fail","category":"output"}
-{"path":"Zend/tests/bug52484_2.phpt","status":"crash","category":"runtime","reason":"target terminated by signal or crash exit"}
-{"path":"Zend/tests/bug52484_3.phpt","status":"crash","category":"runtime","reason":"target terminated by signal or crash exit"}
+{"path":"Zend/tests/bug52484_2.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/bug52484_3.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug52508.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug52614.phpt","status":"fail","category":"compile"}
 {"path":"Zend/tests/bug52879.phpt","status":"pass","category":"pass"}
@@ -689,7 +689,7 @@
 {"path":"Zend/tests/bug63217.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
 {"path":"Zend/tests/bug63219.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug63305.phpt","status":"fail","category":"runtime"}
-{"path":"Zend/tests/bug63462.phpt","status":"crash","category":"runtime","reason":"target terminated by signal or crash exit"}
+{"path":"Zend/tests/bug63462.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug63468.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug63635.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug63734.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
@@ -850,7 +850,7 @@
 {"path":"Zend/tests/bug70262.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug70288.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug70293.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
-{"path":"Zend/tests/bug70321.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/bug70321.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug70332.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug70397.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug70398.phpt","status":"pass","category":"pass"}
@@ -984,7 +984,7 @@
 {"path":"Zend/tests/bug74093.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
 {"path":"Zend/tests/bug74164.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug74269.phpt","status":"fail","category":"output"}
-{"path":"Zend/tests/bug74340.phpt","status":"crash","category":"runtime","reason":"target terminated by signal or crash exit"}
+{"path":"Zend/tests/bug74340.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug74546.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug74603.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug74657.phpt","status":"fail","category":"runtime"}
@@ -1107,7 +1107,7 @@
 {"path":"Zend/tests/bug79657.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug79668.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
 {"path":"Zend/tests/bug79778.phpt","status":"fail","category":"output"}
-{"path":"Zend/tests/bug79783.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/bug79783.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug79784.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug79790.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug79791.phpt","status":"fail","category":"output"}
@@ -1123,7 +1123,7 @@
 {"path":"Zend/tests/bug79934.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug79947.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/bug79948.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
-{"path":"Zend/tests/bug79979.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/bug79979.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/bug80030.phpt","status":"fail","category":"parse"}
 {"path":"Zend/tests/bug80037.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/bug80045.phpt","status":"pass","category":"pass"}
@@ -2198,7 +2198,7 @@
 {"path":"Zend/tests/gh10072-2.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
 {"path":"Zend/tests/gh10072.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
 {"path":"Zend/tests/gh10232.phpt","status":"fail","category":"parse"}
-{"path":"Zend/tests/gh10251.phpt","status":"crash","category":"runtime","reason":"target terminated by signal or crash exit"}
+{"path":"Zend/tests/gh10251.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/gh10346.phpt","status":"unsupported","category":"runtime-cli-ini","reason":"RPHP CLI does not yet expose per-process INI settings"}
 {"path":"Zend/tests/gh10570.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/gh10709.phpt","status":"fail","category":"runtime"}
@@ -2935,7 +2935,7 @@
 {"path":"Zend/tests/overloaded_assign_prop_return_value.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/overloaded_func_001.phpt","status":"skip","category":"extension","reason":"required extension unavailable: zend_test"}
 {"path":"Zend/tests/overloaded_func_002.phpt","status":"skip","category":"extension","reason":"required extension unavailable: zend_test"}
-{"path":"Zend/tests/overloaded_prop_assign_op_refs.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/overloaded_prop_assign_op_refs.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/parameter_default_values/internal_declaration_error_class_const.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/parameter_default_values/internal_declaration_error_const.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/parameter_default_values/internal_declaration_error_false.phpt","status":"fail","category":"output"}
@@ -2968,9 +2968,9 @@
 {"path":"Zend/tests/prop_const_expr/rhs_prop_not_found.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/prop_const_expr/static_initalizer.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/prop_const_expr/static_property_initializer.phpt","status":"fail","category":"compile"}
-{"path":"Zend/tests/property_access_errors_for_guarded_properties.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/property_access_errors_for_guarded_properties.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/property_exists.phpt","status":"fail","category":"runtime"}
-{"path":"Zend/tests/property_guard_hash_val.phpt","status":"crash","category":"runtime","reason":"target terminated by signal or crash exit"}
+{"path":"Zend/tests/property_guard_hash_val.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/prototype_range.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/qm_assign_ref_unwrap_leak.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/readonly_classes/gh9285_error.phpt","status":"fail","category":"output"}
@@ -3801,7 +3801,7 @@
 {"path":"Zend/tests/type_declarations/typed_properties_097.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/type_declarations/typed_properties_098.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/type_declarations/typed_properties_099.phpt","status":"pass","category":"pass"}
-{"path":"Zend/tests/type_declarations/typed_properties_100.phpt","status":"fail","category":"runtime"}
+{"path":"Zend/tests/type_declarations/typed_properties_100.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/type_declarations/typed_properties_101.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/type_declarations/typed_properties_102.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/type_declarations/typed_properties_103.phpt","status":"fail","category":"output"}

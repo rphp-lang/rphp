@@ -185,6 +185,14 @@ S3 exit gate:
 
 Passing S3 permits only the named pinned Symfony CLI-kernel claim.
 
+Current retained S3 evidence includes the general array form of
+`str_replace()`: Symfony's base64 container hash sanitizer now replaces both
+`/` and `+`, so a random slash cannot become an invalid namespace or cache
+path. Concurrent cold-publisher results are compared as an exact unordered
+multiset because publisher process numbering is scheduler-dependent; status,
+diagnostics, output, generated-file manifests and the fresh cache load remain
+mandatory.
+
 ### C5 — Request/response and repeated runtime (S4)
 
 Add an HTTP-facing adapter separately from baseline language compatibility.

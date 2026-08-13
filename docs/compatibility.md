@@ -12,21 +12,21 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`fcb2500169b8710dac7e6038d1a6acc826c012e3`, using the same runner commit. The
+`d9850865fe72c5f75d13a71669dedbcc4def711c`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 864 | 2,888 | 65 | 1 | 221 | 2 | 10 | 23.028% |
+| `Zend/tests` | 868 | 2,891 | 65 | 1 | 221 | 2 | 3 | 23.091% |
 | `tests/lang` | 86 | 182 | 10 | 0 | 16 | 0 | 0 | 32.090% |
-| **Combined** | **950** | **3,070** | **75** | **1** | **237** | **2** | **10** | **23.632%** |
+| **Combined** | **954** | **3,073** | **75** | **1** | **237** | **2** | **3** | **23.690%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 950 / 4,345, or **21.864%**; including crashes and timeouts in the attempted
-denominator gives **23.562%**. These numbers are intentionally pre-alpha and do
+is 954 / 4,345, or **21.956%**; including crashes and timeouts in the attempted
+denominator gives **23.661%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -37,9 +37,9 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,219 runtime failures, 1,151 output mismatches,
+The largest failure groups are 1,202 runtime failures, 1,159 output mismatches,
 579 parse failures, 127 compile failures and six failed `SKIPIF` evaluations.
-Ten cases terminate by signal and two time out. Of the 75 skips, 45 require
+Three cases terminate by signal and two time out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
 does not expose, while three require PHPDBG or CGI/header sections outside this
@@ -48,31 +48,33 @@ CLI gate.
 The complete official PHP 8.2.33 CLI oracle run produced 4,255 passes, zero
 ordinary failures, 86 skips, the one upstream `XFAIL`, three unsupported SAPI
 sections, zero timeouts and zero crashes. Five representative cases also pass
-through php-src's official `run-tests.php`. Repeated RPHP executions before and
-after rebasing onto the current performance checkpoint produced the identical
-manifest SHA-256
-`d8e8c74e6bc88e52595d0fea8b244999e8db661eddf9325077d6d8d60ba68a54`.
-The first two pre-fix runs differed on one large unpacked generator call: it
-alternated between an exact pass and a signal termination because VM stack
-growth ignored an oversized frame request. VM pages now retain and deallocate
-their actual allocation size; 1,000 focused repetitions pass without a crash.
+through php-src's official `run-tests.php`. Two independent RPHP executions
+with a matching native PHP 8.2.33 runner produced byte-identical manifests with
+SHA-256
+`3540fed551f47f2b66b5c96eab87de2c9a3ed7081c3c7e11a0ec70fe1d158592`
+and byte-identical summaries with SHA-256
+`49dbe8a8d365125cf64910c0774eac2f2aeeec57043a81c2ccf06bc8f9664909`.
 
-Relative to the retained `d7e980a` baseline, the current release run adds nine
-exact passes without losing a previous pass. `goto` now carries its source line
-through the AST and compiler, and labels and pending jumps retain structural
-loop, switch and `finally` regions. Illegal jumps into a loop or switch and
-into or out of `finally` are rejected at compile time with the PHP 8.2 filename,
-line and diagnostic shape. Valid jumps within one region or out of a loop
-remain executable. This converts three timeouts and six ordinary failures to
-passes; crash and unsupported counts are unchanged. Contextual uses of `goto`
-as a method, class-constant or named-argument identifier retain their spelling.
+Relative to the retained `fcb2500` baseline, this checkpoint adds four exact
+passes without losing a previous pass. Magic property recursion is guarded per
+object, property and operation; local statics publish their shared reference
+before recursive calls and honor repeated declaration initializers only in the
+first frame; and destructor release order no longer depends on hash iteration.
+Seven former signal terminations now reach controlled ordinary failures. Array
+`str_replace()` now implements ordered search/replacement pairs, array subjects,
+preserved keys, empty searches and the optional by-reference count. This makes
+`Zend/tests/bug34879.phpt` exact and prevents a base64 `/` in Symfony's container
+hash from escaping its `['/', '+']` sanitizer into an invalid namespace or
+cache path. Three crashes and two timeouts remain explicitly visible in the
+coverage map; the diagnostic/output gaps behind controlled failures remain
+compatibility work.
 
 The authoritative per-path result is
-[`fcb2500-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/fcb2500-arm64-manifest.jsonl),
+[`d985086-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/d985086-arm64-manifest.jsonl),
 with aggregate metadata in
-[`fcb2500-arm64-summary.json`](../tests/php-src/results/php-8.2.33/fcb2500-arm64-summary.json),
+[`d985086-arm64-summary.json`](../tests/php-src/results/php-8.2.33/d985086-arm64-summary.json),
 a directory/status navigation map and exact hazard list in
-[`fcb2500-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/fcb2500-arm64-coverage-map.json),
+[`d985086-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/d985086-arm64-coverage-map.json),
 and the full reference aggregate in
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in
@@ -84,6 +86,7 @@ To reproduce the RPHP contract run from the exact external checkout:
 ```sh
 cargo build --locked --release --all-features
 RPHP_PHPT_PHP_SRC_COMMIT=651db3ebfa622cae0c4e6b39766812efbd274ced \
+RPHP_PHPT_REFERENCE_PHP=/path/to/php-8.2.33 \
 RPHP_PHPT_TIMEOUT=3 scripts/run-php-src-phpt.sh \
   /path/to/php-src target/release/rphp /tmp/rphp-phpt-results 4
 ```
@@ -198,6 +201,13 @@ transitions, verifies same-runtime cache immutability, lints every generated
 PHP file, and runs two concurrent cold publishers before a fresh cache load.
 Generated container, ghost and service-locator suffixes are normalized; cache
 metadata paths are fixture-relative and Reflection resource hashes are omitted.
+The two concurrent cold-publisher captures are compared as an unordered exact
+multiset because the operating system does not assign the cache-builder role
+to a stable process number; each process's status, diagnostics and canonical
+output remain in its capture signature. Array `str_replace()` sanitization is
+covered independently so random container hashes cannot publish a `/` as a
+namespace separator.
+
 Included-file and declared-symbol comparison is restricted to the generated
 container, route loader/cache and health service boundary so host-selected
 environment and secrets loader services do not redefine the fixture. The full

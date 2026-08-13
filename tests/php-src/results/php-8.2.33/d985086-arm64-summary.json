@@ -1,7 +1,7 @@
 {
     "schema_version": 5,
-    "rphp_commit": "fcb2500169b8710dac7e6038d1a6acc826c012e3",
-    "runner_commit": "fcb2500169b8710dac7e6038d1a6acc826c012e3",
+    "rphp_commit": "d9850865fe72c5f75d13a71669dedbcc4def711c",
+    "runner_commit": "d9850865fe72c5f75d13a71669dedbcc4def711c",
     "php_src_commit": "651db3ebfa622cae0c4e6b39766812efbd274ced",
     "features": "all-features",
     "architecture": "arm64",
@@ -9,21 +9,21 @@
     "timeout_seconds": 3,
     "total": 4345,
     "statuses": {
-        "pass": 950,
-        "fail": 3070,
+        "pass": 954,
+        "fail": 3073,
         "skip": 75,
         "xfail": 1,
         "unsupported": 237,
         "timeout": 2,
-        "crash": 10
+        "crash": 3
     },
     "categories": {
         "compile": 127,
         "extension": 45,
-        "output": 1151,
+        "output": 1159,
         "parse": 579,
-        "pass": 950,
-        "runtime": 1219,
+        "pass": 954,
+        "runtime": 1207,
         "runtime-cli-ini": 234,
         "section": 3,
         "skipif": 36,
@@ -32,53 +32,53 @@
     "expectation_profiles": {
         "diagnostic": {
             "pass": 9,
-            "fail": 1544,
+            "fail": 1551,
             "skip": 22,
             "xfail": 1,
             "unsupported": 81,
             "timeout": 0,
-            "crash": 10,
+            "crash": 3,
             "total": 1667,
-            "headline_pass_rate": 0.005795235028976175,
+            "headline_pass_rate": 0.0057692307692307696,
             "attempted_pass_rate": 0.005758157389635317
         },
         "ordinary": {
-            "pass": 941,
-            "fail": 1526,
+            "pass": 945,
+            "fail": 1522,
             "skip": 53,
             "xfail": 0,
             "unsupported": 156,
             "timeout": 2,
             "crash": 0,
             "total": 2678,
-            "headline_pass_rate": 0.3814349412241589,
-            "attempted_pass_rate": 0.38112596192790604
+            "headline_pass_rate": 0.38305634373733277,
+            "attempted_pass_rate": 0.3827460510328068
         }
     },
     "suites": {
         "Zend/tests": {
-            "pass": 864,
-            "fail": 2888,
+            "pass": 868,
+            "fail": 2891,
             "skip": 65,
             "xfail": 1,
             "unsupported": 221,
             "timeout": 2,
-            "crash": 10,
+            "crash": 3,
             "categories": {
                 "compile": 117,
                 "extension": 45,
-                "output": 1067,
+                "output": 1075,
                 "parse": 536,
-                "pass": 864,
-                "runtime": 1177,
+                "pass": 868,
+                "runtime": 1165,
                 "runtime-cli-ini": 219,
                 "section": 2,
                 "skipif": 23,
                 "xfail": 1
             },
             "total": 4051,
-            "headline_pass_rate": 0.2302771855010661,
-            "attempted_pass_rate": 0.22954303931987247,
+            "headline_pass_rate": 0.2309124767225326,
+            "attempted_pass_rate": 0.230605738575983,
             "execution_profile": {
                 "attempted": 3764,
                 "pre_execution_failed": 3,
@@ -117,8 +117,8 @@
             }
         }
     },
-    "headline_pass_rate": 0.236318407960199,
-    "attempted_pass_rate": 0.23561507936507936,
+    "headline_pass_rate": 0.23690091879811273,
+    "attempted_pass_rate": 0.23660714285714285,
     "execution_profile": {
         "attempted": 4032,
         "pre_execution_failed": 6,
