@@ -12,21 +12,21 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`86ac18718e4447a0441437985a1a09ee05fd9cfa`, using the same runner commit. The
+`8aade890f521f9d4324a6ad8f11998628d4efb51`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 911 | 2,850 | 65 | 1 | 221 | 1 | 2 | 24.222% |
+| `Zend/tests` | 912 | 2,849 | 65 | 1 | 221 | 1 | 2 | 24.249% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **999** | **3,030** | **75** | **1** | **237** | **1** | **2** | **24.795%** |
+| **Combined** | **1,000** | **3,029** | **75** | **1** | **237** | **1** | **2** | **24.820%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 999 / 4,345, or **22.992%**; including crashes and timeouts in the attempted
-denominator gives **24.777%**. These numbers are intentionally pre-alpha and do
+is 1,000 / 4,345, or **23.015%**; including crashes and timeouts in the attempted
+denominator gives **24.802%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -37,7 +37,7 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,204 runtime failures, 1,129 output mismatches,
+The largest failure groups are 1,203 runtime failures, 1,129 output mismatches,
 568 parse failures, 126 compile failures and six failed `SKIPIF` evaluations.
 Two cases terminate by signal and one times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
@@ -51,24 +51,34 @@ sections, zero timeouts and zero crashes. Five representative cases also pass
 through php-src's official `run-tests.php`. Two independent RPHP executions
 with a matching native PHP 8.2.33 runner produced byte-identical manifests with
 SHA-256
-`67c893985e54d356fea08b8ac8d00dfd48998d23e340065e26e41a060893f630`
+`1151184a4575ae41b742ec9448f3cf3d8bf4d554e94778e42b0b7efa96c0c9db`
 and byte-identical summaries with SHA-256
-`9755187325dc324f125822969306d0ec96c192c1b82cf638d6fb5248f5af2e99`.
+`4a64a9108c871b8da088c61eae6c9f2cc6e80bccf4aaada9a948f89e54ba0082`.
 
-Relative to the retained `8c7107e` baseline, this checkpoint adds one exact
+Relative to the retained `86ac187` baseline, this checkpoint adds one exact
 pass without losing a previous pass or adding a crash or timeout. A positional
-call to a statically resolved function may now bind an appended array slot to a
-known by-reference parameter. The baseline VM preserves the owned reference
-cell and writes modified nested-array and object-property containers back after
-the call. The exact addition is `Zend/tests/032.phpt`; the adjacent by-value
-diagnostic in `Zend/tests/031.phpt` remains an exact pass.
+call to a statically resolved function may now use an intermediate empty
+dimension such as `$input[][$key]`. For a known by-value parameter, RPHP
+evaluates the base and key before raising the catchable PHP 8.2
+`Cannot use [] for reading` `Error`, without appending an element. For a known
+by-reference parameter, direct and multidimensional appended paths bind real
+owned reference cells, evaluate keys before the append, and publish nested-array
+or object-property writeback before entering the callee so mutations persist if
+the callee throws. The exact addition is
+`Zend/tests/func_arg_fetch_optimization.phpt`.
 
 This checkpoint does not claim the runtime-resolved method, static-method or
-dynamic-call forms, reference-return expressions, indirect `ArrayAccess`
-appends, or intermediate empty dimensions. The retained failures
-`ArrayAccess_indirect_append`, `bug34064`, `func_arg_fetch_optimization`, and
-`weakrefs/weakmap_error_conditions` keep those contracts visible for later
-slices.
+dynamic-call forms, reference-return expressions, indirect `ArrayAccess` or
+`WeakMap` appends, or general uncaught stack-trace formatting. Those contracts
+remain visible for later slices.
+
+The preceding `86ac187` checkpoint, relative to the retained `8c7107e`
+baseline, added one exact pass without losing a previous pass or adding a crash
+or timeout. A positional call to a statically resolved function may bind an
+appended array slot to a known by-reference parameter. The baseline VM preserves
+the owned reference cell and writes modified nested-array and object-property
+containers back after the call. The exact addition is `Zend/tests/032.phpt`;
+the adjacent by-value diagnostic in `Zend/tests/031.phpt` remains an exact pass.
 
 The preceding `8c7107e` checkpoint, relative to the retained `2621cc3`
 baseline, added 12 exact passes without losing a previous pass or adding a crash
@@ -153,11 +163,11 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`86ac187-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/86ac187-arm64-manifest.jsonl),
+[`8aade89-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/8aade89-arm64-manifest.jsonl),
 with aggregate metadata in
-[`86ac187-arm64-summary.json`](../tests/php-src/results/php-8.2.33/86ac187-arm64-summary.json),
+[`8aade89-arm64-summary.json`](../tests/php-src/results/php-8.2.33/8aade89-arm64-summary.json),
 a directory/status navigation map and exact hazard list in
-[`86ac187-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/86ac187-arm64-coverage-map.json),
+[`8aade89-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/8aade89-arm64-coverage-map.json),
 and the full reference aggregate in
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in

@@ -49,17 +49,21 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `86ac187` against
-php-src 8.2.33 `651db3e`: 999 of 4,345 discovered `Zend/tests` and `tests/lang`
-cases pass, with no lost pass relative to `8c7107e`. The latest semantic slice
-binds a fresh array slot passed to a statically resolved positional
-by-reference function parameter while preserving the adjacent by-value compile
-diagnostic. It adds the exact upstream pass `Zend/tests/032.phpt`.
-Runtime-resolved method/static/dynamic calls, by-reference returns, indirect
-`ArrayAccess`, intermediate empty dimensions, references inside destructuring,
-variable-variable syntax and generic undefined-variable warnings remain visible
-boundaries; the broader adoption goal remains active until the selected PHP 8.2
-contract corpus converges.
+The current pinned PHP 8.2 differential baseline is RPHP `8aade89` against
+php-src 8.2.33 `651db3e`: 1,000 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with no lost pass relative to `86ac187`. The latest
+semantic slice handles an intermediate empty dimension in positional arguments
+to a statically resolved function. A known by-value parameter evaluates the
+base and key before raising the catchable read `Error` without appending; a
+known by-reference parameter binds direct or multidimensional appended paths,
+preserves key-before-append ordering, and publishes container writeback before
+callee entry. It adds the exact upstream pass
+`Zend/tests/func_arg_fetch_optimization.phpt`. Runtime-resolved
+method/static/dynamic calls, by-reference returns, indirect `ArrayAccess` and
+`WeakMap` appends, general uncaught stack-trace formatting, references inside
+destructuring, variable-variable syntax and generic undefined-variable warnings
+remain visible boundaries; the broader adoption goal remains active until the
+selected PHP 8.2 contract corpus converges.
 
 ## Measurement system
 
