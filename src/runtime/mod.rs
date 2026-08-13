@@ -232,7 +232,8 @@ pub struct ExecutorGlobals {
     /// getter/setter contract while temporarily suppressing warnings.
     pub error_reporting: i64,
     pub(crate) error_handler: Option<crate::value::Value>,
-    pub(crate) error_handler_stack: Vec<Option<crate::value::Value>>,
+    pub(crate) error_handler_levels: i64,
+    pub(crate) error_handler_stack: Vec<(Option<crate::value::Value>, i64)>,
     pub(crate) exception_handler: Option<crate::value::Value>,
     pub(crate) exception_handler_stack: Vec<Option<crate::value::Value>>,
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
@@ -262,6 +263,8 @@ pub struct ExecutorGlobals {
     /// Packed internal `(call frame, $this)` pairs for dynamically resolved
     /// `__invoke` calls. The existing Option remains the cheap hot-path marker.
     pub pending_invoke_this: Option<crate::value::Value>,
+    /// Object identities whose user destructor has already started. Lazily
+    /// allocated because ordinary requests never declare `__destruct`.
     /// Set of absolute file paths already included via include_once/require_once
     pub included_files: std::collections::HashSet<String>,
     /// Owned storage for functions/data from included files (prevents dangling pointers)
@@ -348,7 +351,7 @@ impl ExecutorGlobals {
         // installing that fixed set never rehashes stored function pointers.
         self.function_table.reserve(512);
         self.class_table.reserve(64);
-        self.method_declaring_class.reserve(160);
+        self.method_declaring_class.reserve(256);
         self.class_by_id.reserve(64);
         self.static_property_slots_by_class.reserve(64);
         self.static_property_values.reserve(16);
@@ -396,6 +399,7 @@ impl ExecutorGlobals {
             exception: None,
             error_reporting: 32767,
             error_handler: None,
+            error_handler_levels: 32767,
             error_handler_stack: Vec::new(),
             exception_handler: None,
             exception_handler_stack: Vec::new(),
@@ -464,6 +468,7 @@ impl ExecutorGlobals {
             exception: None,
             error_reporting: 32767,
             error_handler: None,
+            error_handler_levels: 32767,
             error_handler_stack: Vec::new(),
             exception_handler: None,
             exception_handler_stack: Vec::new(),
@@ -1064,6 +1069,19 @@ impl ExecutorGlobals {
                         class_name, parent_name
                     ));
                 }
+                if class_def.is_readonly != parent.is_readonly {
+                    return Err(if class_def.is_readonly {
+                        format!(
+                            "Readonly class {} cannot extend non-readonly class {}",
+                            class_name, parent_name
+                        )
+                    } else {
+                        format!(
+                            "Non-readonly class {} cannot extend readonly class {}",
+                            class_name, parent_name
+                        )
+                    });
+                }
                 merge_parent_constant_definitions(
                     &class_name,
                     &mut class_def.constants,
@@ -1183,9 +1201,15 @@ impl ExecutorGlobals {
                     if !child_method_names.contains(&method_name) {
                         let child_full = format!("{}::{}", class_name, method_name).to_lowercase();
                         self.function_table.insert(child_full, func_ptr);
-                        // Also record declaring class as this class for visibility purposes
+                        // Keep the concrete body owner stable. A single trait
+                        // function pointer can be composed into many classes;
+                        // overwriting this reverse map with the last consumer
+                        // makes lexical private scope registration-order
+                        // dependent. Call frames recover the actual consuming
+                        // class from `$this` when the owner is a trait.
                         self.method_declaring_class
-                            .insert(func_ptr, class_name.clone());
+                            .entry(func_ptr)
+                            .or_insert_with(|| trait_name.clone());
                     }
                 }
             } else {
@@ -1220,7 +1244,8 @@ impl ExecutorGlobals {
             self.function_table
                 .insert(format!("{}::{}", class_name, alias).to_lowercase(), pointer);
             self.method_declaring_class
-                .insert(pointer, class_name.clone());
+                .entry(pointer)
+                .or_insert_with(|| source_trait.clone());
         }
 
         // Interface constants are inherited without being copied into source
@@ -1745,23 +1770,9 @@ impl ExecutorGlobals {
         {
             return declared_scope;
         }
-        let Some(mut candidate) = receiver_scope else {
-            return declared_scope;
-        };
-        while let Some(class) = self.class_table.get(candidate) {
-            if class
-                .uses
-                .iter()
-                .any(|used| used.eq_ignore_ascii_case(declared_scope))
-            {
-                return class.name.as_str();
-            }
-            let Some(parent) = class.parent.as_deref() else {
-                break;
-            };
-            candidate = parent;
-        }
-        receiver_scope.unwrap_or(declared_scope)
+        receiver_scope
+            .and_then(|receiver| self.trait_composition_scope(receiver, declared_scope))
+            .unwrap_or(declared_scope)
     }
 
     /// Find the class scope that owns one concrete property declaration. The
@@ -1822,6 +1833,33 @@ impl ExecutorGlobals {
         self.method_declaring_class
             .get(&func_ptr)
             .map(|s| s.as_str())
+    }
+
+    /// Resolve the class scope into which a trait body was composed for one
+    /// concrete receiver. The nearest consumer wins, matching method lookup
+    /// when a child composes the same trait as one of its ancestors.
+    pub fn trait_composition_scope<'a>(
+        &'a self,
+        receiver_class: &str,
+        trait_name: &str,
+    ) -> Option<&'a str> {
+        fn uses_trait(eg: &ExecutorGlobals, uses: &[String], target: &str) -> bool {
+            uses.iter().any(|used| {
+                used.eq_ignore_ascii_case(target)
+                    || eg
+                        .class_table
+                        .get(used.as_str())
+                        .is_some_and(|definition| uses_trait(eg, &definition.uses, target))
+            })
+        }
+
+        let mut definition = self.class_table.get(receiver_class)?;
+        loop {
+            if uses_trait(self, &definition.uses, trait_name) {
+                return Some(definition.name.as_str());
+            }
+            definition = self.class_table.get(definition.parent.as_deref()?)?;
+        }
     }
 
     /// Return the class or trait that owns the concrete method body.
@@ -2192,6 +2230,15 @@ impl ExecutorGlobals {
                 .any(|part| self.is_return_type_compatible(part, iface_hint));
         }
 
+        // PHP's `iterable` is the built-in union `array|Traversable` for
+        // variance purposes. A concrete array return therefore narrows an
+        // iterable declaration, while the reverse would widen it.
+        if matches!(impl_hint, ParamTypeHint::Array)
+            && matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
+        {
+            return true;
+        }
+
         // Class name covariance
         if let (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) =
             (impl_hint, iface_hint)
@@ -2272,6 +2319,12 @@ impl ExecutorGlobals {
             return iface_parts
                 .iter()
                 .any(|part| self.is_param_type_compatible(impl_hint, part));
+        }
+
+        if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
+            && matches!(iface_hint, ParamTypeHint::Array)
+        {
+            return true;
         }
 
         // Class name contravariance: iface declares A, impl declares B

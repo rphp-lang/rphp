@@ -63,6 +63,40 @@ echo call_user_func(['Math', 'double'], 5);
 }
 
 #[test]
+fn test_wide_static_method_initializes_hidden_this_slot() {
+    let expression = (0..70)
+        .map(|_| "$value")
+        .collect::<Vec<_>>()
+        .join(" . ");
+    let source = format!(
+        r#"<?php
+class ReceiverSeed {{
+    public function touch() {{ return get_class($this); }}
+}}
+class WideStaticCallback {{
+    public static function expand($value) {{ return {expression}; }}
+    public static function expandLate($seed, $value) {{
+        $seed->touch();
+        return static::expand($value);
+    }}
+}}
+function invoke_wide_static($seed) {{
+    $seed->touch();
+    $expanded = WideStaticCallback::expand('x');
+    echo strlen($expanded) . ':' . $seed->touch() . ':';
+    echo strlen(WideStaticCallback::expandLate($seed, 'y')) . ':' . $seed->touch();
+}}
+invoke_wide_static(new ReceiverSeed());
+"#,
+    );
+
+    assert_eq!(
+        run_php(&source),
+        "70:ReceiverSeed:70:ReceiverSeed"
+    );
+}
+
+#[test]
 fn test_is_callable_static_method() {
     let out = run_php(
         r#"<?php

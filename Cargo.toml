@@ -37,6 +37,7 @@ include-path = ["stream-context", "file-contents", "file-write", "file-lines"]
 [dependencies]
 serde = "1.0.228"
 serde_json = "1.0.149"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [dev-dependencies]
 

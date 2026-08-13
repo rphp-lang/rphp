@@ -115,6 +115,29 @@ echo get_class($value->current) . ":" . get_class($value->optional);
 }
 
 #[test]
+fn parenthesized_intersections_support_dnf_property_and_parameter_types() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface DnfLeft {}
+interface DnfRight {}
+class DnfBoth implements DnfLeft, DnfRight {}
+class DnfHolder {
+    public (DnfLeft&DnfRight)|null $value = null;
+    public function set((DnfLeft&DnfRight)|null $value): void { $this->value = $value; }
+}
+$holder = new DnfHolder();
+$holder->set(new DnfBoth());
+echo get_class($holder->value);
+$holder->set(null);
+echo $holder->value === null ? ':null' : ':wrong';
+"#,
+        ),
+        "DnfBoth:null"
+    );
+}
+
+#[test]
 fn typed_instance_assignment_reads_reference_value_without_binding_property() {
     assert_eq!(
         run_php(

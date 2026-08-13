@@ -40,6 +40,7 @@ impl Parser {
                 // return-reference contract is a separate compatibility
                 // slice, but retaining the declaration as an ordinary method
                 // keeps unexercised library helpers loadable.
+                let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -60,6 +61,7 @@ impl Parser {
                     is_static: modifiers.is_static,
                     is_final: modifiers.is_final,
                     is_abstract: modifiers.is_abstract,
+                    returns_by_ref,
                     return_type,
                     generic_params,
                 });
@@ -176,7 +178,8 @@ impl Parser {
     fn parse_class(&mut self) -> Result<Stmt, String> {
         let mut is_abstract = false;
         let mut is_final = false;
-        // Consume leading modifiers (abstract, final) in any order before 'class'
+        let mut is_readonly = false;
+        // Consume leading modifiers in any order before `class`.
         loop {
             match self.peek() {
                 Token::Abstract => {
@@ -186,6 +189,10 @@ impl Parser {
                 Token::Final => {
                     self.advance();
                     is_final = true;
+                }
+                Token::Identifier(ref name) if name.eq_ignore_ascii_case("readonly") => {
+                    self.advance();
+                    is_readonly = true;
                 }
                 _ => break,
             }
@@ -296,6 +303,7 @@ impl Parser {
             if self.peek() == Token::Function {
                 // Method
                 self.advance(); // consume 'function'
+                let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -319,6 +327,7 @@ impl Parser {
                     is_static: modifiers.is_static,
                     is_final: modifiers.is_final,
                     is_abstract: modifiers.is_abstract,
+                    returns_by_ref,
                     return_type,
                     generic_params,
                 });
@@ -372,6 +381,7 @@ impl Parser {
             implements,
             is_abstract,
             is_final,
+            is_readonly,
             properties,
             constants,
             methods,
@@ -459,6 +469,7 @@ impl Parser {
 
             if self.peek() == Token::Function {
                 self.advance();
+                let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -482,6 +493,7 @@ impl Parser {
                     is_static: modifiers.is_static,
                     is_final: modifiers.is_final,
                     is_abstract: modifiers.is_abstract,
+                    returns_by_ref,
                     return_type,
                     generic_params: method_generic_params,
                 });
@@ -565,6 +577,7 @@ impl Parser {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, true)?);
             } else if self.peek() == Token::Function {
                 self.advance(); // consume 'function'
+                let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -600,6 +613,7 @@ impl Parser {
                     is_static: modifiers.is_static,
                     is_final: false,
                     is_abstract: true,
+                    returns_by_ref,
                     return_type,
                     generic_params: method_generic_params,
                 });
@@ -667,6 +681,7 @@ impl Parser {
                     constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
                 } else if self.peek() == Token::Function {
                     self.advance();
+                    let returns_by_ref = self.peek() == Token::Ampersand;
                     self.consume_reference_return_marker();
                     let token = self.advance();
                     let method_name = Self::token_as_named_arg_label(&token)
@@ -695,6 +710,7 @@ impl Parser {
                         is_static: modifiers.is_static,
                         is_final: modifiers.is_final,
                         is_abstract: false,
+                        returns_by_ref,
                         return_type,
                         generic_params,
                     });
@@ -1004,6 +1020,12 @@ impl Parser {
                 }
                 Self::collect_free_vars(inner, bound, out);
             }
+            Expr::AssignReference { var, target } => {
+                if !bound.contains(var.as_str()) && !out.contains(var) {
+                    out.push(var.clone());
+                }
+                Self::collect_free_vars(target, bound, out);
+            }
             Expr::AssignTarget { target, expr } | Expr::ArrayAppendAssign { target, expr } => {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);
@@ -1132,7 +1154,9 @@ impl Parser {
                     Self::collect_free_vars(&arm.body, bound, out);
                 }
             }
-            Expr::StaticProperty { .. } | Expr::ClassConstant { .. } => {}
+            Expr::StaticProperty { .. }
+            | Expr::ClassConstant { .. }
+            | Expr::FirstClassFunctionCallable(_) => {}
             Expr::DynamicClassConstant {
                 class, constant, ..
             } => {

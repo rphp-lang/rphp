@@ -83,7 +83,10 @@ fn op_foreach_init<'a>(
         unsafe { frame_tmp_set_long(frame, pos_ptr, 0) };
     } else {
         let iterator_values = arr_val.as_object().and_then(|object| {
-            matches!(object.class_name.as_ref(), "ArrayIterator" | "ArrayObject")
+            matches!(
+                object.class_name.as_ref(),
+                "ArrayIterator" | "ArrayObject" | "SplObjectStorage" | "SplPriorityQueue"
+            )
                 .then(|| object.get_property("__rphp_iterator_values").cloned())
                 .flatten()
         });

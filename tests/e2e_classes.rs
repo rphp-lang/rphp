@@ -3,6 +3,51 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn loose_object_equality_compares_class_and_nested_property_state() {
+    assert_eq!(
+        run_php(
+            "<?php class ComparableState { private array $values = []; public function add(int $value): void { $this->values[] = $value; } } $left = new ComparableState(); $right = new ComparableState(); echo $left == $right ? 'equal:' : 'bad:'; $right->add(1); echo $left != $right ? 'different:' : 'bad:'; $left->add(1); echo $left == $right ? 'equal' : 'bad';"
+        ),
+        "equal:different:equal"
+    );
+}
+
+#[test]
+fn user_destructor_runs_when_a_function_releases_its_last_object_handles() {
+    let out = run_php(
+        r#"<?php
+class DestructibleBuilder {
+    public function chain() { return $this; }
+    public function __destruct() { echo 'D'; }
+}
+class DestructibleFactory {
+    public function create() {
+        $builder = new DestructibleBuilder();
+        return $builder->chain();
+    }
+}
+function releaseBuilder() {
+    (new DestructibleFactory())->create()->chain();
+    echo 'B';
+}
+releaseBuilder();
+echo 'A';
+"#,
+    );
+    assert_eq!(out, "DBA");
+}
+
+#[test]
+fn destructors_are_not_suppressed_when_allocator_addresses_are_reused() {
+    assert_eq!(
+        run_php(
+            "<?php class ReusedDestructorAddress { public function __construct(private int $id) {} public function chain(): static { return $this; } public function __destruct() { echo $this->id, ','; } } function releaseSequentially(int $id): void { (new ReusedDestructorAddress($id))->chain(); } for ($id = 0; $id < 16; ++$id) releaseSequentially($id);"
+        ),
+        "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,"
+    );
+}
+
+#[test]
 fn reflection_object_exposes_the_declaring_source_file() {
     let file = "/tmp/rphp-reflection-object-source.php";
     assert_eq!(
@@ -62,6 +107,26 @@ fn reflection_class_exposes_name_parent_empty_attributes_and_interfaces() {
             "<?php interface ReflectedInterface {} class ReflectedParent implements ReflectedInterface {} class ReflectedChild extends ReflectedParent {} $class = new ReflectionClass(ReflectedChild::class); $interfaces = class_implements($class->name); echo $class->name . ':' . count($class->getAttributes(null, ReflectionAttribute::IS_INSTANCEOF)) . ':' . $class->getParentClass()->name . ':' . (isset($interfaces['ReflectedInterface']) ? 'yes' : 'no');"
         ),
         "ReflectedChild:0:ReflectedParent:yes"
+    );
+}
+
+#[test]
+fn class_parents_reports_nearest_first_for_names_and_objects() {
+    assert_eq!(
+        run_php(
+            "<?php class ParentRoot {} class ParentMiddle extends ParentRoot {} class ParentLeaf extends ParentMiddle {} echo implode(',', class_parents(ParentLeaf::class)), '|', implode(',', class_parents(new ParentLeaf(), false));"
+        ),
+        "ParentMiddle,ParentRoot|ParentMiddle,ParentRoot"
+    );
+}
+
+#[test]
+fn reserved_keyword_method_name_is_callable() {
+    assert_eq!(
+        run_php(
+            "<?php class KeywordRenderer { public function include(string $path): string { return 'included:' . $path; } } echo (new KeywordRenderer())->include('view.php');"
+        ),
+        "included:view.php"
     );
 }
 
@@ -588,5 +653,100 @@ echo make(DynamicSecond::class, 'second')->value;
 "#,
         ),
         "first|second"
+    );
+}
+
+#[test]
+fn nested_method_arguments_do_not_inherit_the_callers_pending_call_chain() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class NestedValues {
+    public function __construct(private array $values) {}
+    public function getValues(): array { return $this->values; }
+    public function setValues(array $values): void { $this->values = $values; }
+}
+class NestedProcessor {
+    public function processValue(mixed $value, int $root = 0, int $level = 0): mixed {
+        if ($value instanceof NestedValues) {
+            $value->setValues($this->processValue($value->getValues(), 1, 1));
+        } elseif (is_array($value)) {
+            foreach ($value as $key => $entry) {
+                $value[$key] = $this->processValue($entry, $root, $level + 1);
+            }
+        }
+        return $value;
+    }
+}
+$value = new NestedValues([[1], [2, 3]]);
+$processor = new NestedProcessor();
+for ($index = 0; $index < 32; ++$index) {
+    $processor->processValue($value);
+}
+echo count($value->getValues()), ':', $value->getValues()[1][1];
+"#,
+        ),
+        "2:3"
+    );
+}
+
+#[test]
+fn dynamic_object_property_reference_preserves_nested_array_writes() {
+    let output = run_php(
+        r#"<?php
+class DynamicPropertyReferenceFixture {
+    private array $beforeOptimizationPasses = [0 => ['initial']];
+
+    public function add(string $property): void {
+        $passes = &$this->$property;
+        $passes[0][] = 'added';
+        $passes[10] = ['priority'];
+    }
+
+    public function values(): array {
+        return $this->beforeOptimizationPasses;
+    }
+}
+
+$fixture = new DynamicPropertyReferenceFixture();
+$fixture->add('beforeOptimizationPasses');
+var_dump($fixture->values());
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "array(2) {\n",
+            "  [0]=>\n",
+            "  array(2) {\n",
+            "    [0]=>\n",
+            "    string(7) \"initial\"\n",
+            "    [1]=>\n",
+            "    string(5) \"added\"\n",
+            "  }\n",
+            "  [10]=>\n",
+            "  array(1) {\n",
+            "    [0]=>\n",
+            "    string(8) \"priority\"\n",
+            "  }\n",
+            "}\n",
+        )
+    );
+}
+
+#[test]
+fn array_element_reference_preserves_writes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$arguments = [['initial']];
+$argumentAtIndex = &$arguments[0];
+$argumentAtIndex[] = 'added';
+$argumentAtIndex[4] = 'priority';
+echo count($arguments[0]), ':', $arguments[0][0], ':', $arguments[0][1], ':', $arguments[0][4];
+"#,
+        ),
+        "3:initial:added:priority"
     );
 }

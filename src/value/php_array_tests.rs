@@ -15,7 +15,10 @@ fn hash_entry_layout_stays_compact() {
     assert_eq!(std::mem::size_of::<(ArrayEntryKey, Value)>(), 32);
     assert_eq!(std::mem::size_of::<Option<(ArrayEntryKey, Value)>>(), 32);
     assert_eq!(std::mem::size_of::<ArrayStorage>(), 112);
-    assert_eq!(std::mem::size_of::<PhpArray>(), 120);
+    // PHP's reset/current/next/prev/key API requires one persistent cursor per
+    // array. Keep the resulting allocation envelope explicit so later fields
+    // cannot grow every array unnoticed.
+    assert_eq!(std::mem::size_of::<PhpArray>(), 128);
 }
 
 #[test]

@@ -64,6 +64,55 @@ fn filemtime_reports_unix_seconds_and_warns_for_missing_paths() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn is_link_uses_lstat_semantics_for_existing_and_broken_links() {
+    use std::os::unix::fs::symlink;
+
+    let target = TemporaryPath::unique("link-target");
+    let link = TemporaryPath::unique("link");
+    std::fs::write(&target.0, b"target").unwrap();
+    symlink(&target.0, &link.0).unwrap();
+    let source = format!(
+        "<?php echo is_link('{}') ? 'link' : 'bad'; echo ':'; echo is_link('{}') ? 'bad' : 'file';",
+        link.php_literal(),
+        target.php_literal()
+    );
+    assert_eq!(run_php(&source), "link:file");
+
+    std::fs::remove_file(&target.0).unwrap();
+    assert_eq!(
+        run_php(&format!(
+            "<?php echo is_link('{}') ? 'broken-link' : 'bad';",
+            link.php_literal()
+        )),
+        "broken-link"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn chmod_fileperms_and_umask_support_atomic_file_writers() {
+    let path = TemporaryPath::unique("permissions");
+    std::fs::write(&path.0, b"permissions").unwrap();
+    let source = format!(
+        "<?php echo is_int(umask()) ? 'mask' : 'bad'; echo ':'; echo chmod('{}', 0o600) ? 'changed' : 'bad'; echo ':'; echo (fileperms('{}') & 0o777) === 0o600 ? '0600' : 'bad';",
+        path.php_literal(),
+        path.php_literal()
+    );
+    assert_eq!(run_php(&source), "mask:changed:0600");
+}
+
+#[test]
+fn flock_constants_and_regular_file_locking_are_available() {
+    let path = TemporaryPath::unique("flock");
+    let source = format!(
+        "<?php $stream = fopen('{}', 'c'); echo LOCK_SH, ':', LOCK_EX, ':', LOCK_UN, ':', LOCK_NB, '|'; echo flock($stream, LOCK_EX) ? 'locked' : 'bad'; echo ':'; echo flock($stream, LOCK_UN) ? 'unlocked' : 'bad'; fclose($stream);",
+        path.php_literal()
+    );
+    assert_eq!(run_php(&source), "1:2:3:4|locked:unlocked");
+}
+
 #[test]
 fn file_get_contents_reads_complete_ascii_files() {
     let path = TemporaryPath::unique("file-contents-complete");

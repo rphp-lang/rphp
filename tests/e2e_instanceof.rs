@@ -93,6 +93,32 @@ echo $a instanceof Dog ? "yes" : "no";
     );
 }
 
+#[test]
+fn test_instanceof_resolves_self_static_and_trait_scopes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class InstanceofSelfBase {
+    public static function inspect($value) {
+        echo ($value instanceof self ? 's' : '-') . ($value instanceof static ? 'l' : '-');
+    }
+}
+class InstanceofSelfChild extends InstanceofSelfBase {}
+trait InstanceofSelfTrait {
+    public function inspectTrait($value) { echo $value instanceof self ? 't' : '-'; }
+}
+class InstanceofTraitConsumer { use InstanceofSelfTrait; }
+InstanceofSelfBase::inspect(new InstanceofSelfBase());
+echo '|';
+InstanceofSelfChild::inspect(new InstanceofSelfBase());
+echo '|';
+(new InstanceofTraitConsumer())->inspectTrait(new InstanceofTraitConsumer());
+"#
+        ),
+        "sl|s-|t"
+    );
+}
+
 // ── catch type matching ──
 
 #[test]

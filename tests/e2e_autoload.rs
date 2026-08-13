@@ -420,6 +420,16 @@ echo LoadedClass::value();
 }
 
 #[test]
+fn static_method_array_autoloader_is_registered_and_invoked() {
+    assert_eq!(
+        run_php(
+            "<?php class StaticArrayLoader { public static function loadClass($name) { echo $name; } } var_dump(spl_autoload_register(array(StaticArrayLoader::class, 'loadClass'))); class_exists('StaticArrayMissing');"
+        ),
+        "bool(true)\nStaticArrayMissing"
+    );
+}
+
+#[test]
 fn method_exists_autoloads_and_includes_abstract_and_non_public_methods() {
     let dir = TempPhpDir::new();
     let interface_file = dir.write(
@@ -794,4 +804,56 @@ echo (new ChildDependency('inherited'))->value();
 "#
     );
     assert_eq!(run_php(&source), "inherited");
+}
+
+#[test]
+fn autoloaded_child_created_inside_generator_dispatches_its_override() {
+    let dir = TempPhpDir::new();
+    let parent = dir.write(
+        "GeneratorParent.php",
+        "<?php class GeneratorParent { public function build(): string { return 'parent'; } }",
+    );
+    let child = dir.write(
+        "GeneratorChild.php",
+        "<?php class GeneratorChild extends GeneratorParent { public function build(): string { return 'child'; } }",
+    );
+    let source = format!(
+        r#"<?php
+$parentFile = '{parent}';
+$childFile = '{child}';
+spl_autoload_register(function ($name) use ($parentFile, $childFile) {{
+    require $name === 'GeneratorParent' ? $parentFile : $childFile;
+}});
+function generator_child(): iterable {{ yield new GeneratorChild(); }}
+$child = generator_child()->current();
+echo $child->build();
+"#
+    );
+
+    assert_eq!(run_php(&source), "child");
+}
+
+#[test]
+fn wrong_kind_exists_probe_does_not_autoload_an_already_loaded_symbol_again() {
+    let dir = TempPhpDir::new();
+    let interface = dir.write(
+        "LoadedProbeInterface.php",
+        "<?php interface LoadedProbeInterface {}",
+    );
+    let source = format!(
+        r#"<?php
+spl_autoload_register(function ($name) {{
+    echo 'load|';
+    require '{interface}';
+}});
+var_dump(class_exists('LoadedProbeInterface'));
+var_dump(class_exists('LoadedProbeInterface'));
+var_dump(interface_exists('LoadedProbeInterface', false));
+"#
+    );
+
+    assert_eq!(
+        run_php(&source),
+        "load|bool(false)\nbool(false)\nbool(true)\n"
+    );
 }

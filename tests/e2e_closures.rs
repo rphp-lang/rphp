@@ -34,6 +34,51 @@ $greet("PHP");
 }
 
 #[test]
+fn class_scoped_closure_extra_arguments_do_not_overwrite_captures() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait ScopedClosureFactory {
+    public function callback(object $loader): Closure {
+        return function (CapturedContainer $container) use ($loader) {
+            return $container->marker . ':' . $loader->marker . ':' . $this->state;
+        };
+    }
+}
+class ScopedClosureLoader {
+    use ScopedClosureFactory;
+
+    private string $state = 'bound';
+}
+
+class CapturedContainer {
+    public string $marker = 'container';
+}
+class CapturedLoader {
+    public string $marker = 'loader';
+}
+class ClosureInvoker {
+    private CapturedContainer $container;
+    private ?string $environment = 'ignored-extra-argument';
+
+    public function __construct() {
+        $this->container = new CapturedContainer();
+    }
+
+    public function invoke(mixed $resource) {
+        return $resource($this->container, $this->environment);
+    }
+}
+$loader = new CapturedLoader();
+$callback = (new ScopedClosureLoader())->callback($loader);
+echo (new ClosureInvoker())->invoke($callback);
+"#,
+        ),
+        "container:loader:bound"
+    );
+}
+
+#[test]
 fn test_closure_multiple_params() {
     assert_eq!(
         run_php(
@@ -384,6 +429,26 @@ var_dump(Closure::bind($closure, new stdClass()));
             "Warning: Closure::bind(): Cannot bind an instance to a static closure\n",
             "NULL\n"
         )
+    );
+}
+
+#[test]
+fn closure_bind_to_rebinds_an_arrow_function_receiver() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ArrowBinding {
+    public function __construct(public string $value) {}
+    public function reader(): Closure { return fn () => $this->value; }
+}
+$first = new ArrowBinding('first');
+$second = new ArrowBinding('second');
+$reader = $first->reader();
+$rebound = $reader->bindTo($second);
+echo $reader(), ':', $rebound();
+"#,
+        ),
+        "first:second"
     );
 }
 

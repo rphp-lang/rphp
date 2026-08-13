@@ -3,6 +3,7 @@
 pub enum ListTarget {
     Variable(String),
     Target(Expr),
+    AppendTarget(Expr),
     Skip,                                     // empty slot: list(,$b)
     Nested(Vec<ListTarget>),                  // nested destructuring
     KeyedVariable { key: Expr, var: String }, // explicit key: [0 => $a, 2 => $c]
@@ -12,7 +13,9 @@ impl ListTarget {
     pub(crate) fn contains_yield(&self) -> bool {
         match self {
             ListTarget::Variable(_) | ListTarget::Skip => false,
-            ListTarget::Target(target) => target.contains_yield(),
+            ListTarget::Target(target) | ListTarget::AppendTarget(target) => {
+                target.contains_yield()
+            }
             ListTarget::Nested(targets) => targets.iter().any(ListTarget::contains_yield),
             ListTarget::KeyedVariable { key, .. } => key.contains_yield(),
         }
@@ -221,6 +224,11 @@ pub enum Expr {
         var: String,
         expr: Box<Expr>,
     },
+    AssignReference {
+        // $var = &$object->property (reference identity must be preserved)
+        var: String,
+        target: Box<Expr>,
+    },
     AssignTarget {
         // Mutable non-variable assignment used as a value-producing expression.
         target: Box<Expr>,
@@ -242,6 +250,7 @@ pub enum Expr {
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
     },
+    FirstClassFunctionCallable(String),
     FirstClassCallable(Box<Expr>),
     Instanceof {
         // $obj instanceof ClassName
@@ -314,6 +323,7 @@ impl Expr {
             | Expr::PropertyAccess { object: expr, .. }
             | Expr::Instanceof { expr, .. }
             | Expr::Assign { expr, .. }
+            | Expr::AssignReference { target: expr, .. }
             | Expr::Print(expr) => expr.contains_yield(),
             Expr::DynamicInstanceof { expr, class } => {
                 expr.contains_yield() || class.contains_yield()
@@ -374,6 +384,7 @@ impl Expr {
             | Expr::PreDec(_)
             | Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
+            | Expr::FirstClassFunctionCallable(_)
             | Expr::Constant(_)
             | Expr::MagicConstant { .. } => false,
             Expr::DynamicClassConstant {
@@ -543,6 +554,7 @@ pub enum Stmt {
     },
     Function {
         name: String,
+        returns_by_ref: bool,
         params: Vec<Param>,
         body: Vec<Stmt>,
         return_type: Option<TypeHint>,
@@ -607,6 +619,7 @@ pub enum Stmt {
         implements: Vec<GenericAncestor>,
         is_abstract: bool,
         is_final: bool,
+        is_readonly: bool,
         properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
@@ -864,6 +877,7 @@ pub struct ClassMethod {
     pub is_static: bool,
     pub is_final: bool,
     pub is_abstract: bool,
+    pub returns_by_ref: bool,
     pub return_type: Option<TypeHint>,
     pub generic_params: Vec<GenericParameter>,
 }

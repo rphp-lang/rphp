@@ -148,6 +148,32 @@ fn test_parse_first_class_callable_and_argument_unpack() {
 }
 
 #[test]
+fn test_parse_named_first_class_function_callable() {
+    let tokens = Lexer::new("<?php namespace App; $check = is_int(...);")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    let Stmt::Namespace { body, .. } = &stmts[0] else {
+        panic!("expected namespace statement");
+    };
+    assert!(matches!(
+        &body[0],
+        Stmt::Assign {
+            expr: Expr::FirstClassFunctionCallable(name),
+            ..
+        } if name == "is_int"
+    ));
+}
+
+#[test]
+fn test_parse_array_element_reference_assignment_without_bitwise_ambiguity() {
+    let tokens = Lexer::new("<?php $loops[$key][] = &$pathInLoop;")
+        .tokenize()
+        .unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_trailing_commas_in_call_arguments() {
     let source = "<?php sink(1,); sink(named: 2,); $object->run(3,); Thing::make(4,);";
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -258,7 +284,7 @@ fn test_parse_error_control_operator() {
 
 #[test]
 fn test_parse_keyword_method_name() {
-    let tokens = Lexer::new("<?php $matcher->match('/health');")
+    let tokens = Lexer::new("<?php $matcher->match('/health'); $renderer->include('view.php');")
         .tokenize()
         .unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
@@ -266,12 +292,16 @@ fn test_parse_keyword_method_name() {
         &stmts[0],
         Stmt::ExprStmt(Expr::MethodCall { method, .. }) if method == "match"
     ));
+    assert!(matches!(
+        &stmts[1],
+        Stmt::ExprStmt(Expr::MethodCall { method, .. }) if method == "include"
+    ));
 }
 
 #[test]
 fn test_parse_keyword_method_declaration() {
     let tokens = Lexer::new(
-        "<?php class Matcher { public function match(string $path): array { return []; } }",
+        "<?php class Matcher { public function match(string $path): array { return []; } private function include(string $path): string { return $path; } }",
     )
     .tokenize()
     .unwrap();

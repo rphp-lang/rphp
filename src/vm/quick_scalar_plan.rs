@@ -159,7 +159,12 @@ pub fn detect_long_induction_loop(
     header_ip: usize,
     backedge_ip: usize,
 ) -> Option<QuickLongInductionLoop> {
-    if header_ip.checked_add(3)? != backedge_ip || backedge_ip >= op_array.instructions.len() {
+    if backedge_ip >= op_array.instructions.len()
+        || !matches!(
+            backedge_ip.checked_sub(header_ip),
+            Some(3) | Some(4)
+        )
+    {
         return None;
     }
 
@@ -235,6 +240,18 @@ pub fn detect_long_induction_loop(
         OpType::Tmp => Some(increment.result),
         _ => return None,
     };
+
+    if backedge_ip == header_ip + 4 {
+        let release = op_array.instructions[header_ip + 3];
+        if release.opcode != OpCode::ReleaseTemps
+            || release.op1_type != OpType::Tmp
+            || release.op2_type != OpType::Tmp
+            || release.result_type != OpType::Unused
+            || release.op1 > release.op2
+        {
+            return None;
+        }
+    }
 
     if !matches!(backedge.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
         || backedge.op1 as usize != header_ip

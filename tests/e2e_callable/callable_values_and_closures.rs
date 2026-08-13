@@ -1,6 +1,26 @@
 // -- is_callable with string --
 
 #[test]
+fn internal_instance_method_first_class_callable_is_invokable() {
+    assert_eq!(
+        run_php(
+            "<?php $invoke = (new ReflectionMethod(ReflectionMethod::class, 'getPrototype'))->invoke(...); $target = new ReflectionMethod(ReflectionMethod::class, 'getPrototype'); try { $invoke($target); } catch (ReflectionException $error) { echo 'caught'; }"
+        ),
+        "caught"
+    );
+}
+
+#[test]
+fn static_method_string_callbacks_preserve_the_first_public_argument() {
+    assert_eq!(
+        run_php(
+            "<?php class StaticStringCallback { public static function invoke(string $value): void { echo $value; } } call_user_func('StaticStringCallback::invoke', 'direct:'); spl_autoload_register('StaticStringCallback::invoke'); class_exists('MissingStaticStringCallback');"
+        ),
+        "direct:MissingStaticStringCallback"
+    );
+}
+
+#[test]
 fn closure_values_are_instances_of_closure() {
     let out = run_php("<?php $closure = static function () {}; echo $closure instanceof Closure ? 'yes' : 'no';");
     assert_eq!(out, "yes");
@@ -28,6 +48,29 @@ fn dynamic_call_expands_a_sole_unpack_argument() {
         "<?php $callable = static fn ($a, $b, $c) => $a . $b . $c; $args = ['a', 'b', 'c']; echo $callable(...$args);",
     );
     assert_eq!(out, "abc");
+}
+
+#[test]
+fn ordinary_function_calls_expand_a_sole_unpack_argument_with_namespace_fallback() {
+    let out = run_php(
+        r#"<?php
+namespace SpreadCompatibility {
+    function join_values($left, $right) { return $left . ':' . $right; }
+
+    $values = ['left', 'right'];
+    echo join_values(...$values), '|';
+
+    $groups = [
+        ['same' => 1, 4 => 'a'],
+        ['same' => 2, 9 => 'b'],
+        ['tail' => 3],
+    ];
+    $merged = array_merge(...$groups);
+    echo $merged['same'], ':', $merged[0], ':', $merged[1], ':', $merged['tail'];
+}
+"#,
+    );
+    assert_eq!(out, "left:right|2:a:b:3");
 }
 
 #[test]

@@ -167,8 +167,22 @@ fn detect_long_ops_region_inner(
         + string_cache_literal_count)
         .min(QUICK_STRING_FETCH_CACHE_LIMIT);
 
+    let mut passthrough_ips = Vec::new();
     while ip <= backedge_ip {
         let instruction = op_array.instructions[ip];
+        if instruction.opcode == OpCode::ReleaseTemps {
+            if instruction.op1_type != OpType::Tmp
+                || instruction.op2_type != OpType::Tmp
+                || instruction.result_type != OpType::Unused
+                || instruction.op1 > instruction.op2
+                || u32::from(instruction.op2) > total_slots
+            {
+                return None;
+            }
+            passthrough_ips.push(ip);
+            ip += 1;
+            continue;
+        }
         let op = match instruction.opcode {
             OpCode::IsSmaller => {
                 let branch = *op_array.instructions.get(ip + 1)?;
@@ -1463,9 +1477,17 @@ fn detect_long_ops_region_inner(
         if ip_to_op[relative] != u16::MAX || ops.len() >= u16::MAX as usize {
             return None;
         }
-        ip_to_op[relative] = ops.len() as u16;
+        let op_index = ops.len() as u16;
+        ip_to_op[relative] = op_index;
+        for passthrough_ip in passthrough_ips.drain(..) {
+            ip_to_op[passthrough_ip - header_ip] = op_index;
+        }
         op_ips.push(u32::try_from(op_ip).ok()?);
         ops.push(op);
+    }
+
+    if !passthrough_ips.is_empty() {
+        return None;
     }
 
     if closed_loop

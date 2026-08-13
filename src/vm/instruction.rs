@@ -54,6 +54,10 @@ pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;
 /// an object, even when created inside an instance method.
 pub const CLOSURE_FLAG_STATIC: u16 = 1;
 
+/// Instanceof flag: resolve a pseudo-class name against the active trait or
+/// late-static call scope instead of treating it as an ordinary class literal.
+pub const INSTANCEOF_DYNAMIC_STATIC_SCOPE: u16 = 1;
+
 /// FetchDynamicClassConst flag: the class owner is a runtime expression rather
 /// than a statically named class-like declaration.
 pub const CLASS_CONST_DYNAMIC_OWNER: u16 = 1 << 1;
@@ -69,6 +73,11 @@ pub const CLASS_CONST_COMPILE_TIME_NAME: u16 = 1 << 3;
 /// `FetchObjR` used only to reach the terminal operand of `isset()`. A null or
 /// scalar intermediate produces null without the ordinary read diagnostic.
 pub const FETCH_OBJ_SILENT: u16 = 1;
+
+/// `FetchDimR` is the terminal probe of `isset($container[$offset])`. Arrays
+/// can answer directly; ArrayAccess objects dispatch `offsetExists()` instead
+/// of invoking `offsetGet()` and potentially observing or throwing on a miss.
+pub const FETCH_DIM_ISSET: u16 = 1;
 
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not

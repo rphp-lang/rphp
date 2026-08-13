@@ -344,6 +344,43 @@ fn test_empty_array_nonempty() {
     );
 }
 
+#[test]
+fn empty_silently_probes_uninitialized_typed_property_dimensions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class EmptyTypedPropertyProbe {
+    private array $values;
+    public function missing(string $key): bool {
+        return empty($this->values[$key]);
+    }
+    public function initialize(): void {
+        $this->values = ['zero' => 0, 'value' => 4];
+    }
+}
+class TypedArrayDimensionInitializer {
+    private array $values;
+    public function set(string $key, int $value): void {
+        $this->values[$key] = $value;
+    }
+    public function get(string $key): int {
+        return $this->values[$key];
+    }
+}
+$probe = new EmptyTypedPropertyProbe();
+echo $probe->missing('unset') ? 'silent:' : 'bad:';
+$probe->initialize();
+echo $probe->missing('zero') ? 'empty:' : 'bad:';
+echo $probe->missing('value') ? 'bad:' : 'value:';
+$initializer = new TypedArrayDimensionInitializer();
+$initializer->set('created', 9);
+echo $initializer->get('created');
+"#,
+        ),
+        "silent:empty:value:9"
+    );
+}
+
 // ========== unset() ==========
 
 #[test]
@@ -493,6 +530,26 @@ fn test_cast_array_from_array() {
     assert_eq!(
         run_php("<?php $a = [1,2]; $b = (array)$a; echo count($b);"),
         "2"
+    );
+}
+
+#[test]
+fn object_to_array_cast_projects_properties_instead_of_wrapping_the_object() {
+    assert_eq!(
+        run_php(
+            "<?php class CastNode { public $payload = ['ok']; } $cast = (array) new CastNode(); echo count($cast), ':', $cast['payload'][0];"
+        ),
+        "1:ok"
+    );
+}
+
+#[test]
+fn object_to_array_cast_mangles_visibility_and_skips_uninitialized_slots() {
+    assert_eq!(
+        run_php(
+            "<?php class CastBox { public $pub = 1; protected $prot = 2; private $priv = 3; public int $unset; } $box = new CastBox(); $box->dyn = 4; $keys = ['pub', \"\0*\0prot\", \"\0CastBox\0priv\", 'dyn']; $index = 0; $ok = true; foreach ((array) $box as $key => $value) { $ok = $ok && $key === $keys[$index] && $value === $index + 1; ++$index; } echo $ok ? 'OK:' : 'BAD:', $index;"
+        ),
+        "OK:4"
     );
 }
 

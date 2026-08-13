@@ -84,6 +84,129 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     }
 }
 
+/// Run user destructors for direct object handles whose remaining references
+/// all belong to the frame that is about to be released. The ordinary scalar
+/// path remains allocation-free; object counts are built only for frames that
+/// actually own heap values.
+#[cold]
+fn run_frame_destructors(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Result<(), VmError> {
+    // SAFETY: `frame` is the live activation being released. Its compiler-sized
+    // CV/TMP range remains allocated until destructor dispatch completes.
+    unsafe {
+        if !(*frame).has_heap_slots {
+            return Ok(());
+        }
+
+        let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
+        let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
+        let candidate_indices = if total <= 64 {
+            HeapSlotIter::new((*frame).owned_heap_bitmap())
+                .map(|index| index as usize)
+                .collect::<Vec<_>>()
+        } else {
+            (0..total).collect()
+        };
+        let mut counts = HashMap::<usize, usize>::new();
+        for &index in &candidate_indices {
+            let value = &*base.add(index);
+            if let Some(identity) = value.object_identity() {
+                *counts.entry(identity).or_default() += 1;
+            }
+        }
+
+        for (identity, frame_references) in counts {
+            let representative = candidate_indices
+                .iter()
+                .map(|index| &*base.add(*index))
+                .find(|value| value.object_identity() == Some(identity));
+            let Some(representative) = representative else {
+                continue;
+            };
+            let class_name = representative.object_class_name_unchecked().to_string();
+            if eg.find_method_info(&class_name, "__destruct").is_none() {
+                continue;
+            }
+            if representative.object_strong_count() != Some(frame_references)
+                || !representative.mark_object_destructed()
+            {
+                continue;
+            }
+            let receiver = representative.clone();
+            let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
+        }
+    }
+    Ok(())
+}
+
+#[cold]
+fn release_statement_temps(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    first: usize,
+    end: usize,
+) -> Result<(), VmError> {
+    // SAFETY: the compiler emits a bounded statement-temporary range inside
+    // this live frame; ownership bits identify which slots may be dropped.
+    unsafe {
+        let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
+        debug_assert!(first <= end && end <= total);
+        let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+        let compact = total <= 64;
+        let bitmap = compact.then(|| (*frame).owned_heap_bitmap());
+        let is_owned = |index: usize| {
+            bitmap.map_or_else(
+                || (*base.add(index)).needs_cleanup(),
+                |bitmap| bitmap & (1u64 << index) != 0,
+            )
+        };
+
+        let mut object_counts = HashMap::<usize, usize>::new();
+        for index in first..end {
+            if !is_owned(index) {
+                continue;
+            }
+            let value = &*base.add(index);
+            if let Some(identity) = value.object_identity() {
+                *object_counts.entry(identity).or_default() += 1;
+            }
+        }
+        for (identity, range_references) in object_counts {
+            let representative = (first..end)
+                .filter(|index| is_owned(*index))
+                .map(|index| &*base.add(index))
+                .find(|value| value.object_identity() == Some(identity));
+            let Some(representative) = representative else {
+                continue;
+            };
+            let class_name = representative.object_class_name_unchecked().to_string();
+            if eg.find_method_info(&class_name, "__destruct").is_none()
+                || representative.object_strong_count() != Some(range_references)
+                || !representative.mark_object_destructed()
+            {
+                continue;
+            }
+            let receiver = representative.clone();
+            let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
+        }
+
+        for index in first..end {
+            if !is_owned(index) {
+                continue;
+            }
+            let value = base.add(index);
+            std::ptr::drop_in_place(value);
+            std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
+            if compact {
+                (*frame).heap_bitmap &= !(1u64 << index);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[inline(always)]
 unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
@@ -292,6 +415,12 @@ fn call_magic_method(
     eg.current_execute_data.set(call);
     let result = execute_ex(eg, call);
     eg.current_execute_data.set(saved_execute_data);
+
+    if result.is_ok() {
+        run_frame_destructors(eg, call)?;
+    }
+    unsafe { cleanup_frame_slots(call) };
+    pop_vm_call_frame(eg, call);
 
     match result {
         Ok(()) => Ok(Some(return_value)),

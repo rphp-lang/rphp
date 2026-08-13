@@ -27,8 +27,9 @@ use crate::value::{
 use crate::vm::instruction::{
     ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
     CALL_FLAG_EXACT_SCALAR_ARGS, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, FETCH_OBJ_SILENT, InlineCache, Instruction, KnownScalarType,
-    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
+    CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE,
+    InlineCache, Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
+    NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
 };
 use crate::vm::opcode::OpCode;
 
@@ -1204,6 +1205,7 @@ pub struct ClassDef {
     pub is_interface: bool,
     pub is_abstract: bool,
     pub is_final: bool,
+    pub is_readonly: bool,
     pub is_trait: bool,
     pub is_enum: bool,
     pub uses: Vec<String>, // trait names from `use Foo, Bar;`
@@ -1329,13 +1331,24 @@ pub struct Compiler {
 /// Returns 0 for unknown/non-ref functions.
 fn builtin_ref_args(name: &str) -> u64 {
     match name {
-        "sort" | "rsort" | "shuffle" | "usort" | "asort" | "arsort" | "ksort" | "krsort"
-        | "array_walk" => 0b1, // arg 0
+        "sort"
+        | "rsort"
+        | "shuffle"
+        | "usort"
+        | "uasort"
+        | "uksort"
+        | "asort"
+        | "arsort"
+        | "ksort"
+        | "krsort"
+        | "array_walk"
+        | "array_walk_recursive" => 0b1, // arg 0
         "array_push" | "array_unshift" => 0b1,    // arg 0
         "array_pop" | "array_shift" => 0b1,       // arg 0
         "array_splice" => 0b1,                    // arg 0
         "settype" => 0b1,                         // arg 0
         "preg_match" | "preg_match_all" => 0b100, // arg 2 (&$matches)
+        "preg_replace" => 0b1_0000,               // arg 4 (&$count)
         "parse_str" => 0b10,                      // arg 1 (&$result)
         _ => 0,
     }
@@ -2991,26 +3004,42 @@ impl Compiler {
     }
 
     fn compile_isset_operand(&mut self, expr: &Expr) -> (u16, OpType) {
-        let Expr::PropertyAccess {
-            object,
-            property,
-            nullsafe: _,
-        } = expr
-        else {
-            return self.compile_isset_object_base(expr);
-        };
-        let (object_op, object_type) = self.compile_isset_object_base(object);
-        let property_op = self.add_literal(Value::string(property.clone()));
-        let result = self.alloc_tmp();
-        let mut isset = Instruction::new(OpCode::IssetObj);
-        isset.op1 = object_op;
-        isset.op1_type = object_type;
-        isset.op2 = property_op;
-        isset.op2_type = OpType::Const;
-        isset.result = result;
-        isset.result_type = OpType::Tmp;
-        self.instructions.push(isset);
-        (result, OpType::Tmp)
+        match expr {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: _,
+            } => {
+                let (object_op, object_type) = self.compile_isset_object_base(object);
+                let property_op = self.add_literal(Value::string(property.clone()));
+                let result = self.alloc_tmp();
+                let mut isset = Instruction::new(OpCode::IssetObj);
+                isset.op1 = object_op;
+                isset.op1_type = object_type;
+                isset.op2 = property_op;
+                isset.op2_type = OpType::Const;
+                isset.result = result;
+                isset.result_type = OpType::Tmp;
+                self.instructions.push(isset);
+                (result, OpType::Tmp)
+            }
+            Expr::ArrayAccess { array, index } => {
+                let (array_op, array_type) = self.compile_isset_object_base(array);
+                let (index_op, index_type) = self.compile_expr(index);
+                let result = self.alloc_tmp();
+                let mut isset = Instruction::new(OpCode::FetchDimR);
+                isset.op1 = array_op;
+                isset.op1_type = array_type;
+                isset.op2 = index_op;
+                isset.op2_type = index_type;
+                isset.result = result;
+                isset.result_type = OpType::Tmp;
+                isset._pad |= FETCH_DIM_ISSET;
+                self.instructions.push(isset);
+                (result, OpType::Tmp)
+            }
+            _ => self.compile_isset_object_base(expr),
+        }
     }
 
     fn compile_expr(&mut self, expr: &Expr) -> (u16, OpType) {
@@ -3525,6 +3554,37 @@ impl Compiler {
                 args,
                 generic_args,
             } => {
+                if generic_args.is_empty()
+                    && let [CallArg::Unpack(array)] = args.as_slice()
+                {
+                    // A sole unpack has the same runtime argument protocol as
+                    // call_user_func_array(), including sparse positional and
+                    // string-keyed named arguments. Keep the ordinary
+                    // namespaced-function fallback in extended_value.
+                    let resolved = self.resolve_function_name(name);
+                    let name_idx = self.add_literal(Value::string(resolved));
+                    let fallback_idx = if self.current_namespace.is_some()
+                        && !name.contains('\\')
+                        && !self.has_function_import(name)
+                    {
+                        self.add_literal(Value::string(name.clone()))
+                    } else {
+                        0
+                    };
+                    let (array_op, array_type) = self.compile_expr(array);
+                    let tmp = self.alloc_tmp();
+                    let mut call = Instruction::new(OpCode::CallUserFuncArray);
+                    call.op1 = name_idx;
+                    call.op1_type = OpType::Const;
+                    call.op2 = array_op;
+                    call.op2_type = array_type;
+                    call.result = tmp;
+                    call.result_type = OpType::Tmp;
+                    call.extended_value = fallback_idx as u32;
+                    self.instructions.push(call);
+                    return (tmp, OpType::Tmp);
+                }
+
                 if generic_args.is_empty() {
                     if let [CallArg::Positional(argument)] = args.as_slice() {
                         let direct_kind = self
@@ -3982,19 +4042,22 @@ impl Compiler {
             }
             Expr::Isset(args) => {
                 let (tmp, tmp_type) = self.compile_isset_operand(&args[0]);
-                let tmp =
-                    if tmp_type == OpType::Tmp && matches!(args[0], Expr::PropertyAccess { .. }) {
-                        tmp
-                    } else {
-                        let result = self.alloc_tmp();
-                        let mut instr = Instruction::new(OpCode::Isset);
-                        instr.op1 = tmp;
-                        instr.op1_type = tmp_type;
-                        instr.result = result;
-                        instr.result_type = OpType::Tmp;
-                        self.instructions.push(instr);
-                        result
-                    };
+                let tmp = if tmp_type == OpType::Tmp
+                    && matches!(
+                        args[0],
+                        Expr::PropertyAccess { .. } | Expr::ArrayAccess { .. }
+                    ) {
+                    tmp
+                } else {
+                    let result = self.alloc_tmp();
+                    let mut instr = Instruction::new(OpCode::Isset);
+                    instr.op1 = tmp;
+                    instr.op1_type = tmp_type;
+                    instr.result = result;
+                    instr.result_type = OpType::Tmp;
+                    self.instructions.push(instr);
+                    result
+                };
                 // Multi-arg `isset` short-circuits before compiling the next
                 // operand's runtime instructions, just like PHP.
                 for arg in args.iter().skip(1) {
@@ -4007,7 +4070,7 @@ impl Compiler {
 
                     let (operand, operand_type) = self.compile_isset_operand(arg);
                     let tmp2 = if operand_type == OpType::Tmp
-                        && matches!(arg, Expr::PropertyAccess { .. })
+                        && matches!(arg, Expr::PropertyAccess { .. } | Expr::ArrayAccess { .. })
                     {
                         operand
                     } else {
@@ -4032,8 +4095,11 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::Empty(inner) => {
-                // empty($x) ≡ !is_truthy($x)
-                let (op, op_type) = self.compile_expr(inner);
+                // `empty()` reads variables, properties, and dimensions in a
+                // silent probe context. In particular, an uninitialized typed
+                // property behaves as unset instead of throwing before the
+                // truthiness check.
+                let (op, op_type) = self.compile_isset_object_base(inner);
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::BoolNot);
                 instr.op1 = op;
@@ -4200,7 +4266,7 @@ impl Compiler {
             }
             Expr::Closure {
                 is_static,
-                returns_by_ref: _,
+                returns_by_ref,
                 params,
                 use_vars,
                 body,
@@ -4299,7 +4365,7 @@ impl Compiler {
                     block_plans: Vec::new(),
                     ip_to_block: Vec::new(),
                 };
-                let user_func = make_user_function_typed(
+                let mut user_func = make_user_function_typed(
                     op_array,
                     cp.num_args,
                     cp.required_num_args,
@@ -4310,6 +4376,7 @@ impl Compiler {
                     cp.param_names,
                     cp.return_type_hint,
                 );
+                user_func.common.sig.returns_reference = *returns_by_ref;
 
                 self.functions.extend(func_compiler.functions);
                 self.class_defs.extend(func_compiler.class_defs);
@@ -4478,6 +4545,7 @@ impl Compiler {
                     implements: implements.clone(),
                     is_abstract: false,
                     is_final: false,
+                    is_readonly: false,
                     properties: properties.clone(),
                     constants: constants.clone(),
                     methods: methods.clone(),
@@ -4912,7 +4980,8 @@ impl Compiler {
             }
             Expr::Instanceof { expr, class_name } => {
                 let (obj_op, obj_type) = self.compile_expr(expr);
-                let resolved_class = self.resolve_name(class_name);
+                let (resolved_class, dynamic_static_scope) =
+                    self.resolve_static_member_owner(class_name);
                 let name_idx = self.add_literal(Value::string(resolved_class));
                 let tmp = self.alloc_tmp();
                 let mut inst = Instruction::new(OpCode::Instanceof);
@@ -4922,6 +4991,9 @@ impl Compiler {
                 inst.op2_type = OpType::Const;
                 inst.result = tmp;
                 inst.result_type = OpType::Tmp;
+                if dynamic_static_scope {
+                    inst._pad |= INSTANCEOF_DYNAMIC_STATIC_SCOPE;
+                }
                 self.instructions.push(inst);
                 (tmp, OpType::Tmp)
             }
@@ -4952,6 +5024,71 @@ impl Compiler {
                 assign.result = tmp;
                 self.instructions.push(assign);
                 (tmp, OpType::Tmp)
+            }
+            Expr::AssignReference { var, target } => {
+                let destination = self.resolve_cv(var);
+                match target.as_ref() {
+                    Expr::PropertyAccess {
+                        object,
+                        property,
+                        nullsafe: false,
+                    } => {
+                        let (object, object_type) = self.compile_expr(object);
+                        let property = self.add_literal(Value::string(property.clone()));
+                        let mut bind = Instruction::new(OpCode::BindObjPropRef);
+                        bind.op1 = object;
+                        bind.op1_type = object_type;
+                        bind.op2 = property;
+                        bind.op2_type = OpType::Const;
+                        bind.result = destination;
+                        bind.result_type = OpType::Cv;
+                        self.instructions.push(bind);
+                        (destination, OpType::Cv)
+                    }
+                    Expr::DynamicPropertyAccess {
+                        object,
+                        property,
+                        nullsafe: false,
+                    } => {
+                        let (object, object_type) = self.compile_expr(object);
+                        let (property, property_type) = self.compile_expr(property);
+                        let mut bind = Instruction::new(OpCode::BindObjPropRef);
+                        bind.op1 = object;
+                        bind.op1_type = object_type;
+                        bind.op2 = property;
+                        bind.op2_type = property_type;
+                        bind.result = destination;
+                        bind.result_type = OpType::Cv;
+                        self.instructions.push(bind);
+                        (destination, OpType::Cv)
+                    }
+                    Expr::ArrayAccess { array, index } => {
+                        let (array, array_type) = self.compile_expr(array);
+                        let (index, index_type) = self.compile_expr(index);
+                        let mut bind = Instruction::new(OpCode::BindArrayDimRef);
+                        bind.op1 = array;
+                        bind.op1_type = array_type;
+                        bind.op2 = index;
+                        bind.op2_type = index_type;
+                        bind.result = destination;
+                        bind.result_type = OpType::Cv;
+                        self.instructions.push(bind);
+                        (destination, OpType::Cv)
+                    }
+                    _ => {
+                        // Reference-returning calls and plain variable aliases
+                        // retain their previous value-copy fallback until their
+                        // lvalue identity is available to the compiler.
+                        let (source, source_type) = self.compile_expr(target);
+                        let mut assign = Instruction::new(OpCode::AssignCv);
+                        assign.op1 = destination;
+                        assign.op1_type = OpType::Cv;
+                        assign.op2 = source;
+                        assign.op2_type = source_type;
+                        self.instructions.push(assign);
+                        (destination, OpType::Cv)
+                    }
+                }
             }
             Expr::AssignTarget { target, expr } => {
                 match self.compile_assignment_target_expression(target, expr) {
@@ -5044,6 +5181,27 @@ impl Compiler {
                 create.op1_type = callable_type;
                 create.result = result;
                 create.result_type = OpType::Tmp;
+                self.instructions.push(create);
+                (result, OpType::Tmp)
+            }
+            Expr::FirstClassFunctionCallable(name) => {
+                let resolved = self.resolve_function_name(name);
+                let callable = self.add_literal(Value::string(resolved));
+                let fallback = if self.current_namespace.is_some()
+                    && !name.contains('\\')
+                    && !self.has_function_import(name)
+                {
+                    self.add_literal(Value::string(name.clone()))
+                } else {
+                    0
+                };
+                let result = self.alloc_tmp();
+                let mut create = Instruction::new(OpCode::CreateFirstClassCallable);
+                create.op1 = callable;
+                create.op1_type = OpType::Const;
+                create.result = result;
+                create.result_type = OpType::Tmp;
+                create.extended_value = fallback as u32;
                 self.instructions.push(create);
                 (result, OpType::Tmp)
             }
@@ -5554,6 +5712,39 @@ impl Compiler {
                             self.write_back_mutable_array_root(&path);
                         }
                         _ => return Err("Invalid destructuring assignment target".into()),
+                    }
+                    idx += 1;
+                }
+                ListTarget::AppendTarget(target) => {
+                    let idx_literal = self.add_literal(Value::long(idx as i64));
+                    let fetch_tmp = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1_type = array_type;
+                    fetch.op1 = array;
+                    fetch.op2_type = OpType::Const;
+                    fetch.op2 = idx_literal;
+                    fetch.result_type = OpType::Tmp;
+                    fetch.result = fetch_tmp;
+                    self.instructions.push(fetch);
+
+                    if let Expr::Variable(name) = target {
+                        let cv = self.resolve_cv(name);
+                        let mut append = Instruction::new(OpCode::ArrayPushOp);
+                        append.op1 = cv;
+                        append.op1_type = OpType::Cv;
+                        append.op2 = fetch_tmp;
+                        append.op2_type = OpType::Tmp;
+                        self.instructions.push(append);
+                    } else {
+                        let (target, target_type, writeback) =
+                            self.compile_foreach_reference_source(target)?;
+                        let mut append = Instruction::new(OpCode::ArrayPushOp);
+                        append.op1 = target;
+                        append.op1_type = target_type;
+                        append.op2 = fetch_tmp;
+                        append.op2_type = OpType::Tmp;
+                        self.instructions.push(append);
+                        self.emit_foreach_reference_source_writeback(writeback, target);
                     }
                     idx += 1;
                 }

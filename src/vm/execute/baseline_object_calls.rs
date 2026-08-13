@@ -802,25 +802,171 @@ fn op_isset_obj<'a>(
 
 include!("instance_property_cache.rs");
 
+fn op_bind_obj_prop_ref(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    // SAFETY: all three operand slots are compiler-owned by the active frame.
+    // The receiver is cloned before its CV can be replaced, and the owned
+    // reference cell keeps the property target stable across object growth.
+    unsafe {
+        let receiver = (&*(*frame).get_op_ptr(
+            opline.op1 as u32,
+            opline.op1_type,
+            op_array,
+        ))
+            .clone();
+        let name = (&*(*frame).get_op_ptr(
+            opline.op2 as u32,
+            opline.op2_type,
+            op_array,
+        ))
+            .as_str()
+            .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?
+            .to_string();
+        let object = receiver
+            .as_object()
+            .ok_or_else(|| VmError::Fatal("Attempt to bind property on non-object".into()))?;
+        let class_name = object.class_name.to_string();
+        drop(object);
+
+        let caller_class = get_caller_class(frame, eg);
+        let receiver_in_scope = caller_class
+            .as_ref()
+            .is_some_and(|caller| eg.class_is_a(&class_name, caller));
+        let effective_caller = receiver_in_scope
+            .then_some(caller_class.as_deref())
+            .flatten();
+        if let Some((visibility, defining_class)) =
+            eg.find_property_visibility(&class_name, &name)
+            && visibility != Visibility::Public
+            && !eg.check_visibility(effective_caller, &defining_class, visibility)
+        {
+            let visibility = match visibility {
+                Visibility::Protected => "protected",
+                Visibility::Private => "private",
+                Visibility::Public => "public",
+            };
+            return Err(VmError::Fatal(format!(
+                "Cannot access {visibility} property {defining_class}::${name}"
+            )));
+        }
+        if eg
+            .find_class(&class_name)
+            .is_some_and(|class| class.readonly_props.contains(&name))
+        {
+            return Err(VmError::Fatal(format!(
+                "Cannot acquire reference to readonly property {class_name}::${name}"
+            )));
+        }
+
+        let key = crate::runtime::resolve_property_key(
+            eg,
+            &class_name,
+            &name,
+            effective_caller,
+        );
+        let mut object = receiver.as_object_mut().unwrap();
+        let binding = if let Some(property) = object.get_property_mut(&key) {
+            if property.is_owned_reference() {
+                property.clone_owned_reference_alias()
+            } else {
+                let current = std::mem::replace(property, Value::undef());
+                let current = if current.is_reference() {
+                    current.dereferenced().clone()
+                } else {
+                    current
+                };
+                let binding = Value::owned_reference(current);
+                *property = binding.clone_owned_reference_alias();
+                binding
+            }
+        } else {
+            let binding = Value::owned_reference(Value::null());
+            object.set_property(&key, binding.clone_owned_reference_alias());
+            binding
+        };
+        drop(object);
+
+        let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+        frame_slot_set(frame, destination, binding);
+    }
+    Ok(())
+}
+
+fn op_bind_array_dim_ref(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    // SAFETY: the compiler emits mutable array/CV operands owned by this live
+    // frame. Promoting the element to an Rc-backed cell makes both aliases
+    // independent of subsequent array storage reallocations.
+    unsafe {
+        let index = &*(*frame).get_op_ptr(
+            opline.op2 as u32,
+            opline.op2_type,
+            op_array,
+        );
+        let key = value_to_array_key(index)?;
+        let array_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+        if matches!((*array_ptr).value_type(), ValueType::Null | ValueType::Undef) {
+            slot_set(array_ptr, Value::array(PhpArray::new()));
+        }
+        let array = (&mut *array_ptr)
+            .as_array_mut()
+            .ok_or_else(|| VmError::Fatal("Cannot acquire reference to non-array offset".into()))?;
+        if array.get_key_mut(&key).is_none() {
+            array.set(key.clone(), Value::null());
+        }
+        let element = array.get_key_mut(&key).unwrap();
+        let binding = if element.is_owned_reference() {
+            element.clone_owned_reference_alias()
+        } else {
+            let current = std::mem::replace(element, Value::undef());
+            let current = if current.is_reference() {
+                current.dereferenced().clone()
+            } else {
+                current
+            };
+            let binding = Value::owned_reference(current);
+            *element = binding.clone_owned_reference_alias();
+            binding
+        };
+        let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+        frame_slot_set(frame, destination, binding);
+    }
+    Ok(())
+}
+
 fn op_assign_obj_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
-    let val = if val.is_reference() {
-        // SAFETY: Reference values in a live frame point at a slot whose
-        // lifetime covers this opcode; the borrow ends before any assignment.
-        unsafe { &*val.as_ref_ptr() }
-    } else {
-        val
+    // SAFETY: all operands belong to the active compiler-sized frame. A
+    // Reference target remains live through this non-reentrant assignment.
+    let (prop_name, val, obj) = unsafe {
+        let prop_name =
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array);
+        let val = &*(*frame).get_op_ptr(
+            opline.result as u32,
+            opline.result_type,
+            op_array,
+        );
+        let val = if val.is_reference() {
+            &*val.as_ref_ptr()
+        } else {
+            val
+        };
+        let obj = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        (prop_name, val, obj)
     };
     let mut assigned = val.clone();
     let name = prop_name.as_str().unwrap_or("").to_string();
-    let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let obj = unsafe { &*obj_ptr };
 
     if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
@@ -1002,6 +1148,42 @@ fn op_init_method_call<'a>(
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+
+    if obj_val.value_type() == ValueType::Closure {
+        let method = unsafe {
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+        }
+        .as_str()
+        .unwrap_or("");
+        let Some(func_ptr) = eg.find_function(&format!("Closure::{method}")) else {
+            let error = make_error_value(
+                "Error",
+                &format!("Call to undefined method Closure::{method}()"),
+            );
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        };
+        let num_args = opline.extended_value;
+        let pending_call = unsafe { (*frame).call };
+        let call = eg.vm_stack.push_call_frame(
+            func_ptr,
+            num_args + 1,
+            num_args,
+            frame,
+            pending_call,
+        );
+        // SAFETY: the new method frame owns CV 0, and cloning the compact
+        // Closure handle preserves its boxed payload through the call.
+        unsafe {
+            (*frame).call = call;
+            frame_set_this(call, obj_val.clone());
+        }
+        return Ok(ColdResult::Done);
+    }
 
     if let Some(obj) = obj_val.as_object() {
         let obj_class_id = obj.class_id;
@@ -1333,7 +1515,10 @@ fn op_init_static_call<'a>(
         (*frame).call = call;
         let target_is_instance = eg
             .find_method_info(&class, &method)
-            .is_some_and(|(_, is_static, _)| !is_static);
+            .is_some_and(|(_, is_static, _)| !is_static)
+            || (common.sig.this_offset == 1
+                && matches!(raw_class.to_ascii_lowercase().as_str(), "self" | "parent"));
+        let mut initialized_receiver = false;
         if target_is_instance && (*frame).num_cvs != 0 {
             let receiver = (*frame).cv(0);
             if receiver.value_type() == ValueType::Object {
@@ -1342,7 +1527,16 @@ fn op_init_static_call<'a>(
                 } else {
                     frame_set_this(call, receiver.clone());
                 }
+                initialized_receiver = true;
             }
+        }
+        if !initialized_receiver {
+            // Static method frames retain the class-method CV layout, whose
+            // first slot is reserved for `$this`. No receiver is written for
+            // a genuine static call, but wide-frame cleanup scans every CV
+            // instead of using the compact ownership bitmap. Publish Undef so
+            // stale stack bytes can never be mistaken for an owned PHP value.
+            frame_slot_init(call, (*call).cv_mut(0) as *mut Value, Value::undef());
         }
     }
     let called_scope_class_id = if raw_class.eq_ignore_ascii_case("self")
@@ -1488,6 +1682,11 @@ fn op_init_late_static_call<'a>(
     );
     unsafe {
         (*frame).call = call;
+        // Late-static method calls use the same hidden class-method slot as
+        // ordinary static calls. A genuine static target has no receiver to
+        // publish there, so initialize it before SendVal fills CV 1..N. This
+        // is required by wide frames, whose cleanup scans all CVs.
+        frame_slot_init(call, (*call).cv_mut(0) as *mut Value, Value::undef());
     }
     if class_id != 0 {
         publish_late_static_call_class_id(eg, call, class_id);
@@ -1627,7 +1826,13 @@ fn init_resolved_user_call_mode(
         }
     }
 
-    if signature.is_variadic && !resolved.use_vars.is_empty() {
+    if !resolved.use_vars.is_empty()
+        && (signature.is_variadic || explicit_args > signature.public_arity())
+    {
+        // Variadic storage and tolerated extra user arguments can occupy the
+        // CV range where a closure body expects its lexical captures. Keep
+        // captures pending until DoFcall has snapshotted the supplied argument
+        // list, then restore them at the declared parameter boundary.
         eg.pending_closure_captures
             .insert(call as usize, resolved.use_vars);
     } else {
@@ -1692,18 +1897,20 @@ fn op_init_dynamic_call<'a>(
     if let Some(closure) = callable.as_closure() {
         let func_ptr = closure.func;
         let bound_this = closure.bound_this.clone();
-        let is_method = eg.declaring_class_of(func_ptr).is_some();
-        let resolved = crate::stdlib::ResolvedCallback {
+        // Class-scoped anonymous closures carry visibility and `$this`
+        // metadata, but only reflected/first-class method closures reserve a
+        // hidden receiver CV in their signature.
+        let mut resolved = crate::stdlib::ResolvedCallback {
             func_ptr,
-            prepend_args: if is_method {
-                vec![bound_this.clone().unwrap_or_else(Value::null)]
-            } else {
-                vec![]
-            },
+            prepend_args: vec![],
             use_vars: closure.captures.clone(),
             called_scope_class_id: closure.called_scope_class_id,
             bound_this,
         };
+        let is_method = resolved.is_method();
+        if is_method {
+            resolved.prepend_args = vec![resolved.bound_this.clone().unwrap_or_else(Value::null)];
+        }
         // Dynamic sends start at CV 0. A first-class method closure retains
         // the hidden receiver slot, so defer it until DoFcall shifts the
         // explicit argument prefix exactly like an array method callback.

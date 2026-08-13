@@ -23,6 +23,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     super::hot::dump_bail_stats();
 
     eg.current_execute_data.set(unsafe { (*frame).prev_execute_data });
+    run_frame_destructors(eg, frame)?;
     unsafe { cleanup_frame_slots(frame) };
     pop_vm_call_frame(eg, frame);
 
@@ -362,27 +363,44 @@ where
     );
     let mut return_value = Value::null();
 
+    // SAFETY: `frame` is a fresh compiler-sized activation. All argument and
+    // variadic destinations are uninitialized slots described by `func_ptr`.
     unsafe {
         (*frame).return_value = &mut return_value;
         // prev=null so Return exits execute_ex instead of continuing in caller
-    }
 
-    // Write args into CV slots — fresh uninitialized slots, use init (no drop).
-    for i in 0..num_args {
-        let arg = args
-            .next()
-            .expect("callback argument iterator shorter than declared length");
-        unsafe { callback_arg_init(frame, i, arg) };
-    }
-    debug_assert!(
-        args.next().is_none(),
-        "callback argument iterator longer than declared length"
-    );
+        // Write args into CV slots — fresh uninitialized slots, use init (no drop).
+        for i in 0..num_args {
+            let arg = args
+                .next()
+                .expect("callback argument iterator shorter than declared length");
+            callback_arg_init(frame, i, arg);
+        }
+        debug_assert!(
+            args.next().is_none(),
+            "callback argument iterator longer than declared length"
+        );
 
-    if called_scope_class_id != 0 {
-        publish_late_static_call_class_id(eg, frame, called_scope_class_id);
+        if called_scope_class_id != 0 {
+            publish_late_static_call_class_id(eg, frame, called_scope_class_id);
+        }
+        initialize_bound_this_frame(frame, func_ptr, bound_this);
+
+        // Detached callback entry bypasses DoFcall, whose full path normally
+        // materializes the variadic bucket. Internal handlers use the same ABI in
+        // both entry modes, so pack their trailing public arguments here before
+        // dispatching the handler.
+        if (*func_ptr).fn_type == FunctionType::Internal && (*func_ptr).sig.is_variadic {
+            let sig = &(*func_ptr).sig;
+            let fixed = sig.public_arity() as usize;
+            let mut variadic = PhpArray::with_packed_capacity(num_args.saturating_sub(fixed));
+            for index in fixed..num_args {
+                variadic.push((*frame).cv(index as u32).clone());
+            }
+            let destination = (*frame).cv_mut(sig.variadic_cv_index) as *mut Value;
+            frame_slot_set(frame, destination, Value::array(variadic));
+        }
     }
-    initialize_bound_this_frame(frame, func_ptr, bound_this);
 
     let execution_result = match unsafe { (*func_ptr).fn_type } {
         FunctionType::User => {

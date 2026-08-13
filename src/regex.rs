@@ -366,6 +366,11 @@ impl Regex {
 
     /// Replace all occurrences.  Replacement can use `$1`, `$10`, `${2}`, `\\1` backrefs.
     pub fn replace_all(&self, subject: &str, replacement: &str) -> String {
+        self.replace_limit(subject, replacement, usize::MAX).0
+    }
+
+    /// Replace at most `limit` occurrences and return the replacement count.
+    pub fn replace_limit(&self, subject: &str, replacement: &str, limit: usize) -> (String, usize) {
         let (chars, byte_offsets) = subject_chars(subject);
         let metadata = MatchMetadata {
             input: subject,
@@ -373,8 +378,13 @@ impl Regex {
         };
         let mut result = String::new();
         let mut pos = 0;
+        let mut count = 0;
 
         while pos <= chars.len() {
+            if count == limit {
+                result.push_str(&subject[byte_offsets.get(pos)..]);
+                break;
+            }
             let mut groups = vec![None; self.num_groups + 1];
             let mut mark = None;
             let mut ctx = MatchCtx {
@@ -397,6 +407,7 @@ impl Regex {
                 result.push_str(&subject[byte_offsets.get(pos)..match_start]);
                 // Append replacement with backreference expansion
                 result.push_str(&expand_replacement(replacement, &groups, subject));
+                count += 1;
 
                 if end == pos {
                     // Zero-length match — advance by one to avoid infinite loop
@@ -414,7 +425,7 @@ impl Regex {
                 pos += 1;
             }
         }
-        result
+        (result, count)
     }
 
     /// Count non-overlapping matches without publishing capture data.
@@ -1421,6 +1432,7 @@ struct Parser {
     pos: usize,
     group_count: usize,
     named_groups: HashMap<String, usize>,
+    defined_subpatterns: HashMap<String, Node>,
     flags: RegexFlags,
 }
 
@@ -1431,6 +1443,7 @@ impl Parser {
             pos: 0,
             group_count: 0,
             named_groups: HashMap::new(),
+            defined_subpatterns: HashMap::new(),
             flags,
         }
     }
@@ -1677,7 +1690,45 @@ impl Parser {
         // Check for special group types
         if self.peek() == Some('?') {
             self.advance(); // consume '?'
+            if self.chars[self.pos..].starts_with(&['(', 'D', 'E', 'F', 'I', 'N', 'E', ')']) {
+                self.pos += 8;
+                while self.peek() != Some(')') {
+                    if self.peek().is_none() {
+                        return Err("Unterminated PCRE DEFINE block".into());
+                    }
+                    let definition = self.parse_group()?;
+                    let Node::Group {
+                        name: Some(name), ..
+                    } = &definition
+                    else {
+                        return Err("PCRE DEFINE entries must be named groups".into());
+                    };
+                    self.defined_subpatterns.insert(name.clone(), definition);
+                }
+                self.advance();
+                return Ok(Node::Sequence(Vec::new()));
+            }
             match self.peek() {
+                Some('&') => {
+                    // Named subroutine call (?&name). DEFINE blocks above
+                    // publish immutable AST fragments, so expansion here keeps
+                    // the matcher free of an extra runtime dispatch variant.
+                    self.advance();
+                    let mut name = String::new();
+                    while let Some(c) = self.peek() {
+                        if c == ')' {
+                            self.advance();
+                            return self
+                                .defined_subpatterns
+                                .get(&name)
+                                .cloned()
+                                .ok_or_else(|| format!("Unknown PCRE subpattern '{name}'"));
+                        }
+                        name.push(c);
+                        self.advance();
+                    }
+                    Err("Unterminated named PCRE subroutine".into())
+                }
                 Some('|') => {
                     // Branch-reset group (?|...): capture numbering restarts
                     // at the same base for every alternative and continues

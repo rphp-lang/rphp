@@ -597,6 +597,10 @@ pub struct PhpObject {
     pub class_name: Rc<str>,
     /// Stable numeric class ID — matches ClassDef.class_id. Used for inline cache keying.
     pub class_id: u32,
+    /// A PHP object destructor runs at most once for this allocation. Keeping
+    /// the bit on the object avoids stale raw-address identities when the
+    /// allocator reuses storage for a later object in the same request.
+    pub(crate) destructor_ran: bool,
     /// Shared name → slot mapping owned by the class definition.
     pub property_layout: Rc<ObjectLayout>,
     /// Declared properties in compact numeric slots.
@@ -628,6 +632,7 @@ impl PhpObject {
         Self {
             class_name,
             class_id,
+            destructor_ran: false,
             property_layout,
             property_values,
             dynamic_properties: None,
@@ -639,6 +644,7 @@ impl PhpObject {
         Self {
             class_name: Rc::from(class_name),
             class_id,
+            destructor_ran: false,
             property_layout: Rc::new(ObjectLayout::empty()),
             property_values: Vec::new(),
             dynamic_properties: if properties.is_empty() {
@@ -664,6 +670,7 @@ impl PhpObject {
         Self {
             class_name,
             class_id: 0,
+            destructor_ran: false,
             property_layout,
             property_values: Vec::new(),
             dynamic_properties: if properties.is_empty() {
@@ -778,6 +785,12 @@ impl PhpObject {
             dynamic.for_each(visitor);
         }
     }
+
+    pub fn for_each_dynamic_property(&self, visitor: impl FnMut(&str, &Value)) {
+        if let Some(dynamic) = &self.dynamic_properties {
+            dynamic.for_each(visitor);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -806,6 +819,7 @@ mod object_tests;
 pub struct PhpArray {
     storage: ArrayStorage,
     next_int_key: i64,
+    cursor: Cell<usize>,
 }
 
 /// Fast deterministic hashing for integer-only PHP array keys.
@@ -1502,7 +1516,48 @@ impl PhpArray {
         Self {
             storage: ArrayStorage::Packed(Vec::new()),
             next_int_key: 0,
+            cursor: Cell::new(0),
         }
+    }
+
+    #[inline]
+    pub(crate) fn cursor_reset(&self) -> Option<&Value> {
+        self.cursor.set(0);
+        self.iter().next().map(|(_, value)| value)
+    }
+
+    #[inline]
+    pub(crate) fn cursor_end(&self) -> Option<&Value> {
+        let position = self.len().saturating_sub(1);
+        self.cursor.set(position);
+        self.iter().nth(position).map(|(_, value)| value)
+    }
+
+    #[inline]
+    pub(crate) fn cursor_current(&self) -> Option<&Value> {
+        self.iter().nth(self.cursor.get()).map(|(_, value)| value)
+    }
+
+    #[inline]
+    pub(crate) fn cursor_key(&self) -> Option<ArrayKey> {
+        self.iter().nth(self.cursor.get()).map(|(key, _)| key)
+    }
+
+    #[inline]
+    pub(crate) fn cursor_next(&self) -> Option<&Value> {
+        self.cursor.set(self.cursor.get().saturating_add(1));
+        self.cursor_current()
+    }
+
+    #[inline]
+    pub(crate) fn cursor_prev(&self) -> Option<&Value> {
+        let current = self.cursor.get();
+        if current == 0 {
+            self.cursor.set(self.len());
+            return None;
+        }
+        self.cursor.set(current - 1);
+        self.cursor_current()
     }
 
     /// PHP array union (`$left + $right`): retain every left entry and append
@@ -1527,6 +1582,7 @@ impl PhpArray {
         Self {
             storage: ArrayStorage::Packed(Vec::with_capacity(capacity)),
             next_int_key: 0,
+            cursor: Cell::new(0),
         }
     }
 
@@ -1537,6 +1593,7 @@ impl PhpArray {
             return Self {
                 storage: ArrayStorage::SmallHash(SmallHashStorage::new()),
                 next_int_key: 0,
+                cursor: Cell::new(0),
             };
         }
         Self {
@@ -1547,6 +1604,7 @@ impl PhpArray {
                 verified_int_prefix: 0,
             },
             next_int_key: 0,
+            cursor: Cell::new(0),
         }
     }
 
@@ -1558,12 +1616,14 @@ impl PhpArray {
             return Self {
                 storage: ArrayStorage::SmallHash(SmallHashStorage::new()),
                 next_int_key: 0,
+                cursor: Cell::new(0),
             };
         }
         if capacity <= LINEAR_HASH_CAPACITY {
             return Self {
                 storage: ArrayStorage::LinearHash(LinearHashStorage::with_capacity(capacity)),
                 next_int_key: 0,
+                cursor: Cell::new(0),
             };
         }
         Self::with_hash_capacity(capacity)
@@ -2204,7 +2264,6 @@ impl PhpArray {
 
     /// Mutable lookup used only after the caller has established unique COW
     /// ownership. Replacing the returned entry cannot change array structure.
-    #[cfg(any(feature = "quick-loops", test))]
     #[inline(always)]
     pub(crate) fn get_int_mut(&mut self, key: i64) -> Option<&mut Value> {
         match &mut self.storage {
@@ -2525,7 +2584,6 @@ impl PhpArray {
 
     /// Mutable string-key lookup for guarded replacement of an existing
     /// entry. The key/index storage remains untouched.
-    #[cfg(feature = "quick-loops")]
     #[inline(always)]
     pub(crate) fn get_str_mut(&mut self, key: &str) -> Option<&mut Value> {
         match &mut self.storage {
@@ -2548,6 +2606,14 @@ impl PhpArray {
                 let position = *str_index.get(key)?;
                 entries.get_mut(position).map(|entry| &mut entry.1)
             }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get_key_mut(&mut self, key: &ArrayKey) -> Option<&mut Value> {
+        match key {
+            ArrayKey::Int(key) => self.get_int_mut(*key),
+            ArrayKey::String(key) => self.get_str_mut(key),
         }
     }
 
@@ -2941,6 +3007,32 @@ impl PhpArray {
         matches!(&self.storage, ArrayStorage::Packed(_))
     }
 
+    /// PHP list semantics depend on ordered keys, not on the current internal
+    /// storage tier. Explicit `0, 1, ...` keys therefore remain a list even
+    /// when their array was constructed in hash mode.
+    #[inline]
+    pub fn is_list(&self) -> bool {
+        match &self.storage {
+            ArrayStorage::Packed(_) => true,
+            ArrayStorage::SmallHash(small) => {
+                small.entries[..small.len()]
+                    .iter()
+                    .enumerate()
+                    .all(|(index, entry)| {
+                        entry.as_ref().is_some_and(
+                        |(key, _)| matches!(key, ArrayEntryKey::Int(key) if *key == index as i64),
+                    )
+                    })
+            }
+            ArrayStorage::LinearHash(linear) => linear.entries.iter().enumerate().all(
+                |(index, (key, _))| matches!(key, ArrayEntryKey::Int(key) if *key == index as i64),
+            ),
+            ArrayStorage::Hash { entries, .. } => entries.iter().enumerate().all(
+                |(index, (key, _))| matches!(key, ArrayEntryKey::Int(key) if *key == index as i64),
+            ),
+        }
+    }
+
     /// Get packed values slice — only valid when is_packed() is true.
     /// Used for fast iteration when caller knows array is packed.
     #[inline]
@@ -3148,6 +3240,7 @@ impl Clone for PhpArray {
         Self {
             storage: cloned_storage,
             next_int_key: self.next_int_key,
+            cursor: Cell::new(self.cursor.get()),
         }
     }
 }
@@ -3526,6 +3619,27 @@ impl Value {
             // contains the live `Rc<RefCell<PhpObject>>` allocation address.
             unsafe { self.object_identity_unchecked() }
         })
+    }
+
+    /// Mark an Object allocation as having entered its destructor. Returns
+    /// false when the same allocation was already destructed.
+    #[inline]
+    pub(crate) fn mark_object_destructed(&self) -> bool {
+        let Some(mut object) = self.as_object_mut() else {
+            return false;
+        };
+        if object.destructor_ran {
+            return false;
+        }
+        object.destructor_ran = true;
+        true
+    }
+
+    /// Number of live PHP Value handles sharing this object identity.
+    #[inline]
+    pub(crate) fn object_strong_count(&self) -> Option<usize> {
+        let object = self.as_object_rc()?;
+        Some(Rc::strong_count(&object))
     }
 
     /// Read the immutable class name for Object values without taking a
@@ -4087,7 +4201,7 @@ impl Value {
     }
 
     #[inline]
-    fn is_owned_reference(&self) -> bool {
+    pub(crate) fn is_owned_reference(&self) -> bool {
         self.value_type() == ValueType::Reference
             && self.type_info & Self::OWNED_REFERENCE_FLAG != 0
     }

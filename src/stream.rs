@@ -447,6 +447,30 @@ impl PhpStream {
         }
     }
 
+    /// Apply PHP flock operation bits to a regular file stream. Locks are
+    /// released by explicit LOCK_UN or automatically when the stream closes.
+    pub fn lock(&self, operation: i64) -> io::Result<()> {
+        let nonblocking = operation & 4 != 0;
+        let operation = operation & !4;
+        let StreamBackend::File(file) = &self.backend else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "file locks require a regular file",
+            ));
+        };
+        match (operation, nonblocking) {
+            (1, false) => file.lock_shared(),
+            (1, true) => Ok(file.try_lock_shared()?),
+            (2, false) => file.lock(),
+            (2, true) => Ok(file.try_lock()?),
+            (3, _) => file.unlock(),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid file lock operation",
+            )),
+        }
+    }
+
     /// Lock a regular file for the duration of the owning stream. PHP's
     /// `LOCK_EX` flag rejects memory and temporary wrappers.
     #[cfg(feature = "file-write")]

@@ -40,6 +40,14 @@ fn test_e2e_string_assign_echo() {
     assert_eq!(run_php("<?php $s = \"test\"; echo $s;"), "test");
 }
 
+#[test]
+fn substr_saturates_a_negative_length_before_the_string_start() {
+    assert_eq!(
+        run_php("<?php echo '[' . substr('abcdef', 1, -99) . ']';"),
+        "[]"
+    );
+}
+
 // === Concat precedence ===
 
 #[test]
@@ -429,6 +437,139 @@ fn test_strspn_and_strcspn_with_ranges() {
             "<?php echo strcspn('scheme:/path', ':/?#'), ':', strspn('abc123!', 'abc123'), ':', strcspn('xxabc!', '!', 2, 4);"
         ),
         "6:6:3"
+    );
+}
+
+#[test]
+fn double_quoted_octal_nul_escape_keeps_service_ids_valid() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$id = 'Rphp\SymfonyKernelFixture\HealthController';
+echo strlen("\0\r\n'"), ':', strlen($id), ':', strcspn($id, "\0\r\n'"), ':', $id[-1];
+"#,
+        ),
+        "4:42:42:r"
+    );
+}
+
+#[test]
+fn xxh128_hash_matches_php_vectors_and_is_case_insensitive() {
+    assert_eq!(
+        run_php(
+            "<?php echo hash('xxh128', ''), '|', hash('xxh128', 'Symfony'), '|', hash('XXH128', 'framework_17');"
+        ),
+        "99aa06d3014798d86001c324468d497f|c0e5d7ae7e54d739641100ec43e5d6e6|3eae1805172d81287885e7c2c240684f"
+    );
+}
+
+#[test]
+fn xxh128_hash_binary_output_round_trips_through_base64() {
+    assert_eq!(
+        run_php("<?php echo base64_encode(hash('xxh128', 'Symfony', true));"),
+        "wOXXrn5U1zlkEQDsQ+XW5g=="
+    );
+}
+
+#[test]
+fn crc32_hash_matches_php_byte_order_and_binary_output() {
+    assert_eq!(
+        run_php(
+            "<?php echo hash('crc32', ''), '|', hash('crc32', '123456789'), '|', hash('crc32', 'Symfony'), '|', base64_encode(hash('crc32', '123456789', true));"
+        ),
+        "00000000|181989fc|313c4a4d|GBmJ/A=="
+    );
+}
+
+#[test]
+fn scalar_array_serialization_round_trips_php_wire_format() {
+    let serialized = concat!(
+        "a:3:{",
+        "s:4:\"name\";s:7:\"Symfony\";",
+        "s:7:\"enabled\";b:1;",
+        "s:6:\"nested\";a:3:{i:0;N;i:1;i:-3;i:2;s:1:\"x\";}",
+        "}"
+    );
+    let source = format!(
+        "<?php $value = ['name' => 'Symfony', 'enabled' => true, 'nested' => [null, -3, 'x']]; echo serialize($value), '|'; $copy = unserialize('{}', ['allowed_classes' => true]); echo $copy['name'], ':', $copy['enabled'], ':', $copy['nested'][1], ':', $copy['nested'][2];",
+        serialized
+    );
+    assert_eq!(run_php(&source), format!("{serialized}|Symfony:1:-3:x"));
+}
+
+#[test]
+fn object_serialization_honors_magic_hooks_and_allowed_classes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class SerializableProbe {
+    private string $value;
+    public function __construct(string $value) { $this->value = $value; }
+    public function __serialize(): array { return ['value' => $this->value]; }
+    public function __unserialize(array $data): void { $this->value = $data['value']; }
+    public function get(): string { return $this->value; }
+}
+$serialized = serialize(new SerializableProbe('ok'));
+echo $serialized, '|';
+echo unserialize($serialized)->get(), '|';
+echo json_encode(unserialize($serialized, ['allowed_classes' => false]));
+"#,
+        ),
+        "O:17:\"SerializableProbe\":1:{s:5:\"value\";s:2:\"ok\";}|ok|{\"__PHP_Incomplete_Class_Name\":\"SerializableProbe\",\"value\":\"ok\"}"
+    );
+}
+
+#[test]
+fn object_serialization_preserves_cycles_and_shared_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CycleProbe { public $self; }
+$cycle = new CycleProbe();
+$cycle->self = $cycle;
+$cycleWire = serialize($cycle);
+echo $cycleWire, '|';
+$copy = unserialize($cycleWire);
+echo $copy === $copy->self ? 'same' : 'different';
+echo '|';
+$shared = new stdClass();
+echo serialize([1, $shared, $shared]);
+"#,
+        ),
+        concat!(
+            "O:10:\"CycleProbe\":1:{s:4:\"self\";r:1;}|same|",
+            "a:3:{i:0;i:1;i:1;O:8:\"stdClass\":0:{}i:2;r:3;}"
+        )
+    );
+}
+
+#[test]
+fn levenshtein_supports_default_and_custom_edit_costs() {
+    assert_eq!(
+        run_php(
+            "<?php echo levenshtein('kitten', 'sitting'), '|', levenshtein('abc', 'axc', 2, 3, 4), '|', levenshtein('', 'abc');"
+        ),
+        "3|3|3"
+    );
+}
+
+#[test]
+fn explode_supports_positive_zero_and_negative_limits() {
+    assert_eq!(
+        run_php(
+            "<?php echo implode('|', explode(':', 'a:b:c:d', 3)), '#'; echo implode('|', explode(':', 'a:b:c', 0)), '#'; echo implode('|', explode(':', 'a:b:c:d', -2));"
+        ),
+        "a|b|c:d#a:b:c#a|b"
+    );
+}
+
+#[test]
+fn ucwords_supports_default_and_custom_separators() {
+    assert_eq!(
+        run_php(
+            r#"<?php echo ucwords("hello world\tnext-value"), '|', ucwords('one-two three', '-');"#
+        ),
+        "Hello World\tNext-value|One-Two three"
     );
 }
 

@@ -1,6 +1,16 @@
 // === Array literal & echo ===
 
 #[test]
+fn natural_sort_constants_order_numeric_key_fragments() {
+    assert_eq!(
+        run_php(
+            "<?php $values = ['item10' => 10, 'item2' => 2, 'Item1' => 1]; ksort($values, SORT_NATURAL | SORT_FLAG_CASE); echo implode(',', array_keys($values)), ':', SORT_LOCALE_STRING;"
+        ),
+        "Item1,item2,item10:5"
+    );
+}
+
+#[test]
 fn test_e2e_array_echo_prints_array() {
     // echo $arr prints "Array" (PHP behavior)
     assert_eq!(run_php("<?php $a = [1, 2, 3]; echo $a;"), "Array");
@@ -50,6 +60,14 @@ fn test_e2e_array_mixed_keys() {
             "<?php $a = [0 => 'a', 'x' => 'b', 1 => 'c']; echo $a[0]; echo $a['x']; echo $a[1];"
         ),
         "abc"
+    );
+}
+
+#[test]
+fn key_reports_the_initial_array_cursor_key() {
+    assert_eq!(
+        run_php("<?php $named = ['first' => 1, 'second' => 2]; echo key($named), '|'; $indexed = [7 => 'x']; echo key($indexed), '|'; var_dump(key([]));"),
+        "first|7|NULL\n"
     );
 }
 
@@ -114,6 +132,61 @@ fn test_e2e_array_push_auto_creates() {
 #[test]
 fn test_e2e_array_push_continues_index() {
     assert_eq!(run_php("<?php $a = [10, 20]; $a[] = 30; echo $a[2];"), "30");
+}
+
+#[test]
+fn array_access_objects_dispatch_dimension_operations() {
+    assert_eq!(
+        run_php(
+            "<?php
+class Bag implements ArrayAccess {
+    private array $values = [];
+    public function offsetSet($offset, $value): void { $this->values[$offset] = $value; }
+    public function offsetGet($offset): mixed { return $this->values[$offset] ?? null; }
+    public function offsetExists($offset): bool { return isset($this->values[$offset]); }
+    public function offsetUnset($offset): void { unset($this->values[$offset]); }
+}
+$bag = new Bag();
+$bag['name'] = 'value';
+echo $bag['name'], '|';
+unset($bag['name']);
+echo $bag['name'] ?? 'missing';
+"
+        ),
+        "value|missing"
+    );
+}
+
+#[test]
+fn spl_object_storage_uses_object_identity_and_iterates_objects() {
+    assert_eq!(
+        run_php(
+            "<?php
+$first = new stdClass();
+$second = new stdClass();
+$storage = new SplObjectStorage();
+$storage[$first] = 'first';
+$storage->attach($second, 'second');
+echo $storage[$first], ':', $storage[$second], ':', $storage->count(), ':';
+echo isset($storage[$first]) ? 'yes' : 'no';
+echo isset($storage[new stdClass()]) ? 'bad' : 'ok', '|';
+foreach ($storage as $index => $object) {
+    echo $index, '=', $object === $first ? 'first' : 'second', ';';
+}
+$storage->detach($first);
+echo '|', $storage->contains($first) ? 'bad' : 'ok', ':', $storage->count(), '|';
+class StorageHolder {
+    public SplObjectStorage $storage;
+    public function __construct() { $this->storage = new SplObjectStorage(); }
+    public function add(object $object): void { $this->storage[$object] = 'nested'; }
+}
+$holder = new StorageHolder();
+$holder->add($first);
+echo $holder->storage[$first];
+"
+        ),
+        "first:second:2:yesok|0=first;1=second;|ok:1|nested"
+    );
 }
 
 // === Array in loops ===
@@ -477,5 +550,63 @@ fn foreach_destructures_values_with_optional_keys() {
             "<?php foreach ([[1, 2], [3, 4]] as $key => [$left, $right]) { echo $key, ':', $left + $right, '|'; }"
         ),
         "0:3|1:7|"
+    );
+}
+#[test]
+fn array_merge_accepts_zero_one_and_many_arrays() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo count(array_merge()), '|';
+$one = array_merge(['first' => 1, 8 => 'a']);
+echo $one['first'], ':', $one[0], '|';
+$many = array_merge(['same' => 1, 4 => 'a'], ['same' => 2, 9 => 'b'], ['tail' => 3]);
+echo $many['same'], ':', $many[0], ':', $many[1], ':', $many['tail'];
+"#,
+        ),
+        "0|1:a|2:a:b:3"
+    );
+}
+
+#[test]
+fn array_walk_recursive_mutates_only_leaf_values_and_accepts_userdata() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = ['first' => 1, 'nested' => [2, 'deep' => 3]];
+array_walk_recursive($values, static function (&$value, $key, $prefix) {
+    $value = $prefix . $key . ':' . $value;
+}, '>');
+echo $values['first'], '|', $values['nested'][0], '|', $values['nested']['deep'];
+
+$entropy = ['name' => 'value', 'nested' => [1, true]];
+array_walk_recursive($entropy, static function (&$value) { $value = null; });
+echo '|', serialize($entropy);
+"#,
+        ),
+        ">first:1|>0:2|>deep:3|a:2:{s:4:\"name\";N;s:6:\"nested\";a:2:{i:0;N;i:1;N;}}"
+    );
+}
+
+#[test]
+fn spl_priority_queue_orders_array_priorities_and_honors_extract_flags() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$queue = new SplPriorityQueue();
+$queue->insert(['low'], [1, 9]);
+$queue->insert(['high-late'], [2, 1]);
+$queue->insert(['high-early'], [2, 8]);
+echo $queue->count(), ':', $queue->isEmpty() ? 'empty' : 'ready', '|';
+foreach ($queue as [$name]) {
+    echo $name, ',';
+}
+$queue->setExtractFlags(SplPriorityQueue::EXTR_BOTH);
+$queue->rewind();
+$both = $queue->current();
+echo '|', $both['data'][0], ':', $both['priority'][0], ':', $both['priority'][1];
+"#,
+        ),
+        "3:ready|high-early,high-late,low,|high-early:2:8"
     );
 }

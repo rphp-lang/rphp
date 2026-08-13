@@ -2,6 +2,26 @@
 mod common;
 use common::run_php;
 
+#[test]
+fn preg_split_supports_delimiter_and_offset_flags() {
+    assert_eq!(
+        run_php(
+            "<?php $parts = preg_split('/(:)/', ':a::', -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY); echo implode(',', $parts), '|'; foreach (preg_split('/(:)/', 'a:b', -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_OFFSET_CAPTURE) as $part) echo $part[0], '@', $part[1], ',';"
+        ),
+        ":,a,:,:|a@0,:@1,b@2,"
+    );
+}
+
+#[test]
+fn preg_match_supports_define_blocks_and_named_subroutine_calls() {
+    assert_eq!(
+        run_php(
+            r#"<?php $pattern = '/(?(DEFINE)(?<cn>[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*+))(?(DEFINE)(?<fqcn>(?&cn)(?:\\\\(?&cn))*+))^\??(?&fqcn)(?:(?:\|(?&fqcn))*+|(?:&(?&fqcn))*+)$/'; foreach (['?Router', 'App\\Router|Psr\\Log\\LoggerInterface', 'bad-name'] as $type) echo preg_match($pattern, $type);"#
+        ),
+        "110"
+    );
+}
+
 // === preg_match — basic (no captures) ===
 
 #[test]
@@ -103,6 +123,51 @@ fn test_preg_replace_with_backreference() {
         run_php("<?php echo preg_replace('/(\\w+)@(\\w+)/', '$1 at $2', 'user@host');"),
         "user at host"
     );
+}
+
+#[test]
+fn test_preg_replace_applies_pattern_and_replacement_arrays_in_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$patterns = ['/([A-Z]+)([A-Z][a-z])/', '/([a-z\d])([A-Z])/'];
+$replacements = ['\\1_\\2', '\\1_\\2'];
+echo strtolower(preg_replace($patterns, $replacements, 'FrameworkBundle')), '|';
+$result = preg_replace(['/a/', '/b/', '/c/'], ['A'], ['named' => 'abc', 4 => 'cab']);
+echo $result['named'], ':', $result[4];
+"#,
+        ),
+        "framework_bundle|A:A"
+    );
+}
+
+#[test]
+fn preg_match_supports_offset_capture_and_start_offset() {
+    let out = run_php(
+        r#"<?php
+preg_match('/(?<word>[a-z]+)(\d+)?/', '00 alpha 42 beta', $matches, PREG_OFFSET_CAPTURE, 3);
+echo $matches[0][0], ':', $matches[0][1], '|';
+echo $matches['word'][0], ':', $matches['word'][1], '|';
+echo $matches[2][0], ':', $matches[2][1], '|';
+preg_match('/beta/', '00 alpha 42 beta', $tail, PREG_OFFSET_CAPTURE, -4);
+echo $tail[0][0], ':', $tail[0][1];
+"#,
+    );
+    assert_eq!(out, "alpha:3|alpha:3|:-1|beta:12");
+}
+
+#[test]
+fn preg_replace_supports_limit_and_total_count() {
+    let out = run_php(
+        r#"<?php
+$count = -1;
+echo preg_replace('/a/', 'x', 'aaaa', 2, $count), ':', $count, '|';
+$count = -1;
+$result = preg_replace(['/a/', '/b/'], ['x', 'y'], ['first' => 'aab', 4 => 'abb'], 1, $count);
+echo $result['first'], ':', $result[4], ':', $count;
+"#,
+    );
+    assert_eq!(out, "xxaa:2|xay:xyb:4");
 }
 
 // === Case-insensitive flag ===

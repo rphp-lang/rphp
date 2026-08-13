@@ -146,3 +146,28 @@ try {
     );
     assert_eq!(output, "caught:Clone not allowed");
 }
+
+#[test]
+fn clone_results_are_initialized_after_mixed_stack_frame_reuse() {
+    let output = run_php(
+        r#"<?php
+class CloneTarget {
+    public int $value = 7;
+}
+function churn_stack($value) {
+    $first = [$value, $value];
+    $second = $first;
+    return $second[0];
+}
+function copy_target(CloneTarget $target): CloneTarget {
+    return clone $target;
+}
+$target = new CloneTarget();
+for ($index = 0; $index < 64; ++$index) {
+    churn_stack((string) $index);
+    echo copy_target($target)->value;
+}
+"#,
+    );
+    assert_eq!(output, "7".repeat(64));
+}

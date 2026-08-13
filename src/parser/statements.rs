@@ -250,10 +250,10 @@ impl Parser {
                         let target = self.parse_expr()?;
                         if !self.is_empty_array_dimension_suffix() {
                             self.expect(&Token::Semicolon)?;
-                            return Ok(Stmt::Assign {
+                            return Ok(Stmt::ExprStmt(Expr::AssignReference {
                                 var: var_name,
-                                expr: target,
-                            });
+                                target: Box::new(target),
+                            }));
                         }
                         if !matches!(
                             &target,
@@ -586,6 +586,7 @@ impl Parser {
                 // Accept the PHP reference-return declaration marker. Return
                 // aliasing itself remains outside the current execution
                 // contract, matching the closure parser's bounded handling.
+                let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let name = match self.advance() {
                     Token::Identifier(n) => n,
@@ -611,6 +612,7 @@ impl Parser {
                 self.class_scope_active = previous_class_scope;
                 Ok(Stmt::Function {
                     name,
+                    returns_by_ref,
                     params,
                     body,
                     return_type,
@@ -657,6 +659,15 @@ impl Parser {
                 Ok(Stmt::Throw(expr))
             }
             Token::Class | Token::Abstract | Token::Final => self.parse_class(),
+            Token::Identifier(ref name)
+                if name.eq_ignore_ascii_case("readonly")
+                    && matches!(
+                        self.peek_at(1),
+                        Token::Class | Token::Abstract | Token::Final
+                    ) =>
+            {
+                self.parse_class()
+            }
             Token::Enum => self.parse_enum(),
             Token::Interface => self.parse_interface(),
             Token::Trait => self.parse_trait(),

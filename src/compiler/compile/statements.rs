@@ -947,6 +947,7 @@ impl Compiler {
             }
             Stmt::Function {
                 name,
+                returns_by_ref,
                 params,
                 body,
                 return_type,
@@ -1022,7 +1023,7 @@ impl Compiler {
                     block_plans: Vec::new(),
                     ip_to_block: Vec::new(),
                 };
-                let user_func = make_user_function_typed(
+                let mut user_func = make_user_function_typed(
                     op_array,
                     cp.num_args,
                     cp.required_num_args,
@@ -1033,6 +1034,7 @@ impl Compiler {
                     cp.param_names,
                     cp.return_type_hint,
                 );
+                user_func.common.sig.returns_reference = *returns_by_ref;
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
@@ -1058,8 +1060,18 @@ impl Compiler {
             }
             Stmt::ExprStmt(expr) => {
                 // Compile expression for side effects (e.g. function call), discard result
+                let first_tmp = self.next_tmp as u16;
                 let (result, result_type) = self.compile_expr(expr);
                 self.discard_unused_expr_result(result, result_type);
+                let end_tmp = self.next_tmp as u16;
+                if end_tmp > first_tmp {
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = end_tmp;
+                    release.op2_type = OpType::Tmp;
+                    self.instructions.push(release);
+                }
             }
             Stmt::While { condition, body } => {
                 // Loop start: compile condition
@@ -1945,6 +1957,7 @@ impl Compiler {
                 implements,
                 is_abstract,
                 is_final,
+                is_readonly,
                 uses,
                 trait_aliases,
                 properties,
@@ -2110,7 +2123,7 @@ impl Compiler {
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
-                    let user_func = finalize_user_method(
+                    let mut user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -2125,6 +2138,7 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.common.sig.returns_reference = method.returns_by_ref;
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -2173,9 +2187,22 @@ impl Compiler {
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
-                    if prop.is_static && prop.is_readonly {
+                    let property_is_readonly = *is_readonly || prop.is_readonly;
+                    if prop.is_static && property_is_readonly {
                         return Err(format!(
                             "Static property {}::${} cannot be readonly",
+                            name, prop.name
+                        ));
+                    }
+                    if property_is_readonly && prop.type_hint.is_none() {
+                        return Err(format!(
+                            "Readonly property {}::${} must have type",
+                            name, prop.name
+                        ));
+                    }
+                    if property_is_readonly && prop.default.is_some() {
+                        return Err(format!(
+                            "Readonly property {}::${} cannot have default value",
                             name, prop.name
                         ));
                     }
@@ -2202,7 +2229,7 @@ impl Compiler {
                             })
                         })
                         .transpose()?;
-                    if prop.is_readonly && !prop.is_static {
+                    if property_is_readonly && !prop.is_static {
                         readonly_props.push(prop.name.clone());
                     }
                     let definition = PropertyDefinition::declared(
@@ -2211,7 +2238,7 @@ impl Compiler {
                         prop.visibility,
                         resolved_class.clone(),
                         type_hint,
-                        prop.is_readonly,
+                        property_is_readonly,
                         type_hint_requires_reified_check(&prop.type_hint),
                     );
                     if prop.is_static {
@@ -2223,16 +2250,17 @@ impl Compiler {
 
                 // Add promoted properties
                 for (pname, pvis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
+                    let property_is_readonly = *is_readonly || *p_readonly;
                     compiled_props.push(PropertyDefinition::declared(
                         pname.clone(),
                         None,
                         *pvis,
                         resolved_class.clone(),
                         type_hint.clone(),
-                        *p_readonly,
+                        property_is_readonly,
                         *requires_reified_check,
                     ));
-                    if *p_readonly {
+                    if property_is_readonly {
                         readonly_props.push(pname.clone());
                     }
                 }
@@ -2263,6 +2291,7 @@ impl Compiler {
                     is_interface: false,
                     is_abstract: *is_abstract,
                     is_final: *is_final,
+                    is_readonly: *is_readonly,
                     is_trait: false,
                     is_enum: false,
                     uses: resolved_uses,
@@ -2385,7 +2414,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = make_user_function_typed(
+                    let mut user_func = make_user_function_typed(
                         op_array,
                         cp.num_args,
                         cp.required_num_args,
@@ -2396,6 +2425,7 @@ impl Compiler {
                         cp.param_names,
                         cp.return_type_hint,
                     );
+                    user_func.common.sig.returns_reference = method.returns_by_ref;
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -2421,6 +2451,7 @@ impl Compiler {
                     is_interface: true,
                     is_abstract: false,
                     is_final: false,
+                    is_readonly: false,
                     is_trait: false,
                     is_enum: false,
                     uses: vec![],
@@ -2535,7 +2566,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = finalize_user_method(
+                    let mut user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -2550,6 +2581,7 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.common.sig.returns_reference = method.returns_by_ref;
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -2632,6 +2664,7 @@ impl Compiler {
                     is_interface: false,
                     is_abstract: false,
                     is_final: false,
+                    is_readonly: false,
                     is_trait: true,
                     is_enum: false,
                     uses: resolved_uses,
@@ -2738,7 +2771,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = finalize_user_method(
+                    let mut user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -2753,6 +2786,7 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.common.sig.returns_reference = method.returns_by_ref;
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -2812,6 +2846,7 @@ impl Compiler {
                     is_interface: false,
                     is_abstract: false,
                     is_final: true, // enums are implicitly final
+                    is_readonly: false,
                     is_trait: false,
                     is_enum: true,
                     uses: vec![],

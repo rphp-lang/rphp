@@ -253,9 +253,13 @@ $f = new Foo();
 echo is_object($f) ? "yes" : "no";
 echo ",";
 echo is_object(42) ? "yes" : "no";
+echo ",";
+$closure = static function () {};
+echo is_object($closure) ? "yes" : "no";
+echo "," . gettype($closure);
 "#
         ),
-        "yes,no"
+        "yes,no,yes,object"
     );
 }
 
@@ -432,6 +436,24 @@ fn test_sprintf_numeric_formats_write_directly() {
     assert_eq!(
         run_php(r#"<?php echo sprintf("%f %o %b %c", 1.5, 8, 5, 65);"#),
         "1.500000 10 101 A"
+    );
+}
+
+#[test]
+fn test_vsprintf_reuses_array_values_without_changing_format_semantics() {
+    assert_eq!(
+        run_php(r#"<?php echo vsprintf("[%s, %d, %x, %%]", ["route", 7, 255]);"#),
+        "[route, 7, ff, %]"
+    );
+}
+
+#[test]
+fn user_sorts_preserve_keys_and_compare_values_or_keys() {
+    assert_eq!(
+        run_php(
+            "<?php $byValue = ['second' => 2, 'first' => 1]; uasort($byValue, static fn ($left, $right) => $left <=> $right); echo implode(',', array_keys($byValue)), ':'; $byKey = ['item10' => 10, 'item2' => 2]; uksort($byKey, static fn ($left, $right) => (int) substr($left, 4) <=> (int) substr($right, 4)); echo implode(',', array_keys($byKey));"
+        ),
+        "first,second:item2,item10"
     );
 }
 

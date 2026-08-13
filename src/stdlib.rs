@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-use crate::compiler::compile::PropertyDefinition;
+use crate::compiler::compile::{ClassConstantDefinition, PropertyDefinition};
 use crate::compiler::{
     make_direct_internal_function, make_internal_function, make_internal_function_ref,
     make_internal_function_variadic, make_internal_method,
@@ -28,7 +28,7 @@ use crate::vm::execute::{
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
-use crate::vm::function::{Function, FunctionCommon, FunctionType};
+use crate::vm::function::{Function, FunctionCommon, FunctionType, ParamTypeHint};
 use crate::vm::instruction::InlineCache;
 use crate::vm::opcode::OpCode;
 
@@ -37,6 +37,24 @@ pub(crate) mod include_path;
 mod json_decode;
 mod reflection;
 mod regex_callback;
+mod serialization;
+mod tokenizer;
+
+const BUILTIN_EXCEPTION_SUBCLASSES: &[(&str, &str)] = &[
+    ("LogicException", "Exception"),
+    ("BadFunctionCallException", "LogicException"),
+    ("BadMethodCallException", "BadFunctionCallException"),
+    ("DomainException", "LogicException"),
+    ("InvalidArgumentException", "LogicException"),
+    ("LengthException", "LogicException"),
+    ("OutOfRangeException", "LogicException"),
+    ("RuntimeException", "Exception"),
+    ("OutOfBoundsException", "RuntimeException"),
+    ("OverflowException", "RuntimeException"),
+    ("RangeException", "RuntimeException"),
+    ("UnderflowException", "RuntimeException"),
+    ("UnexpectedValueException", "RuntimeException"),
+];
 
 // ============================================================================
 // Helper macros — zero-cost abstractions for stdlib handlers
@@ -46,11 +64,13 @@ mod regex_callback;
 #[allow(unused_unsafe)]
 macro_rules! arg {
     ($ed:expr, $n:expr) => {{
-        let v = unsafe { (*$ed).cv($n) };
-        if v.is_reference() {
-            unsafe { &*v.as_ref_ptr() }
-        } else {
-            v
+        unsafe {
+            let v = (*$ed).cv($n);
+            if v.is_reference() {
+                &*v.as_ref_ptr()
+            } else {
+                v
+            }
         }
     }};
 }
@@ -59,11 +79,24 @@ macro_rules! arg {
 #[allow(unused_unsafe)]
 macro_rules! arg_mut {
     ($ed:expr, $n:expr) => {{
-        let ptr = unsafe { (*$ed).cv_mut($n) as *mut Value };
-        if unsafe { (*ptr).is_reference() } {
-            unsafe { (*ptr).as_ref_ptr() }
-        } else {
-            ptr
+        unsafe {
+            let ptr = (*$ed).cv_mut($n) as *mut Value;
+            if (*ptr).is_reference() {
+                (*ptr).as_ref_ptr()
+            } else {
+                ptr
+            }
+        }
+    }};
+    ($ed:expr, $n:expr, $value:expr) => {{
+        unsafe {
+            let ptr = (*$ed).cv_mut($n) as *mut Value;
+            let destination = if (*ptr).is_reference() {
+                (*ptr).as_ref_ptr()
+            } else {
+                ptr
+            };
+            *destination = $value;
         }
     }};
 }
@@ -119,6 +152,29 @@ macro_rules! ret {
         }
         return Ok(());
     }};
+}
+
+pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
+    // SAFETY: internal handlers receive a live ExecuteData frame and their
+    // registered arity guarantees this CV index. Reference payloads remain
+    // live for the request; cloning detaches the returned owned Value.
+    unsafe {
+        let value = (*ed).cv(index);
+        if value.is_reference() {
+            (&*value.as_ref_ptr()).clone()
+        } else {
+            value.clone()
+        }
+    }
+}
+
+pub(super) fn write_return_value(rv: *mut Value, value: Value) {
+    if rv.is_null() {
+        return;
+    }
+    // SAFETY: the VM supplies either null for a discarded result or one live,
+    // uninitialized return slot owned by the current internal call.
+    unsafe { rv.write(value) };
 }
 
 pub(crate) mod autoload;
@@ -366,7 +422,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "strict"
     );
     reg!("array_reverse", fn_array_reverse, 1, 1, "array");
-    reg!("array_merge", fn_array_merge, 2, 2, "array1", "array2");
+    reg!("array_is_list", fn_array_is_list, 1, 1, "array");
+    reg_var!("array_merge", fn_array_merge, 0, "arrays");
     reg_var!("array_replace", fn_array_replace, 1, "array");
     reg!("array_keys", fn_array_keys, 1, 1, "array");
     reg!("array_values", fn_array_values, 1, 1, "array");
@@ -397,8 +454,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("array_pad", fn_array_pad, 3, 3, "array", "length", "value");
     reg!("array_chunk", fn_array_chunk, 2, 2, "array", "length");
     reg!("array_column", fn_array_column, 2, 2, "array", "column_key");
-    reg_ref!("sort", fn_sort, 1, 1, 0b1, "array");
-    reg_ref!("rsort", fn_rsort, 1, 1, 0b1, "array");
+    reg_ref!("sort", fn_sort, 2, 1, 0b1, "array", "flags");
+    reg_ref!("rsort", fn_rsort, 2, 1, 0b1, "array", "flags");
     reg!(
         "array_search",
         fn_array_search,
@@ -428,7 +485,32 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- String functions ---
     reg_direct!("strlen", fn_strlen, direct_strlen, 1, 1, "string");
+    // S3 exposes xxh128, including the raw-output path used by Symfony's
+    // deterministic service identifiers. The wider algorithm catalogue stays
+    // explicit compatibility work rather than returning invented digests.
+    reg!("hash", fn_hash, 3, 2, "algo", "data", "binary");
+    reg!("hash_init", fn_hash_init, 1, 1, "algo");
+    reg!("hash_update", fn_hash_update, 2, 2, "context", "data");
+    reg!("hash_final", fn_hash_final, 2, 1, "context", "binary");
+    reg!("serialize", serialization::serialize, 1, 1, "value");
+    reg!(
+        "unserialize",
+        serialization::unserialize,
+        2,
+        1,
+        "data",
+        "options"
+    );
+    reg!(
+        "token_get_all",
+        tokenizer::token_get_all,
+        2,
+        1,
+        "code",
+        "flags"
+    );
     reg!("substr", fn_substr, 3, 2, "string", "offset", "length");
+    reg!("strnatcmp", fn_strnatcmp, 2, 2, "string1", "string2");
     reg!(
         "substr_compare",
         fn_substr_compare,
@@ -440,7 +522,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "length",
         "case_insensitive"
     );
-    reg!("strpos", fn_strpos, 2, 2, "haystack", "needle");
+    reg!("strpos", fn_strpos, 3, 2, "haystack", "needle", "offset");
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
     reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
     reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
@@ -472,7 +554,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("trim", fn_trim, 2, 1, "string", "characters");
     reg!("rtrim", fn_rtrim, 2, 1, "string", "characters");
     reg!("ltrim", fn_ltrim, 2, 1, "string", "characters");
-    reg!("explode", fn_explode, 2, 2, "separator", "string");
+    reg!("explode", fn_explode, 3, 2, "separator", "string", "limit");
     reg!("implode", fn_implode, 2, 2, "separator", "array");
     reg!("join", fn_implode, 2, 2, "separator", "array");
     reg!("str_repeat", fn_str_repeat, 2, 2, "string", "times");
@@ -527,7 +609,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("str_split", fn_str_split, 2, 1, "string", "length");
     reg!("ucfirst", fn_ucfirst, 1, 1, "string");
     reg!("lcfirst", fn_lcfirst, 1, 1, "string");
+    reg!("ucwords", fn_ucwords, 2, 1, "string", "separators");
     reg!("str_word_count", fn_str_word_count, 1, 1, "string");
+    reg!(
+        "levenshtein",
+        fn_levenshtein,
+        5,
+        2,
+        "string1",
+        "string2",
+        "insertion_cost",
+        "replacement_cost",
+        "deletion_cost"
+    );
     reg!(
         "wordwrap",
         fn_wordwrap,
@@ -553,26 +647,32 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_direct!("ord", fn_ord, direct_ord, 1, 1, "character");
     reg!("chr", fn_chr, 1, 1, "codepoint");
     reg_var!("sprintf", fn_sprintf, 1, "format");
+    reg!("vsprintf", fn_vsprintf, 2, 2, "format", "values");
 
     // --- Regex functions ---
     reg_ref!(
         "preg_match",
         fn_preg_match,
-        3,
+        5,
         2,
         0b100,
         "pattern",
         "subject",
-        "matches"
+        "matches",
+        "flags",
+        "offset"
     );
-    reg!(
+    reg_ref!(
         "preg_replace",
         fn_preg_replace,
+        5,
         3,
-        3,
+        0b1_0000,
         "pattern",
         "replacement",
-        "subject"
+        "subject",
+        "limit",
+        "count"
     );
 
     // --- Type functions ---
@@ -592,6 +692,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_bool", fn_is_bool, 1, 1, "value");
     reg!("is_numeric", fn_is_numeric, 1, 1, "value");
     reg!("is_object", fn_is_object, 1, 1, "value");
+    reg!("is_iterable", fn_is_iterable, 1, 1, "value");
     reg!("gettype", fn_gettype, 1, 1, "value");
     reg!("get_debug_type", fn_get_debug_type, 1, 1, "value");
 
@@ -719,6 +820,22 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "object_or_class",
         "autoload"
     );
+    reg!(
+        "class_parents",
+        fn_class_parents,
+        2,
+        1,
+        "object_or_class",
+        "autoload"
+    );
+    reg!(
+        "class_uses",
+        fn_class_uses,
+        2,
+        1,
+        "object_or_class",
+        "autoload"
+    );
 
     // --- Math functions ---
     reg_direct!("abs", fn_abs, direct_abs, 1, 1, "num");
@@ -748,7 +865,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Output ---
     reg_var!("var_dump", fn_var_dump, 1, "value");
-    reg!("print_r", fn_print_r, 1, 1, "value");
+    reg!("print_r", fn_print_r, 2, 1, "value", "return");
     reg!("var_export", fn_var_export, 2, 1, "value", "return");
 
     // --- Constants ---
@@ -757,7 +874,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("constant", fn_constant, 1, 1, "name");
 
     // --- JSON ---
-    reg!("json_encode", fn_json_encode, 1, 1, "value");
+    reg!("json_encode", fn_json_encode, 2, 1, "value", "flags");
     reg_direct!(
         "json_decode",
         fn_json_decode,
@@ -782,6 +899,22 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("restore_error_handler", fn_restore_error_handler, 0, 0);
     reg!("get_error_handler", fn_get_error_handler, 0, 0);
+    reg!(
+        "trigger_error",
+        fn_trigger_error,
+        2,
+        1,
+        "message",
+        "error_level"
+    );
+    reg!(
+        "user_error",
+        fn_trigger_error,
+        2,
+        1,
+        "message",
+        "error_level"
+    );
     reg!(
         "set_exception_handler",
         fn_set_exception_handler,
@@ -814,6 +947,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "additional_headers"
     );
     reg!("ob_get_level", fn_ob_get_level, 0, 0);
+    reg!("gc_mem_caches", fn_gc_mem_caches, 0, 0);
     reg!("func_num_args", fn_func_num_args, 0, 0);
     reg!("func_get_arg", fn_func_get_arg, 1, 1, "position");
     reg!("func_get_args", fn_func_get_args, 0, 0);
@@ -912,13 +1046,17 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("filemtime", fn_filemtime, 1, 1, "filename");
     reg!("is_file", fn_is_file, 1, 1, "filename");
     reg!("is_dir", fn_is_dir, 1, 1, "filename");
+    reg!("is_link", fn_is_link, 1, 1, "filename");
+    reg!("chmod", fn_chmod, 2, 2, "filename", "permissions");
+    reg!("fileperms", fn_fileperms, 1, 1, "filename");
+    reg!("umask", fn_umask, 1, 0, "mask");
     reg!("is_readable", fn_is_readable, 1, 1, "filename");
     reg!("is_writable", fn_is_writable, 1, 1, "filename");
     reg!("is_writeable", fn_is_writable, 1, 1, "filename");
     reg!("dirname", fn_dirname, 2, 1, "path", "levels");
     reg!("basename", fn_basename, 2, 1, "path", "suffix");
     reg!("realpath", fn_realpath, 1, 1, "path");
-    reg!("pathinfo", fn_pathinfo, 1, 1, "path");
+    reg!("pathinfo", fn_pathinfo, 2, 1, "path", "flags");
     reg!("getcwd", fn_getcwd, 0, 0);
     #[cfg(not(feature = "file-lines"))]
     reg!("file", fn_file, 1, 1, "filename");
@@ -970,11 +1108,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!(
         "preg_split",
         fn_preg_split,
-        3,
+        4,
         2,
         "pattern",
         "subject",
-        "limit"
+        "limit",
+        "flags"
     );
     reg!(
         "preg_replace_callback",
@@ -1092,8 +1231,17 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "initial"
     );
     reg_ref!("usort", fn_usort, 2, 2, 0b1, "array", "callback");
+    reg_ref!("uasort", fn_uasort, 2, 2, 0b1, "array", "callback");
+    reg_ref!("uksort", fn_uksort, 2, 2, 0b1, "array", "callback");
     reg!("array_diff", fn_array_diff, 2, 2, "array1", "array2");
-    reg!("array_diff_key", fn_array_diff_key, 2, 2, "array", "arrays");
+    reg_var!("array_diff_key", fn_array_diff_key, 2, "array", "arrays");
+    reg_var!(
+        "array_intersect_key",
+        fn_array_intersect_key,
+        2,
+        "array",
+        "arrays"
+    );
     reg!(
         "array_intersect",
         fn_array_intersect,
@@ -1103,11 +1251,27 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "array2"
     );
     reg_ref!("array_walk", fn_array_walk, 2, 2, 0b1, "array", "callback");
-    reg_ref!("asort", fn_asort, 1, 1, 0b1, "array");
-    reg_ref!("arsort", fn_arsort, 1, 1, 0b1, "array");
-    reg_ref!("ksort", fn_ksort, 1, 1, 0b1, "array");
-    reg_ref!("krsort", fn_krsort, 1, 1, 0b1, "array");
+    reg_ref!(
+        "array_walk_recursive",
+        fn_array_walk_recursive,
+        3,
+        2,
+        0b1,
+        "array",
+        "callback",
+        "arg"
+    );
+    reg_ref!("asort", fn_asort, 2, 1, 0b1, "array", "flags");
+    reg_ref!("arsort", fn_arsort, 2, 1, 0b1, "array", "flags");
+    reg_ref!("ksort", fn_ksort, 2, 1, 0b1, "array", "flags");
+    reg_ref!("krsort", fn_krsort, 2, 1, 0b1, "array", "flags");
     reg!("array_key_first", fn_array_key_first, 1, 1, "array");
+    reg_ref!("reset", fn_reset, 1, 1, 0b1, "array");
+    reg_ref!("end", fn_end, 1, 1, 0b1, "array");
+    reg!("current", fn_current, 1, 1, "array");
+    reg_ref!("next", fn_next, 1, 1, 0b1, "array");
+    reg_ref!("prev", fn_prev, 1, 1, 0b1, "array");
+    reg!("key", fn_key, 1, 1, "array");
     reg!("array_key_last", fn_array_key_last, 1, 1, "array");
 
     // --- Math (trigonometric + friends) ---
@@ -1298,27 +1462,32 @@ fn fn_throwable_get_trace_as_string(
     ret!(rv, Value::string(""));
 }
 
-fn fn_closure_bind(
-    ed: *mut ExecuteData,
+fn bind_closure_value(
+    source_value: &Value,
+    new_this: &Value,
+    scope: Option<&Value>,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
+    api: &str,
+    new_this_argument: usize,
+    scope_argument: usize,
 ) -> Result<(), VmError> {
-    let Some(source) = arg!(ed, 1).as_closure() else {
+    let Some(source) = source_value.as_closure() else {
         eg.exception = Some(crate::value::make_error_value(
             "TypeError",
-            "Closure::bind(): Argument #1 ($closure) must be of type Closure",
+            &format!("{api}(): receiver must be of type Closure"),
         ));
         return Ok(());
     };
     let mut rebound = source.clone();
     rebound.identity = std::rc::Rc::new(());
 
-    let new_this = arg!(ed, 2);
     rebound.bound_this = match new_this.value_type() {
         ValueType::Null => None,
         ValueType::Object if rebound.is_static => {
             eg.write_output(
-                b"Warning: Closure::bind(): Cannot bind an instance to a static closure\n",
+                format!("Warning: {api}(): Cannot bind an instance to a static closure\n")
+                    .as_bytes(),
             );
             ret!(rv, Value::null());
         }
@@ -1326,13 +1495,15 @@ fn fn_closure_bind(
         _ => {
             eg.exception = Some(crate::value::make_error_value(
                 "TypeError",
-                "Closure::bind(): Argument #2 ($newThis) must be of type ?object",
+                &format!(
+                    "{api}(): Argument #{new_this_argument} ($newThis) must be of type ?object"
+                ),
             ));
             return Ok(());
         }
     };
 
-    if let Some(scope) = arg_opt!(ed, 3) {
+    if let Some(scope) = scope {
         rebound.called_scope_class_id = match scope.value_type() {
             ValueType::Null => 0,
             ValueType::String if scope.as_str() == Some("static") => source.called_scope_class_id,
@@ -1340,8 +1511,7 @@ fn fn_closure_bind(
                 let name = scope.as_str().unwrap_or_default();
                 let Some(class) = eg.find_class(name) else {
                     eg.write_output(
-                        format!("Warning: Closure::bind(): Class \"{name}\" not found\n")
-                            .as_bytes(),
+                        format!("Warning: {api}(): Class \"{name}\" not found\n").as_bytes(),
                     );
                     ret!(rv, Value::null());
                 };
@@ -1355,7 +1525,9 @@ fn fn_closure_bind(
             _ => {
                 eg.exception = Some(crate::value::make_error_value(
                     "TypeError",
-                    "Closure::bind(): Argument #3 ($newScope) must be of type object|string|null",
+                    &format!(
+                        "{api}(): Argument #{scope_argument} ($newScope) must be of type object|string|null"
+                    ),
                 ));
                 return Ok(());
             }
@@ -1363,6 +1535,40 @@ fn fn_closure_bind(
     }
 
     ret!(rv, Value::closure(rebound));
+}
+
+fn fn_closure_bind(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    bind_closure_value(
+        arg!(ed, 1),
+        arg!(ed, 2),
+        arg_opt!(ed, 3),
+        rv,
+        eg,
+        "Closure::bind",
+        2,
+        3,
+    )
+}
+
+fn fn_closure_bind_to(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    bind_closure_value(
+        arg!(ed, 0),
+        arg!(ed, 1),
+        arg_opt!(ed, 2),
+        rv,
+        eg,
+        "Closure::bindTo",
+        1,
+        2,
+    )
 }
 
 fn fn_array_iterator_construct(
@@ -1380,6 +1586,499 @@ fn fn_array_iterator_construct(
     Ok(())
 }
 
+const SPL_STORAGE_DATA: &str = "__rphp_spl_storage_data";
+const SPL_STORAGE_OBJECTS: &str = "__rphp_spl_storage_objects";
+const SPL_STORAGE_ITERATOR: &str = "__rphp_iterator_values";
+const SPL_STORAGE_POSITION: &str = "__rphp_spl_storage_position";
+const SPL_PRIORITY_ENTRIES: &str = "__rphp_spl_priority_entries";
+const SPL_PRIORITY_POSITION: &str = "__rphp_spl_priority_position";
+const SPL_PRIORITY_EXTRACT_FLAGS: &str = "__rphp_spl_priority_extract_flags";
+const SPL_PRIORITY_EXTR_DATA: i64 = 1;
+const SPL_PRIORITY_EXTR_PRIORITY: i64 = 2;
+const SPL_PRIORITY_EXTR_BOTH: i64 = 3;
+
+#[inline]
+fn spl_storage_array(receiver: &Value, property: &str) -> PhpArray {
+    receiver
+        .as_object()
+        .and_then(|object| object.get_property(property).cloned())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_else(PhpArray::new)
+}
+
+#[inline]
+fn spl_storage_identity(eg: &mut ExecutorGlobals, object: &Value, method: &str) -> Option<i64> {
+    let Some(identity) = object.object_identity() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!("SplObjectStorage::{method}(): Argument #1 ($object) must be of type object"),
+        ));
+        return None;
+    };
+    Some(identity as i64)
+}
+
+fn spl_storage_store(receiver: &Value, identity: i64, object: Value, data: Value) {
+    let mut values = spl_storage_array(receiver, SPL_STORAGE_DATA);
+    let mut objects = spl_storage_array(receiver, SPL_STORAGE_OBJECTS);
+    let is_new = objects.get_int(identity).is_none();
+    values.set_int(identity, data);
+    objects.set_int(identity, object.clone());
+
+    let iterator = if is_new {
+        let mut iterator = spl_storage_array(receiver, SPL_STORAGE_ITERATOR);
+        iterator.push(object);
+        iterator
+    } else {
+        spl_storage_array(receiver, SPL_STORAGE_ITERATOR)
+    };
+
+    if let Some(mut receiver) = receiver.as_object_mut() {
+        receiver.set_property(SPL_STORAGE_DATA, Value::array(values));
+        receiver.set_property(SPL_STORAGE_OBJECTS, Value::array(objects));
+        receiver.set_property(SPL_STORAGE_ITERATOR, Value::array(iterator));
+    }
+}
+
+fn spl_storage_remove(receiver: &Value, identity: i64) {
+    let mut values = spl_storage_array(receiver, SPL_STORAGE_DATA);
+    let mut objects = spl_storage_array(receiver, SPL_STORAGE_OBJECTS);
+    if !objects.remove(&ArrayKey::Int(identity)) {
+        return;
+    }
+    values.remove(&ArrayKey::Int(identity));
+
+    let mut iterator = PhpArray::new();
+    for object in objects.values() {
+        iterator.push(object.clone());
+    }
+    if let Some(mut receiver) = receiver.as_object_mut() {
+        receiver.set_property(SPL_STORAGE_DATA, Value::array(values));
+        receiver.set_property(SPL_STORAGE_OBJECTS, Value::array(objects));
+        receiver.set_property(SPL_STORAGE_ITERATOR, Value::array(iterator));
+        let position = receiver
+            .get_property(SPL_STORAGE_POSITION)
+            .and_then(Value::as_long)
+            .unwrap_or(0)
+            .min(
+                receiver
+                    .get_property(SPL_STORAGE_ITERATOR)
+                    .and_then(Value::as_array)
+                    .map_or(0, |values| values.len() as i64),
+            );
+        receiver.set_property(SPL_STORAGE_POSITION, Value::long(position));
+    }
+}
+
+fn fn_spl_object_storage_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
+        receiver.set_property(SPL_STORAGE_DATA, Value::array(PhpArray::new()));
+        receiver.set_property(SPL_STORAGE_OBJECTS, Value::array(PhpArray::new()));
+        receiver.set_property(SPL_STORAGE_ITERATOR, Value::array(PhpArray::new()));
+        receiver.set_property(SPL_STORAGE_POSITION, Value::long(0));
+    }
+    Ok(())
+}
+
+fn fn_spl_object_storage_offset_set(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0).clone();
+    let object = arg!(ed, 1).clone();
+    let Some(identity) = spl_storage_identity(eg, &object, "offsetSet") else {
+        return Ok(());
+    };
+    let data = arg_opt!(ed, 2).cloned().unwrap_or_else(Value::null);
+    spl_storage_store(&receiver, identity, object, data);
+    Ok(())
+}
+
+fn fn_spl_object_storage_offset_get(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let object = arg!(ed, 1);
+    let Some(identity) = spl_storage_identity(eg, object, "offsetGet") else {
+        return Ok(());
+    };
+    let data = spl_storage_array(arg!(ed, 0), SPL_STORAGE_DATA)
+        .get_int(identity)
+        .cloned();
+    let Some(data) = data else {
+        eg.exception = Some(crate::value::make_error_value(
+            "UnexpectedValueException",
+            "Object not found",
+        ));
+        return Ok(());
+    };
+    ret!(rv, data);
+}
+
+fn fn_spl_object_storage_offset_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let object = arg!(ed, 1);
+    let Some(identity) = spl_storage_identity(eg, object, "offsetExists") else {
+        return Ok(());
+    };
+    ret!(
+        rv,
+        Value::bool(
+            spl_storage_array(arg!(ed, 0), SPL_STORAGE_OBJECTS)
+                .get_int(identity)
+                .is_some()
+        )
+    );
+}
+
+fn fn_spl_object_storage_offset_unset(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let object = arg!(ed, 1);
+    let Some(identity) = spl_storage_identity(eg, object, "offsetUnset") else {
+        return Ok(());
+    };
+    spl_storage_remove(arg!(ed, 0), identity);
+    Ok(())
+}
+
+fn fn_spl_object_storage_count(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::long(spl_storage_array(arg!(ed, 0), SPL_STORAGE_OBJECTS).len() as i64)
+    );
+}
+
+fn fn_spl_object_storage_rewind(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
+        receiver.set_property(SPL_STORAGE_POSITION, Value::long(0));
+    }
+    Ok(())
+}
+
+fn spl_storage_position(receiver: &Value) -> usize {
+    receiver
+        .as_object()
+        .and_then(|object| {
+            object
+                .get_property(SPL_STORAGE_POSITION)
+                .and_then(Value::as_long)
+        })
+        .unwrap_or(0)
+        .max(0) as usize
+}
+
+fn fn_spl_object_storage_valid(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0);
+    ret!(
+        rv,
+        Value::bool(
+            spl_storage_position(receiver)
+                < spl_storage_array(receiver, SPL_STORAGE_ITERATOR).len()
+        )
+    );
+}
+
+fn fn_spl_object_storage_current(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0);
+    let value = spl_storage_array(receiver, SPL_STORAGE_ITERATOR)
+        .get_value_at(spl_storage_position(receiver))
+        .cloned()
+        .unwrap_or_else(Value::null);
+    ret!(rv, value);
+}
+
+fn fn_spl_object_storage_key(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::long(spl_storage_position(arg!(ed, 0)) as i64));
+}
+
+fn fn_spl_object_storage_next(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let next = spl_storage_position(arg!(ed, 0)).saturating_add(1) as i64;
+    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
+        receiver.set_property(SPL_STORAGE_POSITION, Value::long(next));
+    }
+    Ok(())
+}
+
+#[inline]
+fn spl_priority_entries(receiver: &Value) -> PhpArray {
+    spl_storage_array(receiver, SPL_PRIORITY_ENTRIES)
+}
+
+#[inline]
+fn spl_priority_position(receiver: &Value) -> usize {
+    receiver
+        .as_object()
+        .and_then(|object| {
+            object
+                .get_property(SPL_PRIORITY_POSITION)
+                .and_then(Value::as_long)
+        })
+        .unwrap_or(0)
+        .max(0) as usize
+}
+
+fn spl_priority_compare(left: &Value, right: &Value) -> std::cmp::Ordering {
+    match (left.as_array(), right.as_array()) {
+        (Some(left), Some(right)) => {
+            for (left, right) in left.values().zip(right.values()) {
+                let ordering = spl_priority_compare(left, right);
+                if ordering != std::cmp::Ordering::Equal {
+                    return ordering;
+                }
+            }
+            return left.len().cmp(&right.len());
+        }
+        (Some(_), None) => return std::cmp::Ordering::Greater,
+        (None, Some(_)) => return std::cmp::Ordering::Less,
+        (None, None) => {}
+    }
+
+    match (left.value_type(), right.value_type()) {
+        (ValueType::Long | ValueType::Double, ValueType::Long | ValueType::Double) => left
+            .to_float_val()
+            .partial_cmp(&right.to_float_val())
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (ValueType::String, ValueType::String) => left
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right.as_str().unwrap_or_default()),
+        _ => left.echo_to_string().cmp(&right.echo_to_string()),
+    }
+}
+
+#[inline]
+fn spl_priority_entry_part(entry: &Value, index: i64) -> Value {
+    entry
+        .as_array()
+        .and_then(|entry| entry.get_int(index))
+        .cloned()
+        .unwrap_or_else(Value::null)
+}
+
+fn spl_priority_extract_value(receiver: &Value, entry: &Value) -> Value {
+    let data = spl_priority_entry_part(entry, 0);
+    let priority = spl_priority_entry_part(entry, 1);
+    let flags = receiver
+        .as_object()
+        .and_then(|object| {
+            object
+                .get_property(SPL_PRIORITY_EXTRACT_FLAGS)
+                .and_then(Value::as_long)
+        })
+        .unwrap_or(SPL_PRIORITY_EXTR_DATA);
+    match flags {
+        SPL_PRIORITY_EXTR_PRIORITY => priority,
+        SPL_PRIORITY_EXTR_BOTH => {
+            let mut result = PhpArray::new();
+            result.set_str("data", data);
+            result.set_str("priority", priority);
+            Value::array(result)
+        }
+        _ => data,
+    }
+}
+
+fn spl_priority_refresh_iterator(receiver: &Value) {
+    let entries = spl_priority_entries(receiver);
+    let mut iterator = PhpArray::with_packed_capacity(entries.len());
+    for entry in entries.values() {
+        iterator.push(spl_priority_extract_value(receiver, entry));
+    }
+    if let Some(mut receiver) = receiver.as_object_mut() {
+        receiver.set_property(SPL_STORAGE_ITERATOR, Value::array(iterator));
+    }
+}
+
+fn fn_spl_priority_queue_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
+        receiver.set_property(SPL_PRIORITY_ENTRIES, Value::array(PhpArray::new()));
+        receiver.set_property(SPL_PRIORITY_POSITION, Value::long(0));
+        receiver.set_property(
+            SPL_PRIORITY_EXTRACT_FLAGS,
+            Value::long(SPL_PRIORITY_EXTR_DATA),
+        );
+        receiver.set_property(SPL_STORAGE_ITERATOR, Value::array(PhpArray::new()));
+    }
+    Ok(())
+}
+
+fn fn_spl_priority_queue_insert(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0).clone();
+    let mut entry = PhpArray::new();
+    entry.push(arg!(ed, 1).clone());
+    entry.push(arg!(ed, 2).clone());
+
+    let mut entries: Vec<Value> = spl_priority_entries(&receiver).values().cloned().collect();
+    entries.push(Value::array(entry));
+    entries.sort_by(|left, right| {
+        spl_priority_compare(
+            &spl_priority_entry_part(right, 1),
+            &spl_priority_entry_part(left, 1),
+        )
+    });
+
+    let mut sorted = PhpArray::with_packed_capacity(entries.len());
+    for entry in entries {
+        sorted.push(entry);
+    }
+    if let Some(mut receiver) = receiver.as_object_mut() {
+        receiver.set_property(SPL_PRIORITY_ENTRIES, Value::array(sorted));
+    }
+    spl_priority_refresh_iterator(&receiver);
+    ret!(rv, Value::bool(true));
+}
+
+fn fn_spl_priority_queue_set_extract_flags(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let flags = arg_long!(ed, 1);
+    if !matches!(
+        flags,
+        SPL_PRIORITY_EXTR_DATA | SPL_PRIORITY_EXTR_PRIORITY | SPL_PRIORITY_EXTR_BOTH
+    ) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "SplPriorityQueue::setExtractFlags(): Argument #1 ($flags) must be a valid extract flag",
+        ));
+        return Ok(());
+    }
+    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
+        receiver.set_property(SPL_PRIORITY_EXTRACT_FLAGS, Value::long(flags));
+    }
+    spl_priority_refresh_iterator(arg!(ed, 0));
+    Ok(())
+}
+
+fn fn_spl_priority_queue_rewind(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
+        receiver.set_property(SPL_PRIORITY_POSITION, Value::long(0));
+    }
+    Ok(())
+}
+
+fn fn_spl_priority_queue_valid(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0);
+    ret!(
+        rv,
+        Value::bool(spl_priority_position(receiver) < spl_priority_entries(receiver).len())
+    );
+}
+
+fn fn_spl_priority_queue_current(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0);
+    let entry = spl_priority_entries(receiver)
+        .get_value_at(spl_priority_position(receiver))
+        .cloned();
+    ret!(
+        rv,
+        entry
+            .as_ref()
+            .map_or_else(Value::null, |entry| spl_priority_extract_value(
+                receiver, entry
+            ))
+    );
+}
+
+fn fn_spl_priority_queue_key(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::long(spl_priority_position(arg!(ed, 0)) as i64));
+}
+
+fn fn_spl_priority_queue_next(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let next = spl_priority_position(arg!(ed, 0)).saturating_add(1) as i64;
+    if let Some(mut receiver) = arg!(ed, 0).as_object_mut() {
+        receiver.set_property(SPL_PRIORITY_POSITION, Value::long(next));
+    }
+    Ok(())
+}
+
+fn fn_spl_priority_queue_count(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::long(spl_priority_entries(arg!(ed, 0)).len() as i64)
+    );
+}
+
+fn fn_spl_priority_queue_is_empty(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(spl_priority_entries(arg!(ed, 0)).is_empty())
+    );
+}
+
 #[cfg(feature = "value-errors")]
 #[cold]
 fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
@@ -1395,6 +2094,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![],
@@ -1473,6 +2173,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![],
@@ -1498,6 +2199,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![
@@ -1531,30 +2233,35 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     })
     .unwrap();
 
-    // RuntimeException extends Exception
-    eg.register_class(ClassDef {
-        name: "RuntimeException".to_string(),
-        source_file: None,
-        parent: Some("Exception".to_string()),
-        implements: vec![],
-        is_interface: false,
-        is_abstract: false,
-        is_final: false,
-        is_trait: false,
-        is_enum: false,
-        uses: vec![],
-        trait_aliases: vec![],
-        properties: vec![],
-        static_properties: vec![],
-        constants: vec![],
-        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
-        property_defaults: std::rc::Rc::from([]),
-        readonly_props: vec![],
-        methods: vec![],
-        abstract_methods: vec![],
-        class_id: 0,
-    })
-    .unwrap();
+    // SPL's logic/runtime exception families share Exception's constructor and
+    // properties. Register parents before children so ClassDef inheritance can
+    // materialize their layouts immediately.
+    for &(name, parent) in BUILTIN_EXCEPTION_SUBCLASSES {
+        eg.register_class(ClassDef {
+            name: name.to_string(),
+            source_file: None,
+            parent: Some(parent.to_string()),
+            implements: vec![],
+            is_interface: false,
+            is_abstract: false,
+            is_final: false,
+            is_trait: false,
+            is_enum: false,
+            is_readonly: false,
+            uses: vec![],
+            trait_aliases: vec![],
+            properties: vec![],
+            static_properties: vec![],
+            constants: vec![],
+            property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+            property_defaults: std::rc::Rc::from([]),
+            readonly_props: vec![],
+            methods: vec![],
+            abstract_methods: vec![],
+            class_id: 0,
+        })
+        .unwrap();
+    }
 
     // Error implements Throwable
     eg.register_class(ClassDef {
@@ -1567,6 +2274,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![
@@ -1611,6 +2319,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![],
@@ -1636,6 +2345,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![],
@@ -1661,6 +2371,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![],
@@ -1686,6 +2397,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![],
@@ -1711,6 +2423,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_final: false,
         is_trait: false,
         is_enum: false,
+        is_readonly: false,
         uses: vec![],
         trait_aliases: vec![],
         properties: vec![],
@@ -1728,17 +2441,18 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // Register core Throwable methods for each built-in concrete class.
     // num_args = 4 for __construct (CV 0 = $this, CV 1..3 = explicit args)
     // num_args = 1 for getMessage (CV 0 = $this)
-    for class in &[
-        "Throwable",
-        "Exception",
-        "RuntimeException",
-        "Error",
-        "TypeError",
-        "CompileError",
-        "ParseError",
-        "ArgumentCountError",
-        "UnhandledMatchError",
-    ] {
+    let throwable_classes = ["Throwable", "Exception"]
+        .into_iter()
+        .chain(BUILTIN_EXCEPTION_SUBCLASSES.iter().map(|&(name, _)| name))
+        .chain([
+            "Error",
+            "TypeError",
+            "CompileError",
+            "ParseError",
+            "ArgumentCountError",
+            "UnhandledMatchError",
+        ]);
+    for class in throwable_classes {
         // All explicit constructor parameters are optional.
         reg_method!(
             class,
@@ -1782,6 +2496,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             is_final,
             is_trait: false,
             is_enum: false,
+            is_readonly: false,
             uses: vec![],
             trait_aliases: vec![],
             properties: vec![],
@@ -1802,6 +2517,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     eg.register_class(empty_internal_type("Closure", vec![], false, true))
         .unwrap();
+    eg.register_class(empty_internal_type("HashContext", vec![], false, true))
+        .unwrap();
     // Static methods still reserve the canonical hidden method slot at CV 0;
     // explicit Closure::bind arguments begin at CV 1.
     reg_method!(
@@ -1811,6 +2528,15 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         4,
         2,
         "closure",
+        "newThis",
+        "newScope"
+    );
+    reg_method!(
+        "Closure",
+        "bindTo",
+        fn_closure_bind_to,
+        3,
+        1,
         "newThis",
         "newScope"
     );
@@ -1873,7 +2599,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             "array"
         );
     }
-    eg.register_class(empty_internal_type(
+    let mut spl_object_storage = empty_internal_type(
         "SplObjectStorage",
         vec![
             "Iterator".to_string(),
@@ -1883,8 +2609,216 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         ],
         false,
         false,
-    ))
-    .unwrap();
+    );
+    for (name, default) in [
+        (SPL_STORAGE_DATA, Value::array(PhpArray::new())),
+        (SPL_STORAGE_OBJECTS, Value::array(PhpArray::new())),
+        (SPL_STORAGE_ITERATOR, Value::array(PhpArray::new())),
+        (SPL_STORAGE_POSITION, Value::long(0)),
+    ] {
+        spl_object_storage.properties.push(PropertyDefinition::new(
+            name.to_string(),
+            Some(default),
+            Visibility::Private,
+            "SplObjectStorage".to_string(),
+        ));
+    }
+    eg.register_class(spl_object_storage).unwrap();
+    reg_method!(
+        "SplObjectStorage",
+        "__construct",
+        fn_spl_object_storage_construct,
+        1,
+        0
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "offsetset",
+        fn_spl_object_storage_offset_set,
+        3,
+        1,
+        "object",
+        "info"
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "attach",
+        fn_spl_object_storage_offset_set,
+        3,
+        1,
+        "object",
+        "info"
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "offsetget",
+        fn_spl_object_storage_offset_get,
+        2,
+        1,
+        "object"
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "offsetexists",
+        fn_spl_object_storage_offset_exists,
+        2,
+        1,
+        "object"
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "contains",
+        fn_spl_object_storage_offset_exists,
+        2,
+        1,
+        "object"
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "offsetunset",
+        fn_spl_object_storage_offset_unset,
+        2,
+        1,
+        "object"
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "detach",
+        fn_spl_object_storage_offset_unset,
+        2,
+        1,
+        "object"
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "count",
+        fn_spl_object_storage_count,
+        1,
+        0
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "rewind",
+        fn_spl_object_storage_rewind,
+        1,
+        0
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "valid",
+        fn_spl_object_storage_valid,
+        1,
+        0
+    );
+    reg_method!(
+        "SplObjectStorage",
+        "current",
+        fn_spl_object_storage_current,
+        1,
+        0
+    );
+    reg_method!("SplObjectStorage", "key", fn_spl_object_storage_key, 1, 0);
+    reg_method!("SplObjectStorage", "next", fn_spl_object_storage_next, 1, 0);
+
+    let mut spl_priority_queue = empty_internal_type(
+        "SplPriorityQueue",
+        vec!["Iterator".to_string(), "Countable".to_string()],
+        false,
+        false,
+    );
+    spl_priority_queue.constants = [
+        ("EXTR_DATA", SPL_PRIORITY_EXTR_DATA),
+        ("EXTR_PRIORITY", SPL_PRIORITY_EXTR_PRIORITY),
+        ("EXTR_BOTH", SPL_PRIORITY_EXTR_BOTH),
+    ]
+    .into_iter()
+    .map(|(name, value)| ClassConstantDefinition {
+        name: name.to_string(),
+        value: Value::long(value),
+        visibility: Visibility::Public,
+        declaring_class: "SplPriorityQueue".to_string(),
+        type_hint: ParamTypeHint::Int,
+        is_final: false,
+    })
+    .collect();
+    for (name, default) in [
+        (SPL_PRIORITY_ENTRIES, Value::array(PhpArray::new())),
+        (SPL_PRIORITY_POSITION, Value::long(0)),
+        (
+            SPL_PRIORITY_EXTRACT_FLAGS,
+            Value::long(SPL_PRIORITY_EXTR_DATA),
+        ),
+        (SPL_STORAGE_ITERATOR, Value::array(PhpArray::new())),
+    ] {
+        spl_priority_queue.properties.push(PropertyDefinition::new(
+            name.to_string(),
+            Some(default),
+            Visibility::Private,
+            "SplPriorityQueue".to_string(),
+        ));
+    }
+    eg.register_class(spl_priority_queue).unwrap();
+    reg_method!(
+        "SplPriorityQueue",
+        "__construct",
+        fn_spl_priority_queue_construct,
+        1,
+        0
+    );
+    reg_method!(
+        "SplPriorityQueue",
+        "insert",
+        fn_spl_priority_queue_insert,
+        3,
+        2,
+        "value",
+        "priority"
+    );
+    reg_method!(
+        "SplPriorityQueue",
+        "setextractflags",
+        fn_spl_priority_queue_set_extract_flags,
+        2,
+        1,
+        "flags"
+    );
+    reg_method!(
+        "SplPriorityQueue",
+        "rewind",
+        fn_spl_priority_queue_rewind,
+        1,
+        0
+    );
+    reg_method!(
+        "SplPriorityQueue",
+        "valid",
+        fn_spl_priority_queue_valid,
+        1,
+        0
+    );
+    reg_method!(
+        "SplPriorityQueue",
+        "current",
+        fn_spl_priority_queue_current,
+        1,
+        0
+    );
+    reg_method!("SplPriorityQueue", "key", fn_spl_priority_queue_key, 1, 0);
+    reg_method!("SplPriorityQueue", "next", fn_spl_priority_queue_next, 1, 0);
+    reg_method!(
+        "SplPriorityQueue",
+        "count",
+        fn_spl_priority_queue_count,
+        1,
+        0
+    );
+    reg_method!(
+        "SplPriorityQueue",
+        "isempty",
+        fn_spl_priority_queue_is_empty,
+        1,
+        0
+    );
     eg.register_class(empty_internal_type(
         "Generator",
         vec!["Iterator".to_string()],
@@ -2061,31 +2995,36 @@ fn fn_array_reverse(
     }
 }
 
+fn fn_array_is_list(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let is_list = arg!(ed, 0).as_array().is_some_and(|array| array.is_list());
+    ret!(rv, Value::bool(is_list));
+}
+
 fn fn_array_merge(
     ed: *mut ExecuteData,
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let a1 = arg!(ed, 0);
-    let a2 = arg!(ed, 1);
-    if let (Some(a1), Some(a2)) = (a1.as_array(), a2.as_array()) {
-        let mut merged = PhpArray::new();
-        for (key, val) in a1.iter() {
-            match &key {
-                ArrayKey::Int(_) => merged.push(val.clone()),
-                ArrayKey::String(k) => merged.set_str(k, val.clone()),
-            }
-        }
-        for (key, val) in a2.iter() {
-            match &key {
-                ArrayKey::Int(_) => merged.push(val.clone()),
-                ArrayKey::String(k) => merged.set_str(k, val.clone()),
-            }
-        }
+    let mut merged = PhpArray::new();
+    let Some(arrays) = arg!(ed, 0).as_array() else {
         ret!(rv, Value::array(merged));
-    } else {
-        ret!(rv, Value::null());
+    };
+    for value in arrays.values() {
+        let Some(array) = value.as_array() else {
+            ret!(rv, Value::null());
+        };
+        for (key, val) in array.iter() {
+            match &key {
+                ArrayKey::Int(_) => merged.push(val.clone()),
+                ArrayKey::String(k) => merged.set_str(k, val.clone()),
+            }
+        }
     }
+    ret!(rv, Value::array(merged));
 }
 
 fn fn_array_replace(
@@ -2455,10 +3394,11 @@ fn fn_array_column(
 }
 
 fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         let mut entries: Vec<Value> = a.values().cloned().collect();
-        entries.sort_by(|a, b| cmp_val(compare_values(a, b)));
+        entries.sort_by(|a, b| sort_value_cmp(a, b, flags));
         let mut new = PhpArray::new();
         for v in entries {
             new.push(v);
@@ -2475,10 +3415,11 @@ fn fn_rsort(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         let mut entries: Vec<Value> = a.values().cloned().collect();
-        entries.sort_by(|a, b| cmp_val(compare_values(b, a)));
+        entries.sort_by(|a, b| sort_value_cmp(b, a, flags));
         let mut new = PhpArray::new();
         for v in entries {
             new.push(v);
@@ -2765,6 +3706,148 @@ fn fn_strlen(
     ret!(rv, result);
 }
 
+fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let algorithm = arg_str!(ed, 0);
+    let data = arg_str!(ed, 1);
+    let binary = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
+    if algorithm.eq_ignore_ascii_case("xxh128") {
+        let digest = xxhash_rust::xxh3::xxh3_128(data.as_bytes());
+        if binary {
+            ret!(
+                rv,
+                Value::string(bytes_to_php_string(&digest.to_be_bytes()))
+            );
+        }
+        ret!(rv, Value::string(format!("{digest:032x}")));
+    }
+    if algorithm.eq_ignore_ascii_case("crc32") {
+        let digest = php_crc32(data.as_bytes()).to_le_bytes();
+        if binary {
+            ret!(rv, Value::string(bytes_to_php_string(&digest)));
+        }
+        let mut output = String::with_capacity(8);
+        for byte in digest {
+            write!(output, "{byte:02x}").unwrap();
+        }
+        ret!(rv, Value::string(output));
+    }
+    eg.exception = Some(crate::value::make_error_value(
+        "ValueError",
+        "hash(): Argument #1 ($algo) must be a valid hashing algorithm",
+    ));
+    ret!(rv, Value::null());
+}
+
+fn hash_context_buffer(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    if !object.class_name.eq_ignore_ascii_case("HashContext") {
+        return None;
+    }
+    object
+        .get_property("__rphp_hash_buffer")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn fn_hash_init(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let algorithm = arg_str!(ed, 0);
+    if !algorithm.eq_ignore_ascii_case("xxh128") {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "hash_init(): Argument #1 ($algo) must be a valid hashing algorithm",
+        ));
+        return Ok(());
+    }
+    let mut properties = std::collections::HashMap::new();
+    properties.insert("__rphp_hash_algorithm".to_string(), Value::string("xxh128"));
+    properties.insert("__rphp_hash_buffer".to_string(), Value::string(""));
+    ret!(
+        rv,
+        Value::object(crate::value::PhpObject::dynamic(
+            "HashContext".to_string(),
+            0,
+            properties,
+        ))
+    );
+}
+
+fn fn_hash_update(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let data = arg_str!(ed, 1).into_owned();
+    let context = arg!(ed, 0);
+    let Some(mut object) = context.as_object_mut() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "hash_update(): Argument #1 ($context) must be a valid, non-finalized HashContext",
+        ));
+        return Ok(());
+    };
+    let Some(buffer) = object
+        .get_property("__rphp_hash_buffer")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "hash_update(): Argument #1 ($context) must be a valid, non-finalized HashContext",
+        ));
+        return Ok(());
+    };
+    object.set_property("__rphp_hash_buffer", Value::string(buffer + &data));
+    ret!(rv, Value::bool(true));
+}
+
+fn fn_hash_final(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let context = arg!(ed, 0);
+    let Some(buffer) = hash_context_buffer(context) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "hash_final(): Argument #1 ($context) must be a valid, non-finalized HashContext",
+        ));
+        return Ok(());
+    };
+    if let Some(mut object) = context.as_object_mut() {
+        object.unset_property("__rphp_hash_buffer");
+    }
+    let digest = xxhash_rust::xxh3::xxh3_128(buffer.as_bytes());
+    if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
+        ret!(
+            rv,
+            Value::string(bytes_to_php_string(&digest.to_be_bytes()))
+        );
+    }
+    ret!(rv, Value::string(format!("{digest:032x}")));
+}
+
+/// PHP's `hash('crc32', ...)` uses the non-reflected CRC-32/BZIP2 recurrence
+/// and renders the resulting word in little-endian byte order. This is
+/// intentionally distinct from PHP's `crc32b`/`crc32()` algorithm.
+fn php_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04c1_1db7
+            } else {
+                crc << 1
+            };
+        }
+    }
+    !crc
+}
+
 fn fn_substr(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -2783,7 +3866,7 @@ fn fn_substr(
         Some(v) => {
             let l = v.to_long_val();
             if l < 0 {
-                ((len + l) as usize).max(start)
+                ((len + l).max(0) as usize).max(start).min(bytes.len())
             } else {
                 (start + l as usize).min(bytes.len())
             }
@@ -2798,6 +3881,98 @@ fn fn_substr(
             Value::string(String::from_utf8_lossy(&bytes[start..end]).into_owned())
         );
     }
+}
+
+fn natural_compare(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
+    fn numeric_string(bytes: &[u8]) -> Option<&[u8]> {
+        let bytes = bytes.trim_ascii();
+        bytes.iter().all(u8::is_ascii_digit).then_some(bytes)
+    }
+
+    fn compare_integer(left: &[u8], right: &[u8]) -> std::cmp::Ordering {
+        let left = left
+            .iter()
+            .position(|byte| *byte != b'0')
+            .map_or(&left[left.len()..], |start| &left[start..]);
+        let right = right
+            .iter()
+            .position(|byte| *byte != b'0')
+            .map_or(&right[right.len()..], |start| &right[start..]);
+        left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+    }
+
+    if let (Some(left), Some(right)) = (numeric_string(left), numeric_string(right)) {
+        return compare_integer(left, right);
+    }
+
+    let mut left_index = 0;
+    let mut right_index = 0;
+    while left_index < left.len() || right_index < right.len() {
+        while left.get(left_index).is_some_and(u8::is_ascii_whitespace) {
+            left_index += 1;
+        }
+        while right.get(right_index).is_some_and(u8::is_ascii_whitespace) {
+            right_index += 1;
+        }
+
+        let Some(&left_byte) = left.get(left_index) else {
+            return if right_index == right.len() {
+                std::cmp::Ordering::Equal
+            } else {
+                std::cmp::Ordering::Less
+            };
+        };
+        let Some(&right_byte) = right.get(right_index) else {
+            return std::cmp::Ordering::Greater;
+        };
+
+        if left_byte.is_ascii_digit() && right_byte.is_ascii_digit() {
+            let left_end = left[left_index..]
+                .iter()
+                .position(|byte| !byte.is_ascii_digit())
+                .map_or(left.len(), |offset| left_index + offset);
+            let right_end = right[right_index..]
+                .iter()
+                .position(|byte| !byte.is_ascii_digit())
+                .map_or(right.len(), |offset| right_index + offset);
+            let left_digits = &left[left_index..left_end];
+            let right_digits = &right[right_index..right_end];
+            let ordering = if left_byte == b'0' || right_byte == b'0' {
+                left_digits.cmp(right_digits)
+            } else {
+                compare_integer(left_digits, right_digits)
+            };
+            if ordering != std::cmp::Ordering::Equal {
+                return ordering;
+            }
+            left_index = left_end;
+            right_index = right_end;
+            continue;
+        }
+
+        let ordering = left_byte.cmp(&right_byte);
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+        left_index += 1;
+        right_index += 1;
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn fn_strnatcmp(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let left = arg_str!(ed, 0);
+    let right = arg_str!(ed, 1);
+    let result = match natural_compare(left.as_bytes(), right.as_bytes()) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    };
+    ret!(rv, Value::long(result));
 }
 
 fn fn_substr_compare(
@@ -2867,14 +4042,29 @@ fn fn_substr_compare(
 fn fn_strpos(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
+    let offset = arg_opt!(ed, 2).map(Value::to_long_val).unwrap_or(0);
+    let start = if offset < 0 {
+        h.len().checked_sub(offset.unsigned_abs() as usize)
+    } else {
+        usize::try_from(offset)
+            .ok()
+            .filter(|offset| *offset <= h.len())
+    };
+    let Some(start) = start else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)",
+        ));
+        return Ok(());
+    };
     ret!(
         rv,
-        match h.find(n.as_ref()) {
-            Some(pos) => Value::long(pos as i64),
+        match h[start..].find(n.as_ref()) {
+            Some(pos) => Value::long((start + pos) as i64),
             None => Value::bool(false),
         }
     );
@@ -3210,15 +4400,62 @@ fn fn_ltrim(
 fn fn_explode(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let d = arg_str!(ed, 0);
     let s = arg_str!(ed, 1);
+    if d.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "explode(): Argument #1 ($separator) cannot be empty",
+        ));
+        ret!(rv, Value::null());
+    }
+    let limit = arg_opt!(ed, 2).map(Value::to_long_val);
     let mut arr = PhpArray::new();
-    for part in s.split(d.as_ref()) {
-        arr.push(Value::string(part));
+    match limit {
+        None => {
+            for part in s.split(d.as_ref()) {
+                arr.push(Value::string(part));
+            }
+        }
+        Some(limit) if limit >= 0 => {
+            let limit = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+            for part in s.splitn(limit, d.as_ref()) {
+                arr.push(Value::string(part));
+            }
+        }
+        Some(limit) => {
+            let parts = s.split(d.as_ref()).collect::<Vec<_>>();
+            let retained = parts.len().saturating_sub(limit.unsigned_abs() as usize);
+            for part in parts.into_iter().take(retained) {
+                arr.push(Value::string(part));
+            }
+        }
     }
     ret!(rv, Value::array(arr));
+}
+
+fn fn_ucwords(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let string = arg_str!(ed, 0);
+    let separators = arg_opt!(ed, 1)
+        .and_then(Value::as_str)
+        .unwrap_or(" \t\r\n\u{000b}\u{000c}");
+    let mut result = String::with_capacity(string.len());
+    let mut start = true;
+    for character in string.chars() {
+        if start {
+            result.extend(character.to_uppercase());
+        } else {
+            result.push(character);
+        }
+        start = separators.contains(character);
+    }
+    ret!(rv, Value::string(result));
 }
 
 fn fn_implode(
@@ -3382,6 +4619,42 @@ fn fn_lcfirst(
     }
 }
 
+fn fn_levenshtein(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let first = arg_str!(ed, 0);
+    let second = arg_str!(ed, 1);
+    let insertion = arg_opt!(ed, 2).map_or(1, Value::to_long_val).max(0);
+    let replacement = arg_opt!(ed, 3).map_or(1, Value::to_long_val).max(0);
+    let deletion = arg_opt!(ed, 4).map_or(1, Value::to_long_val).max(0);
+    let first = first.as_bytes();
+    let second = second.as_bytes();
+
+    let mut previous = Vec::with_capacity(second.len() + 1);
+    previous.push(0i64);
+    for index in 1..=second.len() {
+        previous.push((index as i64).saturating_mul(insertion));
+    }
+    let mut current = vec![0i64; second.len() + 1];
+    for (first_index, first_byte) in first.iter().enumerate() {
+        current[0] = ((first_index + 1) as i64).saturating_mul(deletion);
+        for (second_index, second_byte) in second.iter().enumerate() {
+            let inserted = current[second_index].saturating_add(insertion);
+            let deleted = previous[second_index + 1].saturating_add(deletion);
+            let replaced = previous[second_index].saturating_add(if first_byte == second_byte {
+                0
+            } else {
+                replacement
+            });
+            current[second_index + 1] = inserted.min(deleted).min(replaced);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    ret!(rv, Value::long(previous[second.len()]));
+}
+
 fn fn_str_word_count(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -3524,14 +4797,26 @@ fn fn_sprintf(
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let fmt = arg_str!(ed, 0);
-    // Variadic: VM packs extra args into an array at CV(1)
-    // Read values directly from that array without cloning them into another Vec.
-    let variadic_arr = arg!(ed, 1);
-    let args = variadic_arr.as_array();
-    let args_count = args
-        .map(|array| array.len())
-        .unwrap_or_else(|| usize::from(variadic_arr.value_type() != ValueType::Undef));
+    // The VM materializes the variadic bucket as an array. Reuse the same
+    // zero-copy formatter as vsprintf instead of cloning its values.
+    let args = arg!(ed, 1).as_array();
+    let result = format_sprintf_values(&fmt, args.as_deref());
+    ret!(rv, Value::string(result));
+}
 
+fn fn_vsprintf(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let fmt = arg_str!(ed, 0);
+    let args = arg!(ed, 1).as_array();
+    let result = format_sprintf_values(&fmt, args.as_deref());
+    ret!(rv, Value::string(result));
+}
+
+fn format_sprintf_values(fmt: &str, args: Option<&PhpArray>) -> String {
+    let args_count = args.map_or(0, PhpArray::len);
     let mut result = String::with_capacity(fmt.len().saturating_add(args_count * 8));
     let bytes = fmt.as_bytes();
     let mut literal_start = 0usize;
@@ -3545,13 +4830,7 @@ fn fn_sprintf(
                 if spec == '%' {
                     result.push('%');
                 } else {
-                    let arg = if let Some(args) = args {
-                        args.get_value_at(arg_idx)
-                    } else if arg_idx == 0 && variadic_arr.value_type() != ValueType::Undef {
-                        Some(variadic_arr)
-                    } else {
-                        None
-                    };
+                    let arg = args.and_then(|args| args.get_value_at(arg_idx));
                     arg_idx += 1;
                     match spec {
                         's' => {
@@ -3610,7 +4889,7 @@ fn fn_sprintf(
         index += 1;
     }
     result.push_str(&fmt[literal_start..]);
-    ret!(rv, Value::string(result));
+    result
 }
 
 // ============================================================================
@@ -3774,8 +5053,24 @@ fn fn_is_object(
 ) -> Result<(), VmError> {
     ret!(
         rv,
-        Value::bool(arg!(ed, 0).value_type() == ValueType::Object)
+        Value::bool(matches!(
+            arg!(ed, 0).value_type(),
+            ValueType::Object | ValueType::Closure
+        ))
     );
+}
+
+fn fn_is_iterable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0);
+    let iterable = value.value_type() == ValueType::Array
+        || value
+            .as_object()
+            .is_some_and(|object| eg.class_is_a(object.class_name.as_ref(), "Traversable"));
+    ret!(rv, Value::bool(iterable));
 }
 
 fn fn_gettype(
@@ -3791,7 +5086,7 @@ fn fn_gettype(
         ValueType::Double => "double",
         ValueType::String => "string",
         ValueType::Array => "array",
-        ValueType::Object => "object",
+        ValueType::Object | ValueType::Closure => "object",
         ValueType::Resource => {
             if resource::is_open_for_request(eg, value.as_resource_id().unwrap()) {
                 "resource"
@@ -4024,6 +5319,81 @@ fn fn_class_implements(
     ret!(rv, Value::array(result));
 }
 
+fn fn_class_parents(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0);
+    let class_name = if let Some(object) = value.as_object() {
+        object.class_name.to_string()
+    } else if let Some(name) = value.as_str() {
+        name.to_string()
+    } else {
+        ret!(rv, Value::bool(false));
+    };
+    let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
+    if eg.find_class(&class_name).is_none()
+        && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
+    {
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(false));
+        }
+        return Ok(());
+    }
+
+    let mut result = PhpArray::new();
+    let mut current = eg
+        .find_class(&class_name)
+        .and_then(|class| class.parent.clone());
+    while let Some(parent_name) = current {
+        let canonical = eg
+            .find_class(&parent_name)
+            .map_or(parent_name, |class| class.name.clone());
+        result.set_str(&canonical, Value::string(canonical.clone()));
+        current = eg
+            .find_class(&canonical)
+            .and_then(|class| class.parent.clone());
+    }
+    ret!(rv, Value::array(result));
+}
+
+fn fn_class_uses(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0);
+    let class_name = if let Some(object) = value.as_object() {
+        object.class_name.to_string()
+    } else if let Some(name) = value.as_str() {
+        name.to_string()
+    } else {
+        ret!(rv, Value::bool(false));
+    };
+    let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
+    if eg.find_class(&class_name).is_none()
+        && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
+    {
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(false));
+        }
+        return Ok(());
+    }
+
+    let mut result = PhpArray::new();
+    if let Some(class) = eg.find_class(&class_name) {
+        for trait_name in &class.uses {
+            let canonical = eg.find_class(trait_name).map_or_else(
+                || trait_name.clone(),
+                |trait_class| trait_class.name.clone(),
+            );
+            result.set_str(&canonical, Value::string(canonical.clone()));
+        }
+    }
+    ret!(rv, Value::array(result));
+}
+
 // ============================================================================
 // Math functions
 // ============================================================================
@@ -4238,6 +5608,9 @@ fn fn_print_r(
 ) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let output = print_r_value(v, 0);
+    if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
+        ret!(rv, Value::string(output));
+    }
     eg.write_output(output.as_bytes());
     ret!(rv, Value::bool(true));
 }
@@ -4360,19 +5733,18 @@ fn fn_unset_func(
     ret!(rv, Value::null());
 }
 
-/// Install an error handler. RPHP currently emits recoverable standard-library
-/// diagnostics directly as return values, so retaining the callback is not yet
-/// observable; accepting the PHP API keeps warning-guarded library code valid.
 fn fn_set_error_handler(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let previous = eg.error_handler.clone().unwrap_or_else(Value::null);
-    eg.error_handler_stack.push(eg.error_handler.take());
+    eg.error_handler_stack
+        .push((eg.error_handler.take(), eg.error_handler_levels));
     eg.error_handler = arg_opt!(ed, 0)
         .filter(|handler| handler.value_type() != ValueType::Null)
         .cloned();
+    eg.error_handler_levels = arg_opt!(ed, 1).map_or(32767, Value::to_long_val);
     ret!(rv, previous);
 }
 
@@ -4382,8 +5754,9 @@ fn fn_restore_error_handler(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let restored = eg.error_handler_stack.pop();
-    if let Some(handler) = restored {
+    if let Some((handler, levels)) = restored {
         eg.error_handler = handler;
+        eg.error_handler_levels = levels;
         ret!(rv, Value::bool(true));
     }
     ret!(rv, Value::bool(false));
@@ -4395,6 +5768,61 @@ fn fn_get_error_handler(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     ret!(rv, eg.error_handler.clone().unwrap_or_else(Value::null));
+}
+
+const E_USER_ERROR: i64 = 256;
+const E_USER_WARNING: i64 = 512;
+const E_USER_NOTICE: i64 = 1024;
+const E_USER_DEPRECATED: i64 = 16_384;
+
+/// Raise one of PHP's user-generated diagnostics. Recoverable diagnostics are
+/// deliberately quiet when no handler claims them, matching RPHP's existing
+/// warning policy while still exposing the observable handler contract.
+fn fn_trigger_error(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let message = arg_str!(ed, 0).into_owned();
+    let level = arg_opt!(ed, 1).map_or(E_USER_NOTICE, Value::to_long_val);
+    if !matches!(
+        level,
+        E_USER_ERROR | E_USER_WARNING | E_USER_NOTICE | E_USER_DEPRECATED
+    ) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED",
+        ));
+        return Ok(());
+    }
+
+    let handled = if level & eg.error_handler_levels != 0 {
+        eg.error_handler.clone().and_then(|callback| {
+            let resolved = resolve_callback_at_callsite(&callback, eg, ed)?;
+            Some(call_resolved_with_values(
+                eg,
+                &resolved,
+                &[
+                    Value::long(level),
+                    Value::string(message.clone()),
+                    Value::string(""),
+                    Value::long(0),
+                ],
+            ))
+        })
+    } else {
+        None
+    };
+
+    if let Some(result) = handled {
+        if result?.is_truthy() || eg.exception.is_some() {
+            ret!(rv, Value::bool(true));
+        }
+    }
+    if level == E_USER_ERROR {
+        return Err(VmError::Fatal(message));
+    }
+    ret!(rv, Value::bool(true));
 }
 
 fn fn_set_exception_handler(
@@ -4476,6 +5904,16 @@ fn fn_ob_get_level(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    ret!(rv, Value::long(0));
+}
+
+fn fn_gc_mem_caches(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    // RPHP does not retain Zend MM free-list caches between these calls.
+    // PHP reports the number of bytes released, hence zero is exact here.
     ret!(rv, Value::long(0));
 }
 
@@ -4683,6 +6121,100 @@ fn compare_values(a: &Value, b: &Value) -> i32 {
         1
     } else {
         0
+    }
+}
+
+const SORT_NATURAL: i64 = 6;
+const SORT_FLAG_CASE: i64 = 8;
+
+fn natural_string_cmp(left: &str, right: &str, case_insensitive: bool) -> std::cmp::Ordering {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let mut left_index = 0usize;
+    let mut right_index = 0usize;
+    while left_index < left.len() && right_index < right.len() {
+        if left[left_index].is_ascii_digit() && right[right_index].is_ascii_digit() {
+            let left_end = left_index
+                + left[left_index..]
+                    .iter()
+                    .take_while(|byte| byte.is_ascii_digit())
+                    .count();
+            let right_end = right_index
+                + right[right_index..]
+                    .iter()
+                    .take_while(|byte| byte.is_ascii_digit())
+                    .count();
+            let left_significant = left_index
+                + left[left_index..left_end]
+                    .iter()
+                    .take_while(|byte| **byte == b'0')
+                    .count();
+            let right_significant = right_index
+                + right[right_index..right_end]
+                    .iter()
+                    .take_while(|byte| **byte == b'0')
+                    .count();
+            let left_digits = &left[left_significant..left_end];
+            let right_digits = &right[right_significant..right_end];
+            let numeric = left_digits
+                .len()
+                .cmp(&right_digits.len())
+                .then_with(|| left_digits.cmp(right_digits));
+            if numeric != std::cmp::Ordering::Equal {
+                return numeric;
+            }
+            left_index = left_end;
+            right_index = right_end;
+            continue;
+        }
+
+        let mut left_byte = left[left_index];
+        let mut right_byte = right[right_index];
+        if case_insensitive {
+            left_byte = left_byte.to_ascii_lowercase();
+            right_byte = right_byte.to_ascii_lowercase();
+        }
+        match left_byte.cmp(&right_byte) {
+            std::cmp::Ordering::Equal => {
+                left_index += 1;
+                right_index += 1;
+            }
+            ordering => return ordering,
+        }
+    }
+    (left.len() - left_index).cmp(&(right.len() - right_index))
+}
+
+fn sort_value_cmp(left: &Value, right: &Value, flags: i64) -> std::cmp::Ordering {
+    if flags & !SORT_FLAG_CASE == SORT_NATURAL {
+        natural_string_cmp(
+            &left.echo_to_string(),
+            &right.echo_to_string(),
+            flags & SORT_FLAG_CASE != 0,
+        )
+    } else {
+        cmp_val(compare_values(left, right))
+    }
+}
+
+fn sort_key_cmp(left: &ArrayKey, right: &ArrayKey, flags: i64) -> std::cmp::Ordering {
+    if flags & !SORT_FLAG_CASE == SORT_NATURAL {
+        let left = match left {
+            ArrayKey::Int(value) => value.to_string(),
+            ArrayKey::String(value) => value.clone(),
+        };
+        let right = match right {
+            ArrayKey::Int(value) => value.to_string(),
+            ArrayKey::String(value) => value.clone(),
+        };
+        natural_string_cmp(&left, &right, flags & SORT_FLAG_CASE != 0)
+    } else {
+        match (left, right) {
+            (ArrayKey::Int(left), ArrayKey::Int(right)) => left.cmp(right),
+            (ArrayKey::String(left), ArrayKey::String(right)) => left.cmp(right),
+            (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
+            (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
+        }
     }
 }
 
@@ -5110,7 +6642,7 @@ fn fn_generator_get_return(
 // Regex (PCRE) functions
 // ============================================================================
 
-/// preg_match($pattern, $subject [, &$matches]) -> int (0 or 1)
+/// preg_match($pattern, $subject, &$matches = null, $flags = 0, $offset = 0): int|false
 fn fn_preg_match(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -5118,6 +6650,16 @@ fn fn_preg_match(
 ) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
+    let flags = arg_opt!(ed, 3).map_or(0, Value::to_long_val);
+    let offset_capture = flags & 256 != 0;
+    let raw_offset = arg_opt!(ed, 4).map_or(0, Value::to_long_val);
+    let subject_len = subject.len() as i64;
+    let offset = if raw_offset < 0 {
+        (subject_len + raw_offset).max(0)
+    } else {
+        raw_offset.min(subject_len)
+    } as usize;
+    let searched_subject = &subject[offset..];
 
     let has_matches = {
         let raw = unsafe { (*ed).cv(2) };
@@ -5133,24 +6675,45 @@ fn fn_preg_match(
     };
 
     if !has_matches {
-        ret!(rv, Value::long(re.is_match(&subject) as i64));
+        ret!(rv, Value::long(re.is_match(searched_subject) as i64));
     }
 
-    match re.captures(&subject) {
+    match re.captures(searched_subject) {
         Some(caps) => {
             if has_matches {
                 let matches_ptr = arg_mut!(ed, 2);
                 let mut arr = PhpArray::new();
                 for i in 0..caps.len() {
-                    match caps.get(i) {
-                        Some(m) => arr.push(Value::string(m.as_str(&subject))),
-                        None => arr.push(Value::string("")),
-                    }
+                    let value = match caps.get(i) {
+                        Some(m) if offset_capture => {
+                            let mut pair = PhpArray::with_packed_capacity(2);
+                            pair.push(Value::string(m.as_str(searched_subject)));
+                            pair.push(Value::long((offset + m.start) as i64));
+                            Value::array(pair)
+                        }
+                        Some(m) => Value::string(m.as_str(searched_subject)),
+                        None if offset_capture => {
+                            let mut pair = PhpArray::with_packed_capacity(2);
+                            pair.push(Value::string(""));
+                            pair.push(Value::long(-1));
+                            Value::array(pair)
+                        }
+                        None => Value::string(""),
+                    };
+                    arr.push(value);
                 }
                 // Add named capture groups as string-keyed entries
                 for (name, &idx) in caps.named_groups() {
                     if let Some(m) = caps.get(idx) {
-                        arr.set_str(name, Value::string(m.as_str(&subject)));
+                        let value = if offset_capture {
+                            let mut pair = PhpArray::with_packed_capacity(2);
+                            pair.push(Value::string(m.as_str(searched_subject)));
+                            pair.push(Value::long((offset + m.start) as i64));
+                            Value::array(pair)
+                        } else {
+                            Value::string(m.as_str(searched_subject))
+                        };
+                        arr.set_str(name, value);
                     }
                 }
                 if let Some(mark) = caps.mark() {
@@ -5176,24 +6739,125 @@ fn fn_preg_match(
     }
 }
 
-/// preg_replace($pattern, $replacement, $subject) -> string
+fn preg_replace_strings(
+    eg: &mut ExecutorGlobals,
+    patterns: &[String],
+    replacements: &[String],
+    replacement_is_array: bool,
+    subject: &str,
+    limit: usize,
+) -> Option<(String, usize)> {
+    let mut result = subject.to_string();
+    let mut count = 0;
+    for (index, pattern) in patterns.iter().enumerate() {
+        let replacement = if replacement_is_array {
+            replacements.get(index).map_or("", String::as_str)
+        } else {
+            replacements.first().map_or("", String::as_str)
+        };
+        let regex = eg.regex_cache.get_or_compile(pattern).ok()?;
+        let (replaced, replacements) = regex.replace_limit(&result, replacement, limit);
+        result = replaced;
+        count += replacements;
+    }
+    Some((result, count))
+}
+
+fn preg_replace_argument_strings(value: &Value) -> (Vec<String>, bool) {
+    if let Some(values) = value.as_array() {
+        (
+            values
+                .iter()
+                .map(|(_, value)| value.dereferenced().echo_to_string())
+                .collect(),
+            true,
+        )
+    } else {
+        (vec![value.dereferenced().echo_to_string()], false)
+    }
+}
+
+/// preg_replace($pattern, $replacement, $subject) -> string|array|null
 fn fn_preg_replace(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let pattern_str = arg_str!(ed, 0);
-    let replacement = arg_str!(ed, 1);
-    let subject = arg_str!(ed, 2);
-
-    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
-        Ok(regex) => regex,
-        Err(_e) => {
-            ret!(rv, Value::null());
-        }
+    let limit = arg_opt!(ed, 3).map_or(-1, Value::to_long_val);
+    let limit = if limit < 0 {
+        usize::MAX
+    } else {
+        usize::try_from(limit).unwrap_or(usize::MAX)
     };
+    let has_count = !arg!(ed, 4).is_undef();
 
-    let result = re.replace_all(&subject, &replacement);
+    // Preserve the allocation profile of the overwhelmingly common scalar
+    // form. Array-capable normalization below necessarily owns each element,
+    // but scalar strings can continue to borrow directly from their Values.
+    if limit == usize::MAX
+        && !has_count
+        && arg!(ed, 0).as_array().is_none()
+        && arg!(ed, 1).as_array().is_none()
+        && arg!(ed, 2).as_array().is_none()
+    {
+        let pattern = arg_str!(ed, 0);
+        let replacement = arg_str!(ed, 1);
+        let subject = arg_str!(ed, 2);
+        let regex = match eg.regex_cache.get_or_compile(&pattern) {
+            Ok(regex) => regex,
+            Err(_) => ret!(rv, Value::null()),
+        };
+        let result = regex.replace_all(&subject, &replacement);
+        ret!(rv, Value::string(result));
+    }
+
+    let (patterns, _) = preg_replace_argument_strings(arg!(ed, 0));
+    let (replacements, replacement_is_array) = preg_replace_argument_strings(arg!(ed, 1));
+    let mut total_count = 0;
+
+    if let Some(subjects) = arg!(ed, 2).as_array() {
+        let subjects: Vec<_> = subjects
+            .iter()
+            .map(|(key, value)| (key, value.dereferenced().echo_to_string()))
+            .collect();
+        let mut result = PhpArray::new();
+        for (key, subject) in subjects {
+            let Some((replaced, count)) = preg_replace_strings(
+                eg,
+                &patterns,
+                &replacements,
+                replacement_is_array,
+                &subject,
+                limit,
+            ) else {
+                ret!(rv, Value::null());
+            };
+            total_count += count;
+            match key {
+                ArrayKey::Int(key) => result.set_int(key, Value::string(replaced)),
+                ArrayKey::String(key) => result.set_str(&key, Value::string(replaced)),
+            }
+        }
+        if has_count {
+            arg_mut!(ed, 4, Value::long(total_count as i64));
+        }
+        ret!(rv, Value::array(result));
+    }
+
+    let subject = arg!(ed, 2).dereferenced().echo_to_string();
+    let Some((result, count)) = preg_replace_strings(
+        eg,
+        &patterns,
+        &replacements,
+        replacement_is_array,
+        &subject,
+        limit,
+    ) else {
+        ret!(rv, Value::null());
+    };
+    if has_count {
+        arg_mut!(ed, 4, Value::long(count as i64));
+    }
     ret!(rv, Value::string(result));
 }
 
@@ -5289,12 +6953,91 @@ fn find_method_in_class_hierarchy<'a>(
             }
         }
 
+        // Internal methods live only in the function table. Check them after
+        // ClassDef metadata so user methods retain their explicit static flag.
+        // Inherited aliases also live in the child namespace, but their user
+        // ABI does not encode `static` in `this_offset`; defer those aliases
+        // to the declaring parent's metadata instead of misclassifying them.
+        if let Some(function) = eg.find_function(&format!("{}::{method_name}", class.name))
+            && eg
+                .declaring_class_of(function)
+                .is_some_and(|declaring| declaring.eq_ignore_ascii_case(&class.name))
+        {
+            return Some((
+                Visibility::Public,
+                unsafe { (*function).sig.this_offset == 0 },
+                function,
+                class.name.as_str(),
+            ));
+        }
+
         current = class
             .parent
             .as_deref()
             .and_then(|parent| find_class_case_insensitive(eg, parent));
     }
     None
+}
+
+/// Invoke a public instance method selected by a VM protocol operation such as
+/// ArrayAccess. Internal methods live in the function table while user methods
+/// carry their direct pointer in ClassDef, so the protocol boundary resolves
+/// both without manufacturing a PHP callback array.
+pub(crate) fn call_object_protocol_method(
+    eg: &mut ExecutorGlobals,
+    receiver: &Value,
+    interface: &str,
+    method: &str,
+    args: &[Value],
+) -> Result<Option<Value>, VmError> {
+    let Some(object) = receiver.as_object() else {
+        return Ok(None);
+    };
+    let class_name = object.class_name.to_string();
+    drop(object);
+    if !eg.class_is_a(&class_name, interface) {
+        return Ok(None);
+    }
+    call_object_public_method(eg, receiver, method, args)
+}
+
+/// Invoke an ordinary public instance method without constructing a callback
+/// descriptor. Serialization hooks and VM protocols share this cold path.
+pub(crate) fn call_object_public_method(
+    eg: &mut ExecutorGlobals,
+    receiver: &Value,
+    method: &str,
+    args: &[Value],
+) -> Result<Option<Value>, VmError> {
+    let Some(object) = receiver.as_object() else {
+        return Ok(None);
+    };
+    let class_name = object.class_name.to_string();
+    let class_id = object.class_id;
+    drop(object);
+
+    let internal_name = format!("{class_name}::{method}");
+    let func_ptr = if let Some(function) = eg.find_function(&internal_name) {
+        function
+    } else {
+        let Some((visibility, is_static, function, _)) =
+            find_method_in_class_hierarchy(eg, &class_name, method)
+        else {
+            return Ok(None);
+        };
+        if visibility != Visibility::Public || is_static {
+            return Ok(None);
+        }
+        function
+    };
+    let resolved = ResolvedCallback {
+        func_ptr,
+        prepend_args: vec![receiver.clone()],
+        use_vars: vec![],
+        called_scope_class_id: class_id,
+        bound_this: None,
+    };
+    call_resolved_with_values(eg, &resolved, args).map(Some)
 }
 
 /// Result of resolving a callback: func pointer + args to prepend (e.g. $this, use_vars).
@@ -5318,6 +7061,18 @@ impl ResolvedCallback {
     #[inline]
     pub(crate) fn has_context(&self) -> bool {
         self.called_scope_class_id != 0 || self.bound_this.is_some()
+    }
+
+    /// Resolved callback pointers are owned by the request's immutable
+    /// function table and remain stable for the lifetime of this descriptor.
+    #[inline]
+    fn signature(&self) -> &crate::vm::function::SignatureInfo {
+        unsafe { &(*self.func_ptr).sig }
+    }
+
+    #[inline]
+    pub(crate) fn is_method(&self) -> bool {
+        self.signature().this_offset == 1
     }
 }
 
@@ -5355,21 +7110,43 @@ fn resolve_callback(
     match val.value_type() {
         ValueType::Closure => {
             let closure = val.as_closure().unwrap();
-            let method_callable = eg.declaring_class_of(closure.func).is_some();
-            Some(ResolvedCallback {
+            // An anonymous closure created in class scope has a declaring
+            // class for visibility, but it still has no hidden method `$this`
+            // parameter. Only an actual method signature reserves that slot.
+            let resolved = ResolvedCallback {
                 func_ptr: closure.func,
-                prepend_args: if method_callable {
-                    vec![closure.bound_this.clone().unwrap_or_else(Value::null)]
-                } else {
-                    vec![]
-                },
+                prepend_args: vec![],
                 use_vars: closure.captures.clone(),
                 called_scope_class_id: closure.called_scope_class_id,
                 bound_this: closure.bound_this.clone(),
+            };
+            let prepend_args = if resolved.signature().this_offset == 1 {
+                vec![closure.bound_this.clone().unwrap_or_else(Value::null)]
+            } else {
+                vec![]
+            };
+            Some(ResolvedCallback {
+                prepend_args,
+                ..resolved
             })
         }
         ValueType::String => {
             let name = val.as_str().unwrap();
+            if let Some((class_name, method_name)) = name.rsplit_once("::") {
+                let class_name = class_name.trim_start_matches('\\');
+                let (visibility, is_static, func_ptr, _) =
+                    find_method_in_class_hierarchy(eg, class_name, method_name)?;
+                if visibility != Visibility::Public || !is_static {
+                    return None;
+                }
+                return Some(ResolvedCallback {
+                    func_ptr,
+                    prepend_args: vec![Value::null()],
+                    use_vars: vec![],
+                    called_scope_class_id: eg.find_class(class_name)?.class_id,
+                    bound_this: None,
+                });
+            }
             eg.find_function(name).map(|ptr| ResolvedCallback {
                 func_ptr: ptr,
                 prepend_args: vec![],
@@ -5632,7 +7409,12 @@ pub(crate) fn resolve_callback_with_cache(
     caller_class: Option<&str>,
     cache_slot: Option<*mut InlineCache>,
 ) -> Option<ResolvedCallback> {
-    let mut cache_slot = if val.value_type() == ValueType::String {
+    // A `Class::method` string carries a hidden method slot and late-static
+    // scope. The compact plain-function cache stores neither, so only cache
+    // actual function names here.
+    let mut cache_slot = if val.value_type() == ValueType::String
+        && val.as_str().is_some_and(|name| !name.contains("::"))
+    {
         cache_slot
     } else {
         None
@@ -5784,7 +7566,7 @@ where
 /// handlers retain their direct slice ABI and every other callable shape uses
 /// the canonical receiver/capture-aware frame path.
 #[inline]
-pub(super) fn call_resolved_with_values(
+pub(crate) fn call_resolved_with_values(
     eg: &mut ExecutorGlobals,
     resolved: &ResolvedCallback,
     args: &[Value],
@@ -6226,6 +8008,77 @@ fn fn_is_dir(
     );
 }
 
+/// is_link($filename): bool — lstat semantics also recognize broken links.
+fn fn_is_link(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let is_link = std::fs::symlink_metadata(path.as_ref())
+        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+    ret!(rv, Value::bool(is_link));
+}
+
+fn fn_chmod(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let mode = arg_long!(ed, 1) as u32;
+    #[cfg(unix)]
+    let result = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path.as_ref(), std::fs::Permissions::from_mode(mode)).is_ok()
+    };
+    #[cfg(not(unix))]
+    let result = false;
+    ret!(rv, Value::bool(result));
+}
+
+fn fn_fileperms(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path.as_ref()) {
+            Ok(metadata) => ret!(rv, Value::long(i64::from(metadata.permissions().mode()))),
+            Err(_) => ret!(rv, Value::bool(false)),
+        }
+    }
+    #[cfg(not(unix))]
+    ret!(rv, Value::bool(false));
+}
+
+fn fn_umask(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+        let supplied = arg_opt!(ed, 0).map(|value| value.to_long_val() as u32);
+        let previous = unsafe {
+            let previous = umask(supplied.unwrap_or(0));
+            if supplied.is_none() {
+                umask(previous);
+            }
+            previous
+        };
+        ret!(rv, Value::long(i64::from(previous)));
+    }
+    #[cfg(not(unix))]
+    ret!(rv, Value::long(0));
+}
+
 /// dirname($path, $levels = 1): string
 fn fn_dirname(
     ed: *mut ExecuteData,
@@ -6457,11 +8310,28 @@ fn fn_pathinfo(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
 
+    let flags = arg_opt!(ed, 1).map_or(15, Value::to_long_val);
+    match flags {
+        1 => ret!(rv, Value::string(dirname)),
+        2 => ret!(rv, Value::string(basename_str)),
+        4 => ret!(rv, Value::string(extension)),
+        8 => ret!(rv, Value::string(filename)),
+        _ => {}
+    }
+
     let mut arr = PhpArray::new();
-    arr.set_str("dirname", Value::string(dirname));
-    arr.set_str("basename", Value::string(basename_str));
-    arr.set_str("extension", Value::string(extension));
-    arr.set_str("filename", Value::string(filename));
+    if flags & 1 != 0 {
+        arr.set_str("dirname", Value::string(dirname));
+    }
+    if flags & 2 != 0 {
+        arr.set_str("basename", Value::string(basename_str));
+    }
+    if flags & 4 != 0 {
+        arr.set_str("extension", Value::string(extension));
+    }
+    if flags & 8 != 0 {
+        arr.set_str("filename", Value::string(filename));
+    }
     ret!(rv, Value::array(arr));
 }
 
@@ -7292,6 +9162,83 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     ret!(rv, Value::bool(true));
 }
 
+fn array_key_value(key: &ArrayKey) -> Value {
+    match key {
+        ArrayKey::Int(value) => Value::long(*value),
+        ArrayKey::String(value) => Value::string(value.clone()),
+    }
+}
+
+fn fn_user_key_preserving_sort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    compare_keys: bool,
+    function_name: &str,
+) -> Result<(), VmError> {
+    let callback = arg!(ed, 1).clone();
+    let mut pairs = match arg!(ed, 0).as_array() {
+        Some(array) => array
+            .iter()
+            .map(|(key, value)| (key, value.clone()))
+            .collect::<Vec<_>>(),
+        None => ret!(rv, Value::bool(false)),
+    };
+    let Some(resolved) = resolve_callback_at_callsite(&callback, eg, ed) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!("{function_name}(): Argument #2 ($callback) must be a valid callback"),
+        ));
+        return Ok(());
+    };
+
+    for index in 1..pairs.len() {
+        let mut current = index;
+        while current > 0 {
+            let arguments = compare_keys
+                .then(|| {
+                    [
+                        array_key_value(&pairs[current - 1].0),
+                        array_key_value(&pairs[current].0),
+                    ]
+                })
+                .unwrap_or_else(|| [pairs[current - 1].1.clone(), pairs[current].1.clone()]);
+            let comparison = call_resolved_with_values(eg, &resolved, &arguments)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            if comparison.to_long_val() <= 0 {
+                break;
+            }
+            pairs.swap(current - 1, current);
+            current -= 1;
+        }
+    }
+
+    let mut sorted = PhpArray::new();
+    for (key, value) in pairs {
+        sorted.set(key, value);
+    }
+    arg_mut!(ed, 0, Value::array(sorted));
+    ret!(rv, Value::bool(true));
+}
+
+fn fn_uasort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_user_key_preserving_sort(ed, rv, eg, false, "uasort")
+}
+
+fn fn_uksort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_user_key_preserving_sort(ed, rv, eg, true, "uksort")
+}
+
 /// array_diff($array1, $array2): array
 fn fn_array_diff(
     ed: *mut ExecuteData,
@@ -7323,18 +9270,50 @@ fn fn_array_diff_key(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let (Some(left), Some(right)) = (arg!(ed, 0).as_array(), arg!(ed, 1).as_array()) else {
+    fn_array_key_membership(ed, rv, false)
+}
+
+fn fn_array_intersect_key(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_array_key_membership(ed, rv, true)
+}
+
+fn array_contains_key(array: &PhpArray, key: &ArrayKey) -> bool {
+    match key {
+        ArrayKey::Int(index) => array.get_int(*index).is_some(),
+        ArrayKey::String(name) => array.get_str(name).is_some(),
+    }
+}
+
+fn fn_array_key_membership(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    intersect: bool,
+) -> Result<(), VmError> {
+    let (Some(left), Some(second)) = (arg!(ed, 0).as_array(), arg!(ed, 1).as_array()) else {
         ret!(rv, Value::array(PhpArray::new()));
     };
+    let trailing = arg!(ed, 2).as_array();
     let mut result = PhpArray::new();
     for (key, value) in left.iter() {
-        let exists = match &key {
-            ArrayKey::Int(index) => right.get_int(*index).is_some(),
-            ArrayKey::String(name) => right.get_str(name).is_some(),
-        };
-        if !exists {
-            result.set(key, value.clone());
+        let mut matches = array_contains_key(&second, &key) == intersect;
+        if matches && let Some(trailing) = trailing.as_deref() {
+            for candidate in trailing.values() {
+                let Some(candidate) = candidate.as_array() else {
+                    ret!(rv, Value::array(PhpArray::new()));
+                };
+                if array_contains_key(&candidate, &key) != intersect {
+                    matches = false;
+                    break;
+                }
+            }
         }
+        if matches {
+            result.set(key, value.clone());
+        };
     }
     ret!(rv, Value::array(result));
 }
@@ -7424,7 +9403,7 @@ fn fn_array_walk(
         .collect::<Vec<_>>();
 
     // Check if callback's first parameter is declared by-reference.
-    let cb_arg0_by_ref = unsafe { (*resolved.func_ptr).sig.is_param_by_ref(0) };
+    let cb_arg0_by_ref = resolved.signature().is_param_by_ref(0);
 
     if cb_arg0_by_ref {
         // By-ref callback: read back CV(0) after each call and rebuild the array.
@@ -7490,19 +9469,108 @@ fn fn_array_walk(
     ret!(rv, Value::bool(true));
 }
 
+fn walk_array_recursive(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    array: &PhpArray,
+    userdata: Option<&Value>,
+    callback_arg0_by_ref: bool,
+) -> Result<PhpArray, VmError> {
+    let pairs = array
+        .iter()
+        .map(|(key, value)| (key, value.clone()))
+        .collect::<Vec<_>>();
+    let mut result = PhpArray::new();
+    for (key, value) in pairs {
+        let value = if let Some(nested) = value.as_array() {
+            Value::array(walk_array_recursive(
+                eg,
+                resolved,
+                nested,
+                userdata,
+                callback_arg0_by_ref,
+            )?)
+        } else {
+            let key_value = match &key {
+                ArrayKey::Int(key) => Value::long(*key),
+                ArrayKey::String(key) => Value::string(key.clone()),
+            };
+            let public_args = 2 + usize::from(userdata.is_some());
+            let num_args = resolved.prepend_args.len() + public_args + resolved.use_vars.len();
+            let arguments = resolved
+                .prepend_args
+                .iter()
+                .cloned()
+                .chain(std::iter::once(value.clone()))
+                .chain(std::iter::once(key_value))
+                .chain(userdata.into_iter().cloned())
+                .chain(resolved.use_vars.iter().cloned());
+            if callback_arg0_by_ref {
+                let (_, modified) =
+                    call_resolved_owned_iter_readback_arg0(eg, resolved, num_args, arguments)?;
+                modified
+            } else {
+                call_resolved_owned_iter(eg, resolved, num_args, arguments)?;
+                value
+            }
+        };
+        if eg.exception.is_some() {
+            return Ok(result);
+        }
+        match key {
+            ArrayKey::Int(key) => result.set_int(key, value),
+            ArrayKey::String(key) => result.set_str(&key, value),
+        }
+    }
+    Ok(result)
+}
+
+fn fn_array_walk_recursive(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let callback = arg!(ed, 1).clone();
+    let userdata = arg_opt!(ed, 2).cloned();
+    let Some(array) = arg!(ed, 0).as_array() else {
+        ret!(rv, Value::bool(false));
+    };
+    let Some(resolved) = resolve_callback_at_callsite(&callback, eg, ed) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "array_walk_recursive(): Argument #2 ($callback) must be a valid callback",
+        ));
+        return Ok(());
+    };
+    let callback_arg0_by_ref = resolved.signature().is_param_by_ref(0);
+    let result = walk_array_recursive(
+        eg,
+        &resolved,
+        array,
+        userdata.as_ref(),
+        callback_arg0_by_ref,
+    )?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    arg_mut!(ed, 0, Value::array(result));
+    ret!(rv, Value::bool(true));
+}
+
 /// asort(&$array): bool — sort by value, preserve keys
 fn fn_asort(
     ed: *mut ExecuteData,
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        pairs.sort_by(|(_, a), (_, b)| cmp_val(compare_values(a, b)));
+        pairs.sort_by(|(_, a), (_, b)| sort_value_cmp(a, b, flags));
         let mut new_arr = PhpArray::new();
         for (k, v) in pairs {
             match k {
@@ -7522,13 +9590,14 @@ fn fn_arsort(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        pairs.sort_by(|(_, a), (_, b)| cmp_val(compare_values(b, a)));
+        pairs.sort_by(|(_, a), (_, b)| sort_value_cmp(b, a, flags));
         let mut new_arr = PhpArray::new();
         for (k, v) in pairs {
             match k {
@@ -7548,18 +9617,14 @@ fn fn_ksort(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        pairs.sort_by(|(a, _), (b, _)| match (a, b) {
-            (ArrayKey::Int(x), ArrayKey::Int(y)) => x.cmp(y),
-            (ArrayKey::String(x), ArrayKey::String(y)) => x.cmp(y),
-            (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
-            (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
-        });
+        pairs.sort_by(|(a, _), (b, _)| sort_key_cmp(a, b, flags));
         let mut new_arr = PhpArray::new();
         for (k, v) in pairs {
             match k {
@@ -7579,18 +9644,14 @@ fn fn_krsort(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        pairs.sort_by(|(a, _), (b, _)| match (b, a) {
-            (ArrayKey::Int(x), ArrayKey::Int(y)) => x.cmp(y),
-            (ArrayKey::String(x), ArrayKey::String(y)) => x.cmp(y),
-            (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
-            (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
-        });
+        pairs.sort_by(|(a, _), (b, _)| sort_key_cmp(b, a, flags));
         let mut new_arr = PhpArray::new();
         for (k, v) in pairs {
             match k {
@@ -8101,6 +10162,58 @@ fn fn_array_key_first(
                 ArrayKey::Int(i) => ret!(rv, Value::long(i)),
                 ArrayKey::String(s) => ret!(rv, Value::string(s.clone())),
             }
+        }
+    }
+    ret!(rv, Value::null());
+}
+
+fn cursor_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    select: impl FnOnce(&PhpArray) -> Option<&Value>,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0)
+        .as_array()
+        .and_then(select)
+        .cloned()
+        .unwrap_or_else(|| Value::bool(false));
+    ret!(rv, value);
+}
+
+fn fn_reset(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    cursor_value(ed, rv, PhpArray::cursor_reset)
+}
+
+fn fn_end(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    cursor_value(ed, rv, PhpArray::cursor_end)
+}
+
+fn fn_current(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    cursor_value(ed, rv, PhpArray::cursor_current)
+}
+
+fn fn_next(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    cursor_value(ed, rv, PhpArray::cursor_next)
+}
+
+fn fn_prev(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    cursor_value(ed, rv, PhpArray::cursor_prev)
+}
+
+/// key($array): int|string|null for the array's current internal cursor.
+fn fn_key(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let Some(key) = arg!(ed, 0).as_array().and_then(PhpArray::cursor_key) {
+        match key {
+            ArrayKey::Int(key) => ret!(rv, Value::long(key)),
+            ArrayKey::String(key) => ret!(rv, Value::string(key)),
         }
     }
     ret!(rv, Value::null());
@@ -8888,7 +11001,7 @@ fn fn_preg_match_all(
     ret!(rv, Value::long(count as i64));
 }
 
-/// preg_split($pattern, $subject, $limit = -1): array|false
+/// preg_split($pattern, $subject, $limit = -1, $flags = 0): array|false
 fn fn_preg_split(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -8897,6 +11010,7 @@ fn fn_preg_split(
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
     let limit = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(-1);
+    let flags = arg_opt!(ed, 3).map(Value::to_long_val).unwrap_or(0);
 
     let re = match eg.regex_cache.get_or_compile(&pattern_str) {
         Ok(regex) => regex,
@@ -8905,11 +11019,51 @@ fn fn_preg_split(
         }
     };
 
-    let parts = re.split(&subject, limit);
     let mut arr = PhpArray::new();
-    for part in parts {
-        arr.push(Value::string(part));
+    let no_empty = flags & 1 != 0;
+    let capture_delimiters = flags & 2 != 0;
+    let capture_offsets = flags & 4 != 0;
+    let mut push_part = |part: &str, offset: i64| {
+        if no_empty && part.is_empty() {
+            return;
+        }
+        if capture_offsets {
+            let mut value = PhpArray::with_packed_capacity(2);
+            value.push(Value::string(part));
+            value.push(Value::long(offset));
+            arr.push(Value::array(value));
+        } else {
+            arr.push(Value::string(part));
+        }
+    };
+
+    let split_limit = if limit <= 0 { i64::MAX } else { limit };
+    let mut cursor = 0usize;
+    let mut splits = 0i64;
+    for captures in re.captures_iter(&subject) {
+        if splits + 1 >= split_limit {
+            break;
+        }
+        let Some(delimiter) = captures.get(0) else {
+            continue;
+        };
+        if delimiter.start < cursor {
+            continue;
+        }
+        push_part(&subject[cursor..delimiter.start], cursor as i64);
+        if capture_delimiters {
+            for group in 1..captures.len() {
+                if let Some(group) = captures.get(group) {
+                    push_part(group.as_str(&subject), group.start as i64);
+                } else {
+                    push_part("", -1);
+                }
+            }
+        }
+        cursor = delimiter.end;
+        splits += 1;
     }
+    push_part(&subject[cursor..], cursor as i64);
     ret!(rv, Value::array(arr));
 }
 

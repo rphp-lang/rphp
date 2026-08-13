@@ -258,6 +258,28 @@ echo invoke_closure_at_one_site($add_ten, 5);
 }
 
 #[test]
+fn test_call_user_func_array_writes_fresh_heap_result_slot() {
+    let out = run_php(
+        r#"<?php
+function callback_object($value) {
+    $result = new stdClass();
+    $result->value = $value;
+    return $result;
+}
+function invoke_object_callback($callback, $value) {
+    $padding = [new stdClass(), new stdClass(), new stdClass()];
+    return call_user_func_array($callback, [$value]);
+}
+for ($i = 0; $i < 25; $i++) {
+    $result = invoke_object_callback('callback_object', $i);
+}
+echo $result->value;
+"#,
+    );
+    assert_eq!(out, "24");
+}
+
+#[test]
 fn test_array_walk_method_reads_back_first_public_argument() {
     let out = run_php(
         r#"<?php
@@ -364,6 +386,21 @@ echo implode(',', StaticFormatter::run());
 "#,
     );
     assert_eq!(out, "A,B");
+}
+
+#[test]
+fn test_first_class_function_callable_uses_namespace_fallback() {
+    let out = run_php(
+        r#"<?php
+namespace App;
+$check = match ('int') {
+    'int' => is_int(...),
+    default => is_string(...),
+};
+echo ($check(1) ? '1' : '0') . ($check('1') ? '1' : '0');
+"#,
+    );
+    assert_eq!(out, "10");
 }
 
 #[test]

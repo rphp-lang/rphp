@@ -82,6 +82,11 @@ impl Parser {
             Token::Global => Some("global".to_string()),
             Token::Print => Some("print".to_string()),
             Token::Clone => Some("clone".to_string()),
+            Token::Include => Some("include".to_string()),
+            Token::IncludeOnce => Some("include_once".to_string()),
+            Token::Require => Some("require".to_string()),
+            Token::RequireOnce => Some("require_once".to_string()),
+            Token::LogicalXor => Some("xor".to_string()),
             _ => None,
         }
     }
@@ -193,6 +198,7 @@ impl Parser {
                 | Token::ArrayKw
                 | Token::Null
                 | Token::Static
+                | Token::LParen
                 | Token::Identifier(_)
                 | Token::Public
                 | Token::Protected
@@ -343,6 +349,9 @@ impl Parser {
                     | Some(Token::Pipe)
                     | Some(Token::Ampersand)
             ),
+            // PHP DNF types parenthesize intersection arms, for example
+            // `(Countable&Iterator)|null`.
+            Token::LParen => true,
             _ => false,
         }
     }
@@ -422,6 +431,14 @@ impl Parser {
                 Ok(None)
             }
             Token::Static => Err("static is only allowed as a return type".to_string()),
+            Token::LParen => {
+                let hint = self.parse_base_type_hint()?;
+                let hint = self.maybe_parse_compound_type(hint)?;
+                if Self::type_hint_uses_static(&hint) {
+                    return Err("static is only allowed as a return type".to_string());
+                }
+                Ok(Some(hint))
+            }
             _ => Ok(None),
         }
     }
@@ -516,6 +533,12 @@ impl Parser {
                 } else {
                     Ok(TypeHint::ClassName("static".to_string()))
                 }
+            }
+            Token::LParen => {
+                let first = self.parse_base_type_hint()?;
+                let intersection = self.maybe_parse_intersection_type(first)?;
+                self.expect(&Token::RParen)?;
+                Ok(intersection)
             }
             other => Err(format!("Expected type hint, got {:?}", other)),
         }
@@ -776,14 +799,36 @@ impl Parser {
                 }
             } else if let Token::Variable(_) = self.peek() {
                 let target = self.parse_expr()?;
-                match target {
-                    Expr::Variable(var) => targets.push(ListTarget::Variable(var)),
-                    Expr::ArrayAccess { .. }
-                    | Expr::PropertyAccess {
-                        nullsafe: false, ..
+                if self.peek() == Token::LBracket && self.peek_at(1) == Token::RBracket {
+                    if !matches!(
+                        &target,
+                        Expr::Variable(_)
+                            | Expr::ArrayAccess { .. }
+                            | Expr::PropertyAccess {
+                                nullsafe: false,
+                                ..
+                            }
+                            | Expr::DynamicPropertyAccess {
+                                nullsafe: false,
+                                ..
+                            }
+                            | Expr::StaticProperty { .. }
+                    ) {
+                        return Err("Invalid array append destructuring target".into());
                     }
-                    | Expr::StaticProperty { .. } => targets.push(ListTarget::Target(target)),
-                    _ => return Err("Invalid destructuring assignment target".into()),
+                    self.advance();
+                    self.advance();
+                    targets.push(ListTarget::AppendTarget(target));
+                } else {
+                    match target {
+                        Expr::Variable(var) => targets.push(ListTarget::Variable(var)),
+                        Expr::ArrayAccess { .. }
+                        | Expr::PropertyAccess {
+                            nullsafe: false, ..
+                        }
+                        | Expr::StaticProperty { .. } => targets.push(ListTarget::Target(target)),
+                        _ => return Err("Invalid destructuring assignment target".into()),
+                    }
                 }
             } else if matches!(self.peek(), Token::Integer(_) | Token::StringLiteral(_)) {
                 // Explicit key: 0 => $var, 'key' => $var

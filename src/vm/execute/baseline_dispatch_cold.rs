@@ -908,6 +908,18 @@ fn op_call_user_func_array<'a>(
         };
         (callback, args)
     };
+    let callback = if opline.extended_value != 0
+        && callback
+            .as_str()
+            .is_some_and(|name| eg.find_function(name).is_none())
+    {
+        op_array
+            .literals
+            .get(opline.extended_value as usize)
+            .unwrap_or(callback)
+    } else {
+        callback
+    };
 
     // SAFETY: `opline` belongs to this op-array, whose cache has one stable
     // entry per instruction.
@@ -935,10 +947,13 @@ fn op_call_user_func_array<'a>(
 
     if opline.result_type != OpType::Unused {
         // SAFETY: the compiler emitted a writable result for this call and the
-        // frame remains live until the opcode returns.
+        // frame remains live until the opcode returns. CallUserFuncArray
+        // results are fresh TMP slots, whose reused stack bytes are not
+        // necessarily an initialized Value; use the frame-aware first-write
+        // path instead of dropping stale bytes through slot_set().
         unsafe {
             let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
-            slot_set(result_ptr, result);
+            frame_tmp_set(frame, result_ptr, result);
         }
     }
     Ok(ColdResult::Done)
@@ -1769,7 +1784,11 @@ fn op_instanceof(
 ) {
     let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let class_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let target = class_name.as_str().unwrap_or("");
+    let raw_target = class_name.as_str().unwrap_or("");
+    let dynamic_target = (opline._pad & INSTANCEOF_DYNAMIC_STATIC_SCOPE != 0)
+        .then(|| resolve_static_call_class(eg, frame, raw_target, true))
+        .flatten();
+    let target = dynamic_target.as_deref().unwrap_or(raw_target);
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
     let is_instance = if obj_val.value_type() == ValueType::Closure {
         eg.class_is_a("Closure", target)
@@ -1937,12 +1956,25 @@ fn op_create_first_class_callable<'a>(
         (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone()
     };
     let caller_class = get_caller_class(frame, eg);
-    let Some(resolved) = crate::stdlib::resolve_callback_with_cache(
+    let resolved = crate::stdlib::resolve_callback_with_cache(
         &callable,
         eg,
         caller_class.as_deref(),
         None,
-    ) else {
+    )
+    .or_else(|| {
+        if opline.extended_value == 0 {
+            return None;
+        }
+        let fallback = &op_array.literals[opline.extended_value as usize];
+        crate::stdlib::resolve_callback_with_cache(
+            fallback,
+            eg,
+            caller_class.as_deref(),
+            None,
+        )
+    });
+    let Some(resolved) = resolved else {
         let error = make_error_value("TypeError", "Failed to create closure from callable");
         return Ok(match throw_in_frame(eg, frame, error) {
             ThrowResult::Handled(new_frame, new_op_array) => {

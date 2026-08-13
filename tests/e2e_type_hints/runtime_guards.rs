@@ -195,3 +195,19 @@ f(10);
         "10"
     );
 }
+
+#[test]
+fn weak_string_arguments_invoke_object_string_conversion() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class StringArgument {
+    public function __toString(): string { return "target"; }
+}
+function acceptString(string $value): void { echo gettype($value), ':', $value; }
+acceptString(new StringArgument());
+"#
+        ),
+        "string:target"
+    );
+}

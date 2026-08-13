@@ -44,6 +44,37 @@ echo (new LazyService())->initialize() instanceof LazyService ? "ok" : "fail";
 }
 
 #[test]
+fn test_interface_iterable_return_accepts_array_covariance() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface IterableResult { public function values(): iterable; }
+class ArrayResult implements IterableResult {
+    public function values(): array { return [1, 2, 3]; }
+}
+echo count((new ArrayResult())->values());
+"#,
+        ),
+        "3"
+    );
+}
+
+#[test]
+fn test_interface_array_return_rejects_iterable_widening() {
+    let result = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+interface ArrayResult { public function values(): array; }
+class IterableResult implements ArrayResult {
+    public function values(): iterable { return []; }
+}
+"#,
+        )
+    });
+    assert!(result.is_err(), "Expected iterable to widen an array return");
+}
+
+#[test]
 fn test_interface_return_widening_rejected() {
     // Interface returns B, implementation returns A (parent) → rejected (too wide)
     let result = std::panic::catch_unwind(|| {

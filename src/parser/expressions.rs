@@ -11,7 +11,12 @@ impl Parser {
     }
 
     fn finish_assignment_tail(&mut self, expr: Expr) -> Result<Expr, String> {
-        if self.is_array_append_suffix() {
+        if self.peek() == Token::Assign && self.peek_at(1) == Token::Ampersand {
+            // Reference assignment has lower precedence than bitwise AND. It
+            // must be recognized before parse_bitwise_and consumes `&` as an
+            // infix operator and asks for an expression after `$left =`.
+            self.finish_assignment_expression(expr)
+        } else if self.is_array_append_suffix() {
             self.finish_array_append_assignment_expression(expr)
         } else if self.peek() == Token::QuestionQuestionAssign {
             self.finish_coalesce_assignment_expression(expr)
@@ -48,6 +53,9 @@ impl Parser {
         self.expect(&Token::LBracket)?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
+        if self.peek() == Token::Ampersand {
+            self.advance();
+        }
         let expr = self.parse_expr()?;
         Ok(Expr::ArrayAppendAssign {
             target: Box::new(target),
@@ -84,15 +92,18 @@ impl Parser {
 
     fn finish_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
         self.expect(&Token::Assign)?;
-        // General reference assignment uses the same writable-target grammar.
-        // Reference identity is not modeled for this expression form yet, but
-        // accepting the marker keeps declarations containing property and
-        // dynamic-property reference assignments loadable.
-        if self.peek() == Token::Ampersand {
+        let by_reference = if self.peek() == Token::Ampersand {
             self.advance();
-        }
+            true
+        } else {
+            false
+        };
         let expr = Box::new(self.parse_expr()?);
         match target {
+            Expr::Variable(var) if by_reference => Ok(Expr::AssignReference {
+                var,
+                target: expr,
+            }),
             Expr::Variable(var) => Ok(Expr::Assign { var, expr }),
             Expr::ArrayAccess { .. }
             | Expr::PropertyAccess {
@@ -378,6 +389,12 @@ impl Parser {
                         expr: Box::new(left),
                         class_name: self.parse_qualified_name()?,
                     }
+                } else if self.peek() == Token::Static {
+                    self.advance();
+                    Expr::Instanceof {
+                        expr: Box::new(left),
+                        class_name: "static".to_string(),
+                    }
                 } else if matches!(self.peek(), Token::Variable(_)) {
                     let class = match self.advance() {
                         Token::Variable(name) => Expr::Variable(name),
@@ -529,6 +546,12 @@ impl Parser {
                         Expr::Instanceof {
                             expr: Box::new(expr),
                             class_name: self.parse_qualified_name()?,
+                        }
+                    } else if self.peek() == Token::Static {
+                        self.advance();
+                        Expr::Instanceof {
+                            expr: Box::new(expr),
+                            class_name: "static".to_string(),
                         }
                     } else if let Token::Variable(class_name) = self.peek() {
                         self.advance();
@@ -764,6 +787,10 @@ impl Parser {
                 let generic_args = self.parse_optional_turbofish()?;
                 if !generic_args.is_empty() {
                     self.expect(&Token::LParen)?;
+                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                        return Err("Generic first-class function callables are not supported yet"
+                            .into());
+                    }
                     let args = self.parse_call_args()?;
                     return Ok(Expr::FunctionCall {
                         name,
@@ -776,6 +803,11 @@ impl Parser {
                 }
                 if self.peek() == Token::LParen {
                     self.advance();
+                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                        self.advance();
+                        self.advance();
+                        return Ok(Expr::FirstClassFunctionCallable(name));
+                    }
                     let args = self.parse_call_args()?;
                     Ok(Expr::FunctionCall {
                         name,
@@ -803,6 +835,10 @@ impl Parser {
                 let generic_args = self.parse_optional_turbofish()?;
                 if !generic_args.is_empty() {
                     self.expect(&Token::LParen)?;
+                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                        return Err("Generic first-class function callables are not supported yet"
+                            .into());
+                    }
                     let args = self.parse_call_args()?;
                     return Ok(Expr::FunctionCall {
                         name,
@@ -817,6 +853,11 @@ impl Parser {
                 // Check if this is a function call (followed by `(`)
                 if self.peek() == Token::LParen {
                     self.advance(); // consume (
+                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                        self.advance();
+                        self.advance();
+                        return Ok(Expr::FirstClassFunctionCallable(name));
+                    }
                     let args = self.parse_call_args()?;
                     Ok(Expr::FunctionCall {
                         name,

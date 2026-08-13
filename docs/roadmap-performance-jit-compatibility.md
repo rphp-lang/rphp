@@ -10095,20 +10095,29 @@ includes `ReflectionClass::getInterfaceNames()`/`getTraitNames()`, the three
 `array_search()` and a bounded live-frame `debug_backtrace()` implementation.
 Focused parser and E2E tests retain each contract independently of Symfony.
 
-This wave is not the S3 gate. A cache-free boot now stops truthfully at the
-next missing dependency, the built-in `LogicException` hierarchy, rather than
-at one of the language or introspection gaps above. The next roadmap step is to
-implement and test the core exception hierarchy, resume the same clean boot and
-continue until the fixture cold-builds, publishes and reloads both caches and
-passes the cached, deleted-cache and malformed-cache transitions required by
-S3.
+This wave is not the S3 gate. The follow-up closes the built-in exception
+hierarchy and continues through serialization hooks, incremental `xxh128`
+hashing, tokenizer constants and tokenization, array cursors, path information,
+memory-cache compatibility, expanded Reflection metadata, temporary lifetime
+cleanup and the language/runtime gaps encountered while compiling the
+container. Each general contract has focused parser, unit or E2E coverage.
 
-The compatibility additions were also checked against the preceding checkpoint
-with balanced native x86-64 A/B runs. After moving unpack to its own VM opcode,
-the ordinary array-literal, two-argument `array_search()` and ordinary keyed
-`foreach` controls measured +0.38%, +1.34% and -0.03%, respectively, all within
-the two-percent regression gate. This keeps the uncommon compatibility paths
-off the established array-literal fast path.
+The cache-free fixture now constructs the container and reaches generated route
+cache publication. The remaining localized blocker is malformed PHP in the
+generated compiled-route return value: an object-rendering fragment is emitted
+inside the array instead of the expected exported data. The next roadmap step
+is therefore to correct that general export/call semantic, then resume the same
+clean boot through route-cache reload and the cached, deleted-cache and
+malformed-cache transitions required by S3.
+
+The earlier compatibility subset was also checked against the preceding
+checkpoint with balanced native x86-64 A/B runs. After moving unpack to its own
+VM opcode, the ordinary array-literal, two-argument `array_search()` and ordinary
+keyed `foreach` controls measured +0.38%, +1.34% and -0.03%, respectively, all
+within the two-percent regression gate. This keeps the uncommon compatibility
+paths off the established array-literal fast path. The larger continuation
+above has correctness and layout gates in this checkpoint; it does not extend
+that earlier A/B performance claim.
 
 ### S1/S3 blockers: language and object model
 

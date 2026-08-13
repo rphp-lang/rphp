@@ -172,6 +172,15 @@ pub enum OpCode {
     /// array callable, the result satisfies Closure type declarations while
     /// retaining the receiver and lexical called-class scope.
     CreateFirstClassCallable = 148,
+    /// End-of-expression TMP release range. op1/op2 are absolute slot bounds;
+    /// object destructors run before the owned values are dropped.
+    ReleaseTemps = 149,
+    /// Bind result(CV) by reference to op1->op2. The property is promoted to
+    /// an owned reference cell so object storage and the frame remain aliases.
+    BindObjPropRef = 150,
+    /// Bind result(CV) by reference to op1[op2], promoting the array element
+    /// to the same stable owned reference-cell representation.
+    BindArrayDimRef = 151,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

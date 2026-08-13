@@ -1073,6 +1073,8 @@ pub struct SignatureInfo {
     /// Bitmask: bit N = 1 means parameter N is pass-by-reference.
     /// Supports up to 64 parameters.
     pub ref_args: u64,
+    /// Whether the declaration uses `function &name()` return-by-reference syntax.
+    pub returns_reference: bool,
     /// Number of hidden CV slots before explicit args (0 for functions, 1 for methods with $this).
     /// DoFcall uses `num_args - this_offset` for public arity check.
     pub this_offset: u32,

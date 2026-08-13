@@ -149,6 +149,32 @@ echo $consumer->readFromTrait();
     assert_eq!(out, "instance:class");
 }
 
+#[test]
+fn shared_trait_body_uses_each_consuming_class_private_scope() {
+    let out = run_php(
+        r#"<?php
+trait ReadsConsumerPrivateState {
+    public function readPrivateState() { return $this->value; }
+    public function writePrivateState($value) { $this->value = $value; }
+}
+class FirstPrivateConsumer {
+    use ReadsConsumerPrivateState;
+    public function __construct(private string $value) {}
+}
+class SecondPrivateConsumer {
+    use ReadsConsumerPrivateState;
+    public function __construct(private string $value) {}
+}
+$first = new FirstPrivateConsumer('first');
+$first->writePrivateState('updated');
+echo $first->readPrivateState();
+echo ':';
+echo (new SecondPrivateConsumer('second'))->readPrivateState();
+"#,
+    );
+    assert_eq!(out, "updated:second");
+}
+
 // ─── Class method overrides trait ─────────────────────────────────
 
 #[test]

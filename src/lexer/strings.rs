@@ -223,6 +223,23 @@ impl<'a> Lexer<'a> {
             if content[pos] == b'\\' && pos + 1 < content.len() {
                 pos += 1;
                 match content[pos] {
+                    b'0'..=b'7' => {
+                        // PHP consumes up to three octal digits in a
+                        // double-quoted escape. Its strings are byte-oriented;
+                        // keep the low byte for values such as `\777`.
+                        let mut value = 0_u16;
+                        let mut digits = 0;
+                        while digits < 3
+                            && content
+                                .get(pos)
+                                .is_some_and(|byte| matches!(byte, b'0'..=b'7'))
+                        {
+                            value = value * 8 + u16::from(content[pos] - b'0');
+                            pos += 1;
+                            digits += 1;
+                        }
+                        current.push(char::from((value & 0xff) as u8));
+                    }
                     b'n' => {
                         current.push('\n');
                         pos += 1;

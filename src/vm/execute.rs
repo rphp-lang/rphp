@@ -25,9 +25,10 @@ use super::instruction::{
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_EXACT_SCALAR_ARGS,
     CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
     CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_OBJ_SILENT, Instruction,
-    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, NEW_FLAG_DYNAMIC_CLASS_NAME,
-    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
+    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
+    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
 };
 use super::opcode::OpCode;
 use super::quick::{
@@ -191,12 +192,38 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
     if frame.is_null() {
         return None;
     }
-    let func = unsafe { (*frame).func };
-    if func.is_null() {
-        return None;
-    }
-    if let Some(class) = eg.declaring_class_of(func) {
-        return Some(class.to_string());
+    // SAFETY: callers pass the live executing frame. Its function pointer and
+    // compiler-sized CV range remain valid for this non-reentrant scope probe.
+    unsafe {
+        let func = (*frame).func;
+        if func.is_null() {
+            return None;
+        }
+        if let Some(class) = eg.declaring_class_of(func) {
+            let is_trait = eg
+                .class_table
+                .get(class)
+                .is_some_and(|definition| definition.is_trait);
+            if !is_trait {
+                return Some(class.to_string());
+            }
+
+            // Trait op arrays are shared by every consuming class. Their lexical
+            // visibility scope is the nearest class that composed the trait, not
+            // whichever consumer happened to register last.
+            let receiver_class = if (*frame).num_cvs == 0 {
+                None
+            } else {
+                let receiver = (*frame).cv(0);
+                (receiver.value_type() == ValueType::Object)
+                    .then(|| receiver.object_class_name_unchecked().to_string())
+            };
+            if let Some(receiver_class) = receiver_class
+                && let Some(scope) = eg.trait_composition_scope(&receiver_class, class)
+            {
+                return Some(scope.to_string());
+            }
+        }
     }
 
     // Closure::bind() may assign a lexical visibility scope to a closure that
@@ -349,6 +376,47 @@ fn write_fetch_dim_result(frame: *mut ExecuteData, result_ptr: *mut Value, value
     unsafe { frame_tmp_set(frame, result_ptr, value) }
 }
 
+/// Materialize PHP's object-to-array projection. Declared properties retain
+/// their visibility-mangled keys, dynamic properties keep insertion order and
+/// uninitialized typed slots remain absent from the result.
+#[cold]
+fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value {
+    let object = value
+        .as_object()
+        .expect("object-to-array cast requires an object value");
+    let mut result = PhpArray::new();
+
+    if let Some(class) = eg.class_by_id(object.class_id) {
+        for (slot, definition) in class.properties.iter().enumerate() {
+            let Some(property) = object.get_property_slot(slot) else {
+                continue;
+            };
+            if property.value_type() == ValueType::Undef {
+                continue;
+            }
+            let key = match definition.visibility {
+                Visibility::Public => definition.name.clone(),
+                Visibility::Protected => format!("\0*\0{}", definition.name),
+                Visibility::Private => {
+                    format!("\0{}\0{}", definition.declaring_class, definition.name)
+                }
+            };
+            result.set_str(&key, property.clone());
+        }
+        object.for_each_dynamic_property(|key, property| {
+            result.set_str(key, property.clone());
+        });
+    } else {
+        object.for_each_property(|key, property| {
+            if property.value_type() != ValueType::Undef {
+                result.set_str(key, property.clone());
+            }
+        });
+    }
+
+    Value::array(result)
+}
+
 #[cold]
 #[inline(never)]
 fn recover_late_static_call_class_id(eg: &ExecutorGlobals, frame: *mut ExecuteData) -> u32 {
@@ -493,6 +561,61 @@ fn check_type_hint_in_scopes(
     }
 }
 
+enum CallArgumentPreparation {
+    Exact,
+    Coerced(Value),
+    Invalid,
+}
+
+/// Apply the object-to-string argument conversion used by weak PHP call sites.
+/// Exact union members win before conversion and strict callers never invoke
+/// `__toString()` implicitly.
+fn prepare_call_argument(
+    value: &Value,
+    hint: &ParamTypeHint,
+    eg: &mut ExecutorGlobals,
+    strict: bool,
+    callee_class: Option<&str>,
+) -> Result<CallArgumentPreparation, VmError> {
+    if check_type_hint(value, hint, eg, strict, callee_class) {
+        return Ok(CallArgumentPreparation::Exact);
+    }
+    if strict {
+        return Ok(CallArgumentPreparation::Invalid);
+    }
+
+    let coerced = match hint {
+        ParamTypeHint::String if value.value_type() == ValueType::Object => {
+            call_magic_method(eg, value, "__tostring", &[])?.and_then(|rendered| {
+                (rendered.value_type() == ValueType::String)
+                    .then(|| Value::string(rendered.as_str().unwrap()))
+            })
+        }
+        ParamTypeHint::Nullable(inner) if value.value_type() != ValueType::Null => {
+            return prepare_call_argument(value, inner, eg, false, callee_class);
+        }
+        ParamTypeHint::Union(parts) => {
+            for part in parts {
+                match prepare_call_argument(value, part, eg, false, callee_class)? {
+                    CallArgumentPreparation::Exact => {
+                        return Ok(CallArgumentPreparation::Exact);
+                    }
+                    CallArgumentPreparation::Coerced(value) => {
+                        return Ok(CallArgumentPreparation::Coerced(value));
+                    }
+                    CallArgumentPreparation::Invalid => {}
+                }
+            }
+            None
+        }
+        _ => None,
+    };
+    Ok(coerced.map_or(
+        CallArgumentPreparation::Invalid,
+        CallArgumentPreparation::Coerced,
+    ))
+}
+
 #[inline]
 fn check_return_type_hint(
     value: &Value,
@@ -502,8 +625,10 @@ fn check_return_type_hint(
     frame: *mut ExecuteData,
     callee_class: Option<&str>,
 ) -> bool {
+    let lexical_scope = get_caller_class(frame, eg);
+    let lexical_scope = lexical_scope.as_deref().or(callee_class);
     if !hint.uses_late_static() {
-        return check_type_hint(value, hint, eg, strict, callee_class);
+        return check_type_hint(value, hint, eg, strict, lexical_scope);
     }
     let common = unsafe { &*(*frame).func };
     let receiver_scope = if common.sig.this_offset == 1 {
@@ -517,7 +642,7 @@ fn check_return_type_hint(
         eg.class_by_id(late_static_call_class_id(eg, frame))
             .map(|class| class.name.as_str())
     });
-    check_type_hint_in_scopes(value, hint, eg, strict, callee_class, called_scope)
+    check_type_hint_in_scopes(value, hint, eg, strict, lexical_scope, called_scope)
 }
 
 /// Validate hints supported by the compact scalar call/return protocol.
@@ -2029,29 +2154,63 @@ fn execute_full_call<'a>(
         }
     }
 
-    let callee_class = eg
-        .declaring_class_of(unsafe { (*call).func })
-        .map(str::to_string);
+    let callee_class = unsafe {
+        let mut resolved = eg.declaring_class_of((*call).func).map(str::to_string);
+        if let Some(declared) = resolved.as_deref()
+            && eg
+                .find_class(declared)
+                .is_some_and(|definition| definition.is_trait)
+            && func_common.sig.this_offset == 1
+        {
+            let receiver = (*call).cv(0);
+            if receiver.value_type() == ValueType::Object
+                && let Some(scope) =
+                    eg.trait_composition_scope(receiver.object_class_name_unchecked(), declared)
+            {
+                resolved = Some(scope.to_string());
+            }
+        }
+        resolved
+    };
     let callee_class_ref = callee_class.as_deref();
 
     if !func_common.sig.param_type_hints.is_empty() {
         let mut type_error = None;
-        for (i, hint) in func_common.sig.param_type_hints.iter().enumerate() {
-            if matches!(hint, ParamTypeHint::None) {
-                continue;
-            }
-            if (i as u32) >= num_args {
-                break;
-            }
-            let cv_idx = func_common.sig.param_cv_index(i as u32);
-            // SAFETY: `call` is the live callee frame and `param_cv_index`
-            // maps this present public argument to an initialized CV slot.
-            let val = unsafe { &*(*call).cv(cv_idx) }.dereferenced();
-            if val.is_undef() {
-                continue;
-            }
-            if !check_type_hint(val, hint, eg, op_array.strict_types, callee_class_ref) {
-                let function_name = registered_function_name(eg, unsafe { (*call).func });
+        // SAFETY: `call` is the live callee frame and every param_cv_index in
+        // this bounded loop names an initialized supplied-argument slot.
+        unsafe {
+            for (i, hint) in func_common.sig.param_type_hints.iter().enumerate() {
+                if matches!(hint, ParamTypeHint::None) {
+                    continue;
+                }
+                if (i as u32) >= num_args {
+                    break;
+                }
+                let cv_idx = func_common.sig.param_cv_index(i as u32);
+                let value = (&*(*call).cv(cv_idx)).dereferenced().clone();
+                if value.is_undef() {
+                    continue;
+                }
+                match prepare_call_argument(
+                    &value,
+                    hint,
+                    eg,
+                    op_array.strict_types,
+                    callee_class_ref,
+                )? {
+                    CallArgumentPreparation::Exact => continue,
+                    CallArgumentPreparation::Coerced(prepared) => {
+                        let slot = (*call).cv_mut(cv_idx) as *mut Value;
+                        if (*slot).is_reference() {
+                            slot_set((*slot).as_ref_ptr(), prepared);
+                        } else {
+                            frame_slot_set(call, slot, prepared);
+                        }
+                        continue;
+                    }
+                    CallArgumentPreparation::Invalid => {}
+                }
+                let function_name = registered_function_name(eg, (*call).func);
                 type_error = Some(make_error_value(
                     "TypeError",
                     &format!(
@@ -2059,7 +2218,7 @@ fn execute_full_call<'a>(
                         function_name,
                         i + 1,
                         hint.display_name(),
-                        val.type_name()
+                        value.type_name()
                     ),
                 ));
                 break;
@@ -2364,6 +2523,97 @@ fn value_to_array_key(val: &Value) -> Result<ArrayKey, VmError> {
         ArrayKeyRef::Int(value) => Ok(ArrayKey::Int(value)),
         ArrayKeyRef::String(value) => Ok(ArrayKey::String(value.to_string())),
     }
+}
+
+/// PHP == comparison for compound values. Object equality compares class and
+/// property state rather than allocation identity; revisiting an object pair
+/// keeps cyclic graphs finite. Scalar leaves retain PHP's ordinary loose
+/// boolean/numeric behavior.
+pub(crate) fn values_equal(a: &Value, b: &Value) -> bool {
+    fn equal_inner(
+        a: &Value,
+        b: &Value,
+        visited_objects: &mut std::collections::HashSet<(usize, usize)>,
+    ) -> bool {
+        let a = a.dereferenced();
+        let b = b.dereferenced();
+
+        if matches!(a.value_type(), ValueType::True | ValueType::False)
+            || matches!(b.value_type(), ValueType::True | ValueType::False)
+            || matches!(a.value_type(), ValueType::Null | ValueType::Undef)
+            || matches!(b.value_type(), ValueType::Null | ValueType::Undef)
+        {
+            return a.is_truthy() == b.is_truthy();
+        }
+
+        match (a.value_type(), b.value_type()) {
+            (ValueType::Long, ValueType::Long) => a.as_long() == b.as_long(),
+            (ValueType::Long | ValueType::Double, ValueType::Long | ValueType::Double) => {
+                a.to_double() == b.to_double()
+            }
+            (ValueType::String, ValueType::String) => {
+                let left = a.as_str().unwrap();
+                let right = b.as_str().unwrap();
+                match (left.trim().parse::<f64>(), right.trim().parse::<f64>()) {
+                    (Ok(left), Ok(right)) => left == right,
+                    _ => left == right,
+                }
+            }
+            (ValueType::Array, ValueType::Array) => {
+                let left = a.as_array().unwrap();
+                let right = b.as_array().unwrap();
+                left.len() == right.len()
+                    && left.iter().all(|(key, value)| {
+                        let other = match key {
+                            ArrayKey::Int(key) => right.get_int(key),
+                            ArrayKey::String(key) => right.get_str(&key),
+                        };
+                        other.is_some_and(|other| equal_inner(value, other, visited_objects))
+                    })
+            }
+            (ValueType::Object, ValueType::Object) => {
+                let left_identity = a.object_identity().unwrap();
+                let right_identity = b.object_identity().unwrap();
+                if left_identity == right_identity {
+                    return true;
+                }
+                if !visited_objects.insert((left_identity, right_identity)) {
+                    return true;
+                }
+
+                let left = a.as_object().unwrap();
+                let right = b.as_object().unwrap();
+                let same_class = if left.class_id != 0 || right.class_id != 0 {
+                    left.class_id == right.class_id
+                } else {
+                    left.class_name.eq_ignore_ascii_case(&right.class_name)
+                };
+                if !same_class {
+                    return false;
+                }
+
+                let mut left_count = 0usize;
+                let mut properties_equal = true;
+                left.for_each_property(|name, value| {
+                    left_count += 1;
+                    properties_equal &= right
+                        .get_property(name)
+                        .is_some_and(|other| equal_inner(value, other, visited_objects));
+                });
+                let mut right_count = 0usize;
+                right.for_each_property(|_, _| right_count += 1);
+                properties_equal && left_count == right_count
+            }
+            (ValueType::Closure, ValueType::Closure) => a
+                .as_closure()
+                .zip(b.as_closure())
+                .is_some_and(|(left, right)| left.same_identity(right)),
+            (ValueType::Resource, ValueType::Resource) => a.as_resource_id() == b.as_resource_id(),
+            _ => false,
+        }
+    }
+
+    equal_inner(a, b, &mut std::collections::HashSet::new())
 }
 
 /// PHP === comparison: same type and same value (recursive for arrays).

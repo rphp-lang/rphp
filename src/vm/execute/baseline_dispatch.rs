@@ -37,6 +37,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if prev.is_null() {
                         return Ok(());
                     }
+                    run_frame_destructors(eg, frame)?;
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     let func_common = unsafe { &*(*frame).func };
@@ -121,11 +122,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         op_array,
                     );
                     let cloned = val.clone();
+                    let destination_is_reference = opline.op1_type == OpType::Cv
+                        && (*frame).cv(opline.op1 as u32).is_reference();
                     let dest = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
                     if opline.result_type != OpType::Unused {
                         // Need two copies: one for dest, one for result
                         if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
                             frame_tmp_set(frame, dest, cloned.clone());
+                        } else if opline.op1_type == OpType::Cv && !destination_is_reference {
+                            frame_slot_set(frame, dest, cloned.clone());
                         } else {
                             slot_set(dest, cloned.clone());
                         }
@@ -140,6 +145,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // Common path: just move the single clone into dest
                         if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
                             frame_tmp_set(frame, dest, cloned);
+                        } else if opline.op1_type == OpType::Cv && !destination_is_reference {
+                            frame_slot_set(frame, dest, cloned);
                         } else {
                             slot_set(dest, cloned);
                         }
@@ -859,7 +866,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                let result = if matches!(opline.opcode, OpCode::IsEqual | OpCode::IsNotEqual)
+                    && matches!(
+                        (op1.value_type(), op2.value_type()),
+                        (ValueType::Array, ValueType::Array)
+                            | (ValueType::Object, ValueType::Object)
+                            | (ValueType::Closure, ValueType::Closure)
+                    )
+                {
+                    let equal = values_equal(op1, op2);
+                    if opline.opcode == OpCode::IsEqual {
+                        equal
+                    } else {
+                        !equal
+                    }
+                } else if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match opline.opcode {
                         OpCode::IsEqual => l1 == l2,
                         OpCode::IsNotEqual => l1 != l2,
@@ -932,6 +953,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     4 => {                                   // (array)
                         match val.value_type() {
                             ValueType::Array => val.clone(),
+                            ValueType::Object => cast_object_to_array(val, eg),
                             ValueType::Null | ValueType::Undef => Value::array(PhpArray::new()),
                             _ => {
                                 let mut arr = PhpArray::new();
@@ -1731,8 +1753,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // Execute the pending call
                 let mut call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
-                // Restore previous pending call from the chain
-                unsafe { (*frame).call = (*call).call };
+                // Restore the caller's previous pending call, then detach the
+                // activation before it becomes an executing frame. Leaving
+                // that predecessor in the callee makes a later nested call
+                // treat a caller-owned (and possibly already popped) frame as
+                // its own pending call chain.
+                unsafe {
+                    let previous_pending_call = (*call).call;
+                    (*frame).call = previous_pending_call;
+                    (*call).call = std::ptr::null_mut();
+                }
 
                 // A non-contiguous pure-scalar call captured its arguments in a
                 // compact activation. On success it never acquires body CVs or
@@ -1752,7 +1782,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         continue 'vm;
                     }
                 }
-
                 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
                 let generic_member_contract =
                     eg.take_pending_generic_member_call(call as usize);
@@ -2358,7 +2387,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::FetchDimR => {
                 #[cfg(feature = "quick-loops")]
-                if opline.extended_value != 0
+                if opline._pad & FETCH_DIM_ISSET == 0
+                    && opline.extended_value != 0
                     && unsafe {
                         execute_quick_region_entry(eg, frame, op_array, opline)?
                     }
@@ -2390,7 +2420,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     };
-                    let val = fetched.cloned().unwrap_or(Value::null());
+                    let val = if opline._pad & FETCH_DIM_ISSET != 0 {
+                        Value::bool(fetched.is_some_and(|value| {
+                            !matches!(value.value_type(), ValueType::Null | ValueType::Undef)
+                        }))
+                    } else {
+                        fetched.cloned().unwrap_or(Value::null())
+                    };
                     write_fetch_dim_result(frame, result_ptr, val);
                 } else if let Some(s) = arr_val.as_str() {
                     // String offset access: $s[0] — PHP strings are byte-oriented
@@ -2403,7 +2439,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let p = len + idx;
                             if p >= 0 { p as usize } else { usize::MAX }
                         };
-                        let val = if pos < bytes.len() {
+                        let val = if opline._pad & FETCH_DIM_ISSET != 0 {
+                            Value::bool(pos < bytes.len())
+                        } else if pos < bytes.len() {
                             // Single byte as a string
                             Value::string(String::from(bytes[pos] as char))
                         } else {
@@ -2411,21 +2449,110 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         write_fetch_dim_result(frame, result_ptr, val);
                     } else {
-                        write_fetch_dim_result(frame, result_ptr, Value::null());
+                        write_fetch_dim_result(
+                            frame,
+                            result_ptr,
+                            if opline._pad & FETCH_DIM_ISSET != 0 {
+                                Value::bool(false)
+                            } else {
+                                Value::null()
+                            },
+                        );
                     }
+                } else if arr_val.value_type() == ValueType::Object {
+                    let receiver = arr_val.clone();
+                    let key = idx_val.clone();
+                    let method = if opline._pad & FETCH_DIM_ISSET != 0 {
+                        "offsetExists"
+                    } else {
+                        "offsetGet"
+                    };
+                    let value = crate::stdlib::call_object_protocol_method(
+                        eg,
+                        &receiver,
+                        "ArrayAccess",
+                        method,
+                        std::slice::from_ref(&key),
+                    )?
+                    .ok_or_else(|| {
+                        let class_name = receiver
+                            .as_object()
+                            .map(|object| object.class_name.to_string())
+                            .unwrap_or_else(|| "object".to_string());
+                        VmError::Fatal(format!(
+                            "Cannot use object of type {class_name} as array"
+                        ))
+                    })?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    write_fetch_dim_result(frame, result_ptr, value);
                 } else {
-                    write_fetch_dim_result(frame, result_ptr, Value::null());
+                    write_fetch_dim_result(
+                        frame,
+                        result_ptr,
+                        if opline._pad & FETCH_DIM_ISSET != 0 {
+                            Value::bool(false)
+                        } else {
+                            Value::null()
+                        },
+                    );
                 }
             }
 
             OpCode::AssignDim => {
                 // op1[op2] = result (value source encoded in result/result_type)
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let key = value_to_array_key(idx_val)?;
                 let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
                 let cloned_val = val.clone();
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
+                if arr.value_type() == ValueType::Object {
+                    let receiver = arr.clone();
+                    let args = [idx_val.clone(), cloned_val];
+                    crate::stdlib::call_object_protocol_method(
+                        eg,
+                        &receiver,
+                        "ArrayAccess",
+                        "offsetSet",
+                        &args,
+                    )?
+                    .ok_or_else(|| {
+                        let class_name = receiver
+                            .as_object()
+                            .map(|object| object.class_name.to_string())
+                            .unwrap_or_else(|| "object".to_string());
+                        VmError::Fatal(format!(
+                            "Cannot use object of type {class_name} as array"
+                        ))
+                    })?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    unsafe { (*frame).opline = opline_ptr.add(1) };
+                    continue 'vm;
+                }
+                let key = value_to_array_key(idx_val)?;
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
                     unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
@@ -2444,6 +2571,41 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let cloned_val = val.clone();
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
+                if arr.value_type() == ValueType::Object {
+                    let receiver = arr.clone();
+                    let args = [Value::null(), cloned_val];
+                    crate::stdlib::call_object_protocol_method(
+                        eg,
+                        &receiver,
+                        "ArrayAccess",
+                        "offsetSet",
+                        &args,
+                    )?
+                    .ok_or_else(|| {
+                        let class_name = receiver
+                            .as_object()
+                            .map(|object| object.class_name.to_string())
+                            .unwrap_or_else(|| "object".to_string());
+                        VmError::Fatal(format!(
+                            "Cannot use object of type {class_name} as array"
+                        ))
+                    })?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    unsafe { (*frame).opline = opline_ptr.add(1) };
+                    continue 'vm;
+                }
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
                     unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
@@ -2480,9 +2642,44 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::UnsetDim => {
                 // Remove key op2 from array op1
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let key = value_to_array_key(idx_val)?;
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
+                if arr.value_type() == ValueType::Object {
+                    let receiver = arr.clone();
+                    let key = idx_val.clone();
+                    crate::stdlib::call_object_protocol_method(
+                        eg,
+                        &receiver,
+                        "ArrayAccess",
+                        "offsetUnset",
+                        std::slice::from_ref(&key),
+                    )?
+                    .ok_or_else(|| {
+                        let class_name = receiver
+                            .as_object()
+                            .map(|object| object.class_name.to_string())
+                            .unwrap_or_else(|| "object".to_string());
+                        VmError::Fatal(format!(
+                            "Cannot use object of type {class_name} as array"
+                        ))
+                    })?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    unsafe { (*frame).opline = opline_ptr.add(1) };
+                    continue 'vm;
+                }
+                let key = value_to_array_key(idx_val)?;
                 match arr.value_type() {
                     ValueType::Array => {
                         arr.as_array_mut().unwrap().remove(&key);
@@ -2601,6 +2798,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?;
                     object.as_object_mut().unwrap().unset_property(property);
                 }
+            }
+
+            OpCode::BindObjPropRef => {
+                op_bind_obj_prop_ref(eg, frame, op_array, opline)?;
+            }
+
+            OpCode::BindArrayDimRef => {
+                op_bind_array_dim_ref(frame, op_array, opline)?;
             }
 
             OpCode::AssignObjProp => {
@@ -2750,8 +2955,65 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let key = key_val.clone();
                 let new_val = val.clone();
 
-                let arr_key = value_to_array_key(&key)?;
                 let obj = unsafe { &*obj_ptr };
+                let object_dimension = if let Some(php_obj) = obj.as_object() {
+                    let caller_class = get_caller_class(frame, eg);
+                    let receiver_in_scope = caller_class
+                        .as_ref()
+                        .is_some_and(|cc| eg.class_is_a(&php_obj.class_name, cc));
+                    let effective_caller = if receiver_in_scope {
+                        caller_class.as_deref()
+                    } else {
+                        None
+                    };
+                    let storage_key = crate::runtime::resolve_property_key(
+                        eg,
+                        &php_obj.class_name,
+                        &prop_name,
+                        effective_caller,
+                    );
+                    php_obj
+                        .get_property(&storage_key)
+                        .filter(|value| value.value_type() == ValueType::Object)
+                        .cloned()
+                } else {
+                    None
+                };
+                if let Some(receiver) = object_dimension {
+                    crate::stdlib::call_object_protocol_method(
+                        eg,
+                        &receiver,
+                        "ArrayAccess",
+                        "offsetSet",
+                        &[key, new_val],
+                    )?
+                    .ok_or_else(|| {
+                        let class_name = receiver
+                            .as_object()
+                            .map(|object| object.class_name.to_string())
+                            .unwrap_or_else(|| "object".to_string());
+                        VmError::Fatal(format!(
+                            "Cannot use object of type {class_name} as array"
+                        ))
+                    })?;
+                    if let Some(exception) = eg.exception.take() {
+                        match throw_in_frame(eg, frame, exception) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                    unsafe { (*frame).opline = opline_ptr.add(1) };
+                    continue 'vm;
+                }
+
+                let arr_key = value_to_array_key(&key)?;
                 if let Some(mut php_obj) = obj.as_object_mut() {
                     let caller_class = get_caller_class(frame, eg);
                     let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
@@ -2759,14 +3021,40 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     });
                     let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
                     let storage_key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &prop_name, effective_caller);
+                    let object_class_name = php_obj.class_name.clone();
+                    let property_definition = php_obj
+                        .property_slot(&storage_key)
+                        .and_then(|slot| eg.instance_property_definition(php_obj.class_id, slot));
 
                     if let Some(arr_val) = php_obj.get_property_mut(&storage_key) {
                         // Property exists — mutate the array in place
                         if let Some(arr) = arr_val.as_array_mut() {
                             arr.set(arr_key, new_val);
+                        } else if matches!(arr_val.value_type(), ValueType::Undef | ValueType::Null) {
+                            // PHP materializes an array when a dimension is
+                            // first assigned through an uninitialized typed
+                            // `array` property (and through an untyped/null
+                            // property). Validate the synthesized value
+                            // against the declared contract before publishing.
+                            let mut array = crate::value::PhpArray::new();
+                            array.set(arr_key, new_val);
+                            let mut initialized = Value::array(array);
+                            if let Some(definition) = property_definition
+                                && definition.is_typed()
+                            {
+                                initialized = prepare_property_assignment(
+                                    initialized,
+                                    definition,
+                                    eg,
+                                    op_array.strict_types,
+                                    &object_class_name,
+                                )
+                                .map_err(VmError::Fatal)?;
+                            }
+                            *arr_val = initialized;
                         } else {
                             return Err(VmError::Fatal(format!(
-                                "Cannot use object of type {} as array", php_obj.class_name
+                                "Cannot use object of type {} as array", object_class_name
                             )));
                         }
                     } else {
@@ -3526,11 +3814,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     // Recursive execute_ex boundary: callee done → return to caller's macro loop
                     if frame == initial_frame {
+                        run_frame_destructors(eg, frame)?;
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
                         pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
+                    run_frame_destructors(eg, frame)?;
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     pop_vm_call_frame(eg, frame);
@@ -3622,11 +3912,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     // Recursive execute_ex boundary: callee done → return to caller's macro loop
                     if frame == initial_frame {
+                        run_frame_destructors(eg, frame)?;
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
                         pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
+                    run_frame_destructors(eg, frame)?;
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     pop_vm_call_frame(eg, frame);
@@ -3811,6 +4103,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if prev.is_null() {
                         return Ok(());
                     }
+                    run_frame_destructors(eg, frame)?;
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     pop_vm_call_frame(eg, frame);
@@ -3835,12 +4128,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
                 // Recursive execute_ex boundary: callee done → return to caller's macro loop
                 if frame == initial_frame {
+                    run_frame_destructors(eg, frame)?;
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     pop_vm_call_frame(eg, frame);
                     return Ok(());
                 }
 
+                run_frame_destructors(eg, frame)?;
                 eg.current_execute_data.set(prev);
                 unsafe { cleanup_frame_slots(frame) };
                 pop_vm_call_frame(eg, frame);
@@ -3943,6 +4238,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if op_nullsafe_check(eg, frame, op_array, opline)? {
                     continue;
                 }
+            }
+
+            OpCode::ReleaseTemps => {
+                release_statement_temps(
+                    eg,
+                    frame,
+                    opline.op1 as usize,
+                    opline.op2 as usize,
+                )?;
             }
 
             // All opcodes handled — new opcodes must be added above

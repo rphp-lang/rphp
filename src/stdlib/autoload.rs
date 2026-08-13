@@ -312,8 +312,11 @@ fn exists_with_autoload(
     kind: SymbolKind,
     autoload: bool,
 ) -> Result<bool, VmError> {
-    if symbol_exists(eg, name, kind) {
-        return Ok(true);
+    // A symbol of another class-like kind still owns this name. PHP returns
+    // false for e.g. class_exists(LoadedInterface::class) without invoking
+    // autoload again and redeclaring the already loaded interface.
+    if symbol_exists(eg, name, SymbolKind::Any) {
+        return Ok(symbol_exists(eg, name, kind));
     }
     if !autoload
         || eg

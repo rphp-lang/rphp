@@ -2,6 +2,116 @@ mod common;
 use common::run_php;
 
 #[test]
+fn reflection_class_get_name_returns_the_declared_qualified_name() {
+    assert_eq!(
+        run_php(
+            "<?php namespace Reflected\\Names; class NamedProbe {} echo (new \\ReflectionClass(NamedProbe::class))->getName();"
+        ),
+        "Reflected\\Names\\NamedProbe"
+    );
+}
+
+#[test]
+fn reflection_doc_comments_truthfully_report_unretained_metadata() {
+    assert_eq!(
+        run_php(
+            "<?php /** class docs */ class Documented { /** property docs */ public int $value; /** method docs */ public function read(): void {} } $class = new ReflectionClass(Documented::class); $properties = $class->getProperties(); var_dump($class->getDocComment(), $class->getMethod('read')->getDocComment(), $properties[0]->getDocComment());"
+        ),
+        "bool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
+#[test]
+fn reflection_class_is_subclass_of_accepts_names_and_reflections() {
+    assert_eq!(
+        run_php(
+            "<?php interface ReflectedMarker {} class ReflectedBase implements ReflectedMarker {} class ReflectedChild extends ReflectedBase {} $child = new ReflectionClass(ReflectedChild::class); echo $child->isSubclassOf(ReflectedBase::class) ? 'parent:' : 'bad:'; echo $child->isSubclassOf(new ReflectionClass(ReflectedMarker::class)) ? 'interface:' : 'bad:'; echo (new ReflectionClass(ReflectedBase::class))->isSubclassOf(ReflectedBase::class) ? 'bad' : 'same';"
+        ),
+        "parent:interface:same"
+    );
+}
+
+#[test]
+fn reflection_class_implements_interface_includes_inherited_and_interface_identity() {
+    assert_eq!(
+        run_php(
+            "<?php interface RootContract {} interface ChildContract extends RootContract {} class ContractParent implements ChildContract {} class ContractChild extends ContractParent {} $child = new ReflectionClass(ContractChild::class); echo (int) $child->implementsInterface(RootContract::class), (int) $child->implementsInterface(ChildContract::class), ':'; echo (int) (new ReflectionClass(RootContract::class))->implementsInterface(RootContract::class);"
+        ),
+        "11:1"
+    );
+}
+
+#[test]
+fn reflection_class_get_interfaces_and_traits_return_named_reflections() {
+    assert_eq!(
+        run_php(
+            "<?php interface ObjectRoot {} interface ObjectChild extends ObjectRoot {} trait ObjectTrait {} class ObjectParent implements ObjectChild {} class ObjectLeaf extends ObjectParent { use ObjectTrait; } $reflection = new ReflectionClass(ObjectLeaf::class); foreach ($reflection->getInterfaces() as $name => $interface) { echo $name, '=', $interface->getName(), ','; } echo '|'; foreach ($reflection->getTraits() as $name => $trait) { echo $name, '=', $trait->getName(); }"
+        ),
+        "ObjectChild=ObjectChild,ObjectRoot=ObjectRoot,|ObjectTrait=ObjectTrait"
+    );
+}
+
+#[test]
+fn reflection_class_get_constructor_reports_inherited_or_missing_constructor() {
+    assert_eq!(
+        run_php(
+            "<?php class ConstructorOwner { protected function __construct(int $value) {} } class ConstructorChild extends ConstructorOwner {} class ConstructorMissing {} $constructor = (new ReflectionClass(ConstructorChild::class))->getConstructor(); echo $constructor->getName(), ':', $constructor->getDeclaringClass()->getName(), ':', $constructor->getModifiers(), ':'; var_dump((new ReflectionClass(ConstructorMissing::class))->getConstructor());"
+        ),
+        "__construct:ConstructorOwner:2:NULL\n"
+    );
+}
+
+#[test]
+fn reflection_method_get_prototype_and_invoke_follow_parent_contract() {
+    assert_eq!(
+        run_php(
+            "<?php class PrototypeParent { public function render($value) { return 'P'.$value; } } class PrototypeChild extends PrototypeParent { public function render($value) { return 'C'.$value; } } $method = new ReflectionMethod(PrototypeChild::class, 'render'); echo (int) $method->hasPrototype(), ':', $method->getPrototype()->getDeclaringClass()->getName(), ':', $method->invoke(new PrototypeChild(), 'x');"
+        ),
+        "1:PrototypeParent:Cx"
+    );
+}
+
+#[test]
+fn reflection_method_can_reflect_and_invoke_internal_methods() {
+    assert_eq!(
+        run_php(
+            "<?php $method = new ReflectionMethod(ReflectionMethod::class, 'getPrototype'); echo $method->getName(), ':', $method->getDeclaringClass()->getName(), ':'; $target = new ReflectionMethod(ReflectionMethod::class, 'getPrototype'); try { $method->invoke($target); } catch (ReflectionException $error) { echo 'caught'; }"
+        ),
+        "getPrototype:ReflectionMethod:caught"
+    );
+}
+
+#[test]
+fn reflection_method_visibility_and_declaration_predicates_share_metadata() {
+    assert_eq!(
+        run_php(
+            "<?php class ReflectedPredicates { protected function pending() {} final public static function ready() {} private function __destruct() {} } foreach ((new ReflectionClass(ReflectedPredicates::class))->getMethods() as $method) { echo $method->getName(), ':', (int) $method->isPublic(), (int) $method->isProtected(), (int) $method->isPrivate(), (int) $method->isStatic(), (int) $method->isFinal(), (int) $method->isAbstract(), (int) $method->isDestructor(), '|'; }"
+        ),
+        "pending:0100000|ready:1001100|__destruct:0010001|"
+    );
+}
+
+#[test]
+fn reflection_class_method_lookup_and_kind_predicates_are_consistent() {
+    assert_eq!(
+        run_php(
+            "<?php interface LookupInterface {} trait LookupTrait { public function fromTrait() {} } abstract class LookupParent { use LookupTrait; protected function inherited() {} } final class LookupChild extends LookupParent {} $class = new ReflectionClass(LookupChild::class); echo (int) $class->hasMethod('FROMTRAIT'), ':', $class->getMethod('inherited')->getDeclaringClass()->getName(), ':', (int) $class->isFinal(), (int) $class->isAbstract(), (int) $class->isInstantiable(), ':'; echo (int) (new ReflectionClass(LookupInterface::class))->isInterface(), (int) (new ReflectionClass(LookupTrait::class))->isTrait();"
+        ),
+        "1:LookupParent:101:11"
+    );
+}
+
+#[test]
+fn reflection_class_reports_class_level_readonly_metadata() {
+    assert_eq!(
+        run_php(
+            "<?php readonly final class ReadonlyClassProbe { public function __construct(public int $value) {} } class MutableClassProbe { public int $value = 0; } $readonly = new ReflectionClass(ReadonlyClassProbe::class); $mutable = new ReflectionClass(MutableClassProbe::class); echo (int) $readonly->isReadOnly(), (int) $readonly->isFinal(), ':', (int) $readonly->getProperties()[0]->isReadOnly(), ':', (int) $mutable->isReadOnly();"
+        ),
+        "11:1:0"
+    );
+}
+
+#[test]
 fn test_get_class_returns_class_name() {
     let out = run_php(
         r#"<?php
@@ -47,9 +157,13 @@ class UserDefinedReflectionProbe {}
 echo (new ReflectionClass(UserDefinedReflectionProbe::class))->isInternal() ? 'bad' : 'user';
 echo ':';
 echo (new ReflectionClass(stdClass::class))->isInternal() ? 'internal' : 'bad';
+echo ':';
+echo (new ReflectionClass(UserDefinedReflectionProbe::class))->isUserDefined() ? 'defined' : 'bad';
+echo ':';
+echo (new ReflectionClass(stdClass::class))->isUserDefined() ? 'bad' : 'builtin';
 "#,
     );
-    assert_eq!(out, "user:internal");
+    assert_eq!(out, "user:internal:defined:builtin");
 }
 
 #[test]
@@ -118,6 +232,62 @@ echo implode(',', (new ReflectionClass(ReflectedNestedTrait::class))->getTraitNa
 }
 
 #[test]
+fn reflection_class_lists_and_filters_constant_values() {
+    let out = run_php(
+        r#"<?php
+class ReflectedConstantParent {
+    public const PUB = 1;
+    protected const PRO = 2;
+    private const HIDDEN = 3;
+    final public const FIN = 4;
+}
+class ReflectedConstantChild extends ReflectedConstantParent {
+    private const OWN = 5;
+}
+$reflection = new ReflectionClass(ReflectedConstantChild::class);
+foreach ($reflection->getConstants() as $name => $value) {
+    echo $name . '=' . $value . ',';
+}
+echo '|';
+foreach ($reflection->getConstants(4) as $name => $value) {
+    echo $name . '=' . $value . ',';
+}
+echo '|';
+foreach ($reflection->getConstants(32) as $name => $value) {
+    echo $name . '=' . $value . ',';
+}
+"#,
+    );
+    assert_eq!(out, "OWN=5,PUB=1,PRO=2,FIN=4,|OWN=5,|FIN=4,");
+}
+
+#[test]
+fn reflection_class_exposes_constant_objects_and_default_properties() {
+    let out = run_php(
+        r#"<?php
+class ReflectedDefaults {
+    public const PUBLIC_VALUE = 3;
+    protected static string $label = 'ready';
+    public int $count = 2;
+    public string $uninitialized;
+}
+$reflection = new ReflectionClass(ReflectedDefaults::class);
+$constant = $reflection->getReflectionConstants()[0];
+echo $constant->name, ':', count($constant->getAttributes()), '|';
+foreach ($reflection->getDefaultProperties() as $name => $value) { echo $name, '=', $value, ','; }
+echo '|';
+foreach ($reflection->getProperties() as $property) {
+    echo $property->name, ':', (int) $property->isDefault(), (int) $property->isPublic(), (int) $property->isProtected(), (int) $property->isStatic(), ',';
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "PUBLIC_VALUE:0|label=ready,count=2,|count:1100,uninitialized:1100,label:1011,"
+    );
+}
+
+#[test]
 fn declared_class_like_inventories_report_canonical_kinds_and_class_aliases() {
     let out = run_php(
         r#"<?php
@@ -134,6 +304,114 @@ echo in_array(DeclaredInventoryTrait::class, get_declared_traits(), true) ? 't' 
 "#,
     );
     assert_eq!(out, "ceait");
+}
+
+#[test]
+fn reflection_functions_and_methods_report_parameter_counts_and_metadata() {
+    let out = run_php(
+        r#"<?php
+function &reflectedCount(&$required, $optional = 1, ...$rest) {}
+class ReflectedCountParent {
+    public function &counted(string $required, ?int $optional = null): void {}
+}
+class ReflectedCountChild extends ReflectedCountParent {}
+$function = new ReflectionFunction('reflectedCount');
+echo $function->getNumberOfParameters(), ':', $function->getNumberOfRequiredParameters(), ':', (int) $function->returnsReference(), (int) $function->isClosure(), (int) $function->hasReturnType(), ':';
+$functionParameters = $function->getParameters();
+echo count($functionParameters), ':', (int) $functionParameters[0]->isOptional(), (int) $functionParameters[1]->isOptional(), (int) $functionParameters[2]->isOptional(), ':';
+echo (int) $functionParameters[0]->isPassedByReference(), (int) $functionParameters[1]->isPassedByReference(), '|';
+$method = new ReflectionMethod(new ReflectedCountChild(), 'counted');
+echo $method->getNumberOfParameters(), ':', $method->getNumberOfRequiredParameters(), ':', (int) $method->returnsReference(), (int) $method->isClosure(), (int) $method->hasReturnType(), (int) $method->hasTentativeReturnType(), ':', $method->getReturnType()->getName(), ':';
+$parameters = $method->getParameters();
+echo count($parameters), ':', $parameters[0]->getName(), ':', $parameters[1]->isDefaultValueAvailable(), ':';
+echo (int) $parameters[0]->hasType(), (int) $functionParameters[0]->hasType();
+"#,
+    );
+    assert_eq!(out, "3:1:100:3:011:10|2:1:1010:void:2:required:1:10");
+}
+
+#[test]
+fn reflection_method_get_closure_binds_instance_and_late_static_scope() {
+    let out = run_php(
+        r#"<?php
+class ReflectedClosureParent {
+    protected function joined($first, $second = 'b') {
+        return static::class . ':' . $first . ':' . $second;
+    }
+    public static function scoped($value) {
+        return static::class . ':' . $value;
+    }
+}
+
+class ReflectedClosureChild extends ReflectedClosureParent {}
+$object = new ReflectedClosureChild();
+$instance = (new ReflectionMethod($object, 'joined'))->getClosure($object);
+echo $instance('a'), '|';
+$static = (new ReflectionMethod(ReflectedClosureChild::class, 'scoped'))->getClosure();
+echo $static('x');
+"#,
+    );
+    assert_eq!(out, "ReflectedClosureChild:a:b|ReflectedClosureChild:x");
+}
+
+#[test]
+fn reflected_method_closure_keeps_nested_captured_arguments_aligned() {
+    let out = run_php(
+        r#"<?php
+class NestedContainer { public string $marker = 'container'; }
+class NestedLoader { public string $marker = 'loader'; }
+class NestedConfigurator {
+    public function configure(NestedContainer $container, NestedLoader $loader): string {
+        return $container->marker . ':' . $loader->marker;
+    }
+}
+
+class NestedInvoker {
+    public function invoke(Closure $callback): string {
+        return $callback(new NestedContainer(), 'environment');
+    }
+}
+
+$configurator = new NestedConfigurator();
+$loader = new NestedLoader();
+$callback = function (NestedContainer $container) use ($configurator, $loader): string {
+    $method = new ReflectionMethod($configurator, 'configure');
+    return $method->getClosure($configurator)($container, $loader);
+};
+echo (new NestedInvoker())->invoke($callback);
+"#,
+    );
+    assert_eq!(out, "container:loader");
+}
+
+#[test]
+fn reflection_class_get_methods_reports_inheritance_filters_and_metadata() {
+    let out = run_php(
+        r#"<?php
+class MethodInventoryParent {
+    protected function inherited($required, $optional = 1) {}
+    private function hidden() {}
+}
+class MethodInventoryChild extends MethodInventoryParent {
+    public static final function visible() {}
+    public function __construct() {}
+}
+$reflection = new ReflectionClass(MethodInventoryChild::class);
+$all = $reflection->getMethods();
+foreach ($all as $method) {
+    echo $method->getName(), ':', $method->getDeclaringClass()->name, ':', $method->getModifiers(), ':';
+    echo $method->isConstructor() ? 'c' : '-', '|';
+}
+echo '#';
+foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+    echo $method->getName(), ',';
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "visible:MethodInventoryChild:49:-|__construct:MethodInventoryChild:1:c|inherited:MethodInventoryParent:2:-|hidden:MethodInventoryParent:4:-|#visible,__construct,"
+    );
 }
 
 #[test]

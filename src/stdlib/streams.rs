@@ -221,6 +221,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         ("fwrite", fn_fwrite, 3, 2, &["stream", "data", "length"]),
         ("fclose", fn_fclose, 1, 1, &["stream"]),
         ("fflush", fn_fflush, 1, 1, &["stream"]),
+        (
+            "flock",
+            fn_flock,
+            3,
+            2,
+            &["stream", "operation", "would_block"],
+        ),
         ("feof", fn_feof, 1, 1, &["stream"]),
         ("ftell", fn_ftell, 1, 1, &["stream"]),
         ("fseek", fn_fseek, 3, 2, &["stream", "offset", "whence"]),
@@ -615,6 +622,20 @@ fn fn_fflush(
         .and_then(|resource| with_stream(eg, resource, |stream| stream.flush().is_ok()))
         .unwrap_or(false);
     return_value(return_pointer, Value::bool(flushed))
+}
+
+#[cold]
+fn fn_flock(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let operation = argument(execute_data, 1).to_long_val();
+    let locked = argument(execute_data, 0)
+        .as_resource_id()
+        .and_then(|resource| with_stream(eg, resource, |stream| stream.lock(operation).is_ok()))
+        .unwrap_or(false);
+    return_value(return_pointer, Value::bool(locked))
 }
 
 #[cold]

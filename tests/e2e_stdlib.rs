@@ -117,6 +117,14 @@ fn test_e2e_strpos_not_found() {
 }
 
 #[test]
+fn strpos_supports_positive_and_negative_offsets() {
+    assert_eq!(
+        run_php("<?php var_dump(strpos('abcabc', 'a', 1)); var_dump(strpos('abcabc', 'a', -4));"),
+        "int(3)\nint(3)\n"
+    );
+}
+
+#[test]
 fn strrchr_returns_the_suffix_at_the_last_first_byte_match() {
     assert_eq!(
         run_php(
@@ -418,12 +426,62 @@ fn substr_compare_supports_offsets_lengths_and_case_folding() {
 }
 
 #[test]
+fn strnatcmp_orders_numeric_segments_like_php() {
+    assert_eq!(
+        run_php(
+            "<?php $values = ['img10', 'img2', 'img02', 'img1']; usort($values, 'strnatcmp'); echo implode(',', $values), ':'; echo strnatcmp('02', '2'), ':', strnatcmp('1.10', '1.2');"
+        ),
+        "img02,img1,img2,img10:0:1"
+    );
+}
+
+#[test]
+fn incremental_xxh128_hash_matches_one_shot_hash() {
+    assert_eq!(
+        run_php(
+            "<?php $context = hash_init('xxh128'); var_dump($context instanceof HashContext); hash_update($context, 'Symfony'); hash_update($context, '!'); echo hash_final($context), ':', hash('xxh128', 'Symfony!');"
+        ),
+        "bool(true)\n0290f3acc01ebe2ef48505b4a1179147:0290f3acc01ebe2ef48505b4a1179147"
+    );
+}
+
+#[test]
 fn array_diff_key_preserves_missing_keys_and_values() {
     assert_eq!(
         run_php(
             "<?php $result = array_diff_key(['keep' => 1, 'drop' => 2, 3 => 'three'], ['drop' => 9]); echo $result['keep'] . ':' . $result[3] . ':' . count($result);"
         ),
         "1:three:2"
+    );
+}
+
+#[test]
+fn array_key_set_operations_accept_variadic_comparison_arrays() {
+    assert_eq!(
+        run_php(
+            "<?php $source = ['keep' => 1, 'shared' => 2, 3 => 'three']; $diff = array_diff_key($source, ['shared' => 9], [3 => 'other']); $intersect = array_intersect_key($source, ['keep' => 0, 'shared' => 0], ['shared' => 0, 3 => 0]); echo count($diff), ':', $diff['keep'], ':', count($intersect), ':', $intersect['shared'];"
+        ),
+        "1:1:1:2"
+    );
+}
+
+#[test]
+fn array_is_list_checks_ordered_keys_without_requiring_packed_storage() {
+    assert_eq!(
+        run_php(
+            "<?php var_dump(array_is_list([])); var_dump(array_is_list([0 => 'a', 1 => 'b'])); var_dump(array_is_list([1 => 'a'])); $sparse = ['a', 'b', 'c']; unset($sparse[1]); var_dump(array_is_list($sparse));"
+        ),
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+}
+
+#[test]
+fn array_cursor_functions_track_reset_end_next_prev_current_and_key() {
+    assert_eq!(
+        run_php(
+            "<?php $values = ['first' => 1, 'middle' => 2, 'last' => 3]; echo reset($values), ':', key($values), '|'; echo next($values), ':', key($values), ':', current($values), '|'; echo end($values), ':', key($values), '|'; echo prev($values), ':', key($values), '|'; $empty = []; var_dump(reset($empty));"
+        ),
+        "1:first|2:middle:2|3:last|2:middle|bool(false)\n"
     );
 }
 
@@ -587,6 +645,14 @@ fn test_e2e_print_r_array() {
     );
 }
 
+#[test]
+fn print_r_return_mode_returns_without_writing_output() {
+    assert_eq!(
+        run_php("<?php $result = print_r(['a' => 1, 2], true); var_dump($result);"),
+        "string(36) \"Array\n(\n    [a] => 1\n    [0] => 2\n)\n\"\n"
+    );
+}
+
 // === Practical combinations ===
 
 #[test]
@@ -651,5 +717,63 @@ fn test_error_handler_api_is_available_for_warning_guards() {
             "<?php function handleWarning($type, $message) { return true; } var_dump(set_error_handler('handleWarning')); var_dump(restore_error_handler());"
         ),
         "NULL\nbool(true)\n"
+    );
+}
+
+#[test]
+fn trigger_error_routes_allowed_levels_through_the_registered_handler() {
+    assert_eq!(
+        run_php(
+            "<?php function handleUserError($level, $message, $file, $line) { echo $level, ':', $message, ':', strlen($file), ':', $line; return true; } set_error_handler('handleUserError', E_USER_WARNING); var_dump(trigger_error('careful', E_USER_WARNING)); var_dump(user_error('quiet', E_USER_NOTICE));"
+        ),
+        "512:careful:0:0bool(true)\nbool(true)\n"
+    );
+}
+
+#[test]
+fn trigger_error_rejects_non_user_error_levels() {
+    assert_eq!(
+        run_php(
+            "<?php try { trigger_error('bad', E_WARNING); } catch (ValueError $error) { echo get_class($error); }"
+        ),
+        "ValueError"
+    );
+}
+
+#[test]
+fn is_iterable_accepts_arrays_and_traversable_objects_only() {
+    assert_eq!(
+        run_php(
+            "<?php $storage = new SplObjectStorage(); echo is_iterable([]) ? 'array' : 'bad'; echo ':'; echo is_iterable($storage) ? 'object' : 'bad'; echo ':'; echo is_iterable(new stdClass()) ? 'bad' : 'plain'; echo ':'; echo is_iterable('text') ? 'bad' : 'scalar';"
+        ),
+        "array:object:plain:scalar"
+    );
+}
+
+#[test]
+fn json_unescaped_constants_and_flags_are_available() {
+    assert_eq!(
+        run_php(
+            "<?php echo JSON_UNESCAPED_SLASHES, ':', JSON_UNESCAPED_UNICODE, '|'; echo json_encode(['path' => '/a/b', 'word' => 'Příliš'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);"
+        ),
+        "64:256|{\"path\":\"/a/b\",\"word\":\"Příliš\"}"
+    );
+}
+
+#[test]
+fn gc_mem_caches_reports_no_zend_allocator_cache_and_supports_namespace_fallback() {
+    assert_eq!(
+        run_php("<?php namespace Fixture; var_dump(gc_mem_caches());"),
+        "int(0)\n"
+    );
+}
+
+#[test]
+fn pathinfo_supports_component_flags_used_by_source_loaders() {
+    assert_eq!(
+        run_php(
+            "<?php echo PATHINFO_ALL, ':'; echo pathinfo('/a/archive.tar.gz', PATHINFO_DIRNAME), ':'; echo pathinfo('/a/archive.tar.gz', PATHINFO_BASENAME), ':'; echo pathinfo('/a/archive.tar.gz', PATHINFO_EXTENSION), ':'; echo pathinfo('/a/archive.tar.gz', PATHINFO_FILENAME);"
+        ),
+        "15:/a:archive.tar.gz:gz:archive.tar"
     );
 }
