@@ -45,7 +45,59 @@ fn op_foreach_init<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    // SAFETY: ForeachInit's source operand is a compiler-validated live-frame
+    // slot and remains borrowed only until this opcode finishes.
+    let source = unsafe {
+        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    };
+    let mut resolved_iterable = None;
+    let mut aggregate_identities = Vec::new();
+    loop {
+        let candidate = resolved_iterable.as_ref().unwrap_or(source);
+        let Some(object) = candidate.as_object() else {
+            break;
+        };
+        let class_name = object.class_name.to_string();
+        drop(object);
+        if !eg.class_is_a(&class_name, "IteratorAggregate") {
+            break;
+        }
+        let identity = candidate.object_identity().unwrap();
+        if aggregate_identities.contains(&identity) {
+            let error = make_error_value(
+                "Exception",
+                &format!(
+                    "Objects returned by {class_name}::getIterator() must be traversable or implement interface Iterator"
+                ),
+            );
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        aggregate_identities.push(identity);
+        let receiver = candidate.clone();
+        let next = crate::stdlib::call_object_protocol_method(
+            eg,
+            &receiver,
+            "IteratorAggregate",
+            "getIterator",
+            &[],
+        )?
+        .ok_or_else(|| VmError::Fatal(format!("Call to undefined method {class_name}::getIterator()")))?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        resolved_iterable = Some(next);
+    }
+    let arr_val = resolved_iterable.as_ref().unwrap_or(source);
 
     // Check for Generator object
     let is_generator = if let Some(obj) = arr_val.as_object() {

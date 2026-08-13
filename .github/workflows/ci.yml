@@ -121,6 +121,20 @@ jobs:
       - name: Run pinned Symfony warmed-kernel gate
         run: scripts/test-symfony-warmed-kernel-s2.sh
 
+  symfony-cold-kernel-s3:
+    name: Symfony cold kernel S3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install PHP 8.2 oracle
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+      - name: Run pinned Symfony cold-build gate
+        run: scripts/test-symfony-cold-kernel-s3.sh
+
   native-jit:
     name: Native JIT (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}

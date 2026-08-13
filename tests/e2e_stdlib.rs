@@ -2,6 +2,20 @@
 mod common;
 use common::run_php;
 
+#[test]
+fn addcslashes_preserves_php_reference_escaping_rules() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo addcslashes("az-A'\\", "a..z'\\"), '|';
+$controls = chr(0).chr(7).chr(8).chr(9).chr(10).chr(11).chr(12).chr(13).chr(31).chr(127);
+echo addcslashes($controls, chr(0).'..'.chr(127));
+"#,
+        ),
+        "\\a\\z-A\\'\\\\|\\000\\a\\b\\t\\n\\v\\f\\r\\037\\177"
+    );
+}
+
 // === count() ===
 
 #[test]

@@ -202,9 +202,9 @@ fn test_parse_reference_assignment_to_dynamic_property() {
     let statements = Parser::new(tokens).parse().unwrap();
     assert!(matches!(
         &statements[0],
-        Stmt::ExprStmt(Expr::AssignTarget { target, expr })
+        Stmt::ExprStmt(Expr::AssignTargetReference { target, source })
             if matches!(target.as_ref(), Expr::DynamicPropertyAccess { .. })
-                && matches!(expr.as_ref(), Expr::Variable(name) if name == "value")
+                && matches!(source.as_ref(), Expr::Variable(name) if name == "value")
     ));
 }
 

@@ -47,6 +47,27 @@ unsafe fn slot_set(ptr: *mut Value, val: Value) {
     ptr.write(val);
 }
 
+/// Perform an ordinary PHP assignment into a value storage location.
+///
+/// Array elements and object properties may hold an explicit PHP reference
+/// cell. Assigning to that element/property updates the referenced value while
+/// preserving every alias; materialization paths that intentionally replace a
+/// reference wrapper continue to use `slot_set` or their container setter.
+#[inline(always)]
+fn assignment_slot_set(slot: &mut Value, val: Value) {
+    // SAFETY: `slot` is an exclusive initialized Value. A reference Value's
+    // target is live by its representation contract; otherwise the target is
+    // the slot itself. `slot_set` preserves initialization after replacement.
+    unsafe {
+        let target = if slot.is_reference() {
+            slot.as_ref_ptr()
+        } else {
+            slot as *mut Value
+        };
+        slot_set(target, val);
+    }
+}
+
 /// Bitmap slow path: drop + update bitmap for a TMP slot overwrite.
 /// Outlined to keep hot inline code small.
 #[inline(never)]

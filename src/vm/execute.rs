@@ -19,7 +19,7 @@ use super::function::{
     ScalarStringFunctionPlan, ScalarStringSource, UserFunction,
 };
 use super::instruction::{
-    ARRAY_INIT_HASH_HINT, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,
+    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,
     CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK,
     CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_EXACT_SCALAR_ARGS,
@@ -2331,14 +2331,13 @@ fn execute_full_call<'a>(
                 for i in 0..user.op_array.num_cvs {
                     args.push(unsafe { (*call).cv(i).clone() });
                 }
-                let generator = Generator::new(
+                let mut generator = Generator::new(
                     unsafe { (*call).func },
                     args,
                     user.op_array.num_cvs,
                     user.op_array.num_temps,
                 );
-                #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-                let mut generator = generator;
+                generator.called_scope_class_id = late_static_call_class_id(eg, call);
                 #[cfg(feature = "php-generics-reified")]
                 {
                     generator.reified_context = eg.generator_reified_context(call as usize);

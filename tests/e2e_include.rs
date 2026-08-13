@@ -83,6 +83,32 @@ fn include_once_expression_returns_true_after_the_first_execution() {
 }
 
 #[test]
+fn included_file_inventory_is_unique_ordered_and_shared_by_both_aliases() {
+    let dir = TempDir::new();
+    let inner = dir.path().join("inner.php");
+    std::fs::write(&inner, "<?php echo 'i';").unwrap();
+    let outer = dir.path().join("outer.php");
+    std::fs::write(
+        &outer,
+        format!("<?php echo 'o'; include '{}';", inner.to_string_lossy()),
+    )
+    .unwrap();
+    let source = format!(
+        r#"<?php
+include '{outer}';
+include_once '{inner}';
+$included = get_included_files();
+$required = get_required_files();
+echo '|', count($included), '|', basename($included[0]), ',', basename($included[1]), '|', $included === $required ? 'same' : 'different';
+"#,
+        outer = outer.to_string_lossy(),
+        inner = inner.to_string_lossy(),
+    );
+
+    assert_eq!(run_php(&source), "oi|2|outer.php,inner.php|same");
+}
+
+#[test]
 fn missing_include_expression_warns_and_returns_false() {
     let output = run_php(
         "<?php $result = include '/nonexistent/rphp/include-expression.php'; var_dump($result);",

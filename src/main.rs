@@ -117,6 +117,7 @@ fn main() {
         CliAction::Stdin => ("Standard input code".to_string(), source_directory),
         CliAction::Help | CliAction::Version => unreachable!("handled above"),
     };
+    let executed_file = matches!(action, CliAction::File(_)).then(|| source_file.clone());
 
     let source = read_source(action).unwrap_or_else(|error| {
         eprintln!("error: {error}");
@@ -147,6 +148,9 @@ fn main() {
     let main_func = make_user_function(result.main);
     let mut eg = ExecutorGlobals::new();
     eg.generic_metadata = result.generic_metadata;
+    if let Some(executed_file) = executed_file {
+        eg.record_included_file(executed_file);
+    }
 
     // Register stdlib
     let _stdlib = stdlib::register_stdlib(&mut eg);

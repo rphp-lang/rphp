@@ -1,4 +1,4 @@
-use super::{Lexer, StringPart, Token};
+use super::{Lexer, StringPart, Token, decode_php_source};
 
 impl<'a> Lexer<'a> {
     pub(super) fn read_string(&mut self, quote: u8) -> Result<String, String> {
@@ -240,6 +240,50 @@ impl<'a> Lexer<'a> {
                         }
                         current.push(char::from((value & 0xff) as u8));
                     }
+                    b'x' => {
+                        let escape_start = pos;
+                        pos += 1;
+                        let mut value = 0_u8;
+                        let mut digits = 0;
+                        while digits < 2 {
+                            let Some(digit) = content.get(pos).copied().and_then(Self::hex_value)
+                            else {
+                                break;
+                            };
+                            value = value * 16 + digit;
+                            pos += 1;
+                            digits += 1;
+                        }
+                        if digits == 0 {
+                            current.push('\\');
+                            current.push(content[escape_start] as char);
+                        } else {
+                            current.push(char::from(value));
+                        }
+                    }
+                    b'u' if content.get(pos + 1) == Some(&b'{') => {
+                        pos += 2;
+                        let digits_start = pos;
+                        let mut value = 0_u32;
+                        while let Some(digit) = content.get(pos).copied().and_then(Self::hex_value)
+                        {
+                            value = value
+                                .checked_mul(16)
+                                .and_then(|value| value.checked_add(u32::from(digit)))
+                                .ok_or_else(|| {
+                                    "Invalid Unicode codepoint escape sequence".to_string()
+                                })?;
+                            pos += 1;
+                        }
+                        if pos == digits_start || content.get(pos) != Some(&b'}') {
+                            return Err("Invalid Unicode codepoint escape sequence".into());
+                        }
+                        pos += 1;
+                        let character = char::from_u32(value).ok_or_else(|| {
+                            "Invalid Unicode codepoint escape sequence".to_string()
+                        })?;
+                        current.push(character);
+                    }
                     b'n' => {
                         current.push('\n');
                         pos += 1;
@@ -287,6 +331,7 @@ impl<'a> Lexer<'a> {
                 if !current.is_empty() {
                     parts.push(StringPart::Literal(std::mem::take(&mut current)));
                 }
+                let expression_start = pos + 1;
                 pos += 2;
                 let name = Self::read_content_identifier(content, &mut pos)?;
                 if content.get(pos) == Some(&b'[') {
@@ -305,11 +350,16 @@ impl<'a> Lexer<'a> {
                         pos += 1;
                     }
                     parts.push(StringPart::ArrayAccess(name, index));
-                } else {
-                    if content.get(pos) == Some(&b'}') {
-                        pos += 1;
-                    }
+                } else if content.get(pos) == Some(&b'}') {
+                    pos += 1;
                     parts.push(StringPart::Variable(name));
+                } else {
+                    let expression_end = Self::complex_interpolation_end(content, pos)?;
+                    let tokens = Self::tokenize_interpolation_expression(
+                        &content[expression_start..expression_end],
+                    )?;
+                    pos = expression_end + 1;
+                    parts.push(StringPart::Expression(tokens));
                 }
             } else {
                 Self::push_utf8_char(content, &mut pos, &mut current)?;
@@ -320,6 +370,52 @@ impl<'a> Lexer<'a> {
             parts.push(StringPart::Literal(current));
         }
         Ok(parts)
+    }
+
+    fn complex_interpolation_end(content: &[u8], mut pos: usize) -> Result<usize, String> {
+        let mut nested_braces = 0_usize;
+        let mut quote = None;
+
+        while pos < content.len() {
+            let byte = content[pos];
+            if let Some(active_quote) = quote {
+                if byte == b'\\' && pos + 1 < content.len() {
+                    pos += 2;
+                    continue;
+                }
+                if byte == active_quote {
+                    quote = None;
+                }
+                pos += 1;
+                continue;
+            }
+
+            match byte {
+                b'\'' | b'"' => quote = Some(byte),
+                b'{' => nested_braces += 1,
+                b'}' if nested_braces == 0 => return Ok(pos),
+                b'}' => nested_braces -= 1,
+                _ => {}
+            }
+            pos += 1;
+        }
+
+        Err("Unterminated complex string interpolation".into())
+    }
+
+    fn tokenize_interpolation_expression(expression: &[u8]) -> Result<Vec<Token>, String> {
+        let decoded = decode_php_source(expression);
+        let source = format!("<?php {decoded}");
+        let mut tokens = Lexer::new(&source).tokenize()?;
+        if tokens.first() != Some(&Token::OpenTag) || tokens.last() != Some(&Token::Eof) {
+            return Err("Invalid complex string interpolation".into());
+        }
+        tokens.remove(0);
+        tokens.pop();
+        if tokens.is_empty() {
+            return Err("Empty complex string interpolation".into());
+        }
+        Ok(tokens)
     }
 
     fn read_content_identifier(content: &[u8], pos: &mut usize) -> Result<String, String> {
@@ -359,6 +455,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn hex_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
     fn is_identifier_start(byte: u8) -> bool {
         byte == b'_' || byte.is_ascii_alphabetic() || byte >= b'\x80'
     }
@@ -385,6 +490,15 @@ impl<'a> Lexer<'a> {
                     Self::emit_array_access_tokens(tokens, name, index);
                     tokens.push(Token::RParen);
                 }
+                StringPart::Expression(expression) => {
+                    tokens.push(Token::LParen);
+                    tokens.push(Token::StringLiteral(String::new()));
+                    tokens.push(Token::Dot);
+                    tokens.push(Token::LParen);
+                    tokens.extend(expression.iter().cloned());
+                    tokens.push(Token::RParen);
+                    tokens.push(Token::RParen);
+                }
             }
             return;
         }
@@ -399,6 +513,11 @@ impl<'a> Lexer<'a> {
                 StringPart::Variable(name) => tokens.push(Token::Variable(name.clone())),
                 StringPart::ArrayAccess(name, index) => {
                     Self::emit_array_access_tokens(tokens, name, index);
+                }
+                StringPart::Expression(expression) => {
+                    tokens.push(Token::LParen);
+                    tokens.extend(expression.iter().cloned());
+                    tokens.push(Token::RParen);
                 }
             }
         }

@@ -74,6 +74,26 @@ namespace SpreadCompatibility {
 }
 
 #[test]
+fn ordinary_function_calls_flatten_mixed_positional_and_named_unpack_arguments() {
+    let out = run_php(
+        r#"<?php
+function mixed_unpack_pair($left, $right) { return $left . ':' . $right; }
+function mixed_unpack_triple($value, $left, $right) { return $value . ':' . $left . ':' . $right; }
+
+$right = ['right' => 'R'];
+echo mixed_unpack_pair('L', ...$right), '|';
+
+$tail = ['x', 'y'];
+echo mixed_unpack_triple(4, ...$tail), '|';
+
+$methods = [['GET']];
+echo array_merge([], ...$methods)[0];
+"#,
+    );
+    assert_eq!(out, "L:R|4:x:y|GET");
+}
+
+#[test]
 fn test_is_callable_existing_function() {
     let out = run_php(
         r#"<?php

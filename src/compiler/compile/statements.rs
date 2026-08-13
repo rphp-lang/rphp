@@ -54,6 +54,75 @@ pub(super) enum ForeachArrayWriteback {
 }
 
 impl Compiler {
+    pub(super) fn compile_array_element_reference_source(
+        &mut self,
+        source: &Expr,
+    ) -> Result<u16, String> {
+        if let Expr::Variable(name) = source {
+            return Ok(self.resolve_cv(name));
+        }
+
+        let destination = self.resolve_cv(&format!("\0array_reference_{}", self.next_cv));
+        match source {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let mut bind = Instruction::new(OpCode::BindObjPropRef);
+                bind.op1 = object;
+                bind.op1_type = object_type;
+                bind.op2 = property;
+                bind.op2_type = OpType::Const;
+                bind.result = destination;
+                bind.result_type = OpType::Cv;
+                self.instructions.push(bind);
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let (property, property_type) = self.compile_expr(property);
+                let mut bind = Instruction::new(OpCode::BindObjPropRef);
+                bind.op1 = object;
+                bind.op1_type = object_type;
+                bind.op2 = property;
+                bind.op2_type = property_type;
+                bind.result = destination;
+                bind.result_type = OpType::Cv;
+                self.instructions.push(bind);
+            }
+            Expr::ArrayAccess { .. } => {
+                let mut root = source;
+                let mut reversed_indices = Vec::new();
+                while let Expr::ArrayAccess { array, index } = root {
+                    reversed_indices.push(index.as_ref().clone());
+                    root = array.as_ref();
+                }
+                reversed_indices.reverse();
+                let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
+                let &(container, container_type) = path.containers.last().unwrap();
+                let &(key, key_type) = path.keys.last().unwrap();
+                let mut bind = Instruction::new(OpCode::BindArrayDimRef);
+                bind.op1 = container;
+                bind.op1_type = container_type;
+                bind.op2 = key;
+                bind.op2_type = key_type;
+                bind.result = destination;
+                bind.result_type = OpType::Cv;
+                self.instructions.push(bind);
+                self.rebuild_mutable_array_path(&path);
+                self.write_back_mutable_array_root(&path);
+            }
+            _ => return Err("Array reference element must contain a mutable l-value".into()),
+        }
+        Ok(destination)
+    }
+
     pub(super) fn compile_foreach_reference_source(
         &mut self,
         source: &Expr,
@@ -587,6 +656,106 @@ impl Compiler {
         }
 
         Ok((result, OpType::Tmp))
+    }
+
+    pub(super) fn compile_target_reference_assignment(
+        &mut self,
+        target: &Expr,
+        source: &Expr,
+    ) -> Result<(u16, OpType), String> {
+        let Expr::Variable(source) = source else {
+            return Err("Reference assignment source must be a variable".into());
+        };
+        let source = self.resolve_cv(source);
+
+        match target {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let mut assign = Instruction::new(OpCode::AssignObjProp);
+                assign.op1 = object;
+                assign.op1_type = object_type;
+                assign.op2 = property;
+                assign.op2_type = OpType::Const;
+                assign.result = source;
+                assign.result_type = OpType::Cv;
+                self.instructions.push(assign);
+
+                let mut bind = Instruction::new(OpCode::BindObjPropRef);
+                bind.op1 = object;
+                bind.op1_type = object_type;
+                bind.op2 = property;
+                bind.op2_type = OpType::Const;
+                bind.result = source;
+                bind.result_type = OpType::Cv;
+                self.instructions.push(bind);
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let (property, property_type) = self.compile_expr(property);
+                let mut assign = Instruction::new(OpCode::AssignObjProp);
+                assign.op1 = object;
+                assign.op1_type = object_type;
+                assign.op2 = property;
+                assign.op2_type = property_type;
+                assign.result = source;
+                assign.result_type = OpType::Cv;
+                self.instructions.push(assign);
+
+                let mut bind = Instruction::new(OpCode::BindObjPropRef);
+                bind.op1 = object;
+                bind.op1_type = object_type;
+                bind.op2 = property;
+                bind.op2_type = property_type;
+                bind.result = source;
+                bind.result_type = OpType::Cv;
+                self.instructions.push(bind);
+            }
+            Expr::ArrayAccess { .. } => {
+                let mut root = target;
+                let mut reversed_indices = Vec::new();
+                while let Expr::ArrayAccess { array, index } = root {
+                    reversed_indices.push(index.as_ref().clone());
+                    root = array.as_ref();
+                }
+                reversed_indices.reverse();
+                let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
+                let &(container, container_type) = path.containers.last().unwrap();
+                let &(key, key_type) = path.keys.last().unwrap();
+
+                let mut assign = Instruction::new(OpCode::AssignDim);
+                assign.op1 = container;
+                assign.op1_type = container_type;
+                assign.op2 = key;
+                assign.op2_type = key_type;
+                assign.result = source;
+                assign.result_type = OpType::Cv;
+                self.instructions.push(assign);
+
+                let mut bind = Instruction::new(OpCode::BindArrayDimRef);
+                bind.op1 = container;
+                bind.op1_type = container_type;
+                bind.op2 = key;
+                bind.op2_type = key_type;
+                bind.result = source;
+                bind.result_type = OpType::Cv;
+                self.instructions.push(bind);
+
+                self.rebuild_mutable_array_path(&path);
+                self.write_back_mutable_array_root(&path);
+            }
+            _ => return Err("Invalid reference assignment target".into()),
+        }
+
+        Ok((source, OpType::Cv))
     }
 
     fn compile_mutable_array_path(

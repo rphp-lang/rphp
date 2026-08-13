@@ -2335,27 +2335,65 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::AddArrayElement => {
                 // op1 = array TMP, op2 = value, result = key (or Unused for auto-key)
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let cloned_val = val.clone();
-                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
-                let arr = unsafe { &mut *arr_ptr };
-                let php_arr = arr.as_array_mut().ok_or_else(|| {
-                    VmError::Fatal("AddArrayElement: operand is not an array".into())
-                })?;
-                if opline.result_type != OpType::Unused {
-                    let key_val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
-                    match value_to_array_key_ref(key_val)? {
-                        ArrayKeyRef::Int(key) => php_arr.set_int(key, cloned_val),
-                        ArrayKeyRef::String(key) => {
-                            if key_val.value_type() == ValueType::String {
-                                php_arr.set_str_value(key_val, cloned_val);
-                            } else {
-                                php_arr.set_str(key, cloned_val);
+                if opline._pad & ARRAY_ELEMENT_REFERENCE != 0
+                    && opline.op2_type != OpType::Cv
+                {
+                    return Err(VmError::Fatal(
+                        "Reference array element source must be a variable".into(),
+                    ));
+                }
+                // SAFETY: all operands are compiler-validated slots in the live
+                // frame. The array TMP is exclusively mutated here; a reference
+                // element aliases either a live CV or its owned reference cell.
+                unsafe {
+                    let cloned_val = if opline._pad & ARRAY_ELEMENT_REFERENCE != 0 {
+                        let source = (*frame).cv_mut(opline.op2 as u32) as *mut Value;
+                        if (*source).is_owned_reference() {
+                            (*source).clone_owned_reference_alias()
+                        } else if (*source).is_reference() {
+                            Value::reference((*source).as_ref_ptr())
+                        } else {
+                            let current = std::mem::replace(&mut *source, Value::undef());
+                            let binding = Value::owned_reference(current);
+                            frame_slot_set(
+                                frame,
+                                source,
+                                binding.clone_owned_reference_alias(),
+                            );
+                            binding
+                        }
+                    } else {
+                        let val = &*(*frame).get_op_ptr(
+                            opline.op2 as u32,
+                            opline.op2_type,
+                            op_array,
+                        );
+                        val.clone()
+                    };
+                    let arr_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    let arr = &mut *arr_ptr;
+                    let php_arr = arr.as_array_mut().ok_or_else(|| {
+                        VmError::Fatal("AddArrayElement: operand is not an array".into())
+                    })?;
+                    if opline.result_type != OpType::Unused {
+                        let key_val = &*(*frame).get_op_ptr(
+                            opline.result as u32,
+                            opline.result_type,
+                            op_array,
+                        );
+                        match value_to_array_key_ref(key_val)? {
+                            ArrayKeyRef::Int(key) => php_arr.set_int(key, cloned_val),
+                            ArrayKeyRef::String(key) => {
+                                if key_val.value_type() == ValueType::String {
+                                    php_arr.set_str_value(key_val, cloned_val);
+                                } else {
+                                    php_arr.set_str(key, cloned_val);
+                                }
                             }
                         }
+                    } else {
+                        php_arr.push(cloned_val);
                     }
-                } else {
-                    php_arr.push(cloned_val);
                 }
             }
 
@@ -2559,7 +2597,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let arr = unsafe { &mut *arr_ptr };
                     arr.as_array_mut().unwrap().set(key, cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
-                    php_arr.set(key, cloned_val);
+                    if let Some(element) = php_arr.get_key_mut(&key) {
+                        assignment_slot_set(element, cloned_val);
+                    } else {
+                        php_arr.set(key, cloned_val);
+                    }
                 } else {
                     return Err(VmError::Fatal("Cannot use a scalar value as an array".into()));
                 }
@@ -2836,7 +2878,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         let cloned = val.clone();
                         unsafe {
-                            obj_val.object_set_property_slot_unchecked(ic.property_slot(), cloned);
+                            let property = obj_val
+                                .object_property_slot_unchecked(ic.property_slot())
+                                as *mut Value;
+                            assignment_slot_set(&mut *property, cloned);
                         };
                     } else if property_flags == 2
                         && cache_matches
@@ -2863,8 +2908,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 // SAFETY: class-id equality proves the cached
                                 // declared slot belongs to this object.
                                 unsafe {
-                                    obj_val.object_set_property_slot_unchecked(
-                                        ic.property_slot(),
+                                    let property = obj_val
+                                        .object_property_slot_unchecked(ic.property_slot())
+                                        as *mut Value;
+                                    assignment_slot_set(
+                                        &mut *property,
                                         Value::long(source.raw_long()),
                                     );
                                 }
@@ -2910,7 +2958,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     .map_err(VmError::Fatal)?;
                                     let cloned = val.clone();
                                     unsafe {
-                                        obj_val.object_set_property_slot_unchecked(ic.property_slot(), cloned);
+                                        let property = obj_val
+                                            .object_property_slot_unchecked(ic.property_slot())
+                                            as *mut Value;
+                                        assignment_slot_set(&mut *property, cloned);
                                     };
                                     true
                                 } else {

@@ -535,6 +535,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "replace",
         "subject"
     );
+    reg!("addcslashes", fn_addcslashes, 2, 2, "string", "characters");
     reg_direct!(
         "strtolower",
         fn_strtolower,
@@ -698,6 +699,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Reflection / class introspection ---
     reg!("get_class", fn_get_class, 1, 0, "object");
+    reg!("get_included_files", fn_get_included_files, 0, 0);
+    reg!("get_required_files", fn_get_included_files, 0, 0);
     reg!("get_declared_classes", fn_get_declared_classes, 0, 0);
     reg!("get_declared_interfaces", fn_get_declared_interfaces, 0, 0);
     reg!("get_declared_traits", fn_get_declared_traits, 0, 0);
@@ -1115,14 +1118,18 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "limit",
         "flags"
     );
-    reg!(
+    reg_ref!(
         "preg_replace_callback",
         fn_preg_replace_callback,
+        6,
         3,
-        3,
+        0b1_0000,
         "pattern",
         "callback",
-        "subject"
+        "subject",
+        "limit",
+        "count",
+        "flags"
     );
     reg!("preg_quote", fn_preg_quote, 2, 1, "string", "delimiter");
 
@@ -2572,11 +2579,14 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         false,
     ))
     .unwrap();
-    for name in ["ArrayIterator", "ArrayObject"] {
+    for (name, traversal_interface) in [
+        ("ArrayIterator", "Iterator"),
+        ("ArrayObject", "IteratorAggregate"),
+    ] {
         let mut class = empty_internal_type(
             name,
             vec![
-                "IteratorAggregate".to_string(),
+                traversal_interface.to_string(),
                 "ArrayAccess".to_string(),
                 "Countable".to_string(),
             ],
@@ -4358,6 +4368,57 @@ fn trim_mask(ed: *mut ExecuteData) -> [bool; 256] {
     mask
 }
 
+fn fn_addcslashes(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let string = php_string_to_bytes(arg_str!(ed, 0).as_ref());
+    let characters = php_string_to_bytes(arg_str!(ed, 1).as_ref());
+    let mut mask = [false; 256];
+    let mut index = 0;
+    while index < characters.len() {
+        if index + 3 < characters.len()
+            && characters[index + 1] == b'.'
+            && characters[index + 2] == b'.'
+            && characters[index] <= characters[index + 3]
+        {
+            for byte in characters[index]..=characters[index + 3] {
+                mask[byte as usize] = true;
+            }
+            index += 4;
+        } else {
+            mask[characters[index] as usize] = true;
+            index += 1;
+        }
+    }
+
+    let mut escaped = Vec::with_capacity(string.len());
+    for byte in string {
+        if !mask[byte as usize] {
+            escaped.push(byte);
+            continue;
+        }
+        escaped.push(b'\\');
+        match byte {
+            7 => escaped.push(b'a'),
+            8 => escaped.push(b'b'),
+            b'\t' => escaped.push(b't'),
+            b'\n' => escaped.push(b'n'),
+            11 => escaped.push(b'v'),
+            12 => escaped.push(b'f'),
+            b'\r' => escaped.push(b'r'),
+            0..=31 | 127..=255 => {
+                escaped.push(b'0' + ((byte >> 6) & 7));
+                escaped.push(b'0' + ((byte >> 3) & 7));
+                escaped.push(b'0' + (byte & 7));
+            }
+            _ => escaped.push(byte),
+        }
+    }
+    ret!(rv, Value::string(bytes_to_php_string(&escaped)));
+}
+
 fn trim_bytes(ed: *mut ExecuteData, trim_left: bool, trim_right: bool) -> String {
     let string = arg_str!(ed, 0);
     let bytes = string.as_bytes();
@@ -5173,6 +5234,14 @@ fn fn_get_declared_classes(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     ret!(rv, declared_names_value(eg.declared_class_names()));
+}
+
+fn fn_get_included_files(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, declared_names_value(eg.included_file_names().to_vec()));
 }
 
 fn fn_get_declared_interfaces(
@@ -11067,7 +11136,7 @@ fn fn_preg_split(
     ret!(rv, Value::array(arr));
 }
 
-/// preg_replace_callback($pattern, $callback, $subject): string|null
+/// preg_replace_callback($pattern, $callback, $subject, $limit, &$count, $flags): string|null
 fn fn_preg_replace_callback(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -11076,6 +11145,14 @@ fn fn_preg_replace_callback(
     let pattern_str = arg_str!(ed, 0);
     let callback = arg!(ed, 1).clone();
     let subject = arg_str!(ed, 2).into_owned();
+    let limit = arg_opt!(ed, 3).map_or(-1, Value::to_long_val);
+    let limit = if limit < 0 {
+        usize::MAX
+    } else {
+        usize::try_from(limit).unwrap_or(usize::MAX)
+    };
+    let has_count = arg_opt!(ed, 4).is_some();
+    let flags = arg_opt!(ed, 5).map_or(0, Value::to_long_val);
 
     let re = match eg.regex_cache.get_or_compile(&pattern_str) {
         Ok(regex) => regex,
@@ -11084,9 +11161,15 @@ fn fn_preg_replace_callback(
         }
     };
 
-    let Some(result) = regex_callback::replace(&re, subject, &callback, ed, eg)? else {
+    let Some((result, replacements)) =
+        regex_callback::replace(&re, subject, &callback, limit, flags & 512 != 0, ed, eg)?
+    else {
         return Ok(());
     };
+
+    if has_count {
+        arg_mut!(ed, 4, Value::long(replacements as i64));
+    }
 
     ret!(rv, Value::string(result));
 }

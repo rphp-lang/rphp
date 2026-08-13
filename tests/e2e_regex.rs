@@ -40,6 +40,24 @@ fn test_preg_match_basic_no_match() {
     );
 }
 
+#[test]
+fn preg_match_accepts_utf8_mode_for_empty_and_unicode_patterns() {
+    assert_eq!(
+        run_php(
+            "<?php echo preg_match('//u', '/health'), '|', preg_match('/^.$/u', 'ž'), '|'; var_dump(preg_match('/a/uz', 'a'));"
+        ),
+        "1|1|bool(false)\n"
+    );
+}
+
+#[test]
+fn preg_replace_accepts_the_study_modifier_without_losing_subject_text() {
+    assert_eq!(
+        run_php("<?php echo json_encode(preg_replace(['/\\n{2,}/S'], \"\\n\", \" \\n\\n\\nx\"));"),
+        r#"" \nx""#
+    );
+}
+
 // === preg_match — with capture groups ===
 
 #[test]
@@ -430,6 +448,23 @@ fn test_preg_replace_callback_builds_variable_length_output_in_order() {
             "#,
         ),
         "<aa>1<bbbb>22<cc>"
+    );
+}
+
+#[test]
+fn preg_replace_callback_honors_limit_and_writes_count_by_reference() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            function uppercase_callback($matches) {
+                return strtoupper($matches[0]);
+            }
+            $count = -1;
+            echo preg_replace_callback('/[a-z]+/', 'uppercase_callback', 'a1bb2c', 2, $count), '|', $count, '|';
+            echo preg_replace_callback('/[a-z]+/', 'uppercase_callback', 'a1bb', 0, $count), '|', $count;
+            "#,
+        ),
+        "A1BB2c|2|a1bb|0"
     );
 }
 

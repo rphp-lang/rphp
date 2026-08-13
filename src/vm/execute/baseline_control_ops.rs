@@ -97,10 +97,6 @@ pub(crate) fn execute_included_file(
         Err(error) => return Ok(IncludeFileOutcome::Missing(error)),
     };
 
-    if is_once {
-        eg.included_files.insert(canonical.clone());
-    }
-
     let tokens = match crate::lexer::Lexer::new(&source).tokenize() {
         Ok(tokens) => tokens,
         Err(error) => {
@@ -159,6 +155,7 @@ pub(crate) fn execute_included_file(
             }
         }
     };
+    eg.record_included_file(canonical.clone());
 
     // Includes are separate compilation units, but both generic runtimes and
     // Reflection consume one executor-wide interned metadata graph. Merge the

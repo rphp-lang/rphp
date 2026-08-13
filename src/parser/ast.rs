@@ -229,6 +229,11 @@ pub enum Expr {
         var: String,
         target: Box<Expr>,
     },
+    AssignTargetReference {
+        // $array[$key] = &$var or $object->property = &$var
+        target: Box<Expr>,
+        source: Box<Expr>,
+    },
     AssignTarget {
         // Mutable non-variable assignment used as a value-producing expression.
         target: Box<Expr>,
@@ -328,7 +333,12 @@ impl Expr {
             Expr::DynamicInstanceof { expr, class } => {
                 expr.contains_yield() || class.contains_yield()
             }
-            Expr::AssignTarget { target, expr } | Expr::ArrayAppendAssign { target, expr } => {
+            Expr::AssignTarget { target, expr }
+            | Expr::AssignTargetReference {
+                target,
+                source: expr,
+            }
+            | Expr::ArrayAppendAssign { target, expr } => {
                 target.contains_yield() || expr.contains_yield()
             }
             Expr::ListAssign { targets, expr } => {
@@ -412,6 +422,7 @@ pub struct ArrayElement {
     pub key: Option<Expr>,
     pub value: Expr,
     pub unpack: bool,
+    pub by_reference: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

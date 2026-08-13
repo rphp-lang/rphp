@@ -921,7 +921,6 @@ impl IntIndexValue {
     }
 
     #[inline(always)]
-    #[cfg(any(feature = "quick-loops", test))]
     fn clear_cached_long(&mut self) {
         self.0 = self.position();
     }

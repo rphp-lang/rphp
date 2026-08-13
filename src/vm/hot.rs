@@ -1300,7 +1300,16 @@ pub fn execute_hot_frame(
                     unsafe { Value::raw_copy(src_val as *const Value, &mut copied as *mut Value) };
                     copied
                 };
-                unsafe { obj_val.object_set_property_slot_unchecked(ic.property_slot(), new_val) };
+                // SAFETY: the class-id/cache guards prove this declared slot;
+                // heap sources have bailed. Reference cells must side-exit so
+                // baseline assignment preserves their aliases.
+                unsafe {
+                    let property = obj_val.object_property_slot_unchecked(ic.property_slot());
+                    if (*property).is_reference() {
+                        return bailout(frame, opline_ptr, HotBailReason::ObjHeapProperty);
+                    }
+                    obj_val.object_set_property_slot_unchecked(ic.property_slot(), new_val);
+                }
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
             }

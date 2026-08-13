@@ -267,6 +267,9 @@ pub struct ExecutorGlobals {
     /// allocated because ordinary requests never declare `__destruct`.
     /// Set of absolute file paths already included via include_once/require_once
     pub included_files: std::collections::HashSet<String>,
+    /// First-successful-include order exposed by get_included_files().
+    /// Membership remains separate so include_once stays O(1).
+    included_file_order: Vec<String>,
     /// Owned storage for functions/data from included files (prevents dangling pointers)
     pub included_functions: Vec<Box<crate::vm::function::UserFunction>>,
     /// Lazily allocated SPL autoload stack and recursion guard.
@@ -415,6 +418,7 @@ impl ExecutorGlobals {
             static_vars: HashMap::new(),
             pending_invoke_this: None,
             included_files: std::collections::HashSet::new(),
+            included_file_order: Vec::new(),
             included_functions: Vec::new(),
             autoload: None,
             next_class_id: 1,
@@ -484,6 +488,7 @@ impl ExecutorGlobals {
             static_vars: HashMap::new(),
             pending_invoke_this: None,
             included_files: std::collections::HashSet::new(),
+            included_file_order: Vec::new(),
             included_functions: Vec::new(),
             autoload: None,
             next_class_id: 1,
@@ -2110,6 +2115,18 @@ impl ExecutorGlobals {
         }
         self.function_table.insert(key, func);
         Ok(())
+    }
+
+    /// Record one successfully compiled main/include file exactly once while
+    /// retaining PHP's first-inclusion order for runtime introspection.
+    pub fn record_included_file(&mut self, path: String) {
+        if self.included_files.insert(path.clone()) {
+            self.included_file_order.push(path);
+        }
+    }
+
+    pub fn included_file_names(&self) -> &[String] {
+        &self.included_file_order
     }
 
     /// Look up a function by name.

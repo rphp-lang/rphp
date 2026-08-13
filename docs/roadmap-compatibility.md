@@ -42,12 +42,12 @@ is PHP 8.4 and therefore measures progress rather than establishing PHP 8.4
 compatibility. Keep that trend line reproducible while establishing a pinned
 PHP 8.2 contract baseline.
 
-Composer S0, the four bounded Symfony component S1 gates, and the reference-
-warmed Symfony FrameworkBundle S2 diagnostic pass. The active S3 cold-build
-fixture reaches route-cache publication. Its current blocker is a general
-export/call semantic that emits malformed generated PHP. S2 is localization
-evidence only: RPHP has not passed cold kernel boot, an HTTP adapter, or a
-repeated-request lifecycle gate.
+Composer S0, the four bounded Symfony component S1 gates, the reference-warmed
+Symfony FrameworkBundle S2 diagnostic, and the pinned Symfony FrameworkBundle
+S3 CLI-kernel cold-build gate pass. S3 covers RPHP-built container and route
+caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
+publication transitions against PHP 8.2. It does not admit an HTTP adapter or
+a repeated-request lifecycle gate.
 
 ## Measurement system
 

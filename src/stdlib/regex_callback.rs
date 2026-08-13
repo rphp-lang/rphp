@@ -18,15 +18,24 @@ pub(super) fn replace(
     regex: &Regex,
     subject: String,
     callback: &Value,
+    limit: usize,
+    unmatched_as_null: bool,
     execute_data: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
-) -> Result<Option<String>, VmError> {
+) -> Result<Option<(String, usize)>, VmError> {
+    if limit == 0 {
+        return Ok(Some((subject, 0)));
+    }
     let mut resolved = None;
     let mut result = String::new();
     let mut previous_end = 0;
     let mut reusable_capture_free_matches: Option<Value> = None;
+    let mut replacements = 0usize;
 
-    let count = regex.try_visit_captures(&subject, |caps| {
+    regex.try_visit_captures(&subject, |caps| {
+        if replacements == limit {
+            return Ok(false);
+        }
         if resolved.is_none() {
             resolved = Some(resolve_callback_or_fatal(eg, callback, execute_data)?);
             result.reserve(subject.len());
@@ -58,12 +67,15 @@ pub(super) fn replace(
             for index in 0..caps.len() {
                 match caps.get(index) {
                     Some(capture) => matches.push(Value::string(capture.as_str(&subject))),
+                    None if unmatched_as_null => matches.push(Value::null()),
                     None => matches.push(Value::string("")),
                 }
             }
             for (name, &index) in caps.named_groups() {
                 if let Some(capture) = caps.get(index) {
                     matches.set_str(name, Value::string(capture.as_str(&subject)));
+                } else if unmatched_as_null {
+                    matches.set_str(name, Value::null());
                 }
             }
             Value::array(matches)
@@ -91,15 +103,16 @@ pub(super) fn replace(
         result.push_str(&subject[previous_end..full_match.start]);
         callback_result.append_echo_to(&mut result);
         previous_end = full_match.end;
+        replacements += 1;
         Ok(true)
     })?;
 
     if eg.exception.is_some() {
         return Ok(None);
     }
-    if count == 0 {
-        return Ok(Some(subject));
+    if replacements == 0 {
+        return Ok(Some((subject, 0)));
     }
     result.push_str(&subject[previous_end..]);
-    Ok(Some(result))
+    Ok(Some((result, replacements)))
 }

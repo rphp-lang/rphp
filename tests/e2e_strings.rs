@@ -139,6 +139,22 @@ fn test_e2e_double_quote_escaped_quote() {
 }
 
 #[test]
+fn double_quoted_and_heredoc_strings_decode_hex_and_unicode_escapes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo 'A=', "\u{41}", '|bytes=', strlen("\u{202A}"), '|face=', "\u{1F642}", '|';
+$value = <<<TEXT
+heredoc=\u{2069}|hex=\x41\x42
+TEXT;
+echo $value;
+"#,
+        ),
+        "A=A|bytes=3|face=🙂|heredoc=\u{2069}|hex=AB"
+    );
+}
+
+#[test]
 fn test_e2e_single_quote_literal_backslash_n() {
     assert_eq!(run_php("<?php echo 'a\\nb';"), "a\\nb");
 }
@@ -256,6 +272,47 @@ echo <<<TEXT
 ",
         ),
         "Hello PHP\n  indented"
+    );
+}
+
+#[test]
+fn complex_interpolation_calls_methods_in_order_and_propagates_exceptions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+final class InterpolationProbe {
+    private $calls = 0;
+
+    private function render($prefix, $value) {
+        echo "call{$value}|";
+        return $prefix . ++$this->calls;
+    }
+
+    private function zero() {
+        return 'Z';
+    }
+
+    private function fail() {
+        throw new RuntimeException('boom');
+    }
+
+    public function run() {
+        echo "quoted=[{$this->render('Q', 2)}]|";
+        echo <<<TEXT
+            heredoc=[{$this->render('H', 3)}]|zero=[{$this->zero()}]
+            TEXT;
+        try {
+            echo "|before{$this->fail()}after";
+        } catch (RuntimeException $error) {
+            echo '|caught:', $error->getMessage();
+        }
+    }
+}
+
+(new InterpolationProbe())->run();
+"#,
+        ),
+        "call2|quoted=[Q1]|call3|heredoc=[H2]|zero=[Z]|caught:boom"
     );
 }
 

@@ -1026,7 +1026,12 @@ impl Parser {
                 }
                 Self::collect_free_vars(target, bound, out);
             }
-            Expr::AssignTarget { target, expr } | Expr::ArrayAppendAssign { target, expr } => {
+            Expr::AssignTarget { target, expr }
+            | Expr::AssignTargetReference {
+                target,
+                source: expr,
+            }
+            | Expr::ArrayAppendAssign { target, expr } => {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);
             }

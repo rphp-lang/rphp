@@ -2,6 +2,65 @@
 mod common;
 use common::run_php;
 
+#[test]
+fn iterator_aggregate_resolves_nested_aggregates_and_generator_keys() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class GeneratorAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        yield 'first' => 10;
+        yield 'second' => 20;
+    }
+}
+class NestedAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        return new GeneratorAggregate();
+    }
+}
+foreach (new NestedAggregate() as $key => $value) {
+    echo $key, ':', $value, '|';
+}
+"#,
+        ),
+        "first:10|second:20|"
+    );
+}
+
+#[test]
+fn iterator_aggregate_generator_closure_preserves_lexical_visibility_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ScopedGeneratorAggregate implements IteratorAggregate {
+    private $factory;
+    public function __construct($factory) {
+        $this->factory = $factory;
+    }
+    public function getIterator(): Traversable {
+        $factory = $this->factory;
+        return $factory();
+    }
+}
+class ScopedGeneratorOwner {
+    protected function load(): string {
+        return 'visible';
+    }
+    public static function aggregate(self $owner): IteratorAggregate {
+        return new ScopedGeneratorAggregate(function () use ($owner) {
+            yield $owner->load();
+        });
+    }
+}
+foreach (ScopedGeneratorOwner::aggregate(new ScopedGeneratorOwner()) as $value) {
+    echo $value;
+}
+"#,
+        ),
+        "visible"
+    );
+}
+
 // === Basic foreach ($arr as $val) ===
 
 #[test]

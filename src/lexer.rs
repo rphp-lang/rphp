@@ -138,6 +138,7 @@ enum StringPart {
     Literal(String),
     Variable(String),
     ArrayAccess(String, String), // var_name, index (string or integer literal)
+    Expression(Vec<Token>),
 }
 
 pub struct Lexer<'a> {
@@ -1102,6 +1103,36 @@ mod tests {
                 Token::Variable("name".into()),
                 Token::Dot,
                 Token::StringLiteral("!".into()),
+                Token::RParen,
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn complex_string_interpolation_emits_a_method_call_expression() {
+        let tokens = Lexer::new("<?php echo <<<DOC\nvalue={$this->render('x', 2)}\nDOC;")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Echo,
+                Token::LParen,
+                Token::StringLiteral("value=".into()),
+                Token::Dot,
+                Token::LParen,
+                Token::Variable("this".into()),
+                Token::Arrow,
+                Token::Identifier("render".into()),
+                Token::LParen,
+                Token::StringLiteral("x".into()),
+                Token::Comma,
+                Token::Integer(2),
+                Token::RParen,
+                Token::RParen,
                 Token::RParen,
                 Token::Semicolon,
                 Token::Eof,

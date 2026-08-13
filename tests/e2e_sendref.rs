@@ -107,6 +107,45 @@ echo $a;
     assert_eq!(out, "12");
 }
 
+#[test]
+fn array_and_property_targets_bind_to_the_source_variable() {
+    let out = run_php(
+        r#"<?php
+$values = ['old', 'nested' => ['old']];
+$source = 'first';
+$result = ($values[0] = &$source);
+echo $result, ':', $values[0], ':', $source, '|';
+$source = 'second';
+echo $values[0], ':', $source, '|';
+$values[0] = 'third';
+echo $values[0], ':', $source, '|';
+
+$nested = 'nested-first';
+$values['nested'][0] = &$nested;
+$nested = 'nested-second';
+echo $values['nested'][0], ':', $nested, '|';
+
+class ReferenceBox { public $value = 'old'; }
+$box = new ReferenceBox();
+$property = 'property-first';
+$box->value = &$property;
+$box->value = 'property-second';
+echo $box->value, ':', $property, '|';
+
+$left = 'left';
+$holder = ['right'];
+$literal = [&$left, &$holder[0]];
+$literal[0] = 'left-updated';
+$holder[0] = 'right-updated';
+echo $left, ':', $literal[0], ':', $holder[0], ':', $literal[1];
+"#,
+    );
+    assert_eq!(
+        out,
+        "first:first:first|second:second|third:third|nested-second:nested-second|property-second:property-second|left-updated:left-updated:right-updated:right-updated"
+    );
+}
+
 // ============================================================
 // Stdlib by-ref tests — sort, array_push, array_pop, etc.
 // ============================================================

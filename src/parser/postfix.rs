@@ -111,11 +111,13 @@ impl Parser {
                         constant: "class".to_string(),
                     },
                     unpack: false,
+                    by_reference: false,
                 },
                 ArrayElement {
                     key: None,
                     value: Expr::StringLiteral(member),
                     unpack: false,
+                    by_reference: false,
                 },
             ]))));
         }
@@ -197,11 +199,13 @@ impl Parser {
                                     key: None,
                                     value: expr,
                                     unpack: false,
+                                    by_reference: false,
                                 },
                                 ArrayElement {
                                     key: None,
                                     value: constant,
                                     unpack: false,
+                                    by_reference: false,
                                 },
                             ])),
                             args,
@@ -236,11 +240,13 @@ impl Parser {
                                         key: None,
                                         value: expr,
                                         unpack: false,
+                                        by_reference: false,
                                     },
                                     ArrayElement {
                                         key: None,
                                         value: member,
                                         unpack: false,
+                                        by_reference: false,
                                     },
                                 ])),
                                 args,
@@ -272,11 +278,13 @@ impl Parser {
                                         key: None,
                                         value: expr,
                                         unpack: false,
+                                        by_reference: false,
                                     },
                                     ArrayElement {
                                         key: None,
                                         value: member,
                                         unpack: false,
+                                        by_reference: false,
                                     },
                                 ])),
                                 args,
@@ -322,11 +330,13 @@ impl Parser {
                                     key: None,
                                     value: expr,
                                     unpack: false,
+                                    by_reference: false,
                                 },
                                 ArrayElement {
                                     key: None,
                                     value: Expr::StringLiteral(member),
                                     unpack: false,
+                                    by_reference: false,
                                 },
                             ])));
                             continue;

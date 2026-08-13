@@ -95,6 +95,8 @@ pub const NEW_FLAG_DYNAMIC_CLASS_NAME: u16 = 1 << 2;
 /// InitArray flag: at least one compile-time literal string key guarantees
 /// general hash storage rather than packed integer storage.
 pub const ARRAY_INIT_HASH_HINT: u16 = 1;
+/// AddArrayElement flag: preserve the source l-value's PHP reference identity.
+pub const ARRAY_ELEMENT_REFERENCE: u16 = 1 << 1;
 
 /// Exact scalar representation proven for an instruction result. The fact is
 /// stored in otherwise-unused high padding bits so later compiler tiers and a

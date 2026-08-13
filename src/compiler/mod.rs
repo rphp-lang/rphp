@@ -3558,6 +3558,7 @@ fn build_object_array_function_plan(
             OpCode::AddArrayElement => {
                 if pending_call.is_some()
                     || Some((instruction.op1_type, instruction.op1)) != array_slot
+                    || instruction._pad & crate::vm::instruction::ARRAY_ELEMENT_REFERENCE != 0
                     || instruction.result_type != OpType::Const
                     || entries.len() == MAX_ENTRIES
                     || op_array

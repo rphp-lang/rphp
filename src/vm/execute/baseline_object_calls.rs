@@ -1123,7 +1123,10 @@ fn op_assign_obj_prop<'a>(
 
         if prop_exists {
             if let Some(mut php_obj) = obj.as_object_mut() {
-                php_obj.set_property(&key, assigned);
+                let property = php_obj
+                    .get_property_mut(&key)
+                    .expect("existing property must remain addressable during assignment");
+                assignment_slot_set(property, assigned);
             }
         } else {
             // Property not found — try __set magic method

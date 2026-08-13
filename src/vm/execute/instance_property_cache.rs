@@ -63,7 +63,13 @@ fn try_assign_cached_typed_instance_property<'a>(
     let set_value = |value| {
         // SAFETY: the class-id guard above proves that the cached slot belongs
         // to this object; the object is not borrowed elsewhere in this path.
-        unsafe { object.object_set_property_slot_unchecked(cache.property_slot(), value) };
+        // SAFETY: the cache guard also keeps this declared slot addressable for
+        // the duration of the assignment-through-reference operation.
+        unsafe {
+            let property = object.object_property_slot_unchecked(cache.property_slot())
+                as *mut Value;
+            assignment_slot_set(&mut *property, value);
+        };
     };
 
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

@@ -136,9 +136,26 @@ compiled route cache. RPHP loads those generated files unchanged, handles an
 in-memory GET `/health`, runs kernel termination and shutdown, and must match
 reference PHP exactly at `200|warmed|OK`; the gate also verifies that RPHP did
 not mutate the warmed cache. This admits only the exercised short-lived CLI
-lifecycle. RPHP does not yet cold-build the cache, provide an HTTP SAPI, prove
-repeated-worker isolation, or claim broad Symfony application compatibility;
-those remain the separate S3 and S4 gates.
+lifecycle and does not by itself admit cold cache generation. The separate S3
+gate below covers the pinned cold build; HTTP and repeated-worker behavior
+remain S4 work.
+
+The pinned Symfony cold-kernel S3 fixture installs the same unmodified
+FrameworkBundle 7.4.16 dependency closure from its exact lock with
+checksum-pinned Composer 2.8.12. RPHP now builds both the production container
+and compiled route cache from the PHP fixture, and a fresh RPHP process returns
+the PHP 8.2 oracle results for `/health` and a missing route. The gate also
+compares cold, cached, deleted-cache and deliberately malformed route-cache
+transitions, verifies same-runtime cache immutability, lints every generated
+PHP file, and runs two concurrent cold publishers before a fresh cache load.
+Generated container, ghost and service-locator suffixes are normalized; cache
+metadata paths are fixture-relative and Reflection resource hashes are omitted.
+Included-file and declared-symbol comparison is restricted to the generated
+container, route loader/cache and health service boundary so host-selected
+environment and secrets loader services do not redefine the fixture. The full
+normalized cache file manifest is still compared. This admits only the named
+short-lived Symfony CLI kernel; an HTTP SAPI, request superglobals and
+repeated-worker isolation remain S4 work.
 
 `use function` imports have their own case-insensitive alias table, separate
 from class imports. Direct calls support default, explicit and comma-separated

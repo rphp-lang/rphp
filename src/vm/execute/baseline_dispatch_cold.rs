@@ -1923,6 +1923,10 @@ fn op_create_closure(
     let common = unsafe { &*func_ptr };
     let called_scope_class_id = if common.plan.needs_late_static_scope() {
         late_static_call_class_id(eg, frame)
+    } else if opline.op2_type == OpType::Const {
+        op_array.literals[opline.op2 as usize]
+            .as_str()
+            .map_or(0, |class| eg.class_id_of(class))
     } else {
         get_caller_class(frame, eg)
             .as_deref()

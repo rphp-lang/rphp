@@ -99,6 +99,25 @@ impl Parser {
             false
         };
         let expr = Box::new(self.parse_expr()?);
+        if by_reference
+            && matches!(
+                &target,
+                Expr::ArrayAccess { .. }
+                    | Expr::PropertyAccess {
+                        nullsafe: false,
+                        ..
+                    }
+                    | Expr::DynamicPropertyAccess {
+                        nullsafe: false,
+                        ..
+                    }
+            )
+        {
+            return Ok(Expr::AssignTargetReference {
+                target: Box::new(target),
+                source: expr,
+            });
+        }
         match target {
             Expr::Variable(var) if by_reference => Ok(Expr::AssignReference {
                 var,
@@ -1029,25 +1048,42 @@ impl Parser {
                     key: None,
                     value: self.parse_expr()?,
                     unpack: true,
+                    by_reference: false,
                 });
             } else {
-            let value = self.parse_expr()?;
-            if self.peek() == Token::DoubleArrow {
-                // key => value
-                self.advance();
-                let actual_value = self.parse_expr()?;
-                elements.push(ArrayElement {
-                    key: Some(value),
-                    value: actual_value,
-                    unpack: false,
-                });
-            } else {
-                elements.push(ArrayElement {
-                    key: None,
-                    value,
-                    unpack: false,
-                });
-            }
+                let leading_reference = if self.peek() == Token::Ampersand {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
+                let value = self.parse_expr()?;
+                if self.peek() == Token::DoubleArrow {
+                    if leading_reference {
+                        return Err("Array keys cannot be references".into());
+                    }
+                    self.advance();
+                    let by_reference = if self.peek() == Token::Ampersand {
+                        self.advance();
+                        true
+                    } else {
+                        false
+                    };
+                    let actual_value = self.parse_expr()?;
+                    elements.push(ArrayElement {
+                        key: Some(value),
+                        value: actual_value,
+                        unpack: false,
+                        by_reference,
+                    });
+                } else {
+                    elements.push(ArrayElement {
+                        key: None,
+                        value,
+                        unpack: false,
+                        by_reference: leading_reference,
+                    });
+                }
             }
             if self.peek() == Token::Comma {
                 self.advance();

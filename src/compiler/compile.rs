@@ -25,11 +25,11 @@ use crate::value::{
     canonical_decimal_array_key as canonical_string_literal_array_key,
 };
 use crate::vm::instruction::{
-    ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE,
-    InlineCache, Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
-    NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
+    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_EXACT_SCALAR_ARGS, CLASS_CONST_COMPILE_TIME_NAME,
+    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
 };
 use crate::vm::opcode::OpCode;
 
@@ -139,6 +139,7 @@ mod array_literal_hint_tests {
             key,
             value: Expr::Integer(1),
             unpack: false,
+            by_reference: false,
         }
     }
 
@@ -1348,7 +1349,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "array_splice" => 0b1,                    // arg 0
         "settype" => 0b1,                         // arg 0
         "preg_match" | "preg_match_all" => 0b100, // arg 2 (&$matches)
-        "preg_replace" => 0b1_0000,               // arg 4 (&$count)
+        "preg_replace" | "preg_replace_callback" => 0b1_0000, // arg 4 (&$count)
         "parse_str" => 0b10,                      // arg 1 (&$result)
         _ => 0,
     }
@@ -1387,10 +1388,11 @@ impl Compiler {
             | Expr::BitwiseNot(inner)
             | Expr::Cast { expr: inner, .. } => Self::is_compile_time_class_constant_name(inner),
             Expr::ArrayLiteral(elements) => elements.iter().all(|element| {
-                element
-                    .key
-                    .as_ref()
-                    .is_none_or(Self::is_compile_time_class_constant_name)
+                !element.by_reference
+                    && element
+                        .key
+                        .as_ref()
+                        .is_none_or(Self::is_compile_time_class_constant_name)
                     && Self::is_compile_time_class_constant_name(&element.value)
             }),
             Expr::ArrayAccess { array, index } => {
@@ -3585,6 +3587,40 @@ impl Compiler {
                     return (tmp, OpType::Tmp);
                 }
 
+                if generic_args.is_empty()
+                    && args
+                        .iter()
+                        .any(|argument| matches!(argument, CallArg::Unpack(_)))
+                {
+                    // A mixed ordinary/unpacked call has runtime arity and may
+                    // acquire named arguments from string keys. Materialize the
+                    // argument sequence once, preserving evaluation order,
+                    // then use the same named-argument protocol as a sole unpack.
+                    let resolved = self.resolve_function_name(name);
+                    let name_idx = self.add_literal(Value::string(resolved));
+                    let fallback_idx = if self.current_namespace.is_some()
+                        && !name.contains('\\')
+                        && !self.has_function_import(name)
+                    {
+                        self.add_literal(Value::string(name.clone()))
+                    } else {
+                        0
+                    };
+                    let (arguments, arguments_type) =
+                        self.compile_mixed_unpacked_call_arguments(args);
+                    let tmp = self.alloc_tmp();
+                    let mut call = Instruction::new(OpCode::CallUserFuncArray);
+                    call.op1 = name_idx;
+                    call.op1_type = OpType::Const;
+                    call.op2 = arguments;
+                    call.op2_type = arguments_type;
+                    call.result = tmp;
+                    call.result_type = OpType::Tmp;
+                    call.extended_value = fallback_idx as u32;
+                    self.instructions.push(call);
+                    return (tmp, OpType::Tmp);
+                }
+
                 if generic_args.is_empty() {
                     if let [CallArg::Positional(argument)] = args.as_slice() {
                         let direct_kind = self
@@ -3911,12 +3947,26 @@ impl Compiler {
 
                 // Add elements
                 for elem in elements {
-                    let (val_op, val_type) = self.compile_expr(&elem.value);
+                    let (val_op, val_type) = if elem.by_reference {
+                        match self.compile_array_element_reference_source(&elem.value) {
+                            Ok(source) => (source, OpType::Cv),
+                            Err(error) => {
+                                self.deferred_error = Some(error);
+                                let null = self.add_literal(Value::null());
+                                (null, OpType::Const)
+                            }
+                        }
+                    } else {
+                        self.compile_expr(&elem.value)
+                    };
                     let mut add = Instruction::new(if elem.unpack {
                         OpCode::AddArrayUnpack
                     } else {
                         OpCode::AddArrayElement
                     });
+                    if elem.by_reference {
+                        add._pad |= ARRAY_ELEMENT_REFERENCE;
+                    }
                     add.op1_type = OpType::Tmp;
                     add.op1 = arr_tmp;
                     add.op2_type = val_type;
@@ -4393,6 +4443,15 @@ impl Compiler {
                 let mut create = Instruction::new(OpCode::CreateClosure);
                 create.op1 = name_idx;
                 create.op1_type = OpType::Const;
+                // A closure declared in a class retains that lexical visibility
+                // scope even when another object invokes it later. Trait bodies
+                // remain dynamically scoped to their concrete consumer.
+                if !self.dynamic_static_scope
+                    && let Some(scope) = self.lexical_static_class.clone()
+                {
+                    create.op2 = self.add_literal(Value::string(scope));
+                    create.op2_type = OpType::Const;
+                }
                 create.result = tmp;
                 create.result_type = OpType::Tmp;
                 create.extended_value = use_vars.len() as u32;
@@ -5090,6 +5149,16 @@ impl Compiler {
                     }
                 }
             }
+            Expr::AssignTargetReference { target, source } => {
+                match self.compile_target_reference_assignment(target, source) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        self.deferred_error = Some(error);
+                        let null = self.add_literal(Value::null());
+                        (null, OpType::Const)
+                    }
+                }
+            }
             Expr::AssignTarget { target, expr } => {
                 match self.compile_assignment_target_expression(target, expr) {
                     Ok(result) => result,
@@ -5472,6 +5541,58 @@ impl Compiler {
                 }
             })
             .collect()
+    }
+
+    fn compile_mixed_unpacked_call_arguments(&mut self, args: &[CallArg]) -> (u16, OpType) {
+        let arguments = self.alloc_tmp();
+        let mut init = Instruction::new(OpCode::InitArray);
+        init.result = arguments;
+        init.result_type = OpType::Tmp;
+        init.extended_value = args.len() as u32;
+        if args
+            .iter()
+            .any(|argument| matches!(argument, CallArg::Named { .. }))
+        {
+            init._pad |= ARRAY_INIT_HASH_HINT;
+        }
+        self.instructions.push(init);
+
+        for argument in args {
+            match argument {
+                CallArg::Unpack(expression) => {
+                    let (value, value_type) = self.compile_expr(expression);
+                    let mut unpack = Instruction::new(OpCode::AddArrayUnpack);
+                    unpack.op1 = arguments;
+                    unpack.op1_type = OpType::Tmp;
+                    unpack.op2 = value;
+                    unpack.op2_type = value_type;
+                    self.instructions.push(unpack);
+                }
+                CallArg::Positional(expression) => {
+                    let (value, value_type) = self.compile_expr(expression);
+                    let mut add = Instruction::new(OpCode::AddArrayElement);
+                    add.op1 = arguments;
+                    add.op1_type = OpType::Tmp;
+                    add.op2 = value;
+                    add.op2_type = value_type;
+                    self.instructions.push(add);
+                }
+                CallArg::Named { name, value } => {
+                    let (value, value_type) = self.compile_expr(value);
+                    let key = self.add_literal(Value::string(name.clone()));
+                    let mut add = Instruction::new(OpCode::AddArrayElement);
+                    add.op1 = arguments;
+                    add.op1_type = OpType::Tmp;
+                    add.op2 = value;
+                    add.op2_type = value_type;
+                    add.result = key;
+                    add.result_type = OpType::Const;
+                    self.instructions.push(add);
+                }
+            }
+        }
+
+        (arguments, OpType::Tmp)
     }
 
     fn compile_method_call_from_operands(

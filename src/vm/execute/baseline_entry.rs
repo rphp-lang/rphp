@@ -400,6 +400,63 @@ where
             let destination = (*frame).cv_mut(sig.variadic_cv_index) as *mut Value;
             frame_slot_set(frame, destination, Value::array(variadic));
         }
+
+        // Generator functions invoked through this detached callback entry do
+        // not execute their body yet; publish the same suspended object that
+        // DoFcall creates while the fresh frame and function pointer are valid.
+        let user = ((*func_ptr).fn_type == FunctionType::User)
+            .then(|| &*(func_ptr as *const UserFunction));
+        if let Some(user) = user
+            && user.op_array.is_generator
+        {
+            use crate::vm::generator::{Generator, new_generator_ref};
+
+            let mut arguments = Vec::with_capacity(num_args);
+            for index in 0..num_args {
+                arguments.push((*frame).cv(index as u32).clone());
+            }
+            let mut generator = Generator::new(
+                func_ptr,
+                arguments,
+                user.op_array.num_cvs,
+                user.op_array.num_temps,
+            );
+            generator.called_scope_class_id = called_scope_class_id;
+            let generator_ref = new_generator_ref(generator);
+            let mut object = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
+            object.generator = Some(generator_ref);
+            let generator_value = Value::object(object);
+            let return_hint = &(*func_ptr).sig.return_type_hint;
+            let callee_class = eg.declaring_class_of(func_ptr);
+            if !check_type_hint(
+                &generator_value,
+                return_hint,
+                eg,
+                user.op_array.strict_types,
+                callee_class,
+            ) {
+                eg.exception = Some(make_error_value(
+                    "TypeError",
+                    &format!(
+                        "Generator return type must be a supertype of Generator, {} given",
+                        return_hint.display_name()
+                    ),
+                ));
+            }
+            let arg0 = if READBACK_ARG0 && num_args > 0 {
+                Some((*frame).cv(0).clone())
+            } else {
+                None
+            };
+            eg.current_execute_data.set(saved_execute_data);
+            cleanup_frame_slots(frame);
+            pop_vm_call_frame(eg, frame);
+            return if eg.exception.is_some() {
+                Ok((Value::null(), arg0))
+            } else {
+                Ok((generator_value, arg0))
+            };
+        }
     }
 
     let execution_result = match unsafe { (*func_ptr).fn_type } {
@@ -638,6 +695,7 @@ fn materialize_generator_frame(
     unsafe { (*frame).return_value = std::ptr::null_mut() };
 
     let gen_data = gen_ref.borrow();
+    publish_late_static_call_class_id(eg, frame, gen_data.called_scope_class_id);
     for (i, value) in gen_data.cv_values.iter().enumerate() {
         let slot = unsafe { (*frame).cv_mut(i as u32) };
         unsafe { frame_restore_slot(frame, slot as *mut Value, value.clone()) };

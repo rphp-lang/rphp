@@ -11,7 +11,7 @@
 //! - Lookbehind `(?<=...)`, `(?<!...)`
 //! - Escape sequences `\n`, `\r`, `\t`, `\\`, `\/`
 //!
-//! Flags: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended/comments), `U` (ungreedy)
+//! Flags: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended/comments), `U` (ungreedy), `u` (UTF-8), `S` (study hint)
 
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -2080,6 +2080,13 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
             's' => flags.dotall = true,
             'x' => flags.extended = true,
             'U' => flags.ungreedy = true,
+            // RPHP strings and this engine's matching units are already
+            // Unicode scalar values. Accept PHP's UTF-8 mode for valid RPHP
+            // strings; unknown modifiers must still fail independently.
+            'u' => {}
+            // PCRE's study modifier is an optimization hint and cannot alter
+            // observable match or replacement results.
+            'S' => {}
             // The engine's `$` anchor is already strict, which is precisely
             // PCRE_DOLLAR_ENDONLY semantics. Accept the modifier so generated
             // framework patterns can state that requirement explicitly.

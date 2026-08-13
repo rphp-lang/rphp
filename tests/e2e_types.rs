@@ -91,6 +91,16 @@ fn array_iterator_participates_in_foreach() {
 }
 
 #[test]
+fn array_iterator_and_array_object_expose_distinct_traversal_contracts() {
+    assert_eq!(
+        run_php(
+            "<?php $iterator = new ArrayIterator([]); $object = new ArrayObject([]); echo (int) ($iterator instanceof Iterator), (int) ($iterator instanceof IteratorAggregate), '|', (int) ($object instanceof Iterator), (int) ($object instanceof IteratorAggregate);"
+        ),
+        "10|01"
+    );
+}
+
+#[test]
 fn error_and_exception_handler_stacks_restore_previous_callbacks() {
     assert_eq!(
         run_php(

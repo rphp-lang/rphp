@@ -707,7 +707,9 @@ impl Parser {
                 return false;
             }
         }
-        saw_dimension && self.tokens.get(i) == Some(&Token::Assign)
+        saw_dimension
+            && self.tokens.get(i) == Some(&Token::Assign)
+            && self.tokens.get(i + 1) != Some(&Token::Ampersand)
     }
 
     fn split_array_access(mut expr: Expr) -> (Expr, Vec<Expr>) {
