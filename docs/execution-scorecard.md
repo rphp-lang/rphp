@@ -290,6 +290,16 @@ above remains frozen at its named baseline; the current capability row,
 methodology and full evidence are recorded in
 [`performance-native-string-hash-read.md`](performance-native-string-hash-read.md).
 
+Follow-up completion note (2026-08-13): a fresh dual-architecture scorecard
+and profile selected geometric capacity growth inside the already-admitted
+packed-array append kernel as the next baseline structural cost. A bounded,
+packed-only reserve now improves `bench_array.php` by 4.96% on ARM64 and 0.57%
+on physical x86-64 while the application corpora, independent routing holdout
+and String/scalar controls remain below the one-percent regression ceiling.
+The exact integrated baseline, semantic envelope, rejected code-layout
+variants and complete distributions are recorded in
+[`performance-packed-array-reserve.md`](performance-packed-array-reserve.md).
+
 ## Reproduction
 
 Run the complete timing and telemetry scorecard, including the structural

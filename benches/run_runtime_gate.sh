@@ -46,7 +46,8 @@ case $only in
         bench_scalar_method.php | bench_static_method.php | \
         bench_property.php | \
         bench_static_late_property.php | bench_static_self_property.php | \
-        corpus_order_pipeline.php | corpus_ledger_pipeline.php) ;;
+        corpus_order_pipeline.php | corpus_ledger_pipeline.php | \
+        holdout_routing_pipeline.php) ;;
     *)
         echo "RPHP_RUNTIME_GATE_ONLY names an unknown workload" >&2
         exit 2
@@ -201,6 +202,7 @@ bench_static_late_property.php 1
 bench_static_self_property.php 1
 corpus_order_pipeline.php 1
 corpus_ledger_pipeline.php 2
+holdout_routing_pipeline.php 1
 WORKLOADS
 
 echo
@@ -216,7 +218,8 @@ for workload in \
     bench_static_late_property.php \
     bench_static_self_property.php \
     corpus_order_pipeline.php \
-    corpus_ledger_pipeline.php
+    corpus_ledger_pipeline.php \
+    holdout_routing_pipeline.php
 do
     if [ -n "$only" ] && [ "$workload" != "$only" ]; then
         continue

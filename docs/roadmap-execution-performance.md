@@ -248,5 +248,15 @@ A milestone may advance only when:
 4. Remove the superseded special mechanism and remeasure after convergence.
 5. Repeat by execution-weighted impact; keep new coroutine expansion deferred.
 
+Completion checkpoint (2026-08-13): the next profiled M1/M5 structural slice
+is accepted. The existing typed packed-array append kernel now issues one
+bounded packed-only capacity request for proven large unit loops. Exact output,
+fallback tests, telemetry, the full feature matrix and 100-pair ARM64/x86-64
+target/corpus/holdout gates pass against the integrated baseline. Detailed
+method, distributions and code-layout rejection evidence are in
+[`performance-packed-array-reserve.md`](performance-packed-array-reserve.md).
+The next goal returns to scorecard/profile selection rather than extending this
+kernel without new evidence.
+
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.
