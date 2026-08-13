@@ -128,7 +128,7 @@ fn detect_long_ops_region_inner(
                     .and_then(Value::as_str)
                     .is_some(),
                 OpType::Cv => {
-                    preheader_string_literal_cv(op_array, header_ip, instruction.op2)
+                    preheader_string_literal_cv(op_array, header_ip, instruction.op2).is_some()
                         && cv_unmodified_in_region(region, instruction.op2)
                 }
                 _ => false,
@@ -142,14 +142,18 @@ fn detect_long_ops_region_inner(
     let mut string_source_input_mask = 0u64;
     let mut string_cache_literals = [u16::MAX; QUICK_STRING_FETCH_CACHE_LIMIT];
     let mut string_cache_literal_count = 0usize;
+    let mut finite_string_literals = [u16::MAX; QUICK_STRING_FETCH_CACHE_LIMIT];
+    let mut finite_string_literal_count = 0usize;
+    let mut finite_string_literal_overflow = false;
     for instruction in region.iter().filter(|instruction| {
         instruction.opcode == OpCode::AssignCv
             && instruction.op1_type == OpType::Cv
             && string_key_assignment_mask & (1u64 << instruction.op1) != 0
     }) {
-        match instruction.op2_type {
+        let literal = match instruction.op2_type {
             OpType::Cv => {
                 add_mask_slot(&mut string_source_input_mask, instruction.op2, total_slots)?;
+                preheader_string_literal_cv(op_array, header_ip, instruction.op2)?
             }
             OpType::Const
                 if !string_cache_literals[..string_cache_literal_count]
@@ -158,9 +162,20 @@ fn detect_long_ops_region_inner(
             {
                 string_cache_literals[string_cache_literal_count] = instruction.op2;
                 string_cache_literal_count += 1;
+                instruction.op2
             }
-            _ => {}
+            OpType::Const => instruction.op2,
+            _ => continue,
+        };
+        if finite_string_literals[..finite_string_literal_count].contains(&literal) {
+            continue;
         }
+        if finite_string_literal_count == finite_string_literals.len() {
+            finite_string_literal_overflow = true;
+            continue;
+        }
+        finite_string_literals[finite_string_literal_count] = literal;
+        finite_string_literal_count += 1;
     }
     string_input_mask |= string_source_input_mask;
     let string_cache_capacity = (string_source_input_mask.count_ones() as usize
@@ -1645,6 +1660,9 @@ fn detect_long_ops_region_inner(
         string_input_mask,
         string_output_mask,
         string_append_mask,
+        finite_string_literals,
+        finite_string_literal_count: finite_string_literal_count as u8,
+        finite_string_literal_overflow,
         object_input_mask,
         typed_invariant_source,
         string_cache_capacity: string_cache_capacity as u8,

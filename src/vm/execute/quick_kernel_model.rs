@@ -145,8 +145,12 @@ const NATIVE_ARRAY_RESERVE_MIN_ITERATIONS: u64 = 1 << 19;
     )
 ))]
 enum NativeMixedContextKind {
-    /// Pointer to one prevalidated Long payload selected by a String token.
+    /// Pointer to one unique-COW Long payload selected by a String token. Both
+    /// read and write operations may use this context.
     Entry,
+    /// Pointer to one immutable Long payload selected by a String token.
+    /// The source array is only borrowed and the native region may only load.
+    ReadOnlyEntry,
     /// Pointer to an immutable `NativeIndexedLongLookupContext`.
     IndexedRead,
     /// Pointer to either a unique-COW mutable `PhpArray` or the alternate
