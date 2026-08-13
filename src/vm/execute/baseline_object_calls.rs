@@ -274,6 +274,31 @@ fn op_new_obj<'a>(
         stats::inc_newobj_class_hash_lookup();
         eg.find_class(&name)
     };
+    op_new_obj_resolved(
+        eg,
+        frame,
+        op_array,
+        opline,
+        ip,
+        result_ptr,
+        name,
+        class_def.map(|class| class.class_id),
+    )
+}
+
+#[inline(never)]
+fn op_new_obj_resolved<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    ip: usize,
+    result_ptr: *mut Value,
+    name: &str,
+    class_id: Option<u32>,
+) -> Result<ColdResult<'a>, VmError> {
+    let ic = &op_array.cache[ip];
+    let class_def = class_id.and_then(|class_id| eg.class_by_id(class_id));
 
     // Reject instantiation of interfaces, abstract classes, and internal-only classes
     if name == "Generator" {
