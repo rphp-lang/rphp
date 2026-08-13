@@ -1,6 +1,6 @@
 /// End-to-end tests for include/require/include_once/require_once statements.
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -144,6 +144,77 @@ fn test_include_shares_variables() {
     let source = format!("<?php $x = 'hello'; include '{}'; echo $y;", path);
     let output = run_php(&source);
     assert_eq!(output, "helloworld");
+}
+
+#[test]
+fn included_code_can_remove_a_literal_local_before_a_later_read() {
+    let (dir, fragment) = write_temp_php("drop-scope-value.php", "<?php unset($payload);");
+    let driver = dir.path().join("scope-driver.php");
+    let source = format!(
+        r#"<?php
+function inspect_fragment($fragment) {{
+    $payload = "route-ready\n";
+    echo $payload;
+    include $fragment;
+    echo $payload;
+}}
+inspect_fragment('{fragment}');"#
+    );
+
+    assert_eq!(
+        run_php_with_source_context(
+            &source,
+            driver.to_string_lossy().as_ref(),
+            dir.path().to_string_lossy().as_ref(),
+        ),
+        format!(
+            "route-ready\n\nWarning: Undefined variable $payload in {} on line 6\n",
+            driver.to_string_lossy()
+        )
+    );
+}
+
+#[test]
+fn included_code_can_replace_a_proven_string_with_an_integer() {
+    let (dir, fragment) = write_temp_php("replace-scope-value.php", "<?php $payload = 17;");
+    let driver = dir.path().join("replacement-driver.php");
+    let source = format!(
+        r#"<?php
+function render_fragment($fragment) {{
+    $payload = "stale";
+    include $fragment;
+    echo $payload;
+}}
+render_fragment('{fragment}');"#
+    );
+
+    assert_eq!(
+        run_php_with_source_context(
+            &source,
+            driver.to_string_lossy().as_ref(),
+            dir.path().to_string_lossy().as_ref(),
+        ),
+        "17"
+    );
+}
+
+#[test]
+fn echo_of_a_removed_local_reports_the_original_source_location() {
+    let dir = TempDir::new();
+    let driver = dir.path().join("removed-local.php");
+    let source = "<?php\n$ticket = 'active';\nunset($ticket);\necho $ticket;";
+
+    assert_eq!(
+        run_php_with_source_context(
+            source,
+            driver.to_string_lossy().as_ref(),
+            dir.path().to_string_lossy().as_ref(),
+        ),
+        format!(
+            "\nWarning: Undefined variable $ticket in {} on line 4\n",
+            driver.to_string_lossy()
+        )
+    );
 }
 
 #[test]

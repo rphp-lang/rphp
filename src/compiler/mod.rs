@@ -47,6 +47,9 @@ pub struct OpArray {
     pub static_vars: Vec<(u32, String)>,
     /// Function name (for static variable storage key)
     pub name: String,
+    /// Canonical source unit used by runtime diagnostics. Empty for synthetic
+    /// bytecode assembled without source context.
+    pub source_file: String,
     /// Main script scope CVs — all top-level variables synced to eg.globals before function calls.
     /// Empty for non-main-script op_arrays.
     pub main_scope_vars: Vec<(u32, String)>,

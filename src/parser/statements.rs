@@ -147,7 +147,7 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Const { name, value })
             }
-            Token::Echo => {
+            Token::Echo { line } => {
                 self.advance();
                 let mut expressions = vec![self.parse_expr()?];
                 while self.peek() == Token::Comma {
@@ -155,7 +155,7 @@ impl Parser {
                     expressions.push(self.parse_expr()?);
                 }
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Echo(expressions))
+                Ok(Stmt::Echo { expressions, line })
             }
             Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
                 let tok = self.advance();

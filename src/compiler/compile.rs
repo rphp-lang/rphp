@@ -703,6 +703,13 @@ fn propagate_declared_scalar_types(
                 slots.fill(KnownScalarType::Unknown);
                 receiver_classes.fill(None);
             }
+            // Included code executes in the caller's symbol-table scope and
+            // may unset or replace any local, including a value with an exact
+            // scalar or receiver-class fact established before the include.
+            OpCode::Include => {
+                slots.fill(KnownScalarType::Unknown);
+                receiver_classes.fill(None);
+            }
             _ => {}
         }
 
@@ -2292,6 +2299,7 @@ impl Compiler {
                 } else {
                     self.source_file.clone()
                 },
+                source_file: self.source_file.clone(),
                 main_scope_vars,
                 all_cvs,
                 cache,
@@ -4488,6 +4496,7 @@ impl Compiler {
                     global_vars: func_compiler.global_vars,
                     static_vars: func_compiler.static_vars,
                     name: func_compiler.current_function_name,
+                    source_file: func_compiler.source_file.clone(),
                     main_scope_vars: vec![],
                     all_cvs: closure_all_cvs,
                     cache,

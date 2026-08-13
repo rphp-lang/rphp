@@ -537,7 +537,10 @@ pub enum Stmt {
         name: String,
         line: usize,
     },
-    Echo(Vec<Expr>),
+    Echo {
+        expressions: Vec<Expr>,
+        line: usize,
+    },
     Assign {
         var: String,
         expr: Expr,
@@ -727,7 +730,7 @@ impl Stmt {
     /// suspension contexts and are therefore deliberately not traversed.
     pub(crate) fn contains_yield(&self) -> bool {
         match self {
-            Stmt::Echo(expressions) | Stmt::Unset(expressions) => {
+            Stmt::Echo { expressions, .. } | Stmt::Unset(expressions) => {
                 expressions.iter().any(Expr::contains_yield)
             }
             Stmt::Assign { expr, .. }

@@ -951,12 +951,14 @@ impl Compiler {
             Stmt::Noop => {}
             Stmt::Label(name) => self.define_label(name)?,
             Stmt::Goto { name, line } => self.emit_goto(name, *line)?,
-            Stmt::Echo(expressions) => {
+            Stmt::Echo { expressions, line } => {
                 for expr in expressions {
                     let (operand, op_type) = self.compile_expr(expr);
                     let mut echo = Instruction::new(OpCode::Echo);
                     echo.op1 = operand;
                     echo.op1_type = op_type;
+                    echo.extended_value = u32::try_from(*line)
+                        .map_err(|_| "Echo source line exceeds bytecode range".to_string())?;
                     self.instructions.push(echo);
                 }
             }
@@ -1183,6 +1185,7 @@ impl Compiler {
                     global_vars: func_compiler.global_vars,
                     static_vars: func_compiler.static_vars,
                     name: func_name,
+                    source_file: func_compiler.source_file.clone(),
                     main_scope_vars: vec![],
                     all_cvs: func_all_cvs,
                     cache,
@@ -2293,6 +2296,7 @@ impl Compiler {
                         global_vars: func_compiler.global_vars,
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
+                        source_file: func_compiler.source_file.clone(),
                         main_scope_vars: vec![],
                         all_cvs: include_scope_cvs,
                         cache,
@@ -2586,6 +2590,7 @@ impl Compiler {
                         global_vars: func_compiler.global_vars,
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
+                        source_file: func_compiler.source_file.clone(),
                         main_scope_vars: vec![],
                         all_cvs: include_scope_cvs,
                         cache,
@@ -2738,6 +2743,7 @@ impl Compiler {
                         global_vars: func_compiler.global_vars,
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
+                        source_file: func_compiler.source_file.clone(),
                         main_scope_vars: vec![],
                         all_cvs: include_scope_cvs,
                         cache,
@@ -2943,6 +2949,7 @@ impl Compiler {
                         global_vars: func_compiler.global_vars,
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
+                        source_file: func_compiler.source_file.clone(),
                         main_scope_vars: vec![],
                         all_cvs: include_scope_cvs,
                         cache,

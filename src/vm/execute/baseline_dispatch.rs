@@ -187,7 +187,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Echo => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                if val.value_type() == ValueType::String {
+                if val.value_type() == ValueType::Undef {
+                    if opline.op1_type == OpType::Cv && opline.extended_value != 0 {
+                        if let Some((_, name)) = op_array
+                            .all_cvs
+                            .iter()
+                            .find(|(index, _)| *index == u32::from(opline.op1))
+                        {
+                            let file = if op_array.source_file.is_empty() {
+                                op_array.name.as_str()
+                            } else {
+                                op_array.source_file.as_str()
+                            };
+                            eg.write_output(
+                                format!(
+                                    "\nWarning: Undefined variable ${name} in {file} on line {}\n",
+                                    opline.extended_value
+                                )
+                                .as_bytes(),
+                            );
+                        }
+                    }
+                } else if val.value_type() == ValueType::String {
                     // Fast path: string → write bytes directly, no allocation
                     eg.write_output(val.as_str().unwrap().as_bytes());
                 } else if val.value_type() == ValueType::Long {

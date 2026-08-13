@@ -5,7 +5,9 @@ mod strings;
 pub enum Token {
     OpenTag, // <?php
     // Keywords
-    Echo,        // echo
+    Echo {
+        line: usize,
+    }, // echo
     Function,    // function
     Return,      // return
     If,          // if
@@ -527,7 +529,13 @@ impl<'a> Lexer<'a> {
                         continue;
                     }
                     match ident.as_str() {
-                        "echo" => tokens.push(Token::Echo),
+                        "echo" => {
+                            let line = 1 + self.src[..identifier_start]
+                                .iter()
+                                .filter(|byte| **byte == b'\n')
+                                .count();
+                            tokens.push(Token::Echo { line });
+                        }
                         "function" => tokens.push(Token::Function),
                         "return" => tokens.push(Token::Return),
                         "if" => tokens.push(Token::If),
@@ -883,7 +891,11 @@ impl<'a> Lexer<'a> {
         if inline_end > inline_start {
             let inline = std::str::from_utf8(&self.src[inline_start..inline_end])
                 .map_err(|_| "Inline HTML is not valid UTF-8".to_string())?;
-            tokens.push(Token::Echo);
+            let line = 1 + self.src[..inline_start]
+                .iter()
+                .filter(|byte| **byte == b'\n')
+                .count();
+            tokens.push(Token::Echo { line });
             tokens.push(Token::StringLiteral(inline.to_string()));
             tokens.push(Token::Semicolon);
         }
@@ -899,6 +911,10 @@ impl<'a> Lexer<'a> {
 mod tests {
     use super::*;
 
+    fn echo(line: usize) -> Token {
+        Token::Echo { line }
+    }
+
     #[test]
     fn test_echo_42() {
         let tokens = Lexer::new("<?php echo 42;").tokenize().unwrap();
@@ -906,7 +922,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(1),
                 Token::Integer(42),
                 Token::Semicolon,
                 Token::Eof,
@@ -921,7 +937,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(1),
                 Token::Integer(42),
                 Token::Semicolon,
                 Token::Eof,
@@ -938,13 +954,13 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(1),
                 Token::Integer(1),
                 Token::Semicolon,
-                Token::Echo,
+                echo(2),
                 Token::StringLiteral("plain".into()),
                 Token::Semicolon,
-                Token::Echo,
+                echo(2),
                 Token::Integer(2),
                 Token::Semicolon,
                 Token::Eof,
@@ -963,7 +979,7 @@ mod tests {
                 Token::Assign,
                 Token::Integer(42),
                 Token::Semicolon,
-                Token::Echo,
+                echo(1),
                 Token::Variable("a".into()),
                 Token::Semicolon,
                 Token::Eof,
@@ -1003,7 +1019,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(1),
                 Token::Identifier("my_double".into()),
                 Token::LParen,
                 Token::Integer(21),
@@ -1023,17 +1039,17 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(2),
                 Token::MagicConstant {
                     name: "__line__".into(),
                     line: 2,
                 },
                 Token::Semicolon,
-                Token::Echo,
+                echo(2),
                 Token::Backslash,
                 Token::Identifier("__FILE__".into()),
                 Token::Semicolon,
-                Token::Echo,
+                echo(2),
                 Token::Identifier("Example".into()),
                 Token::DoubleColon,
                 Token::Identifier("__CLASS__".into()),
@@ -1078,7 +1094,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(1),
                 Token::Integer(-1),
                 Token::Semicolon,
                 Token::Eof,
@@ -1102,7 +1118,7 @@ mod tests {
                 Token::Integer(10),
                 Token::RParen,
                 Token::LBrace,
-                Token::Echo,
+                echo(1),
                 Token::Variable("x".into()),
                 Token::Semicolon,
                 Token::RBrace,
@@ -1120,7 +1136,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(1),
                 Token::StringLiteral("$name\\n".into()),
                 Token::Semicolon,
                 Token::Eof,
@@ -1141,7 +1157,7 @@ mod tests {
                 Token::Assign,
                 Token::StringLiteral("PHP".into()),
                 Token::Semicolon,
-                Token::Echo,
+                echo(1),
                 Token::LParen,
                 Token::StringLiteral("Hello ".into()),
                 Token::Dot,
@@ -1164,7 +1180,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(1),
                 Token::LParen,
                 Token::StringLiteral("value=".into()),
                 Token::Dot,
@@ -1194,7 +1210,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Echo,
+                echo(1),
                 Token::StringLiteral("first\n  second".into()),
                 Token::Semicolon,
                 Token::Eof,
