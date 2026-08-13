@@ -329,6 +329,28 @@ echo $counter->next(), '|', $counter->next();
 }
 
 #[test]
+fn recursive_call_observes_method_static_mutation_immediately() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RecursingStatic {
+    public function run() {
+        static $first = true;
+        echo $first ? 'first:' : 'again:';
+        if ($first) {
+            $first = false;
+            $this->run();
+        }
+    }
+}
+(new RecursingStatic())->run();
+"#,
+        ),
+        "first:again:"
+    );
+}
+
+#[test]
 fn test_destructuring_assignment_is_value_producing_and_allows_skips() {
     assert_eq!(
         run_php(

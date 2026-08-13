@@ -428,6 +428,44 @@ fn call_magic_method(
     }
 }
 
+const PROPERTY_GUARD_GET: u8 = 1;
+const PROPERTY_GUARD_SET: u8 = 1 << 1;
+const PROPERTY_GUARD_ISSET: u8 = 1 << 2;
+const PROPERTY_GUARD_UNSET: u8 = 1 << 3;
+
+#[inline]
+fn property_guard_active(object: &Value, name: &str, operation: u8) -> bool {
+    object
+        .as_object()
+        .is_some_and(|object| object.property_guard_active(name, operation))
+}
+
+#[inline]
+fn set_property_guard(object: &Value, name: &str, operation: u8, active: bool) {
+    if let Some(mut object) = object.as_object_mut() {
+        object.set_property_guard(name, operation, active);
+    }
+}
+
+/// Invoke one guarded magic-property operation and always release its guard,
+/// including when the user method throws or the VM reports an execution error.
+fn call_guarded_property_magic_method(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    name: &str,
+    operation: u8,
+    method: &str,
+    arguments: &[Value],
+) -> Result<Option<Value>, VmError> {
+    if property_guard_active(object, name, operation) {
+        return Ok(None);
+    }
+    set_property_guard(object, name, operation, true);
+    let result = call_magic_method(eg, object, method, arguments);
+    set_property_guard(object, name, operation, false);
+    result
+}
+
 /// Reuse PHP object string conversion from feature-only internal handlers.
 #[cfg(any(feature = "stream-line", feature = "stream-registry"))]
 pub(crate) fn call_object_string_conversion(

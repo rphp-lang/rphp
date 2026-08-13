@@ -1851,6 +1851,8 @@ fn op_bind_global(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) {
+    // SAFETY: the compiler validated the global-name operand for this live
+    // frame and its op array before dispatch reached this opcode.
     let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let name = name_val.as_str().unwrap_or("").to_string();
     if let Some(val) = eg.globals.get(&name) {
@@ -1861,35 +1863,49 @@ fn op_bind_global(
 
 #[inline(never)]
 fn op_bind_static(
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) {
+    // SAFETY: the compiler validated the static-name operand for this live
+    // frame and its op array before dispatch reached this opcode.
     let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let var_name = name_val.as_str().unwrap_or("").to_string();
     let func_name = op_array.literals[opline.extended_value as usize]
         .as_str()
         .unwrap_or("")
         .to_string();
+    // SAFETY: `BindStatic` carries a CV operand belonging to this live frame,
+    // which remains allocated throughout this call.
     let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
 
-    if let Some(value) = eg
-        .static_vars
-        .get(&func_name)
-        .and_then(|statics| statics.get(&var_name))
-    {
-        unsafe { slot_set(cv_ptr, value.clone()) };
-        return;
-    }
-
-    if opline.result_type != OpType::Unused {
-        let default_val =
-            unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
-        unsafe { slot_set(cv_ptr, default_val.clone()) };
+    let statics = eg.static_vars.entry(func_name).or_default();
+    let binding = if let Some(binding) = statics.get(&var_name) {
+        if binding.is_owned_reference() {
+            binding.clone_owned_reference_alias()
+        } else {
+            let binding = Value::owned_reference(binding.clone());
+            statics.insert(var_name.clone(), binding.clone_owned_reference_alias());
+            binding
+        }
     } else {
-        unsafe { slot_set(cv_ptr, Value::null()) };
-    }
+        let initial = if opline.result_type != OpType::Unused {
+            // SAFETY: the default-value operand was validated with the op array;
+            // the frame and literal storage outlive this dispatch step.
+            unsafe {
+                (&*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)).clone()
+            }
+        } else {
+            Value::null()
+        };
+        let binding = Value::owned_reference(initial);
+        statics.insert(var_name, binding.clone_owned_reference_alias());
+        binding
+    };
+    // SAFETY: `cv_ptr` is the initialized live CV slot resolved above, and
+    // `slot_set` replaces its value without retaining the raw pointer.
+    unsafe { slot_set(cv_ptr, binding) };
 }
 
 #[inline(never)]

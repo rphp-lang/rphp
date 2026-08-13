@@ -623,7 +623,13 @@ fn op_fetch_obj_r_slow<'a>(
                 });
                 if !own_private && !caller_has_own {
                     if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                        if opline._pad & FETCH_OBJ_SILENT == 0 {
+                        let has_getter = eg
+                            .find_function(&format!(
+                                "{}::__get",
+                                obj.class_name.to_ascii_lowercase()
+                            ))
+                            .is_some();
+                        if opline._pad & FETCH_OBJ_SILENT == 0 && !has_getter {
                             let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
                             return Err(VmError::Fatal(format!(
                                 "Cannot access {} property {}::${}",
@@ -704,9 +710,11 @@ fn op_fetch_obj_r_slow<'a>(
             // An intermediate property in `isset($object->a->b)` first asks
             // `__isset(a)` and invokes `__get(a)` only when it returns true.
             if opline._pad & FETCH_OBJ_SILENT != 0 {
-                let magic_set = call_magic_method(
+                let magic_set = call_guarded_property_magic_method(
                     eg,
                     obj_val,
+                    name,
+                    PROPERTY_GUARD_ISSET,
                     "__isset",
                     &[Value::string(name)],
                 )?;
@@ -719,12 +727,36 @@ fn op_fetch_obj_r_slow<'a>(
                 }
             }
             // Property not found (or accepted by __isset) — try __get.
-            let magic_value = call_magic_method(eg, obj_val, "__get", &[Value::string(name)])?;
+            if name.starts_with('\0')
+                && property_guard_active(obj_val, name, PROPERTY_GUARD_GET)
+            {
+                return Ok(object_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    "Cannot access property starting with \"\\0\"".into(),
+                ));
+            }
+            let magic_value = call_guarded_property_magic_method(
+                eg,
+                obj_val,
+                name,
+                PROPERTY_GUARD_GET,
+                "__get",
+                &[Value::string(name)],
+            )?;
             if let Some(result) = take_magic_exception(eg, frame) {
                 return Ok(result);
             }
             if let Some(result) = magic_value {
                 set_result(result);
+            } else if name.starts_with('\0') {
+                return Ok(object_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    "Cannot access property starting with \"\\0\"".into(),
+                ));
             } else {
                 set_result(Value::null());
             }
@@ -790,13 +822,82 @@ fn op_isset_obj<'a>(
 
     let set = match property_state {
         Some(set) => set,
-        None => call_magic_method(eg, object, "__isset", &[Value::string(name)])?
-            .is_some_and(|value| value.is_truthy()),
+        None => call_guarded_property_magic_method(
+            eg,
+            object,
+            name,
+            PROPERTY_GUARD_ISSET,
+            "__isset",
+            &[Value::string(name)],
+        )?
+        .is_some_and(|value| value.is_truthy()),
     };
     if let Some(result) = take_magic_exception(eg, frame) {
         return Ok(result);
     }
     set_result(set);
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_unset_obj<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: the compiler validated both operands against this op array, and
+    // dispatch keeps `frame` live for the entire opcode.
+    let (object, property) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+        )
+    };
+    if object.value_type() != ValueType::Object {
+        return Ok(ColdResult::Done);
+    }
+    let name = property
+        .as_str()
+        .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?;
+    let caller_class = get_caller_class(frame, eg);
+    let object_ref = object.as_object().unwrap();
+    let receiver_in_scope = caller_class
+        .as_ref()
+        .is_some_and(|caller| eg.class_is_a(&object_ref.class_name, caller));
+    let effective_caller = receiver_in_scope
+        .then_some(caller_class.as_deref())
+        .flatten();
+    let accessible = eg
+        .find_property_visibility(&object_ref.class_name, name)
+        .is_none_or(|(visibility, defining_class)| {
+            visibility == Visibility::Public
+                || eg.check_visibility(effective_caller, &defining_class, visibility)
+        });
+    let key = crate::runtime::resolve_property_key(
+        eg,
+        &object_ref.class_name,
+        name,
+        effective_caller,
+    );
+    let removed = accessible && object_ref.contains_property(&key);
+    drop(object_ref);
+
+    if removed {
+        object.as_object_mut().unwrap().unset_property(&key);
+        return Ok(ColdResult::Done);
+    }
+    let _ = call_guarded_property_magic_method(
+        eg,
+        object,
+        name,
+        PROPERTY_GUARD_UNSET,
+        "__unset",
+        &[Value::string(name)],
+    )?;
+    if let Some(result) = take_magic_exception(eg, frame) {
+        return Ok(result);
+    }
     Ok(ColdResult::Done)
 }
 
@@ -980,6 +1081,7 @@ fn op_assign_obj_prop<'a>(
 
         // Visibility check — use declaring class, not receiver class
         let mut prop_is_public = true;
+        let mut property_accessible = true;
         if let Some((vis, defining_class)) = eg.find_property_visibility(&php_obj.class_name, &name) {
             if vis != Visibility::Public {
                 prop_is_public = false;
@@ -995,11 +1097,26 @@ fn op_assign_obj_prop<'a>(
                 });
                 if !own_private && !caller_has_own {
                     if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                        let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
-                        return Err(VmError::Fatal(format!(
-                            "Cannot access {} property {}::${}",
-                            vis_str, defining_class, name
-                        )));
+                        let has_setter = eg
+                            .find_function(&format!(
+                                "{}::__set",
+                                php_obj.class_name.to_ascii_lowercase()
+                            ))
+                            .is_some();
+                        if has_setter {
+                            prop_is_public = false;
+                            property_accessible = false;
+                        } else {
+                            let vis_str = match vis {
+                                Visibility::Protected => "protected",
+                                Visibility::Private => "private",
+                                _ => "public",
+                            };
+                            return Err(VmError::Fatal(format!(
+                                "Cannot access {} property {}::${}",
+                                vis_str, defining_class, name
+                            )));
+                        }
                     }
                 }
             }
@@ -1060,13 +1177,15 @@ fn op_assign_obj_prop<'a>(
         }
         // Resolve storage key (mangled for private properties)
         let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
-        let declared_slot = php_obj.property_slot(&key);
+        let declared_slot = property_accessible
+            .then(|| php_obj.property_slot(&key))
+            .flatten();
         let definition = declared_slot.and_then(|slot| {
             eg.instance_property_definition(php_obj.class_id, slot)
         });
         let object_class_id = php_obj.class_id;
         let object_class_name = php_obj.class_name.clone();
-        let prop_exists = php_obj.contains_property(&key);
+        let prop_exists = property_accessible && php_obj.contains_property(&key);
         drop(php_obj);
         if let Some(definition_ref) = definition {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -1130,7 +1249,35 @@ fn op_assign_obj_prop<'a>(
             }
         } else {
             // Property not found — try __set magic method
-            if call_magic_method(eg, obj, "__set", &[Value::string(name.clone()), assigned.clone()])?.is_none() {
+            let guarded = property_guard_active(obj, &name, PROPERTY_GUARD_SET);
+            if name.starts_with('\0') && guarded {
+                return Ok(object_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    "Cannot access property starting with \"\\0\"".into(),
+                ));
+            }
+            let magic = call_guarded_property_magic_method(
+                eg,
+                obj,
+                &name,
+                PROPERTY_GUARD_SET,
+                "__set",
+                &[Value::string(name.clone()), assigned.clone()],
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
+            if guarded || magic.is_none() {
+                if name.starts_with('\0') {
+                    return Ok(object_property_throw(
+                        eg,
+                        frame,
+                        "Error",
+                        "Cannot access property starting with \"\\0\"".into(),
+                    ));
+                }
                 // No __set — fall back to direct insert
                 if let Some(mut php_obj) = obj.as_object_mut() {
                     php_obj.set_property(&key, assigned);

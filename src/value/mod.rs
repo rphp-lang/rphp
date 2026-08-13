@@ -309,9 +309,23 @@ enum DynamicPropertyStorage {
 /// wider objects use ordered slots plus a secure name-to-position index. Every
 /// tier preserves insertion order and exposes guarded positions to inline
 /// caches; indexed entries and their index share one string allocation.
-#[derive(Clone)]
 pub struct DynamicPropertyMap {
     storage: DynamicPropertyStorage,
+    /// Magic-property recursion guards share this already-cold allocation.
+    /// The map itself may contain no user-visible properties while a guard is
+    /// active and is released again when the last guard leaves.
+    property_guards: Option<Box<HashMap<String, u8>>>,
+}
+
+impl Clone for DynamicPropertyMap {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+            // A cloned PHP object starts outside any magic operation even if
+            // cloning was requested from inside a getter or setter.
+            property_guards: None,
+        }
+    }
 }
 
 impl DynamicPropertyMap {
@@ -323,7 +337,10 @@ impl DynamicPropertyMap {
         } else {
             DynamicPropertyStorage::Indexed(IndexedDynamicProperties::with_capacity(capacity))
         };
-        Self { storage }
+        Self {
+            storage,
+            property_guards: None,
+        }
     }
 
     fn from_hash_map(properties: HashMap<String, Value>) -> Self {
@@ -332,6 +349,7 @@ impl DynamicPropertyMap {
                 storage: DynamicPropertyStorage::Indexed(IndexedDynamicProperties::from_hash_map(
                     properties,
                 )),
+                property_guards: None,
             };
         }
         let mut result = Self::with_capacity(properties.len());
@@ -559,6 +577,40 @@ impl DynamicPropertyMap {
         self.len() == 0
     }
 
+    #[inline]
+    fn property_guard_active(&self, key: &str, operation: u8) -> bool {
+        self.property_guards
+            .as_ref()
+            .and_then(|guards| guards.get(key))
+            .is_some_and(|guard| guard & operation != 0)
+    }
+
+    #[inline]
+    fn set_property_guard(&mut self, key: &str, operation: u8, active: bool) {
+        if active {
+            let guards = self
+                .property_guards
+                .get_or_insert_with(|| Box::new(HashMap::new()));
+            *guards.entry(key.to_string()).or_insert(0) |= operation;
+            return;
+        }
+
+        let Some(guards) = self.property_guards.as_mut() else {
+            return;
+        };
+        let mut remove = false;
+        if let Some(guard) = guards.get_mut(key) {
+            *guard &= !operation;
+            remove = *guard == 0;
+        }
+        if remove {
+            guards.remove(key);
+        }
+        if guards.is_empty() {
+            self.property_guards = None;
+        }
+    }
+
     pub(crate) fn for_each(&self, mut visitor: impl FnMut(&str, &Value)) {
         match &self.storage {
             DynamicPropertyStorage::Small(small) => {
@@ -746,6 +798,31 @@ impl PhpObject {
                 .dynamic_properties
                 .as_ref()
                 .is_some_and(|properties| properties.contains_key(key))
+    }
+
+    #[inline]
+    pub(crate) fn property_guard_active(&self, key: &str, operation: u8) -> bool {
+        self.dynamic_properties
+            .as_ref()
+            .is_some_and(|properties| properties.property_guard_active(key, operation))
+    }
+
+    #[inline]
+    pub(crate) fn set_property_guard(&mut self, key: &str, operation: u8, active: bool) {
+        if active {
+            self.dynamic_properties
+                .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)))
+                .set_property_guard(key, operation, true);
+            return;
+        }
+
+        let Some(properties) = self.dynamic_properties.as_mut() else {
+            return;
+        };
+        properties.set_property_guard(key, operation, false);
+        if properties.is_empty() && properties.property_guards.is_none() {
+            self.dynamic_properties = None;
+        }
     }
 
     /// Set a declared slot or create/update a dynamic property.

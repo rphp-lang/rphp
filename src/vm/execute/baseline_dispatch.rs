@@ -2826,21 +2826,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 _ => {}
             },
 
-            OpCode::UnsetObj => {
-                // SAFETY: the compiler validated both operand descriptors;
-                // `frame` and `op_array` stay live for this dispatch step.
-                let object = unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                };
-                if object.value_type() == ValueType::Object {
-                    let property = unsafe {
-                        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
-                    }
-                    .as_str()
-                    .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?;
-                    object.as_object_mut().unwrap().unset_property(property);
+            OpCode::UnsetObj => match op_unset_obj(eg, frame, op_array, opline)? {
+                ColdResult::NewFrame(new_frame, new_op_array) => {
+                    frame = new_frame;
+                    op_array = new_op_array;
+                    continue;
                 }
-            }
+                ColdResult::Unhandled(exception) => {
+                    eg.exception = Some(exception);
+                    return Ok(());
+                }
+                _ => {}
+            },
 
             OpCode::BindObjPropRef => {
                 op_bind_obj_prop_ref(eg, frame, op_array, opline)?;
@@ -4016,11 +4013,23 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if !op_array.static_vars.is_empty() {
                     let func_name = op_array.name.clone();
                     for (cv_idx, var_name) in &op_array.static_vars {
+                        // SAFETY: `cv_idx` comes from this frame's validated
+                        // op array and the frame remains live until return.
                         let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                        let val = unsafe { (*cv_ptr).clone() };
-                        eg.static_vars.entry(func_name.clone())
-                            .or_insert_with(HashMap::new)
-                            .insert(var_name.clone(), val);
+                        // SAFETY: `get_op_mut` returned the initialized CV slot
+                        // owned by the still-live frame.
+                        let value = unsafe { &*cv_ptr };
+                        // BindStatic installs the request-owned reference cell
+                        // eagerly, so recursive calls observe mutations before
+                        // the outer frame returns. Retain a defensive fallback
+                        // for hand-built op arrays that predate that contract.
+                        if !value.is_owned_reference() {
+                            let binding = Value::owned_reference(value.dereferenced().clone());
+                            eg.static_vars
+                                .entry(func_name.clone())
+                                .or_insert_with(HashMap::new)
+                                .insert(var_name.clone(), binding);
+                        }
                     }
                 }
 
