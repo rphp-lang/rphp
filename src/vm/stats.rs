@@ -137,6 +137,9 @@ mod inner {
     static QUICK_LOOP_DEOPTIMIZATIONS: AtomicU64 = AtomicU64::new(0);
     static QUICK_LOOP_GUARD_FAILURES: AtomicU64 = AtomicU64::new(0);
     static QUICK_LOOP_ITERATIONS: AtomicU64 = AtomicU64::new(0);
+    static QUICK_PACKED_ARRAY_RESERVE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+    static QUICK_PACKED_ARRAY_RESERVE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+    static QUICK_PACKED_ARRAY_RESERVE_ENTRIES: AtomicU64 = AtomicU64::new(0);
 
     static JIT_LOOP_CANDIDATES: AtomicU64 = AtomicU64::new(0);
     static JIT_LOOP_ADMISSIONS: [AtomicU64; JitRegionKind::COUNT] =
@@ -198,6 +201,9 @@ mod inner {
         QUICK_LOOP_DEOPTIMIZATIONS.store(0, Ordering::Relaxed);
         QUICK_LOOP_GUARD_FAILURES.store(0, Ordering::Relaxed);
         QUICK_LOOP_ITERATIONS.store(0, Ordering::Relaxed);
+        QUICK_PACKED_ARRAY_RESERVE_ATTEMPTS.store(0, Ordering::Relaxed);
+        QUICK_PACKED_ARRAY_RESERVE_SUCCESSES.store(0, Ordering::Relaxed);
+        QUICK_PACKED_ARRAY_RESERVE_ENTRIES.store(0, Ordering::Relaxed);
         JIT_LOOP_CANDIDATES.store(0, Ordering::Relaxed);
         JIT_STRAIGHT_CANDIDATES.store(0, Ordering::Relaxed);
         JIT_STRAIGHT_ADMISSIONS.store(0, Ordering::Relaxed);
@@ -346,6 +352,18 @@ mod inner {
             return;
         }
         QUICK_LOOP_GUARD_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_quick_packed_array_reserve(entries: usize, succeeded: bool) {
+        if !enabled() {
+            return;
+        }
+        QUICK_PACKED_ARRAY_RESERVE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        QUICK_PACKED_ARRAY_RESERVE_ENTRIES.fetch_add(entries as u64, Ordering::Relaxed);
+        if succeeded {
+            QUICK_PACKED_ARRAY_RESERVE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     #[inline]
@@ -750,6 +768,21 @@ mod inner {
             "quick_loop_iterations={}",
             QUICK_LOOP_ITERATIONS.load(Ordering::Relaxed)
         );
+        let _ = writeln!(
+            err,
+            "quick_packed_array_reserve_attempts={}",
+            QUICK_PACKED_ARRAY_RESERVE_ATTEMPTS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "quick_packed_array_reserve_successes={}",
+            QUICK_PACKED_ARRAY_RESERVE_SUCCESSES.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "quick_packed_array_reserve_entries={}",
+            QUICK_PACKED_ARRAY_RESERVE_ENTRIES.load(Ordering::Relaxed)
+        );
         let _ = writeln!(err, "-- quick/JIT planner coverage --");
         let _ = writeln!(
             err,
@@ -1031,6 +1064,15 @@ pub fn inc_quick_loop_guard_failed() {
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_quick_loop_guard_failed() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn record_quick_packed_array_reserve(entries: usize, succeeded: bool) {
+    inner::record_quick_packed_array_reserve(entries, succeeded);
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn record_quick_packed_array_reserve(_entries: usize, _succeeded: bool) {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

@@ -1921,6 +1921,21 @@ impl PhpArray {
         true
     }
 
+    /// Reserve a proven number of dense appends without changing the array's
+    /// storage tier. Allocation failure keeps canonical geometric growth as
+    /// the exact fallback.
+    #[cfg(any(test, feature = "quick-loops"))]
+    #[inline]
+    pub(crate) fn reserve_packed_long_appends(&mut self, additional: usize) -> bool {
+        let ArrayStorage::Packed(packed) = &mut self.storage else {
+            return false;
+        };
+        if i64::try_from(packed.len()).ok() != Some(self.next_int_key) {
+            return false;
+        }
+        packed.try_reserve(additional).is_ok()
+    }
+
     /// Reserve canonical indexed-hash storage for a bounded native write
     /// estimate without changing the current storage tier.
     #[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]

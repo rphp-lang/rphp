@@ -24,6 +24,11 @@ fn hash_entry_layout_stays_compact() {
 #[test]
 fn packed_long_chunks_preserve_keys_and_reject_other_storage() {
     let mut packed = PhpArray::new();
+    assert!(packed.reserve_packed_long_appends(1_000));
+    assert!(matches!(
+        &packed.storage,
+        ArrayStorage::Packed(values) if values.capacity() >= 1_000
+    ));
     assert!(packed.push_packed_long_chunk(&[-2, 0, 7]));
     packed.push(Value::long(9));
     assert_eq!(packed.len(), 4);
@@ -33,6 +38,7 @@ fn packed_long_chunks_preserve_keys_and_reject_other_storage() {
 
     let mut hashed = PhpArray::new();
     hashed.set_str("key", Value::long(1));
+    assert!(!hashed.reserve_packed_long_appends(1_000));
     assert!(!hashed.push_packed_long_chunk(&[2, 3]));
     assert_eq!(hashed.len(), 1);
 }

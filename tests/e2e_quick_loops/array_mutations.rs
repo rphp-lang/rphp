@@ -27,6 +27,23 @@ echo $i;
 }
 
 #[test]
+fn quick_long_array_push_preserves_preexisting_dense_prefix() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [10, 20];
+for ($i = 0; $i < 70000; $i++) {
+    $values[] = $i;
+}
+echo count($values) . '|' . $values[0] . '|' . $values[1] . '|';
+echo $values[2] . '|' . $values[70001];
+"
+        ),
+        "70002|10|20|0|69999"
+    );
+}
+
+#[test]
 fn quick_long_array_push_preserves_cow_alias() {
     assert_eq!(
         run_php(

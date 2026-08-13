@@ -48,6 +48,16 @@ pub(super) struct QuickArrayPushLoopKernel {
     exit_target: QuickLongTarget,
 }
 
+/// Bound speculative packed-array capacity to one normal large application
+/// collection per closed loop. The reservation is in entries, not bytes.
+#[cfg(feature = "quick-loops")]
+const QUICK_PACKED_ARRAY_RESERVE_ENTRY_BUDGET: usize = 1 << 19;
+
+/// Below this size, ordinary geometric growth is cheaper and avoids a large
+/// speculative allocation when an interrupt cancels the loop early.
+#[cfg(feature = "quick-loops")]
+const QUICK_PACKED_ARRAY_RESERVE_MIN_ITERATIONS: u64 = 1 << 16;
+
 #[derive(Clone, Copy)]
 #[cfg(feature = "quick-loops")]
 enum QuickLongConditionalBody {

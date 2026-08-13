@@ -1,5 +1,73 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+/// Derive a bounded append count only when the loop's signed bound cannot be
+/// overwritten by its induction, condition or post-increment result slots.
+#[cfg(feature = "quick-loops")]
+#[inline(always)]
+fn quick_packed_array_reserve_hint(
+    slots: &[i64; 64],
+    header_lhs: u16,
+    header_rhs: QuickLongOperand,
+    condition_tmp: Option<u16>,
+    post_value: u16,
+    post_result: Option<u16>,
+) -> usize {
+    if header_lhs != post_value
+        || condition_tmp == Some(post_value)
+        || post_result == Some(post_value)
+        || condition_tmp.is_some() && condition_tmp == post_result
+    {
+        return 0;
+    }
+    if let QuickLongOperand::Slot(bound_slot) = header_rhs
+        && (bound_slot == post_value
+            || condition_tmp == Some(bound_slot)
+            || post_result == Some(bound_slot))
+    {
+        return 0;
+    }
+    let current = slots[post_value as usize];
+    let bound = quick_long_operand(slots, header_rhs);
+    if current >= bound {
+        return 0;
+    }
+    let remaining = current.abs_diff(bound);
+    if remaining < QUICK_PACKED_ARRAY_RESERVE_MIN_ITERATIONS {
+        return 0;
+    }
+    usize::try_from(remaining)
+        .unwrap_or(usize::MAX)
+        .min(QUICK_PACKED_ARRAY_RESERVE_ENTRY_BUDGET)
+}
+
+/// Keep the one-time allocation path out of the shared hot executor layout.
+/// The quick array kernel pays one outlined call before entering its loop.
+#[cfg(feature = "quick-loops")]
+#[cold]
+#[inline(never)]
+#[cfg_attr(
+    target_os = "linux",
+    unsafe(link_section = ".rphp_packed_array_reserve")
+)]
+fn reserve_quick_packed_array_loop_capacity(
+    array: &mut PhpArray,
+    slots: &[i64; 64],
+    kernel: QuickArrayPushLoopKernel,
+) {
+    let reserve_hint = quick_packed_array_reserve_hint(
+        slots,
+        kernel.header_lhs,
+        kernel.header_rhs,
+        kernel.header_condition_tmp,
+        kernel.post_value,
+        kernel.post_result,
+    );
+    if reserve_hint != 0 {
+        let reserved = array.reserve_packed_long_appends(reserve_hint);
+        stats::record_quick_packed_array_reserve(reserve_hint, reserved);
+    }
+}
+
 /// Run a closed loop whose only body operation appends one Long value. The
 /// array pointer comes from the canonical unique-COW entry guard, and each
 /// push remains immediately observable before a possible increment fallback.
@@ -20,6 +88,7 @@ unsafe fn run_quick_array_push_loop(
     let mut iterations = 0u64;
     let mut continue_loop =
         slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
+    reserve_quick_packed_array_loop_capacity(&mut *array, &slots, kernel);
     if let Some(slot) = kernel.header_condition_tmp {
         slots[slot as usize] = i64::from(continue_loop);
         dirty_bool_mask |= 1u64 << slot;
@@ -139,4 +208,66 @@ unsafe fn run_quick_array_push_loop(
         .add(kernel.exit_target.exit_ip().unwrap_unchecked());
     stats::inc_quick_loop_completed(iterations);
     Ok(QuickLoopOutcome::Completed)
+}
+
+#[cfg(all(test, feature = "quick-loops"))]
+mod quick_packed_array_reserve_tests {
+    use super::{
+        QUICK_PACKED_ARRAY_RESERVE_ENTRY_BUDGET, QUICK_PACKED_ARRAY_RESERVE_MIN_ITERATIONS,
+        QuickLongOperand, quick_packed_array_reserve_hint,
+    };
+
+    #[test]
+    fn hint_is_bounded_and_requires_a_stable_large_unit_loop() {
+        let mut slots = [0; 64];
+        slots[1] = QUICK_PACKED_ARRAY_RESERVE_MIN_ITERATIONS as i64;
+        assert_eq!(
+            quick_packed_array_reserve_hint(
+                &slots,
+                0,
+                QuickLongOperand::Slot(1),
+                Some(2),
+                0,
+                Some(3),
+            ),
+            QUICK_PACKED_ARRAY_RESERVE_MIN_ITERATIONS as usize
+        );
+
+        slots[1] = i64::MAX;
+        assert_eq!(
+            quick_packed_array_reserve_hint(
+                &slots,
+                0,
+                QuickLongOperand::Slot(1),
+                Some(2),
+                0,
+                Some(3),
+            ),
+            QUICK_PACKED_ARRAY_RESERVE_ENTRY_BUDGET
+        );
+
+        slots[1] = QUICK_PACKED_ARRAY_RESERVE_MIN_ITERATIONS as i64 - 1;
+        assert_eq!(
+            quick_packed_array_reserve_hint(
+                &slots,
+                0,
+                QuickLongOperand::Slot(1),
+                Some(2),
+                0,
+                Some(3),
+            ),
+            0
+        );
+        assert_eq!(
+            quick_packed_array_reserve_hint(
+                &slots,
+                0,
+                QuickLongOperand::Slot(1),
+                Some(1),
+                0,
+                Some(3),
+            ),
+            0
+        );
+    }
 }
