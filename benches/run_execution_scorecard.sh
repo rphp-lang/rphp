@@ -216,7 +216,7 @@ emit_stats() {
         section == "coverage" && /^[a-z_]+=[0-9]+(,side_exits=[0-9]+)?$/ {
             print "stats\t" workload "\t" mode "\t" $0; next
         }
-        /^(push_call_frame|cleanup_frame|write_val|write_frame_slot|do_fcall|return|quick_loop|quick_packed_array_|closure_payload_|jit_loop|jit_straight_)[a-z_]*=[0-9]+$/ {
+        /^(push_call_frame|cleanup_frame|write_val|write_frame_slot|do_fcall|return|quick_loop|quick_packed_array_|closure_payload_|declared_object_|declared_property_|jit_loop|jit_straight_)[a-z_]*=[0-9]+$/ {
             print "stats\t" workload "\t" mode "\t" $0
         }
         END {
@@ -282,6 +282,7 @@ workloads=(
     benches/bench_array.php
     benches/bench_closure_copy.php
     benches/bench_closure_storage.php
+    benches/bench_declared_object_lifecycle.php
 )
 labels=(
     order typed_order ledger typed_ledger routing_holdout
@@ -289,6 +290,7 @@ labels=(
     packed_foreach hash_foreach string_append array_build_read
     closure_copy
     closure_storage
+    declared_object_lifecycle
 )
 modes=(baseline typed jit php_nojit php_jit)
 expected_results=()

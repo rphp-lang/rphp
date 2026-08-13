@@ -278,20 +278,21 @@ fn op_new_obj<'a>(
     }
 
     // Create compact declared-property slots from the class layout.
-    let (class_id, property_layout, property_values) =
-        if let Some(class_def) = class_def {
-            (
-                class_def.class_id,
+    let (class_id, obj) = if let Some(class_def) = class_def {
+        let class_id = class_def.class_id;
+        (
+            class_id,
+            PhpObject::with_layout_from_defaults(
+                class_id,
                 class_def.property_layout.clone(),
-                class_def.property_defaults.as_ref().to_vec(),
-            )
-        } else {
-            (0, std::rc::Rc::new(crate::value::ObjectLayout::empty()), Vec::new())
-        };
-    let obj = if class_id == 0 {
-        PhpObject::dynamic(name.to_string(), class_id, std::collections::HashMap::new())
+                class_def.property_defaults.as_ref(),
+            ),
+        )
     } else {
-        PhpObject::with_layout(class_id, property_layout, property_values)
+        (
+            0,
+            PhpObject::dynamic(name.to_string(), 0, std::collections::HashMap::new()),
+        )
     };
     // NewObj writes a compiler-owned TMP/VAR for the first time. Stack reuse
     // intentionally leaves dead scalar bytes uninitialized, so dropping the

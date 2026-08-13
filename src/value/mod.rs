@@ -663,6 +663,8 @@ pub struct PhpObject {
     pub generator: Option<GeneratorRef>,
 }
 
+const _: [(); 72] = [(); std::mem::size_of::<PhpObject>()];
+
 thread_local! {
     /// Every decoded JSON object is the same dynamic `stdClass`. Sharing its
     /// immutable name and empty declared-property layout removes two heap
@@ -671,6 +673,41 @@ thread_local! {
         Rc::from("stdClass"),
         Rc::new(ObjectLayout::empty()),
     );
+
+    /// One bounded reusable declared-property buffer per common object width.
+    /// PHP evaluates a replacement object before releasing the previous CV, so
+    /// one slot per width still covers the steady state after two allocations.
+    static DECLARED_PROPERTY_STORAGE_POOL: RefCell<[Option<Vec<Value>>; 5]> =
+        RefCell::new(std::array::from_fn(|_| None));
+}
+
+const MAX_POOLED_DECLARED_PROPERTIES: usize = 4;
+
+fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
+    if defaults.is_empty() {
+        return Vec::new();
+    }
+
+    let pooled = (defaults.len() <= MAX_POOLED_DECLARED_PROPERTIES)
+        .then(|| {
+            DECLARED_PROPERTY_STORAGE_POOL.with(|pool| pool.borrow_mut()[defaults.len()].take())
+        })
+        .flatten();
+    let reused = pooled.is_some();
+    let mut values = pooled.unwrap_or_else(|| {
+        stats::inc_declared_property_storage_allocation();
+        Vec::with_capacity(defaults.len())
+    });
+    if values.capacity() < defaults.len() {
+        stats::inc_declared_property_storage_allocation();
+        values.reserve_exact(defaults.len() - values.capacity());
+    } else if !values.is_empty() {
+        unreachable!("pooled declared-property storage must be cleared before reuse");
+    } else if reused {
+        stats::inc_declared_property_storage_reuse();
+    }
+    values.extend(defaults.iter().cloned());
+    values
 }
 
 impl PhpObject {
@@ -690,6 +727,20 @@ impl PhpObject {
             dynamic_properties: None,
             generator: None,
         }
+    }
+
+    /// Materialize immutable class defaults into request-owned slots, reusing
+    /// one bounded buffer for the common small declared-object widths.
+    pub(crate) fn with_layout_from_defaults(
+        class_id: u32,
+        property_layout: Rc<ObjectLayout>,
+        property_defaults: &[Value],
+    ) -> Self {
+        Self::with_layout(
+            class_id,
+            property_layout,
+            materialize_declared_property_defaults(property_defaults),
+        )
     }
 
     pub fn dynamic(class_name: String, class_id: u32, properties: HashMap<String, Value>) -> Self {
@@ -867,6 +918,120 @@ impl PhpObject {
         if let Some(dynamic) = &self.dynamic_properties {
             dynamic.for_each(visitor);
         }
+    }
+}
+
+impl Drop for PhpObject {
+    fn drop(&mut self) {
+        let width = self.property_values.len();
+        if width == 0 || width > MAX_POOLED_DECLARED_PROPERTIES {
+            return;
+        }
+
+        let mut values = std::mem::take(&mut self.property_values);
+        // Drop heap-bearing property values before borrowing the pool: a
+        // nested final object release may itself return a declared buffer.
+        values.clear();
+        // Retain only the exact small buffer created by the declared-default
+        // materializer. Other internal constructors may supply a wider Vec;
+        // keeping it would make request-local retention unbounded.
+        if values.capacity() != width {
+            return;
+        }
+        let mut available = Some(values);
+        let retained = DECLARED_PROPERTY_STORAGE_POOL
+            .try_with(|pool| {
+                let mut pool = pool.borrow_mut();
+                if pool[width].is_none() {
+                    pool[width] = available.take();
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+        if retained {
+            stats::inc_declared_property_storage_return();
+        }
+    }
+}
+
+#[cfg(test)]
+mod declared_property_storage_tests {
+    use super::{ObjectLayout, PhpObject, Value};
+    use std::rc::Rc;
+
+    #[test]
+    fn pooled_declared_storage_is_cleared_before_reuse() {
+        let layout = Rc::new(ObjectLayout::new(
+            "PooledRow",
+            vec!["first".to_string(), "second".to_string()],
+        ));
+        let first = PhpObject::with_layout_from_defaults(
+            1,
+            Rc::clone(&layout),
+            &[Value::long(1), Value::long(2)],
+        );
+        drop(first);
+
+        let second =
+            PhpObject::with_layout_from_defaults(1, layout, &[Value::long(7), Value::long(8)]);
+        assert_eq!(
+            second.get_property_slot(0).and_then(Value::as_long),
+            Some(7)
+        );
+        assert_eq!(
+            second.get_property_slot(1).and_then(Value::as_long),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn nested_heap_properties_drop_before_the_buffer_is_returned() {
+        let child_layout = Rc::new(ObjectLayout::new("Child", Vec::new()));
+        let parent_layout = Rc::new(ObjectLayout::new("Parent", vec!["child".to_string()]));
+        let child = Value::object(PhpObject::with_layout_from_defaults(2, child_layout, &[]));
+        let parent = PhpObject::with_layout_from_defaults(1, Rc::clone(&parent_layout), &[child]);
+        drop(parent);
+
+        let reused = PhpObject::with_layout_from_defaults(1, parent_layout, &[Value::long(9)]);
+        assert_eq!(
+            reused.get_property_slot(0).and_then(Value::as_long),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn oversized_internal_capacity_is_not_retained() {
+        let layout = Rc::new(ObjectLayout::new(
+            "WideCapacity",
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+            ],
+        ));
+        let mut oversized = Vec::with_capacity(64);
+        oversized.extend([
+            Value::long(1),
+            Value::long(2),
+            Value::long(3),
+            Value::long(4),
+        ]);
+        drop(PhpObject::with_layout(1, Rc::clone(&layout), oversized));
+
+        let ordinary = PhpObject::with_layout_from_defaults(
+            1,
+            layout,
+            &[
+                Value::long(5),
+                Value::long(6),
+                Value::long(7),
+                Value::long(8),
+            ],
+        );
+        assert_eq!(ordinary.property_values.capacity(), 4);
     }
 }
 
@@ -3672,7 +3837,11 @@ impl Value {
     /// Stores Rc pointer directly — no Box wrapper. Clone = Rc increment, Drop = Rc decrement.
     #[inline]
     pub fn object(obj: PhpObject) -> Self {
+        let is_declared = obj.class_id != 0;
         let rc = Rc::new(RefCell::new(obj));
+        if is_declared {
+            stats::inc_declared_object_owner_allocation();
+        }
         let ptr = Rc::into_raw(rc) as *mut u8;
         Self {
             data: ValueData { ptr },

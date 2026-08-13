@@ -48,7 +48,7 @@ case $only in
         bench_static_late_property.php | bench_static_self_property.php | \
         corpus_order_pipeline.php | corpus_ledger_pipeline.php | \
         holdout_routing_pipeline.php | bench_closure_copy.php | \
-        bench_closure_storage.php) ;;
+        bench_closure_storage.php | bench_declared_object_lifecycle.php) ;;
     *)
         echo "RPHP_RUNTIME_GATE_ONLY names an unknown workload" >&2
         exit 2
@@ -206,6 +206,7 @@ corpus_ledger_pipeline.php 2
 holdout_routing_pipeline.php 1
 bench_closure_copy.php 1
 bench_closure_storage.php 1
+bench_declared_object_lifecycle.php 1
 WORKLOADS
 
 echo
@@ -224,7 +225,8 @@ for workload in \
     corpus_ledger_pipeline.php \
     holdout_routing_pipeline.php \
     bench_closure_copy.php \
-    bench_closure_storage.php
+    bench_closure_storage.php \
+    bench_declared_object_lifecycle.php
 do
     if [ -n "$only" ] && [ "$workload" != "$only" ]; then
         continue

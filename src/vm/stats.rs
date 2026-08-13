@@ -170,6 +170,10 @@ mod inner {
         [const { AtomicU64::new(0) }; VALUE_KIND_COUNT];
     static CLOSURE_PAYLOAD_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
     static CLOSURE_CAPTURE_STORAGE_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+    static DECLARED_OBJECT_OWNER_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+    static DECLARED_PROPERTY_STORAGE_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+    static DECLARED_PROPERTY_STORAGE_REUSES: AtomicU64 = AtomicU64::new(0);
+    static DECLARED_PROPERTY_STORAGE_RETURNS: AtomicU64 = AtomicU64::new(0);
     static OPCODE_COUNTS: [AtomicU64; OPCODE_KIND_COUNT] =
         [const { AtomicU64::new(0) }; OPCODE_KIND_COUNT];
 
@@ -242,6 +246,10 @@ mod inner {
         }
         CLOSURE_PAYLOAD_ALLOCATIONS.store(0, Ordering::Relaxed);
         CLOSURE_CAPTURE_STORAGE_ALLOCATIONS.store(0, Ordering::Relaxed);
+        DECLARED_OBJECT_OWNER_ALLOCATIONS.store(0, Ordering::Relaxed);
+        DECLARED_PROPERTY_STORAGE_ALLOCATIONS.store(0, Ordering::Relaxed);
+        DECLARED_PROPERTY_STORAGE_REUSES.store(0, Ordering::Relaxed);
+        DECLARED_PROPERTY_STORAGE_RETURNS.store(0, Ordering::Relaxed);
         for counter in &OPCODE_COUNTS {
             counter.store(0, Ordering::Relaxed);
         }
@@ -495,6 +503,34 @@ mod inner {
     pub fn inc_closure_capture_storage_allocation() {
         if enabled() {
             CLOSURE_CAPTURE_STORAGE_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_declared_object_owner_allocation() {
+        if enabled() {
+            DECLARED_OBJECT_OWNER_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_declared_property_storage_allocation() {
+        if enabled() {
+            DECLARED_PROPERTY_STORAGE_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_declared_property_storage_reuse() {
+        if enabled() {
+            DECLARED_PROPERTY_STORAGE_REUSES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_declared_property_storage_return() {
+        if enabled() {
+            DECLARED_PROPERTY_STORAGE_RETURNS.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -931,6 +967,27 @@ mod inner {
             "closure_capture_storage_allocations={}",
             CLOSURE_CAPTURE_STORAGE_ALLOCATIONS.load(Ordering::Relaxed)
         );
+        let _ = writeln!(err, "-- declared object lifecycle --");
+        let _ = writeln!(
+            err,
+            "declared_object_owner_allocations={}",
+            DECLARED_OBJECT_OWNER_ALLOCATIONS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "declared_property_storage_allocations={}",
+            DECLARED_PROPERTY_STORAGE_ALLOCATIONS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "declared_property_storage_reuses={}",
+            DECLARED_PROPERTY_STORAGE_REUSES.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "declared_property_storage_returns={}",
+            DECLARED_PROPERTY_STORAGE_RETURNS.load(Ordering::Relaxed)
+        );
 
         let mut opcodes = Vec::new();
         for (idx, counter) in OPCODE_COUNTS.iter().enumerate() {
@@ -1261,6 +1318,42 @@ pub fn inc_closure_capture_storage_allocation() {
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_closure_capture_storage_allocation() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_declared_object_owner_allocation() {
+    inner::inc_declared_object_owner_allocation();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_declared_object_owner_allocation() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_declared_property_storage_allocation() {
+    inner::inc_declared_property_storage_allocation();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_declared_property_storage_allocation() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_declared_property_storage_reuse() {
+    inner::inc_declared_property_storage_reuse();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_declared_property_storage_reuse() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_declared_property_storage_return() {
+    inner::inc_declared_property_storage_return();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_declared_property_storage_return() {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]
