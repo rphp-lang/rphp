@@ -170,13 +170,13 @@ fn op_new_obj<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: The compiler guarantees that this live frame owns NewObj's
     // operand/result slots and that opline addresses op_array's stable storage.
-    let (ip, result_ptr, raw_name) = unsafe {
+    let (raw_name, ip, result_ptr) = unsafe {
         (
-            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
-            (*frame).get_op_mut(opline.result as u32, opline.result_type),
             (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
                 .as_str()
                 .unwrap_or(""),
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+            (*frame).get_op_mut(opline.result as u32, opline.result_type),
         )
     };
     let ic = &op_array.cache[ip];
@@ -214,7 +214,7 @@ fn op_new_obj<'a>(
     if !literal_cache_hit {
         stats::inc_newobj_class_hash_lookup();
     }
-    if !literal_cache_hit
+    if (dynamic_static_scope || dynamic_class_name || ic.class_id == 0)
         && eg.find_class(&name).is_none()
         && let Some(class_def) = eg.take_pending_anonymous_class(&name)
     {
@@ -246,7 +246,7 @@ fn op_new_obj<'a>(
         eg.register_class(class_def).map_err(VmError::Fatal)?;
     }
 
-    if (dynamic_static_scope || dynamic_class_name || ic.class_id == 0)
+    if !literal_cache_hit
         && {
             stats::inc_newobj_class_hash_lookup();
             eg.find_class(&name).is_none()
