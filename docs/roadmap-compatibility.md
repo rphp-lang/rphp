@@ -49,6 +49,15 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
+The current pinned PHP 8.2 differential baseline is RPHP `f1fb5e9` against
+php-src 8.2.33 `651db3e`: 974 of 4,345 discovered `Zend/tests` and `tests/lang`
+cases pass, with no lost pass relative to `9db688b`. The latest semantic slice
+connects direct `$GLOBALS` dimensions to the global symbol table and admits four
+additional upstream cases. Undefined-variable diagnostics, variable-variable
+syntax, exact by-reference errors and invalid `$GLOBALS` restrictions remain
+the next visible boundaries of that family; the broader adoption goal remains
+active until the selected PHP 8.2 contract corpus converges.
+
 ## Measurement system
 
 ### Contract baseline
