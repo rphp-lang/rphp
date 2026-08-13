@@ -12,21 +12,21 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`8c7107e568f072eb0038db0aab721022758e21de`, using the same runner commit. The
+`86ac18718e4447a0441437985a1a09ee05fd9cfa`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 910 | 2,851 | 65 | 1 | 221 | 1 | 2 | 24.196% |
+| `Zend/tests` | 911 | 2,850 | 65 | 1 | 221 | 1 | 2 | 24.222% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **998** | **3,031** | **75** | **1** | **237** | **1** | **2** | **24.770%** |
+| **Combined** | **999** | **3,030** | **75** | **1** | **237** | **1** | **2** | **24.795%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 998 / 4,345, or **22.969%**; including crashes and timeouts in the attempted
-denominator gives **24.752%**. These numbers are intentionally pre-alpha and do
+is 999 / 4,345, or **22.992%**; including crashes and timeouts in the attempted
+denominator gives **24.777%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -37,7 +37,7 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,205 runtime failures, 1,129 output mismatches,
+The largest failure groups are 1,204 runtime failures, 1,129 output mismatches,
 568 parse failures, 126 compile failures and six failed `SKIPIF` evaluations.
 Two cases terminate by signal and one times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
@@ -51,13 +51,29 @@ sections, zero timeouts and zero crashes. Five representative cases also pass
 through php-src's official `run-tests.php`. Two independent RPHP executions
 with a matching native PHP 8.2.33 runner produced byte-identical manifests with
 SHA-256
-`01cf18235f1de7211c8e3b0338bee3c2a4b0a5e4ab3e1d86e8df51783cd18b2d`
+`67c893985e54d356fea08b8ac8d00dfd48998d23e340065e26e41a060893f630`
 and byte-identical summaries with SHA-256
-`ddda0efd922b561964bf03e9c42d461ffe75a79fcec5791a131681ea1c9cf2f3`.
+`9755187325dc324f125822969306d0ec96c192c1b82cf638d6fb5248f5af2e99`.
 
-Relative to the retained `2621cc3` baseline, this checkpoint adds 12 exact
-passes without losing a previous pass or adding a crash or timeout. PHP 8.2
-empty array dimensions now produce compile-stage `Cannot use [] for reading`
+Relative to the retained `8c7107e` baseline, this checkpoint adds one exact
+pass without losing a previous pass or adding a crash or timeout. A positional
+call to a statically resolved function may now bind an appended array slot to a
+known by-reference parameter. The baseline VM preserves the owned reference
+cell and writes modified nested-array and object-property containers back after
+the call. The exact addition is `Zend/tests/032.phpt`; the adjacent by-value
+diagnostic in `Zend/tests/031.phpt` remains an exact pass.
+
+This checkpoint does not claim the runtime-resolved method, static-method or
+dynamic-call forms, reference-return expressions, indirect `ArrayAccess`
+appends, or intermediate empty dimensions. The retained failures
+`ArrayAccess_indirect_append`, `bug34064`, `func_arg_fetch_optimization`, and
+`weakrefs/weakmap_error_conditions` keep those contracts visible for later
+slices.
+
+The preceding `8c7107e` checkpoint, relative to the retained `2621cc3`
+baseline, added 12 exact passes without losing a previous pass or adding a crash
+or timeout. PHP 8.2 empty array dimensions now produce compile-stage
+`Cannot use [] for reading`
 or `Cannot use [] for unsetting` diagnostics, including constant-dead code,
 coalescing and constant-expression contexts. The diagnostic retains the base
 expression's source line across a multiline suffix. Direct and nested final
@@ -69,10 +85,10 @@ The exact additions are `Zend/tests/031.phpt`, `bug41351`, `bug41351_2`,
 `errmsg_008`, and `restrict_globals/invalid_append_isset` plus
 `restrict_globals/invalid_append_unset`. Five previous parse failures now reach
 a later runtime failure: `032`, `ArrayAccess_indirect_append`, `bug34064`,
-`func_arg_fetch_optimization`, and `weakrefs/weakmap_error_conditions`. They
-expose separate append-lvalue contracts for by-reference calls and returns,
-indirect `ArrayAccess`, catchable argument fetches, and intermediate empty
-dimensions such as `$map[][1]`; none is counted as a pass by this checkpoint.
+`func_arg_fetch_optimization`, and `weakrefs/weakmap_error_conditions`. At that
+checkpoint they exposed separate append-lvalue contracts for by-reference calls
+and returns, indirect `ArrayAccess`, catchable argument fetches, and intermediate
+empty dimensions such as `$map[][1]`; none was counted as a pass there.
 
 The preceding `2621cc3` checkpoint, relative to the retained `f1fb5e9`
 baseline, added 12 exact
@@ -137,11 +153,11 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`8c7107e-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/8c7107e-arm64-manifest.jsonl),
+[`86ac187-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/86ac187-arm64-manifest.jsonl),
 with aggregate metadata in
-[`8c7107e-arm64-summary.json`](../tests/php-src/results/php-8.2.33/8c7107e-arm64-summary.json),
+[`86ac187-arm64-summary.json`](../tests/php-src/results/php-8.2.33/86ac187-arm64-summary.json),
 a directory/status navigation map and exact hazard list in
-[`8c7107e-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/8c7107e-arm64-coverage-map.json),
+[`86ac187-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/86ac187-arm64-coverage-map.json),
 and the full reference aggregate in
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in
