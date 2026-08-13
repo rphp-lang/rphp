@@ -250,6 +250,46 @@ A();
     );
 }
 
+#[test]
+fn test_globals_dimension_tracks_the_global_symbol_table() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$shade = "amber";
+function recolor() {
+    $GLOBALS["shade"] = "blue";
+}
+function erase_global($name) {
+    unset($GLOBALS[$name]);
+}
+recolor();
+echo $shade, "|", $GLOBALS["shade"], "\n";
+erase_global("shade");
+var_dump(isset($shade), isset($GLOBALS["shade"]));
+$GLOBALS[3] = "numeric";
+echo $GLOBALS["3"], "|";
+$shape = 9;
+$GLOBALS["shape"] = "round";
+echo $shape, "|";
+$GLOBALS["counter"] = 2;
+$GLOBALS["counter"]++;
+$GLOBALS["counter"] += 4;
+$GLOBALS["bag"] = [];
+$GLOBALS["bag"][] = "first";
+$GLOBALS["fallback"] ??= "ready";
+$GLOBALS["fallback"] ??= "ignored";
+$source = 5;
+$GLOBALS["linked"] =& $source;
+$source++;
+$alias =& $GLOBALS["counter"];
+$alias++;
+echo $GLOBALS["counter"], "|", $GLOBALS["bag"][0], "|", $linked, "|", $fallback;
+"#
+        ),
+        "blue|blue\nbool(false)\nbool(false)\nnumeric|round|8|first|6|ready"
+    );
+}
+
 // static variable tests
 
 #[test]

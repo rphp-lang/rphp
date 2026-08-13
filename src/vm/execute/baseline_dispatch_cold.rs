@@ -1862,6 +1862,136 @@ fn op_bind_global(
 }
 
 #[inline(never)]
+fn op_global_dimension(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let scope_vars = if !op_array.main_scope_vars.is_empty() {
+        &op_array.main_scope_vars
+    } else {
+        &op_array.global_vars
+    };
+
+    // SAFETY: each dedicated global opcode is emitted only with validated
+    // operands belonging to this live frame/op-array pair. CV indices in
+    // scope metadata come from the same compiler allocation, and every slot
+    // replacement goes through the frame bitmap helpers before old owners
+    // are dropped.
+    unsafe {
+        let key = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let name = value_to_global_name(key)?;
+        match opline.opcode {
+            OpCode::FetchGlobal => {
+                let local = scope_vars
+                    .iter()
+                    .find(|(_, variable)| variable == &name)
+                    .map(|(cv, _)| {
+                        (&*(*frame).get_op_ptr(*cv, OpType::Cv, op_array)).clone()
+                    });
+                let value = local
+                    .or_else(|| eg.globals.get(&name).cloned())
+                    .unwrap_or_else(Value::undef);
+                let value = if opline._pad & FETCH_DIM_ISSET != 0 {
+                    Value::bool(!matches!(
+                        value.value_type(),
+                        ValueType::Null | ValueType::Undef
+                    ))
+                } else {
+                    value
+                };
+                let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                write_fetch_dim_result(frame, result, value);
+            }
+            OpCode::AssignGlobal => {
+                let value =
+                    (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone();
+                globals_set(&mut eg.globals, &name, value.clone());
+                eg.dirty_globals.insert(name.clone());
+                if let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name) {
+                    let is_reference = (*frame).cv(*cv).is_reference();
+                    let destination = (*frame).get_op_mut(*cv, OpType::Cv);
+                    if is_reference {
+                        slot_set(destination, value);
+                    } else {
+                        frame_slot_set(frame, destination, value);
+                    }
+                }
+            }
+            OpCode::UnsetGlobal => {
+                globals_set(&mut eg.globals, &name, Value::undef());
+                eg.dirty_globals.insert(name.clone());
+                if let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name) {
+                    frame_slot_set(frame, (*frame).cv_mut(*cv), Value::undef());
+                }
+            }
+            OpCode::BindGlobalRef => {
+                let current_cv = scope_vars
+                    .iter()
+                    .find(|(_, variable)| variable == &name)
+                    .map(|(cv, _)| *cv);
+                let binding = if let Some(cv) = current_cv {
+                    let slot = (*frame).cv_mut(cv);
+                    if slot.is_owned_reference() {
+                        slot.clone_owned_reference_alias()
+                    } else {
+                        let owned = Value::owned_reference(slot.clone());
+                        let alias = owned.clone_owned_reference_alias();
+                        frame_slot_set(frame, slot, owned);
+                        alias
+                    }
+                } else if let Some(value) = eg.globals.get(&name) {
+                    if value.is_owned_reference() {
+                        value.clone_owned_reference_alias()
+                    } else {
+                        Value::owned_reference(value.clone())
+                    }
+                } else {
+                    Value::owned_reference(Value::null())
+                };
+                globals_set(
+                    &mut eg.globals,
+                    &name,
+                    binding.clone_owned_reference_alias(),
+                );
+                frame_slot_set(
+                    frame,
+                    (*frame).cv_mut(opline.result as u32),
+                    binding.clone_owned_reference_alias(),
+                );
+            }
+            OpCode::AssignGlobalRef => {
+                let source = (*frame).cv_mut(opline.op2 as u32);
+                let binding = if source.is_owned_reference() {
+                    source.clone_owned_reference_alias()
+                } else {
+                    let owned = Value::owned_reference(source.clone());
+                    let alias = owned.clone_owned_reference_alias();
+                    frame_slot_set(frame, source, owned);
+                    alias
+                };
+                globals_set(
+                    &mut eg.globals,
+                    &name,
+                    binding.clone_owned_reference_alias(),
+                );
+                eg.dirty_globals.insert(name.clone());
+                if let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name) {
+                    frame_slot_set(
+                        frame,
+                        (*frame).cv_mut(*cv),
+                        binding.clone_owned_reference_alias(),
+                    );
+                }
+            }
+            _ => unreachable!("op_global_dimension called for a non-global opcode"),
+        }
+    }
+    Ok(())
+}
+
+#[inline(never)]
 fn op_bind_static(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,

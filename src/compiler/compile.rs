@@ -187,6 +187,27 @@ mod array_literal_hint_tests {
 /// reaching `global`, because its target may not have been compiled yet. Here
 /// direct calls can be resolved into a small call graph. Only dynamic/unknown
 /// calls and chains that actually reach a `global` binding remain conservative.
+fn instructions_may_access_globals(instructions: &[Instruction]) -> bool {
+    instructions.iter().any(|instruction| {
+        matches!(
+            instruction.opcode,
+            OpCode::InitFcall
+                | OpCode::InitDynamicCall
+                | OpCode::InitUserCall
+                | OpCode::CallUserFuncArray
+                | OpCode::InitMethodCall
+                | OpCode::InitStaticCall
+                | OpCode::InitLateStaticCall
+                | OpCode::Include
+                | OpCode::FetchGlobal
+                | OpCode::AssignGlobal
+                | OpCode::UnsetGlobal
+                | OpCode::BindGlobalRef
+                | OpCode::AssignGlobalRef
+        )
+    })
+}
+
 fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
     let function_indices: HashMap<String, usize> = functions
         .iter()
@@ -199,7 +220,17 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
 
     for (index, (_, function)) in functions.iter().enumerate() {
         let op_array = &function.op_array;
-        direct_global_access[index] = !op_array.global_vars.is_empty();
+        direct_global_access[index] = !op_array.global_vars.is_empty()
+            || op_array.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction.opcode,
+                    OpCode::FetchGlobal
+                        | OpCode::AssignGlobal
+                        | OpCode::UnsetGlobal
+                        | OpCode::BindGlobalRef
+                        | OpCode::AssignGlobalRef
+                )
+            });
 
         for instruction in &op_array.instructions {
             match instruction.opcode {
@@ -703,10 +734,13 @@ fn propagate_declared_scalar_types(
                 slots.fill(KnownScalarType::Unknown);
                 receiver_classes.fill(None);
             }
-            // Included code executes in the caller's symbol-table scope and
-            // may unset or replace any local, including a value with an exact
-            // scalar or receiver-class fact established before the include.
-            OpCode::Include => {
+            // Included code and direct `$GLOBALS[...]` mutation execute
+            // against the current symbol table and may replace any local.
+            OpCode::Include
+            | OpCode::AssignGlobal
+            | OpCode::UnsetGlobal
+            | OpCode::BindGlobalRef
+            | OpCode::AssignGlobalRef => {
                 slots.fill(KnownScalarType::Unknown);
                 receiver_classes.fill(None);
             }
@@ -3077,6 +3111,18 @@ impl Compiler {
                 (result, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index } => {
+                if matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS") {
+                    let (key, key_type) = self.compile_expr(index);
+                    let result = self.alloc_tmp();
+                    let mut isset = Instruction::new(OpCode::FetchGlobal);
+                    isset.op1 = key;
+                    isset.op1_type = key_type;
+                    isset.result = result;
+                    isset.result_type = OpType::Tmp;
+                    isset._pad |= FETCH_DIM_ISSET;
+                    self.instructions.push(isset);
+                    return (result, OpType::Tmp);
+                }
                 let (array_op, array_type) = self.compile_isset_object_base(array);
                 let (index_op, index_type) = self.compile_expr(index);
                 let result = self.alloc_tmp();
@@ -3115,6 +3161,18 @@ impl Compiler {
                 (result, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index } => {
+                if matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS") {
+                    let (key, key_type) = self.compile_expr(index);
+                    let result = self.alloc_tmp();
+                    let mut isset = Instruction::new(OpCode::FetchGlobal);
+                    isset.op1 = key;
+                    isset.op1_type = key_type;
+                    isset.result = result;
+                    isset.result_type = OpType::Tmp;
+                    isset._pad |= FETCH_DIM_ISSET;
+                    self.instructions.push(isset);
+                    return (result, OpType::Tmp);
+                }
                 let (array_op, array_type) = self.compile_isset_object_base(array);
                 let (index_op, index_type) = self.compile_expr(index);
                 let result = self.alloc_tmp();
@@ -4072,6 +4130,17 @@ impl Compiler {
                 (arr_tmp, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index } => {
+                if matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS") {
+                    let (key, key_type) = self.compile_expr(index);
+                    let result = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchGlobal);
+                    fetch.op1 = key;
+                    fetch.op1_type = key_type;
+                    fetch.result = result;
+                    fetch.result_type = OpType::Tmp;
+                    self.instructions.push(fetch);
+                    return (result, OpType::Tmp);
+                }
                 let (arr_op, arr_type) = self.compile_expr(array);
                 let (idx_op, idx_type) = self.compile_expr(index);
                 let tmp = self.alloc_tmp();
@@ -4478,19 +4547,7 @@ impl Compiler {
                     .map(|_| InlineCache::empty())
                     .collect();
                 let may_access_globals = !func_compiler.global_vars.is_empty()
-                    || func_compiler.instructions.iter().any(|i| {
-                        matches!(
-                            i.opcode,
-                            OpCode::InitFcall
-                                | OpCode::InitDynamicCall
-                                | OpCode::InitUserCall
-                                | OpCode::CallUserFuncArray
-                                | OpCode::InitMethodCall
-                                | OpCode::InitStaticCall
-                                | OpCode::InitLateStaticCall
-                                | OpCode::Include
-                        )
-                    });
+                    || instructions_may_access_globals(&func_compiler.instructions);
                 let nested_generic_declarations =
                     std::mem::take(&mut func_compiler.generic_declarations);
                 let op_array = OpArray {
@@ -5225,6 +5282,16 @@ impl Compiler {
                         (destination, OpType::Cv)
                     }
                     Expr::ArrayAccess { array, index } => {
+                        if matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS") {
+                            let (key, key_type) = self.compile_expr(index);
+                            let mut bind = Instruction::new(OpCode::BindGlobalRef);
+                            bind.op1 = key;
+                            bind.op1_type = key_type;
+                            bind.result = destination;
+                            bind.result_type = OpType::Cv;
+                            self.instructions.push(bind);
+                            return (destination, OpType::Cv);
+                        }
                         let (array, array_type) = self.compile_expr(array);
                         let (index, index_type) = self.compile_expr(index);
                         let mut bind = Instruction::new(OpCode::BindArrayDimRef);

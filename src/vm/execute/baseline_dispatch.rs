@@ -2564,6 +2564,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::FetchGlobal
+            | OpCode::AssignGlobal
+            | OpCode::UnsetGlobal
+            | OpCode::BindGlobalRef
+            | OpCode::AssignGlobalRef => {
+                op_global_dimension(eg, frame, op_array, opline)?;
+            }
+
             OpCode::AssignDim => {
                 // op1[op2] = result (value source encoded in result/result_type)
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };

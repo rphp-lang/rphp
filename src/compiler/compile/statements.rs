@@ -23,6 +23,10 @@ pub(super) struct MutableArrayPath {
 
 enum CoalesceWrite {
     Variable(u16),
+    Global {
+        key: u16,
+        key_type: OpType,
+    },
     ObjectProperty {
         object: u16,
         object_type: OpType,
@@ -39,6 +43,10 @@ enum CoalesceWrite {
 
 pub(super) enum ForeachArrayWriteback {
     Variable(u16),
+    Global {
+        key: u16,
+        key_type: OpType,
+    },
     ObjectProperty {
         object: u16,
         object_type: OpType,
@@ -217,6 +225,23 @@ impl Compiler {
                 ))
             }
             Expr::ArrayAccess { .. } => {
+                if let Expr::ArrayAccess { array, index } = source
+                    && matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS")
+                {
+                    let (key, key_type) = self.compile_expr(index);
+                    let current = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchGlobal);
+                    fetch.op1 = key;
+                    fetch.op1_type = key_type;
+                    fetch.result = current;
+                    fetch.result_type = OpType::Tmp;
+                    self.instructions.push(fetch);
+                    return Ok((
+                        current,
+                        OpType::Tmp,
+                        ForeachArrayWriteback::Global { key, key_type },
+                    ));
+                }
                 let mut root = source;
                 let mut reversed_indices = Vec::new();
                 while let Expr::ArrayAccess { array, index } = root {
@@ -256,6 +281,14 @@ impl Compiler {
                 let mut assign = Instruction::new(OpCode::AssignCv);
                 assign.op1 = cv;
                 assign.op1_type = OpType::Cv;
+                assign.op2 = array;
+                assign.op2_type = OpType::Tmp;
+                self.instructions.push(assign);
+            }
+            ForeachArrayWriteback::Global { key, key_type } => {
+                let mut assign = Instruction::new(OpCode::AssignGlobal);
+                assign.op1 = key;
+                assign.op1_type = key_type;
                 assign.op2 = array;
                 assign.op2_type = OpType::Tmp;
                 self.instructions.push(assign);
@@ -408,26 +441,40 @@ impl Compiler {
                 )
             }
             Expr::ArrayAccess { .. } => {
-                let mut root = target;
-                let mut reversed_indices = Vec::new();
-                while let Expr::ArrayAccess { array, index } = root {
-                    reversed_indices.push(index.as_ref().clone());
-                    root = array.as_ref();
+                if let Expr::ArrayAccess { array, index } = target
+                    && matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS")
+                {
+                    let (key, key_type) = self.compile_expr(index);
+                    let current = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchGlobal);
+                    fetch.op1 = key;
+                    fetch.op1_type = key_type;
+                    fetch.result = current;
+                    fetch.result_type = OpType::Tmp;
+                    self.instructions.push(fetch);
+                    (current, OpType::Tmp, CoalesceWrite::Global { key, key_type })
+                } else {
+                    let mut root = target;
+                    let mut reversed_indices = Vec::new();
+                    while let Expr::ArrayAccess { array, index } = root {
+                        reversed_indices.push(index.as_ref().clone());
+                        root = array.as_ref();
+                    }
+                    reversed_indices.reverse();
+                    let path = self.compile_mutable_array_path(root, &reversed_indices, true)?;
+                    let &(container, container_type) = path.containers.last().unwrap();
+                    let &(key, key_type) = path.keys.last().unwrap();
+                    let current = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1 = container;
+                    fetch.op1_type = container_type;
+                    fetch.op2 = key;
+                    fetch.op2_type = key_type;
+                    fetch.result = current;
+                    fetch.result_type = OpType::Tmp;
+                    self.instructions.push(fetch);
+                    (current, OpType::Tmp, CoalesceWrite::Array(path))
                 }
-                reversed_indices.reverse();
-                let path = self.compile_mutable_array_path(root, &reversed_indices, true)?;
-                let &(container, container_type) = path.containers.last().unwrap();
-                let &(key, key_type) = path.keys.last().unwrap();
-                let current = self.alloc_tmp();
-                let mut fetch = Instruction::new(OpCode::FetchDimR);
-                fetch.op1 = container;
-                fetch.op1_type = container_type;
-                fetch.op2 = key;
-                fetch.op2_type = key_type;
-                fetch.result = current;
-                fetch.result_type = OpType::Tmp;
-                self.instructions.push(fetch);
-                (current, OpType::Tmp, CoalesceWrite::Array(path))
             }
             _ => return Err("Invalid null-coalescing assignment target".into()),
         };
@@ -453,6 +500,14 @@ impl Compiler {
                 let mut assign = Instruction::new(OpCode::AssignCv);
                 assign.op1 = cv;
                 assign.op1_type = OpType::Cv;
+                assign.op2 = value;
+                assign.op2_type = value_type;
+                self.instructions.push(assign);
+            }
+            CoalesceWrite::Global { key, key_type } => {
+                let mut assign = Instruction::new(OpCode::AssignGlobal);
+                assign.op1 = key;
+                assign.op1_type = key_type;
                 assign.op2 = value;
                 assign.op2_type = value_type;
                 self.instructions.push(assign);
@@ -667,6 +722,19 @@ impl Compiler {
             return Err("Reference assignment source must be a variable".into());
         };
         let source = self.resolve_cv(source);
+
+        if let Expr::ArrayAccess { array, index } = target
+            && matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS")
+        {
+            let (key, key_type) = self.compile_expr(index);
+            let mut assign = Instruction::new(OpCode::AssignGlobalRef);
+            assign.op1 = key;
+            assign.op1_type = key_type;
+            assign.op2 = source;
+            assign.op2_type = OpType::Cv;
+            self.instructions.push(assign);
+            return Ok((source, OpType::Cv));
+        }
 
         match target {
             Expr::PropertyAccess {
@@ -1159,19 +1227,7 @@ impl Compiler {
                     .map(|_| InlineCache::empty())
                     .collect();
                 let may_access_globals = !func_compiler.global_vars.is_empty()
-                    || func_compiler.instructions.iter().any(|i| {
-                        matches!(
-                            i.opcode,
-                            OpCode::InitFcall
-                                | OpCode::InitDynamicCall
-                                | OpCode::InitUserCall
-                                | OpCode::CallUserFuncArray
-                                | OpCode::InitMethodCall
-                                | OpCode::InitStaticCall
-                                | OpCode::InitLateStaticCall
-                                | OpCode::Include
-                        )
-                    });
+                    || instructions_may_access_globals(&func_compiler.instructions);
                 let nested_generic_declarations =
                     std::mem::take(&mut func_compiler.generic_declarations);
                 let op_array = OpArray {
@@ -1554,16 +1610,26 @@ impl Compiler {
             }
             Stmt::ArrayAssign { var, index, expr } => {
                 // $var[index] = expr
-                let cv_idx = self.resolve_cv(var);
                 let (idx_op, idx_type) = self.compile_expr(index);
                 let (val_op, val_type) = self.compile_expr(expr);
-                let mut instr = Instruction::new(OpCode::AssignDim);
-                instr.op1_type = OpType::Cv;
-                instr.op1 = cv_idx;
-                instr.op2_type = idx_type;
-                instr.op2 = idx_op;
-                instr.result_type = val_type;
-                instr.result = val_op;
+                let mut instr = Instruction::new(if var == "GLOBALS" {
+                    OpCode::AssignGlobal
+                } else {
+                    OpCode::AssignDim
+                });
+                if var == "GLOBALS" {
+                    instr.op1_type = idx_type;
+                    instr.op1 = idx_op;
+                    instr.op2_type = val_type;
+                    instr.op2 = val_op;
+                } else {
+                    instr.op1_type = OpType::Cv;
+                    instr.op1 = self.resolve_cv(var);
+                    instr.op2_type = idx_type;
+                    instr.op2 = idx_op;
+                    instr.result_type = val_type;
+                    instr.result = val_op;
+                }
                 self.instructions.push(instr);
             }
             Stmt::NestedArrayAssign {
@@ -1793,6 +1859,16 @@ impl Compiler {
                                 root = array;
                             }
                             indices.reverse();
+                            if indices.len() == 1
+                                && matches!(root, Expr::Variable(name) if name == "GLOBALS")
+                            {
+                                let (key, key_type) = self.compile_expr(&indices[0]);
+                                let mut unset = Instruction::new(OpCode::UnsetGlobal);
+                                unset.op1 = key;
+                                unset.op1_type = key_type;
+                                self.instructions.push(unset);
+                                continue;
+                            }
                             let path = self.compile_mutable_array_path(root, &indices, false)?;
                             let &(leaf, leaf_type) = path.containers.last().unwrap();
                             let &(key, key_type) = path.keys.last().unwrap();
@@ -2272,19 +2348,7 @@ impl Compiler {
                         .map(|_| InlineCache::empty())
                         .collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
-                        || func_compiler.instructions.iter().any(|i| {
-                            matches!(
-                                i.opcode,
-                                OpCode::InitFcall
-                                    | OpCode::InitDynamicCall
-                                    | OpCode::InitUserCall
-                                | OpCode::CallUserFuncArray
-                                | OpCode::InitMethodCall
-                                | OpCode::InitStaticCall
-                                | OpCode::InitLateStaticCall
-                                | OpCode::Include
-                            )
-                        });
+                        || instructions_may_access_globals(&func_compiler.instructions);
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -2566,19 +2630,7 @@ impl Compiler {
                         .map(|_| InlineCache::empty())
                         .collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
-                        || func_compiler.instructions.iter().any(|i| {
-                            matches!(
-                                i.opcode,
-                                OpCode::InitFcall
-                                    | OpCode::InitDynamicCall
-                                    | OpCode::InitUserCall
-                                    | OpCode::CallUserFuncArray
-                                    | OpCode::InitMethodCall
-                                    | OpCode::InitStaticCall
-                                    | OpCode::InitLateStaticCall
-                                    | OpCode::Include
-                            )
-                        });
+                        || instructions_may_access_globals(&func_compiler.instructions);
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -2719,19 +2771,7 @@ impl Compiler {
                         .map(|_| InlineCache::empty())
                         .collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
-                        || func_compiler.instructions.iter().any(|i| {
-                            matches!(
-                                i.opcode,
-                                OpCode::InitFcall
-                                    | OpCode::InitDynamicCall
-                                    | OpCode::InitUserCall
-                                    | OpCode::CallUserFuncArray
-                                    | OpCode::InitMethodCall
-                                    | OpCode::InitStaticCall
-                                    | OpCode::InitLateStaticCall
-                                    | OpCode::Include
-                            )
-                        });
+                        || instructions_may_access_globals(&func_compiler.instructions);
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -2925,19 +2965,7 @@ impl Compiler {
                         .map(|_| InlineCache::empty())
                         .collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
-                        || func_compiler.instructions.iter().any(|i| {
-                            matches!(
-                                i.opcode,
-                                OpCode::InitFcall
-                                    | OpCode::InitDynamicCall
-                                    | OpCode::InitUserCall
-                                    | OpCode::CallUserFuncArray
-                                    | OpCode::InitMethodCall
-                                    | OpCode::InitStaticCall
-                                    | OpCode::InitLateStaticCall
-                                    | OpCode::Include
-                            )
-                        });
+                        || instructions_may_access_globals(&func_compiler.instructions);
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,

@@ -2524,6 +2524,15 @@ fn value_to_array_key(val: &Value) -> Result<ArrayKey, VmError> {
     }
 }
 
+/// `$GLOBALS` dimensions use the same key normalization as arrays, then map
+/// the canonical key onto the string-named global symbol table.
+fn value_to_global_name(val: &Value) -> Result<String, VmError> {
+    Ok(match value_to_array_key_ref(val)? {
+        ArrayKeyRef::Int(value) => value.to_string(),
+        ArrayKeyRef::String(value) => value.to_string(),
+    })
+}
+
 /// PHP == comparison for compound values. Object equality compares class and
 /// property state rather than allocation identity; revisiting an object pair
 /// keeps cyclic graphs finite. Scalar leaves retain PHP's ordinary loose

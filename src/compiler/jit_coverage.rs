@@ -138,7 +138,12 @@ pub(super) fn loop_miss_reason(
             | OpCode::GeneratorReturn
             | OpCode::Include
             | OpCode::BindGlobal
-            | OpCode::BindStatic => has_semantic_boundary = true,
+            | OpCode::BindStatic
+            | OpCode::FetchGlobal
+            | OpCode::AssignGlobal
+            | OpCode::UnsetGlobal
+            | OpCode::BindGlobalRef
+            | OpCode::AssignGlobalRef => has_semantic_boundary = true,
 
             OpCode::JmpZ
             | OpCode::JmpNZ

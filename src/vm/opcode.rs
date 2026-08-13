@@ -181,6 +181,18 @@ pub enum OpCode {
     /// Bind result(CV) by reference to op1[op2], promoting the array element
     /// to the same stable owned reference-cell representation.
     BindArrayDimRef = 151,
+    /// Read one entry from PHP's request-global symbol table. op1 is the
+    /// dimension key and result is the fetched value.
+    FetchGlobal = 152,
+    /// Assign one entry in PHP's request-global symbol table. op1 is the key
+    /// and op2 is the assigned value.
+    AssignGlobal = 153,
+    /// Remove one entry from PHP's request-global symbol table. op1 is the key.
+    UnsetGlobal = 154,
+    /// Bind result(CV) by reference to one request-global entry.
+    BindGlobalRef = 155,
+    /// Bind one request-global entry by reference to op2(CV).
+    AssignGlobalRef = 156,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.
