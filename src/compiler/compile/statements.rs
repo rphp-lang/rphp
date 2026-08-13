@@ -66,6 +66,45 @@ pub(super) enum ForeachArrayWriteback {
 }
 
 impl Compiler {
+    pub(super) fn compile_array_append_argument_reference(
+        &mut self,
+        target: &Expr,
+        indices: &[Expr],
+    ) -> Result<(u16, OpType), String> {
+        let (array, array_type, writeback) = self.compile_foreach_reference_source(target)?;
+        let keys: Vec<(u16, OpType)> = indices
+            .iter()
+            .map(|index| self.compile_expr(index))
+            .collect();
+        let appended = self.resolve_cv(&format!("\0array_append_argument_{}", self.next_cv));
+        let mut bind_append = Instruction::new(OpCode::BindArrayAppendRef);
+        bind_append.op1 = array;
+        bind_append.op1_type = array_type;
+        bind_append.result = appended;
+        bind_append.result_type = OpType::Cv;
+        self.instructions.push(bind_append);
+
+        // Publish the appended reference cell before the call. The cell then
+        // carries later callee mutations back to copied property/nested roots,
+        // including when the callee exits by throwing.
+        self.emit_foreach_reference_source_writeback(writeback, array, array_type);
+
+        let mut current = appended;
+        for (key, key_type) in keys {
+            let child = self.resolve_cv(&format!("\0array_append_dimension_{}", self.next_cv));
+            let mut bind_dimension = Instruction::new(OpCode::BindArrayDimRef);
+            bind_dimension.op1 = current;
+            bind_dimension.op1_type = OpType::Cv;
+            bind_dimension.op2 = key;
+            bind_dimension.op2_type = key_type;
+            bind_dimension.result = child;
+            bind_dimension.result_type = OpType::Cv;
+            self.instructions.push(bind_dimension);
+            current = child;
+        }
+        Ok((current, OpType::Cv))
+    }
+
     pub(super) fn compile_array_element_reference_source(
         &mut self,
         source: &Expr,
@@ -258,6 +297,15 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
+                if let Expr::ArrayAppendArgument { target, .. } = root {
+                    let (current, current_type) =
+                        self.compile_array_append_argument_reference(target, &reversed_indices)?;
+                    return Ok((
+                        current,
+                        current_type,
+                        ForeachArrayWriteback::Variable(current),
+                    ));
+                }
                 let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();

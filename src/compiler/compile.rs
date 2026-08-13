@@ -4019,20 +4019,9 @@ impl Compiler {
                                 CallArg::Positional(Expr::ArrayAppendArgument {
                                     target, ..
                                 }) if index < 64 && ref_args & (1u64 << index) != 0 => {
-                                    match self.compile_foreach_reference_source(target) {
-                                        Ok((array, array_type, writeback)) => {
-                                            let result = self.alloc_tmp();
-                                            let mut bind =
-                                                Instruction::new(OpCode::BindArrayAppendRef);
-                                            bind.op1 = array;
-                                            bind.op1_type = array_type;
-                                            bind.result = result;
-                                            bind.result_type = OpType::Tmp;
-                                            self.instructions.push(bind);
-                                            reference_writebacks
-                                                .push((writeback, array, array_type));
-                                            (result, OpType::Tmp, None)
-                                        }
+                                    match self.compile_array_append_argument_reference(target, &[])
+                                    {
+                                        Ok((result, result_type)) => (result, result_type, None),
                                         Err(error) => {
                                             self.deferred_error = Some(error);
                                             (0, OpType::Unused, None)
@@ -5797,6 +5786,37 @@ impl Compiler {
     ) {
         for (i, arg) in args.iter().enumerate() {
             match arg {
+                CallArg::Positional(Expr::ArrayAccess { array, index })
+                    if matches!(array.as_ref(), Expr::ArrayAppendArgument { .. })
+                        && (i >= 64 || ref_args & (1u64 << i) == 0) =>
+                {
+                    let Expr::ArrayAppendArgument { target, .. } = array.as_ref() else {
+                        unreachable!();
+                    };
+                    // PHP evaluates the lvalue base and following key before
+                    // raising the catchable read Error for this one-level
+                    // intermediate append argument. It does not append.
+                    let _ = self.compile_expr(target);
+                    let _ = self.compile_expr(index);
+                    let error = self.add_literal(crate::value::make_error_value(
+                        "Error",
+                        "Cannot use [] for reading",
+                    ));
+                    let mut throw = Instruction::new(OpCode::Throw);
+                    throw.op1 = error;
+                    throw.op1_type = OpType::Const;
+                    self.instructions.push(throw);
+
+                    let null = self.add_literal(Value::null());
+                    let mut send = Instruction::new(OpCode::SendVal);
+                    send.op1 = null;
+                    send.op1_type = OpType::Const;
+                    send.op2 = (i as u32 + cv_offset) as u16;
+                    if set_extended_value {
+                        send.extended_value = i as u32;
+                    }
+                    self.instructions.push(send);
+                }
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
                     let opcode = Self::positional_opcode(ref_args, i, op_type, use_var_ex);

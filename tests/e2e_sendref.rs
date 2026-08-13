@@ -361,6 +361,76 @@ fn test_positional_value_argument_still_rejects_an_empty_dimension_read() {
     assert_eq!(error, "Cannot use [] for reading on line 3");
 }
 
+#[test]
+fn test_positional_reference_argument_supports_intermediate_append_dimensions() {
+    let out = run_php(
+        r#"<?php
+function bind_fresh_slot(&$slot, $value) {
+    $slot = $value;
+}
+function first_key() {
+    global $items;
+    echo count($items), ":";
+    return "first";
+}
+function second_key() {
+    echo "second:";
+    return "second";
+}
+
+$items = [];
+bind_fresh_slot($items[][first_key()][second_key()], "nested");
+class NestedSlotHolder { public $items = []; }
+$holder = new NestedSlotHolder;
+bind_fresh_slot($holder->items[]["property"], "stored");
+echo $items[0]["first"]["second"], ":", $holder->items[0]["property"];
+"#,
+    );
+    assert_eq!(out, "0:second:nested:stored");
+}
+
+#[test]
+fn test_append_reference_writeback_survives_a_throwing_callee() {
+    let out = run_php(
+        r#"<?php
+function bind_then_throw(&$slot) {
+    $slot = "retained";
+    throw new Exception("stop");
+}
+class ThrowingSlotHolder { public $items = []; }
+$holder = new ThrowingSlotHolder;
+try {
+    bind_then_throw($holder->items[]);
+} catch (Exception $error) {
+    echo $holder->items[0];
+}
+"#,
+    );
+    assert_eq!(out, "retained");
+}
+
+#[test]
+fn test_intermediate_append_value_argument_raises_a_catchable_read_error() {
+    let out = run_php(
+        r#"<?php
+function observe_slot($value) {}
+function observed_key() {
+    echo "key:";
+    return "slot";
+}
+function call_observer($input) {
+    try {
+        observe_slot($input[][observed_key()]);
+    } catch (Error $error) {
+        echo $error->getMessage(), ":", count($input);
+    }
+}
+call_observer([]);
+"#,
+    );
+    assert_eq!(out, "key:Cannot use [] for reading:0");
+}
+
 // ============================================================
 // Method call by-ref (SendVarEx runtime check)
 // ============================================================
