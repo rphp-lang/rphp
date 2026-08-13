@@ -1376,6 +1376,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "settype" => 0b1,                         // arg 0
         "preg_match" | "preg_match_all" => 0b100, // arg 2 (&$matches)
         "preg_replace" | "preg_replace_callback" => 0b1_0000, // arg 4 (&$count)
+        "str_replace" => 0b1000,                  // arg 3 (&$count)
         "parse_str" => 0b10,                      // arg 1 (&$result)
         _ => 0,
     }

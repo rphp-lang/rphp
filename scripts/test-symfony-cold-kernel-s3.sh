@@ -195,6 +195,59 @@ run_concurrent_scripts() {
     printf '%s\n' "${second_status}" >"${prefix}-2.status"
 }
 
+compare_concurrent_captures() {
+    local phase="$1"
+    local reference_prefix="$2"
+    local candidate_prefix="$3"
+    local reference_manifest="${workspace}/${phase}-reference.captures"
+    local candidate_manifest="${workspace}/${phase}-candidate.captures"
+
+    : >"${reference_manifest}"
+    : >"${candidate_manifest}"
+    for index in 1 2; do
+        canonicalize_gate_output \
+            "${reference_prefix}-${index}.stdout" \
+            "${reference_prefix}-${index}.canonical"
+        canonicalize_gate_output \
+            "${candidate_prefix}-${index}.stdout" \
+            "${candidate_prefix}-${index}.canonical"
+
+        if [[ "$(cat "${reference_prefix}-${index}.status")" != "0" ]]; then
+            echo "error: ${phase} PHP process ${index} exited non-zero" >&2
+            exit 1
+        fi
+        if [[ "$(cat "${candidate_prefix}-${index}.status")" != "0" ]]; then
+            echo "error: ${phase} RPHP process ${index} exited non-zero" >&2
+            cat "${candidate_prefix}-${index}.stderr" >&2
+            exit 1
+        fi
+
+        printf '%s %s %s\n' \
+            "$(sha256_file "${reference_prefix}-${index}.status")" \
+            "$(sha256_file "${reference_prefix}-${index}.stderr")" \
+            "$(sha256_file "${reference_prefix}-${index}.canonical")" \
+            >>"${reference_manifest}"
+        printf '%s %s %s\n' \
+            "$(sha256_file "${candidate_prefix}-${index}.status")" \
+            "$(sha256_file "${candidate_prefix}-${index}.stderr")" \
+            "$(sha256_file "${candidate_prefix}-${index}.canonical")" \
+            >>"${candidate_manifest}"
+    done
+
+    LC_ALL=C sort -o "${reference_manifest}" "${reference_manifest}"
+    LC_ALL=C sort -o "${candidate_manifest}" "${candidate_manifest}"
+    if ! cmp -s "${reference_manifest}" "${candidate_manifest}"; then
+        echo "error: ${phase} concurrent capture multisets differ between PHP and RPHP" >&2
+        for index in 1 2; do
+            echo "--- PHP process ${index}" >&2
+            cat "${reference_prefix}-${index}.canonical" >&2
+            echo "--- RPHP process ${index}" >&2
+            cat "${candidate_prefix}-${index}.canonical" >&2
+        done
+        exit 1
+    fi
+}
+
 reference_version="$("${reference_php}" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION.".".PHP_RELEASE_VERSION;')"
 if [[ "${reference_version}" != 8.2.* ]]; then
     echo "error: Symfony S3 requires a PHP 8.2 reference oracle, got ${reference_version}" >&2
@@ -296,8 +349,11 @@ cp -R "${seed}/." "${reference_atomic}/"
 cp -R "${seed}/." "${candidate_atomic}/"
 run_concurrent_scripts "${reference_php}" "${reference_atomic}" s3-gate.php "${workspace}/atomic-reference"
 run_concurrent_scripts "${rphp}" "${candidate_atomic}" s3-gate.php "${workspace}/atomic-candidate"
+compare_concurrent_captures \
+    atomic \
+    "${workspace}/atomic-reference" \
+    "${workspace}/atomic-candidate"
 for index in 1 2; do
-    compare_capture "atomic-${index}" "${workspace}/atomic-reference-${index}" "${workspace}/atomic-candidate-${index}" yes
     assert_expected_requests "${workspace}/atomic-candidate-${index}.canonical"
 done
 assert_cache_shape "${reference_atomic}/var/cache/prod"

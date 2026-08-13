@@ -526,14 +526,16 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
     reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
     reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
-    reg!(
+    reg_ref!(
         "str_replace",
         fn_str_replace,
+        4,
         3,
-        3,
+        0b1000,
         "search",
         "replace",
-        "subject"
+        "subject",
+        "count"
     );
     reg!("addcslashes", fn_addcslashes, 2, 2, "string", "characters");
     reg_direct!(
@@ -4295,15 +4297,89 @@ fn fn_strtr(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
 fn fn_str_replace(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let search = arg_str!(ed, 0);
-    let replace = arg_str!(ed, 1);
-    let subject = arg_str!(ed, 2);
-    ret!(
-        rv,
-        Value::string(subject.replace(search.as_ref(), replace.as_ref()))
-    );
+    let search = arg!(ed, 0);
+    let replace = arg!(ed, 1);
+    let subject = arg!(ed, 2);
+
+    if search.as_array().is_none() && replace.as_array().is_some() {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string",
+        ));
+        return Ok(());
+    }
+
+    let replacement_values = replace.as_array().map(|array| {
+        array
+            .values()
+            .map(Value::echo_to_string)
+            .collect::<Vec<_>>()
+    });
+    let scalar_replacement = replace
+        .as_array()
+        .is_none()
+        .then(|| replace.echo_to_string());
+    let searches = if let Some(searches) = search.as_array() {
+        searches
+            .values()
+            .enumerate()
+            .map(|(index, search)| {
+                let replacement = replacement_values
+                    .as_ref()
+                    .and_then(|values| values.get(index))
+                    .cloned()
+                    .or_else(|| scalar_replacement.clone())
+                    .unwrap_or_default();
+                (search.echo_to_string(), replacement)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![(
+            search.echo_to_string(),
+            scalar_replacement.unwrap_or_default(),
+        )]
+    };
+
+    fn replace_all(subject: &str, searches: &[(String, String)], count: &mut usize) -> String {
+        let mut result = subject.to_string();
+        for (search, replacement) in searches {
+            if search.is_empty() {
+                continue;
+            }
+            *count += result.matches(search).count();
+            result = result.replace(search, replacement);
+        }
+        result
+    }
+
+    let mut count = 0;
+    let result = if let Some(subjects) = subject.as_array() {
+        let mut result = PhpArray::new();
+        for (key, subject) in subjects.iter() {
+            result.set(
+                key,
+                Value::string(replace_all(
+                    &subject.echo_to_string(),
+                    &searches,
+                    &mut count,
+                )),
+            );
+        }
+        Value::array(result)
+    } else {
+        Value::string(replace_all(
+            &subject.echo_to_string(),
+            &searches,
+            &mut count,
+        ))
+    };
+
+    // Writing the omitted optional frame slot is unobservable. When &$count
+    // was supplied, arg_mut! follows its reference, including Reference(Undef).
+    arg_mut!(ed, 3, Value::long(count as i64));
+    ret!(rv, result);
 }
 
 #[inline(always)]

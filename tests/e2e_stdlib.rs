@@ -194,6 +194,33 @@ fn test_e2e_str_replace_multiple() {
     );
 }
 
+#[test]
+fn str_replace_supports_array_pairs_subject_keys_and_count() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = str_replace(['/','+'], ['.','_'], 'a/b+c', $count);
+echo "$value|$count\n";
+$values = str_replace(['a','b'], [2 => 'X', 1 => 'Y'], ['k' => 'aba', -1 => 'cab'], $count);
+echo $values['k'], '|', $values[-1], '|', $count, "\n";
+echo str_replace(['a', 'b'], ['b', 'c'], 'a'), "\n";
+echo str_replace('', 'X', 'ab', $count), '|', $count;
+"#,
+        ),
+        "a.b_c|2\nXYX|cXY|5\nc\nab|0"
+    );
+}
+
+#[test]
+fn str_replace_rejects_array_replacement_for_scalar_search() {
+    assert_eq!(
+        run_php(
+            "<?php try { str_replace('a', ['X'], 'a'); } catch (TypeError $error) { echo $error->getMessage(); }"
+        ),
+        "str_replace(): Argument #2 ($replace) must be of type string when argument #1 ($search) is a string"
+    );
+}
+
 // === strtolower / strtoupper ===
 
 #[test]
