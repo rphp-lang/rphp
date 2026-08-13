@@ -174,6 +174,10 @@ mod inner {
     static DECLARED_PROPERTY_STORAGE_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
     static DECLARED_PROPERTY_STORAGE_REUSES: AtomicU64 = AtomicU64::new(0);
     static DECLARED_PROPERTY_STORAGE_RETURNS: AtomicU64 = AtomicU64::new(0);
+    static NEWOBJ_LITERAL_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+    static NEWOBJ_LITERAL_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+    static NEWOBJ_CLASS_NAME_MATERIALIZATIONS: AtomicU64 = AtomicU64::new(0);
+    static NEWOBJ_CLASS_HASH_LOOKUPS: AtomicU64 = AtomicU64::new(0);
     static OPCODE_COUNTS: [AtomicU64; OPCODE_KIND_COUNT] =
         [const { AtomicU64::new(0) }; OPCODE_KIND_COUNT];
 
@@ -250,6 +254,10 @@ mod inner {
         DECLARED_PROPERTY_STORAGE_ALLOCATIONS.store(0, Ordering::Relaxed);
         DECLARED_PROPERTY_STORAGE_REUSES.store(0, Ordering::Relaxed);
         DECLARED_PROPERTY_STORAGE_RETURNS.store(0, Ordering::Relaxed);
+        NEWOBJ_LITERAL_CACHE_HITS.store(0, Ordering::Relaxed);
+        NEWOBJ_LITERAL_CACHE_MISSES.store(0, Ordering::Relaxed);
+        NEWOBJ_CLASS_NAME_MATERIALIZATIONS.store(0, Ordering::Relaxed);
+        NEWOBJ_CLASS_HASH_LOOKUPS.store(0, Ordering::Relaxed);
         for counter in &OPCODE_COUNTS {
             counter.store(0, Ordering::Relaxed);
         }
@@ -531,6 +539,34 @@ mod inner {
     pub fn inc_declared_property_storage_return() {
         if enabled() {
             DECLARED_PROPERTY_STORAGE_RETURNS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_newobj_literal_cache_hit() {
+        if enabled() {
+            NEWOBJ_LITERAL_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_newobj_literal_cache_miss() {
+        if enabled() {
+            NEWOBJ_LITERAL_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_newobj_class_name_materialization() {
+        if enabled() {
+            NEWOBJ_CLASS_NAME_MATERIALIZATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_newobj_class_hash_lookup() {
+        if enabled() {
+            NEWOBJ_CLASS_HASH_LOOKUPS.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -989,6 +1025,27 @@ mod inner {
             "declared_property_storage_returns={}",
             DECLARED_PROPERTY_STORAGE_RETURNS.load(Ordering::Relaxed)
         );
+        let _ = writeln!(err, "-- new object resolution --");
+        let _ = writeln!(
+            err,
+            "newobj_literal_cache_hits={}",
+            NEWOBJ_LITERAL_CACHE_HITS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "newobj_literal_cache_misses={}",
+            NEWOBJ_LITERAL_CACHE_MISSES.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "newobj_class_name_materializations={}",
+            NEWOBJ_CLASS_NAME_MATERIALIZATIONS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "newobj_class_hash_lookups={}",
+            NEWOBJ_CLASS_HASH_LOOKUPS.load(Ordering::Relaxed)
+        );
 
         let mut opcodes = Vec::new();
         for (idx, counter) in OPCODE_COUNTS.iter().enumerate() {
@@ -1355,6 +1412,42 @@ pub fn inc_declared_property_storage_return() {
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_declared_property_storage_return() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_newobj_literal_cache_hit() {
+    inner::inc_newobj_literal_cache_hit();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_newobj_literal_cache_hit() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_newobj_literal_cache_miss() {
+    inner::inc_newobj_literal_cache_miss();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_newobj_literal_cache_miss() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_newobj_class_name_materialization() {
+    inner::inc_newobj_class_name_materialization();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_newobj_class_name_materialization() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_newobj_class_hash_lookup() {
+    inner::inc_newobj_class_hash_lookup();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_newobj_class_hash_lookup() {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

@@ -691,6 +691,28 @@ echo make(DynamicSecond::class, 'second')->value;
 }
 
 #[test]
+fn repeated_anonymous_new_reuses_the_registered_class_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$firstClass = null;
+$observed = [];
+for ($index = 0; $index < 3; $index++) {
+    $object = new class($index) {
+        public function __construct(public $value) {}
+    };
+    $class = get_class($object);
+    if ($firstClass === null) { $firstClass = $class; }
+    $observed[] = ($class === $firstClass ? 'same' : 'different') . ':' . $object->value;
+}
+echo implode('|', $observed);
+"#,
+        ),
+        "same:0|same:1|same:2"
+    );
+}
+
+#[test]
 fn nested_method_arguments_do_not_inherit_the_callers_pending_call_chain() {
     assert_eq!(
         run_php(

@@ -164,14 +164,45 @@ function load_for_new($class) {
     if ($class === 'ConstructedByLoader') { require __DIR__ . '/loaded.php'; }
 }
 spl_autoload_register('load_for_new');
-$object = new ConstructedByLoader();
-echo $object->value();
+$values = [];
+for ($index = 0; $index < 3; $index++) {
+    $object = new ConstructedByLoader();
+    $values[] = $object->value();
+}
+echo implode(',', $values);
 "#,
         &source_file,
         &source_dir,
     );
 
-    assert_eq!(output, "load:ConstructedByLoader|loaded");
+    assert_eq!(output, "load:ConstructedByLoader|loaded,loaded,loaded");
+}
+
+#[test]
+fn dynamic_new_owns_its_class_name_across_autoload_reentry() {
+    let dir = TempPhpDir::new();
+    let loaded_class = dir.write(
+        "DynamicLoaded.php",
+        "<?php class DynamicLoaded { public function value() { return 'loaded'; } } class ReplacementClass {}",
+    );
+    let source = format!(
+        r#"<?php
+class DynamicNameState {{ public static $value = 'DynamicLoaded'; }}
+$class = DynamicNameState::$value;
+spl_autoload_register(function($requested) {{
+    echo "load:$requested|";
+    DynamicNameState::$value = 'ReplacementClass';
+    require '{loaded_class}';
+}});
+$object = new $class();
+echo get_class($object) . '|' . DynamicNameState::$value . '|' . $object->value();
+"#,
+    );
+
+    assert_eq!(
+        run_php(&source),
+        "load:DynamicLoaded|DynamicLoaded|ReplacementClass|loaded"
+    );
 }
 
 #[test]
@@ -472,7 +503,8 @@ class OriginalClass {
     public static function value() { return 'method'; }
 }
 var_dump(class_alias('OriginalClass', 'AliasClass'));
-$object = new AliasClass();
+$object = null;
+for ($index = 0; $index < 3; $index++) { $object = new AliasClass(); }
 echo get_class($object) . '|';
 var_dump($object instanceof OriginalClass);
 var_dump($object instanceof AliasClass);

@@ -168,30 +168,54 @@ fn op_new_obj<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    // SAFETY: NewObj operands and result are compiler-owned slots in this live
-    // frame, and opline belongs to op_array's stable instruction allocation.
-    let (raw_name, ip, result_ptr) = unsafe {
+    // SAFETY: The compiler guarantees that this live frame owns NewObj's
+    // operand/result slots and that opline addresses op_array's stable storage.
+    let (ip, result_ptr, raw_name) = unsafe {
         (
-            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
             (*frame).get_op_mut(opline.result as u32, opline.result_type),
+            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+                .as_str()
+                .unwrap_or(""),
         )
     };
+    let ic = &op_array.cache[ip];
     let dynamic_static_scope = opline._pad & NEW_FLAG_DYNAMIC_STATIC_SCOPE != 0;
     let dynamic_class_name = opline._pad & NEW_FLAG_DYNAMIC_CLASS_NAME != 0;
-    let name = if dynamic_static_scope {
-        resolve_static_call_class(eg, frame, &raw_name, true).ok_or_else(|| {
-            VmError::Fatal(format!("Cannot access {raw_name} when no class scope is active"))
-        })?
-    } else {
-        raw_name
-    };
-    let ic = &op_array.cache[ip];
+    let literal_cache_hit = !dynamic_static_scope
+        && !dynamic_class_name
+        && opline.op1_type == OpType::Const
+        && ic.class_id != 0;
+    if literal_cache_hit {
+        stats::inc_newobj_literal_cache_hit();
+    } else if !dynamic_static_scope && !dynamic_class_name && opline.op1_type == OpType::Const {
+        stats::inc_newobj_literal_cache_miss();
+    }
 
-    if eg.find_class(&name).is_none()
+    let owned_name: String;
+    let name = if literal_cache_hit {
+        // Const operands live in the immutable OpArray, so the warmed cache
+        // can borrow its spelling without allocating or risking re-entry.
+        raw_name
+    } else {
+        // Cold literal, late-static and runtime class expressions still own
+        // their evaluated name before autoload can re-enter the VM.
+        stats::inc_newobj_class_name_materialization();
+        owned_name = if dynamic_static_scope {
+            resolve_static_call_class(eg, frame, raw_name, true).ok_or_else(|| {
+                VmError::Fatal(format!("Cannot access {raw_name} when no class scope is active"))
+            })?
+        } else {
+            raw_name.to_string()
+        };
+        owned_name.as_str()
+    };
+
+    if !literal_cache_hit {
+        stats::inc_newobj_class_hash_lookup();
+    }
+    if !literal_cache_hit
+        && eg.find_class(&name).is_none()
         && let Some(class_def) = eg.take_pending_anonymous_class(&name)
     {
         let dependencies = class_def
@@ -202,6 +226,7 @@ fn op_new_obj<'a>(
             .cloned()
             .collect::<Vec<_>>();
         for dependency in dependencies {
+            stats::inc_newobj_class_hash_lookup();
             if eg.find_class(&dependency).is_none()
                 && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?
             {
@@ -222,7 +247,10 @@ fn op_new_obj<'a>(
     }
 
     if (dynamic_static_scope || dynamic_class_name || ic.class_id == 0)
-        && eg.find_class(&name).is_none()
+        && {
+            stats::inc_newobj_class_hash_lookup();
+            eg.find_class(&name).is_none()
+        }
     {
         let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &name)?;
         if let Some(exception) = eg.exception.take() {
@@ -240,9 +268,10 @@ fn op_new_obj<'a>(
     // Literal object creation is monomorphic in ordinary PHP code. After the
     // first canonical name lookup, use the stable numeric class index instead
     // of hashing the same class name on every allocation.
-    let class_def = if !dynamic_static_scope && !dynamic_class_name && ic.class_id != 0 {
+    let class_def = if literal_cache_hit {
         eg.class_by_id(ic.class_id)
     } else {
+        stats::inc_newobj_class_hash_lookup();
         eg.find_class(&name)
     };
 
