@@ -1165,6 +1165,9 @@ impl Parser {
             Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
             | Expr::FirstClassFunctionCallable(_) => {}
+            Expr::ArrayAppendArgument { target, .. } => {
+                Self::collect_free_vars(target, bound, out);
+            }
             Expr::DynamicClassConstant {
                 class, constant, ..
             } => {

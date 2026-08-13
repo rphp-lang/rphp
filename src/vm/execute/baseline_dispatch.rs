@@ -1731,15 +1731,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     }
-                    let argument = if opline.op1_type == OpType::Cv {
-                        let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                        let raw_ptr = base.add(opline.op1 as usize);
-                        materialize_reference_alias(frame, raw_ptr)
+                    let caller_value = if opline.op1_type == OpType::Cv {
+                        (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
                     } else {
-                        let caller_value =
-                            (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
-                        Value::reference(caller_value)
+                        (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                     };
+                    let argument = materialize_reference_alias(frame, caller_value);
                     let call = (*frame).call;
                     debug_assert!(!call.is_null());
                     let arg_slot = (*call).cv_mut(opline.op2 as u32);
@@ -2771,7 +2768,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let array = (&mut *array_ptr).as_array_mut().ok_or_else(|| {
                         VmError::Fatal("Cannot append a reference to a non-array".into())
                     })?;
-                    let target = (*frame).cv_mut(opline.result as u32) as *mut Value;
+                    let target =
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type);
                     frame_slot_set(frame, target, Value::owned_reference(Value::null()));
                     array.push((*target).clone_owned_reference_alias());
                 }

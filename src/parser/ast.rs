@@ -112,6 +112,13 @@ pub enum Expr {
         array: Box<Expr>,
         index: Box<Expr>,
     },
+    /// A positional call argument ending in `[]`. The compiler may bind the
+    /// appended slot only when the statically resolved parameter is by
+    /// reference; every ordinary value context retains PHP's read error.
+    ArrayAppendArgument {
+        target: Box<Expr>,
+        line: usize,
+    },
     Cast {
         // (int)$x, (string)$x, etc.
         cast_type: CastType,
@@ -329,6 +336,7 @@ impl Expr {
             Expr::ArrayAccess { array, index } => {
                 array.contains_yield() || index.contains_yield()
             }
+            Expr::ArrayAppendArgument { target, .. } => target.contains_yield(),
             Expr::DynamicPropertyAccess {
                 object, property, ..
             } => object.contains_yield() || property.contains_yield(),

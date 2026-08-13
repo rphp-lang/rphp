@@ -284,14 +284,18 @@ impl Compiler {
         &mut self,
         writeback: ForeachArrayWriteback,
         array: u16,
+        array_type: OpType,
     ) {
         match writeback {
             ForeachArrayWriteback::Variable(cv) => {
+                if array_type == OpType::Cv && array == cv {
+                    return;
+                }
                 let mut assign = Instruction::new(OpCode::AssignCv);
                 assign.op1 = cv;
                 assign.op1_type = OpType::Cv;
                 assign.op2 = array;
-                assign.op2_type = OpType::Tmp;
+                assign.op2_type = array_type;
                 self.instructions.push(assign);
             }
             ForeachArrayWriteback::Global { key, key_type } => {
@@ -299,7 +303,7 @@ impl Compiler {
                 assign.op1 = key;
                 assign.op1_type = key_type;
                 assign.op2 = array;
-                assign.op2_type = OpType::Tmp;
+                assign.op2_type = array_type;
                 self.instructions.push(assign);
             }
             ForeachArrayWriteback::ObjectProperty {
@@ -314,7 +318,7 @@ impl Compiler {
                 assign.op2 = property;
                 assign.op2_type = property_type;
                 assign.result = array;
-                assign.result_type = OpType::Tmp;
+                assign.result_type = array_type;
                 self.instructions.push(assign);
             }
             ForeachArrayWriteback::StaticProperty {
@@ -332,7 +336,7 @@ impl Compiler {
                 assign.op2 = property;
                 assign.op2_type = OpType::Const;
                 assign.result = array;
-                assign.result_type = OpType::Tmp;
+                assign.result_type = array_type;
                 self.instructions.push(assign);
             }
             ForeachArrayWriteback::Array(path) => {
@@ -344,7 +348,7 @@ impl Compiler {
                 assign.op2 = key;
                 assign.op2_type = key_type;
                 assign.result = array;
-                assign.result_type = OpType::Tmp;
+                assign.result_type = array_type;
                 self.instructions.push(assign);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
@@ -1174,7 +1178,7 @@ impl Compiler {
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
                 self.instructions.push(operation);
-                self.emit_foreach_reference_source_writeback(writeback, result);
+                self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
             }
             Stmt::If {
                 condition,
@@ -1736,7 +1740,7 @@ impl Compiler {
                 append.op2 = value;
                 append.op2_type = value_type;
                 self.instructions.push(append);
-                self.emit_foreach_reference_source_writeback(writeback, array);
+                self.emit_foreach_reference_source_writeback(writeback, array, array_type);
             }
             Stmt::BindArrayAppendReference { var, target } => {
                 let (array, array_type, writeback) =
@@ -1748,7 +1752,7 @@ impl Compiler {
                 bind.result = cv;
                 bind.result_type = OpType::Cv;
                 self.instructions.push(bind);
-                self.emit_foreach_reference_source_writeback(writeback, array);
+                self.emit_foreach_reference_source_writeback(writeback, array, array_type);
             }
             Stmt::Foreach {
                 array,
@@ -1886,7 +1890,11 @@ impl Compiler {
                     flush.result = val_cv;
                     flush.result_type = OpType::Cv;
                     self.instructions.push(flush);
-                    self.emit_foreach_reference_source_writeback(writeback, arr_copy_tmp);
+                    self.emit_foreach_reference_source_writeback(
+                        writeback,
+                        arr_copy_tmp,
+                        OpType::Tmp,
+                    );
                 }
 
                 // Patch jumps

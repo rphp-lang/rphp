@@ -40,6 +40,21 @@ impl Parser {
         result
     }
 
+    fn parse_positional_call_argument(&mut self) -> Result<Expr, String> {
+        let target = self.parse_empty_dimension_target_prefix()?;
+        if !self.is_empty_array_dimension_suffix() {
+            return Ok(target);
+        }
+
+        let bracket_line = self.expect_lbracket()?;
+        self.expect(&Token::RBracket)?;
+        let line = self.last_primary_line.unwrap_or(bracket_line);
+        self.parse_postfix_chain(Expr::ArrayAppendArgument {
+            target: Box::new(target),
+            line,
+        })
+    }
+
     /// Parse comma-separated call arguments supporting both positional and
     /// named (PHP 8 `name: expr`) arguments.  The opening `(` must already
     /// be consumed; this method consumes everything up to and including the
@@ -156,7 +171,7 @@ impl Parser {
                     }
                     break;
                 }
-                let expr = self.parse_expr()?;
+                let expr = self.parse_positional_call_argument()?;
                 args.push(CallArg::Positional(expr));
                 if self.peek() == Token::Comma {
                     self.advance();

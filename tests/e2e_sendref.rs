@@ -1,6 +1,9 @@
 /// Tests for pass-by-reference (SendRef) — both user functions and stdlib.
 mod common;
 use common::run_php;
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
 
 // ============================================================
 // User function &$param tests
@@ -321,6 +324,41 @@ echo count($a) . "," . $a[0] . "," . $a[2];
 "#,
     );
     assert_eq!(out, "3,10,30");
+}
+
+#[test]
+fn test_positional_reference_argument_can_append_a_fresh_array_slot() {
+    let out = run_php(
+        r#"<?php
+function bind_fresh_slot(&$slot, $value) {
+    $slot = $value;
+}
+
+$values = [];
+$nested = ["slots" => []];
+class SlotHolder { public $slots = []; }
+$holder = new SlotHolder;
+bind_fresh_slot($values[], "first");
+bind_fresh_slot($values[], "second");
+bind_fresh_slot($nested["slots"][], "nested");
+bind_fresh_slot($holder->slots[], "property");
+echo count($values), ":", $values[0], "|", $values[1],
+     ":", $nested["slots"][0], ":", $holder->slots[0];
+"#,
+    );
+    assert_eq!(out, "2:first|second:nested:property");
+}
+
+#[test]
+fn test_positional_value_argument_still_rejects_an_empty_dimension_read() {
+    let source = "<?php\nfunction observe($value) {}\nobserve($values[]);";
+    let tokens = Lexer::new(source).tokenize().expect("source must lex");
+    let statements = Parser::new(tokens).parse().expect("source must parse");
+    let error = match Compiler::new().compile(&statements) {
+        Ok(_) => panic!("value argument must not turn [] into an append target"),
+        Err(error) => error,
+    };
+    assert_eq!(error, "Cannot use [] for reading on line 3");
 }
 
 // ============================================================

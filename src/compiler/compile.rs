@@ -3244,6 +3244,11 @@ impl Compiler {
                 let null = self.add_literal(Value::null());
                 (null, OpType::Const)
             }
+            Expr::ArrayAppendArgument { line, .. } => {
+                self.deferred_error = Some(self.goto_error("Cannot use [] for reading", *line));
+                let null = self.add_literal(Value::null());
+                (null, OpType::Const)
+            }
             Expr::BinaryOp { op, left, right } => {
                 // Short-circuit logical operators
                 match op {
@@ -3487,7 +3492,7 @@ impl Compiler {
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
                 self.instructions.push(operation);
-                self.emit_foreach_reference_source_writeback(writeback, result);
+                self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
                 (result, OpType::Tmp)
             }
             Expr::PostInc(name) => {
@@ -3544,7 +3549,7 @@ impl Compiler {
                 operation.result = updated;
                 operation.result_type = OpType::Tmp;
                 self.instructions.push(operation);
-                self.emit_foreach_reference_source_writeback(writeback, updated);
+                self.emit_foreach_reference_source_writeback(writeback, updated, OpType::Tmp);
                 (original, OpType::Tmp)
             }
             Expr::PreInc(name) => {
@@ -3593,7 +3598,7 @@ impl Compiler {
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
                 self.instructions.push(operation);
-                self.emit_foreach_reference_source_writeback(writeback, result);
+                self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
                 (result, OpType::Tmp)
             }
             Expr::Ternary {
@@ -3996,6 +4001,7 @@ impl Compiler {
                             arg,
                             CallArg::Positional(
                                 Expr::ArrayAccess { .. }
+                                    | Expr::ArrayAppendArgument { .. }
                                     | Expr::PropertyAccess {
                                         nullsafe: false,
                                         ..
@@ -4010,12 +4016,35 @@ impl Compiler {
                         args.iter()
                             .enumerate()
                             .map(|(index, arg)| match arg {
+                                CallArg::Positional(Expr::ArrayAppendArgument {
+                                    target, ..
+                                }) if index < 64 && ref_args & (1u64 << index) != 0 => {
+                                    match self.compile_foreach_reference_source(target) {
+                                        Ok((array, array_type, writeback)) => {
+                                            let result = self.alloc_tmp();
+                                            let mut bind =
+                                                Instruction::new(OpCode::BindArrayAppendRef);
+                                            bind.op1 = array;
+                                            bind.op1_type = array_type;
+                                            bind.result = result;
+                                            bind.result_type = OpType::Tmp;
+                                            self.instructions.push(bind);
+                                            reference_writebacks
+                                                .push((writeback, array, array_type));
+                                            (result, OpType::Tmp, None)
+                                        }
+                                        Err(error) => {
+                                            self.deferred_error = Some(error);
+                                            (0, OpType::Unused, None)
+                                        }
+                                    }
+                                }
                                 CallArg::Positional(expr)
                                     if index < 64 && ref_args & (1u64 << index) != 0 =>
                                 {
                                     match self.compile_foreach_reference_source(expr) {
                                         Ok((op, op_type, writeback)) => {
-                                            reference_writebacks.push((writeback, op));
+                                            reference_writebacks.push((writeback, op, op_type));
                                             (op, op_type, None)
                                         }
                                         Err(error) => {
@@ -4093,8 +4122,8 @@ impl Compiler {
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
-                for (writeback, value) in reference_writebacks {
-                    self.emit_foreach_reference_source_writeback(writeback, value);
+                for (writeback, value, value_type) in reference_writebacks {
+                    self.emit_foreach_reference_source_writeback(writeback, value, value_type);
                 }
 
                 (tmp, OpType::Tmp)
@@ -5419,7 +5448,7 @@ impl Compiler {
                 append.op2_type = assigned_type;
                 self.instructions.push(append);
                 if let Some((_, _, writeback)) = mutable_source {
-                    self.emit_foreach_reference_source_writeback(writeback, array);
+                    self.emit_foreach_reference_source_writeback(writeback, array, array_type);
                 }
                 (assigned, assigned_type)
             }
@@ -6147,7 +6176,11 @@ impl Compiler {
                         append.op2 = fetch_tmp;
                         append.op2_type = OpType::Tmp;
                         self.instructions.push(append);
-                        self.emit_foreach_reference_source_writeback(writeback, target);
+                        self.emit_foreach_reference_source_writeback(
+                            writeback,
+                            target,
+                            target_type,
+                        );
                     }
                     idx += 1;
                 }
