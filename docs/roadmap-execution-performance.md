@@ -248,20 +248,21 @@ A milestone may advance only when:
 4. Remove the superseded special mechanism and remeasure after convergence.
 5. Repeat by execution-weighted impact; keep new coroutine expansion deferred.
 
-Completion checkpoint (2026-08-13): the profiled declared-object M1/M5 slice is
-accepted. Common one-to-four-slot objects now reuse bounded thread-local
-property storage while their identity-bearing owner and PHP lifecycle remain
-canonical. Exact output, clone/destructor/reference/dynamic-property/Reflection
-tests, allocation telemetry, the full feature matrix and dual-architecture
-target/corpus/holdout gates pass against the integrated compatibility baseline.
-The million-object target reduces property-storage allocations from a
-source-accounted 1,000,000 to 2 and improves by 15.87% on ARM64 and 2.69% on
-x86-64; median ARM64 peak RSS is unchanged. Detailed method, distributions and
-semantic boundaries are in
-[`performance-declared-object-lifecycle.md`](performance-declared-object-lifecycle.md).
-The next goal returns to scorecard/profile selection; removing the remaining
-identity-bearing owner allocation requires separate evidence and a broader
-identity/destructor design.
+Completion checkpoint (2026-08-14): the profiled literal-`NewObj` M1/M5 slice
+is accepted. After its first canonical resolution, a monomorphic literal site
+borrows its immutable spelling and resolves class metadata by the existing
+stable numeric identity, eliminating steady-state name allocation and hash
+lookup. Dynamic and late-static expressions, aliases, anonymous classes,
+autoload re-entry, constructors, generics and errors remain canonical. Exact
+output, focused semantics, telemetry, the full feature matrix and
+dual-architecture target/corpus/holdout gates pass. The million-object target
+improves by 31.08% on ARM64 and 25.05% on x86-64; its warmed 999,999 executions
+materialize zero names and perform zero class hash lookups. Detailed method,
+distributions and boundaries are in
+[`performance-literal-newobj-resolution.md`](performance-literal-newobj-resolution.md).
+The next goal returns to scorecard/profile selection. Removing the remaining
+identity-bearing owner allocation still requires separate evidence and a
+broader identity/destructor design.
 
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.
