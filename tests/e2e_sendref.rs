@@ -108,6 +108,20 @@ echo $a;
 }
 
 #[test]
+fn reassigned_reference_source_uses_its_value_in_scalar_operations() {
+    let out = run_php(
+        r#"<?php
+function expose(&$value) {}
+$value = 1;
+expose($value);
+$value = 'stable';
+echo $value . '-ok';
+"#,
+    );
+    assert_eq!(out, "stable-ok");
+}
+
+#[test]
 fn array_and_property_targets_bind_to_the_source_variable() {
     let out = run_php(
         r#"<?php

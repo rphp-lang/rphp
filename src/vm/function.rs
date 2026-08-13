@@ -1351,6 +1351,9 @@ impl FunctionCommon {
 pub struct UserFunction {
     pub common: FunctionCommon,
     pub op_array: OpArray,
+    /// CVs whose runtime representation may remain a PHP reference wrapper.
+    /// Exact scalar propagation must keep their reads on dereferencing paths.
+    pub reference_cvs: Vec<u32>,
     pub long_property_plan: Option<Box<LongPropertyMethodPlan>>,
     pub property_getter_plan: Option<PropertyGetterMethodPlan>,
     pub property_init_plan: Option<Box<PropertyInitMethodPlan>>,

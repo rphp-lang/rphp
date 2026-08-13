@@ -213,6 +213,25 @@ echo $accumulate(3) . '|' . $accumulate(5);
 }
 
 #[test]
+fn reference_capture_and_static_local_keep_distinct_persistent_cells() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$trail = 'seed';
+$advance = function() use (&$trail) {
+    static $step = 0;
+    $step++;
+    $trail = $step . '/' . $trail;
+    return $trail;
+};
+echo $advance() . '|' . $advance() . '|' . $advance();
+"#
+        ),
+        "1/seed|2/1/seed|3/2/1/seed"
+    );
+}
+
+#[test]
 fn test_closure_multiple_use_vars() {
     assert_eq!(
         run_php(

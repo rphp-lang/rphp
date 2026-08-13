@@ -566,6 +566,7 @@ fn operand_scalar_type(
 /// native-code tier will receive.
 fn propagate_declared_scalar_types(
     op_array: &mut OpArray,
+    reference_cvs: &[u32],
     this_offset: u32,
     param_type_hints: &[ParamTypeHint],
     ref_args: u64,
@@ -582,6 +583,15 @@ fn propagate_declared_scalar_types(
     let mut directly_mutated_params = vec![false; param_type_hints.len()];
     let mut maybe_aliased_params = vec![false; param_type_hints.len()];
     let mut aliased_cvs = vec![false; op_array.num_cvs as usize];
+    let mut reference_wrapped_cvs = vec![false; op_array.num_cvs as usize];
+    for &cv in reference_cvs {
+        if let Some(aliased) = aliased_cvs.get_mut(cv as usize) {
+            *aliased = true;
+        }
+        if let Some(reference) = reference_wrapped_cvs.get_mut(cv as usize) {
+            *reference = true;
+        }
+    }
     let straight_line = !op_array.instructions.iter().any(|instruction| {
         matches!(
             instruction.opcode,
@@ -616,8 +626,20 @@ fn propagate_declared_scalar_types(
                 if let Some(aliased) = aliased_cvs.get_mut(instruction.op1 as usize) {
                     *aliased = true;
                 }
+                if let Some(reference) = reference_wrapped_cvs.get_mut(instruction.op1 as usize) {
+                    *reference = true;
+                }
             }
-            OpCode::SendRef | OpCode::SendVarEx if instruction.op1_type == OpType::Cv => {
+            OpCode::SendRef if instruction.op1_type == OpType::Cv => {
+                mark_param(&mut maybe_aliased_params, instruction.op1);
+                if let Some(aliased) = aliased_cvs.get_mut(instruction.op1 as usize) {
+                    *aliased = true;
+                }
+                if let Some(reference) = reference_wrapped_cvs.get_mut(instruction.op1 as usize) {
+                    *reference = true;
+                }
+            }
+            OpCode::SendVarEx if instruction.op1_type == OpType::Cv => {
                 mark_param(&mut maybe_aliased_params, instruction.op1);
                 if let Some(aliased) = aliased_cvs.get_mut(instruction.op1 as usize) {
                     *aliased = true;
@@ -633,6 +655,9 @@ fn propagate_declared_scalar_types(
             let cv = this_offset as usize + index;
             if let Some(aliased) = aliased_cvs.get_mut(cv) {
                 *aliased = true;
+            }
+            if let Some(reference) = reference_wrapped_cvs.get_mut(cv) {
+                *reference = true;
             }
         }
         if !directly_mutated_params[index]
@@ -781,8 +806,20 @@ fn propagate_declared_scalar_types(
             _ => {}
         }
 
-        let left = operand_scalar_type(op_array, &slots, instruction.op1_type, instruction.op1);
-        let right = operand_scalar_type(op_array, &slots, instruction.op2_type, instruction.op2);
+        let exact_operand_type = |op_type: OpType, operand: u16| {
+            if op_type == OpType::Cv
+                && reference_wrapped_cvs
+                    .get(operand as usize)
+                    .copied()
+                    .unwrap_or(false)
+            {
+                KnownScalarType::Unknown
+            } else {
+                operand_scalar_type(op_array, &slots, op_type, operand)
+            }
+        };
+        let left = exact_operand_type(instruction.op1_type, instruction.op1);
+        let right = exact_operand_type(instruction.op2_type, instruction.op2);
         let argument_receiver_class =
             if matches!(instruction.op1_type, OpType::Cv | OpType::Tmp | OpType::Var) {
                 receiver_classes
@@ -854,6 +891,16 @@ fn propagate_declared_scalar_types(
             }
             if let Some(slot) = receiver_classes.get_mut(instruction.op1 as usize) {
                 *slot = None;
+            }
+            if let Some(reference) = reference_wrapped_cvs.get_mut(instruction.op1 as usize) {
+                *reference = true;
+            }
+        }
+        if matches!(instruction.opcode, OpCode::SendNamed | OpCode::SendUser)
+            && instruction.op1_type == OpType::Cv
+        {
+            if let Some(reference) = reference_wrapped_cvs.get_mut(instruction.op1 as usize) {
+                *reference = true;
             }
         }
         let mut result = KnownScalarType::Unknown;
@@ -2173,6 +2220,7 @@ impl Compiler {
             let signature = &function.common.sig;
             propagate_declared_scalar_types(
                 &mut function.op_array,
+                &function.reference_cvs,
                 signature.this_offset,
                 &signature.param_type_hints,
                 signature.ref_args,
@@ -2191,6 +2239,7 @@ impl Compiler {
                 let signature = &method.common.sig;
                 propagate_declared_scalar_types(
                     &mut method.op_array,
+                    &method.reference_cvs,
                     signature.this_offset,
                     &signature.param_type_hints,
                     signature.ref_args,
@@ -4386,8 +4435,12 @@ impl Compiler {
                     }
                 };
                 cp.return_type_hint = self.convert_type_hint(return_type);
-                for (v, _) in use_vars {
-                    func_compiler.resolve_cv(v);
+                let mut closure_reference_cvs = Vec::new();
+                for (v, by_reference) in use_vars {
+                    let cv = func_compiler.resolve_cv(v);
+                    if *by_reference {
+                        closure_reference_cvs.push(cv as u32);
+                    }
                 }
                 for s in body {
                     if let Err(e) = func_compiler.compile_stmt(s) {
@@ -4455,6 +4508,7 @@ impl Compiler {
                     cp.param_names,
                     cp.return_type_hint,
                 );
+                user_func.reference_cvs = closure_reference_cvs;
                 user_func.common.sig.returns_reference = *returns_by_ref;
 
                 self.functions.extend(func_compiler.functions);
