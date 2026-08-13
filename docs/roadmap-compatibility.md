@@ -49,14 +49,17 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `f1fb5e9` against
-php-src 8.2.33 `651db3e`: 974 of 4,345 discovered `Zend/tests` and `tests/lang`
-cases pass, with no lost pass relative to `9db688b`. The latest semantic slice
-connects direct `$GLOBALS` dimensions to the global symbol table and admits four
-additional upstream cases. Undefined-variable diagnostics, variable-variable
-syntax, exact by-reference errors and invalid `$GLOBALS` restrictions remain
-the next visible boundaries of that family; the broader adoption goal remains
-active until the selected PHP 8.2 contract corpus converges.
+The current pinned PHP 8.2 differential baseline is RPHP `2621cc3` against
+php-src 8.2.33 `651db3e`: 986 of 4,345 discovered `Zend/tests` and `tests/lang`
+cases pass, with no lost pass relative to `f1fb5e9`. The latest semantic slice
+distinguishes the case-sensitive `$GLOBALS` root, materializes by-value symbol
+table snapshots, preserves nested dimension writeback, and enforces PHP 8.2's
+root mutation, capture and positional reference-argument restrictions. It adds
+12 exact upstream passes. Empty-dimension diagnostics, references inside
+destructuring, variable-variable syntax, generic undefined-variable warnings
+and other reference-call forms remain visible boundaries of this family; the
+broader adoption goal remains active until the selected PHP 8.2 contract corpus
+converges.
 
 ## Measurement system
 

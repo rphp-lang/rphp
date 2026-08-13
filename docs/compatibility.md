@@ -12,33 +12,33 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`f1fb5e9575b306375a1f01505dd92e6559f844a8`, using the same runner commit. The
+`2621cc3f7471d3dace4bced6b225acf04423bf86`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 886 | 2,875 | 65 | 1 | 221 | 1 | 2 | 23.558% |
+| `Zend/tests` | 898 | 2,863 | 65 | 1 | 221 | 1 | 2 | 23.877% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **974** | **3,055** | **75** | **1** | **237** | **1** | **2** | **24.175%** |
+| **Combined** | **986** | **3,043** | **75** | **1** | **237** | **1** | **2** | **24.473%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 974 / 4,345, or **22.417%**; including crashes and timeouts in the attempted
-denominator gives **24.157%**. These numbers are intentionally pre-alpha and do
+is 986 / 4,345, or **22.693%**; including crashes and timeouts in the attempted
+denominator gives **24.454%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
 language coverage. Of 4,032 attempted cases, six fail during `SKIPIF` before
-the test body, 712 are rejected in the observed parse/compile stage, and 3,314
-(**82.192%**) execute the test's `FILE` section past that stage. This is not a
+the test body, 711 are rejected in the observed parse/compile stage, and 3,315
+(**82.217%**) execute the test's `FILE` section past that stage. This is not a
 second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,201 runtime failures, 1,139 output mismatches,
-585 parse failures, 127 compile failures and six failed `SKIPIF` evaluations.
+The largest failure groups are 1,200 runtime failures, 1,129 output mismatches,
+585 parse failures, 126 compile failures and six failed `SKIPIF` evaluations.
 Two cases terminate by signal and one times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
@@ -51,11 +51,41 @@ sections, zero timeouts and zero crashes. Five representative cases also pass
 through php-src's official `run-tests.php`. Two independent RPHP executions
 with a matching native PHP 8.2.33 runner produced byte-identical manifests with
 SHA-256
-`de25bb5e2171cb6b9f7c70ca0d959c65798ab6c8855d19c57a94f8e12d6d9944`
+`dcf4c93a32de09ea4ef8db69432b2f69d8f9b713471a1d276be162cc46348e16`
 and byte-identical summaries with SHA-256
-`e53892be6ffdd84e8929208ea8c088c861e8eaaa1b32348b7cda3b82bc639b66`.
+`014c0826c54f90eed84190604e67e08724432f57ebc9cc8cfeb859cff00fd41a`.
 
-Relative to the retained `9db688b` baseline, this checkpoint adds four exact
+Relative to the retained `f1fb5e9` baseline, this checkpoint adds 12 exact
+passes without losing a previous pass or adding a crash or timeout. PHP 8.2's
+case-sensitive `$GLOBALS` root is now distinct from an ordinary `$globals`
+local. Reading the root materializes a by-value snapshot of the active global
+symbol table, while direct and nested dimensions retain writeback to that
+table. Direct root assignment, append, compound/coalescing assignment,
+increment, destructuring, `foreach`, `unset`, reference acquisition and closure
+capture fail at PHP's compile stage, including code in a constant-dead branch.
+Passing the root to a positional user-function reference parameter raises the
+catchable PHP 8.2 `Error`, including calls compiled before the function
+declaration.
+
+The exact additions are `Zend/tests/array_add_indirect.phpt`,
+`Zend/tests/closure_use_auto_global.phpt`, and ten cases under
+`Zend/tests/restrict_globals`: `invalid_append`, `invalid_assign`,
+`invalid_assign_list`, `invalid_assign_op`, `invalid_assign_ref_lhs`,
+`invalid_assign_ref_rhs`, `invalid_foreach`, `invalid_foreach_ref`,
+`invalid_pass_by_ref`, and `invalid_unset`. The retained failure
+`Zend/tests/bug63882_2.phpt` moves from the public `output` category to
+`compile` only because the existing runner heuristic sees the word
+`Unsupported` in a runtime operand-type fatal; a direct probe confirms that
+the test body reached comparison execution, so this is not a front-end
+regression.
+
+This does not claim complete `$GLOBALS` compatibility. The selected 17-case
+root/capture cluster passes 12 cases. Empty `[]` read/unset diagnostics,
+references inside destructuring syntax, variable-variable syntax such as
+`${1}`, generic undefined-variable warnings, and reference-argument forms
+beyond the exercised positional user-function calls remain separate work.
+
+The retained `f1fb5e9` checkpoint, relative to `9db688b`, added four exact
 passes without losing a previous pass or moving another case to a worse status.
 Direct `$GLOBALS` dimensions now operate on the request's global symbol table,
 canonicalize PHP array keys to symbol names, and synchronize with globals bound
@@ -65,11 +95,6 @@ regression. The exact additions are `Zend/tests/035.phpt`,
 `Zend/tests/arrow_functions/004.phpt`, `Zend/tests/unset_cv02.phpt`, and
 `tests/lang/030.phpt`. `Zend/tests/closure_019.phpt` now executes its global
 callable accesses and advances from a runtime failure to a later output mismatch.
-
-This does not claim complete `$GLOBALS` compatibility. Generic undefined-variable
-diagnostics, variable-variable syntax such as `${1}`, exact by-reference errors,
-and PHP's invalid direct `$GLOBALS` mutation and capture restrictions remain
-visible failures.
 
 The retained `9db688b` checkpoint, relative to `5173160`, added nine exact
 passes without losing a previous pass or moving another case to a worse status.
@@ -92,11 +117,11 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`f1fb5e9-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/f1fb5e9-arm64-manifest.jsonl),
+[`2621cc3-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/2621cc3-arm64-manifest.jsonl),
 with aggregate metadata in
-[`f1fb5e9-arm64-summary.json`](../tests/php-src/results/php-8.2.33/f1fb5e9-arm64-summary.json),
+[`2621cc3-arm64-summary.json`](../tests/php-src/results/php-8.2.33/2621cc3-arm64-summary.json),
 a directory/status navigation map and exact hazard list in
-[`f1fb5e9-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/f1fb5e9-arm64-coverage-map.json),
+[`2621cc3-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/2621cc3-arm64-coverage-map.json),
 and the full reference aggregate in
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in
