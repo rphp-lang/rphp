@@ -74,6 +74,19 @@ f(match: "ok");
     );
 }
 
+#[test]
+fn test_named_args_keyword_param_goto() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function f($goto) { echo $goto; }
+f(goto: "ok");
+"#
+        ),
+        "ok"
+    );
+}
+
 // ── P1 regression: variadic named arguments ──
 
 #[test]

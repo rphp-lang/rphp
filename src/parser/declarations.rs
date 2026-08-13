@@ -797,6 +797,7 @@ impl Parser {
         loop {
             let name = match self.advance() {
                 Token::Identifier(name) | Token::MagicConstant { name, .. } => name,
+                Token::Goto { name, .. } => name,
                 other => return Err(format!("Expected class constant name, got {:?}", other)),
             };
             self.expect(&Token::Assign)?;
@@ -818,7 +819,9 @@ impl Parser {
     }
 
     fn try_parse_class_constant_type(&mut self) -> Result<Option<TypeHint>, String> {
-        if matches!(self.peek(), Token::Identifier(_)) && self.peek_at(1) == Token::Assign {
+        if matches!(self.peek(), Token::Identifier(_) | Token::Goto { .. })
+            && self.peek_at(1) == Token::Assign
+        {
             return Ok(None);
         }
 

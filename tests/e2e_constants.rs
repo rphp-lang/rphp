@@ -29,6 +29,22 @@ echo Values::label() . ':' . Values::class . ':' . MissingClass::class;
 }
 
 #[test]
+fn goto_keyword_spelling_is_preserved_for_class_constant_names() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Labels {
+    public const GOTO = "upper";
+    public const goto = "lower";
+}
+echo Labels::GOTO, ":", Labels::goto;
+"#,
+        ),
+        "upper:lower"
+    );
+}
+
+#[test]
 fn class_name_literals_resolve_inside_nested_property_defaults() {
     let out = run_php(
         r#"<?php

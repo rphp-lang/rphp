@@ -61,13 +61,22 @@ pub enum Token {
     IncludeOnce, // include_once
     Require,     // require
     RequireOnce, // require_once
+    Goto {
+        /// Preserve the lexeme because `goto` is also legal as a contextual
+        /// identifier whose spelling can remain observably case-sensitive.
+        name: String,
+        line: usize,
+    },
     // Literals
-    Integer(i64),                                // 42, -1
-    Float(f64),                                  // 3.14, 1.5e10
-    StringLiteral(String),                       // "hello", 'world'
-    Variable(String),                            // $a, $foo
-    Identifier(String),                          // my_double, strlen
-    MagicConstant { name: String, line: usize }, // __FILE__, __LINE__, ...
+    Integer(i64),          // 42, -1
+    Float(f64),            // 3.14, 1.5e10
+    StringLiteral(String), // "hello", 'world'
+    Variable(String),      // $a, $foo
+    Identifier(String),    // my_double, strlen
+    MagicConstant {
+        name: String,
+        line: usize,
+    }, // __FILE__, __LINE__, ...
     // Operators
     Assign,                 // =
     Plus,                   // +
@@ -507,6 +516,14 @@ impl<'a> Lexer<'a> {
                             .filter(|byte| **byte == b'\n')
                             .count();
                         tokens.push(Token::MagicConstant { name: ident, line });
+                        continue;
+                    }
+                    if !is_member_name && ident.eq_ignore_ascii_case("goto") {
+                        let line = 1 + self.src[..identifier_start]
+                            .iter()
+                            .filter(|byte| **byte == b'\n')
+                            .count();
+                        tokens.push(Token::Goto { name: ident, line });
                         continue;
                     }
                     match ident.as_str() {
@@ -1021,6 +1038,34 @@ mod tests {
                 Token::DoubleColon,
                 Token::Identifier("__CLASS__".into()),
                 Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn goto_records_its_source_line_but_member_names_remain_identifiers() {
+        let tokens = Lexer::new("<?php\nGOTO finish; $object->goto(); finish:")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Goto {
+                    name: "GOTO".into(),
+                    line: 2,
+                },
+                Token::Identifier("finish".into()),
+                Token::Semicolon,
+                Token::Variable("object".into()),
+                Token::Arrow,
+                Token::Identifier("goto".into()),
+                Token::LParen,
+                Token::RParen,
+                Token::Semicolon,
+                Token::Identifier("finish".into()),
+                Token::Colon,
                 Token::Eof,
             ]
         );

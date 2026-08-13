@@ -1263,6 +1263,30 @@ struct LoopContext {
     is_switch: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GotoRegionKind {
+    LoopOrSwitch,
+    Finally,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GotoRegion {
+    id: u32,
+    kind: GotoRegionKind,
+}
+
+struct GotoLabel {
+    instruction: u16,
+    regions: Vec<GotoRegion>,
+}
+
+struct GotoPatch {
+    instruction: usize,
+    label: String,
+    regions: Vec<GotoRegion>,
+    line: usize,
+}
+
 pub struct Compiler {
     instructions: Vec<Instruction>,
     literals: Vec<Value>,
@@ -1274,8 +1298,10 @@ pub struct Compiler {
     functions: Vec<(String, UserFunction)>,
     /// Loop context stack for break/continue
     loop_stack: Vec<LoopContext>,
-    labels: HashMap<String, u16>,
-    goto_patches: Vec<(usize, String)>,
+    labels: HashMap<String, GotoLabel>,
+    goto_patches: Vec<GotoPatch>,
+    goto_regions: Vec<GotoRegion>,
+    next_goto_region_id: u32,
     /// Try/catch entries
     try_entries: Vec<TryEntry>,
     /// Class definitions
@@ -1414,6 +1440,8 @@ impl Compiler {
             loop_stack: Vec::new(),
             labels: HashMap::new(),
             goto_patches: Vec::new(),
+            goto_regions: Vec::new(),
+            next_goto_region_id: 0,
             try_entries: Vec::new(),
             class_defs: Vec::new(),
             generic_declarations: Vec::new(),
@@ -5416,37 +5444,105 @@ impl Compiler {
         }
     }
 
-    fn define_label(&mut self, name: &str) -> Result<(), String> {
-        let target = self.instructions.len() as u16;
-        if self.labels.insert(name.to_string(), target).is_some() {
-            return Err(format!("Label '{name}' already defined"));
+    fn enter_goto_region(&mut self, kind: GotoRegionKind) {
+        let region = GotoRegion {
+            id: self.next_goto_region_id,
+            kind,
+        };
+        self.next_goto_region_id = self
+            .next_goto_region_id
+            .checked_add(1)
+            .expect("too many structural goto regions");
+        self.goto_regions.push(region);
+    }
+
+    fn leave_goto_region(&mut self) {
+        self.goto_regions
+            .pop()
+            .expect("goto region stack must remain balanced");
+    }
+
+    fn goto_error(&self, message: &str, line: usize) -> String {
+        if self.source_file.is_empty() {
+            format!("{message} on line {line}")
+        } else {
+            format!("{message} in {} on line {line}", self.source_file)
         }
-        let mut index = 0;
-        while index < self.goto_patches.len() {
-            if self.goto_patches[index].1 == name {
-                let (instruction, _) = self.goto_patches.swap_remove(index);
-                self.instructions[instruction].op1 = target;
-            } else {
-                index += 1;
-            }
+    }
+
+    fn validate_goto_regions(
+        &self,
+        source: &[GotoRegion],
+        target: &[GotoRegion],
+        line: usize,
+    ) -> Result<(), String> {
+        if source
+            .iter()
+            .any(|region| region.kind == GotoRegionKind::Finally && !target.contains(region))
+        {
+            return Err(self.goto_error("jump out of a finally block is disallowed", line));
+        }
+        if target
+            .iter()
+            .any(|region| region.kind == GotoRegionKind::Finally && !source.contains(region))
+        {
+            return Err(self.goto_error("jump into a finally block is disallowed", line));
+        }
+        if target
+            .iter()
+            .any(|region| region.kind == GotoRegionKind::LoopOrSwitch && !source.contains(region))
+        {
+            return Err(self.goto_error("'goto' into loop or switch statement is disallowed", line));
         }
         Ok(())
     }
 
-    fn emit_goto(&mut self, name: &str) {
+    fn define_label(&mut self, name: &str) -> Result<(), String> {
+        let target = self.instructions.len() as u16;
+        if self.labels.contains_key(name) {
+            return Err(format!("Label '{name}' already defined"));
+        }
+        let target_regions = self.goto_regions.clone();
+        let mut index = 0;
+        while index < self.goto_patches.len() {
+            if self.goto_patches[index].label == name {
+                let patch = self.goto_patches.swap_remove(index);
+                self.validate_goto_regions(&patch.regions, &target_regions, patch.line)?;
+                self.instructions[patch.instruction].op1 = target;
+            } else {
+                index += 1;
+            }
+        }
+        self.labels.insert(
+            name.to_string(),
+            GotoLabel {
+                instruction: target,
+                regions: target_regions,
+            },
+        );
+        Ok(())
+    }
+
+    fn emit_goto(&mut self, name: &str, line: usize) -> Result<(), String> {
         let mut instruction = Instruction::new(OpCode::Jmp);
         if let Some(target) = self.labels.get(name) {
-            instruction.op1 = *target;
+            self.validate_goto_regions(&self.goto_regions, &target.regions, line)?;
+            instruction.op1 = target.instruction;
         } else {
-            self.goto_patches
-                .push((self.instructions.len(), name.to_string()));
+            self.goto_patches.push(GotoPatch {
+                instruction: self.instructions.len(),
+                label: name.to_string(),
+                regions: self.goto_regions.clone(),
+                line,
+            });
         }
         self.instructions.push(instruction);
+        Ok(())
     }
 
     fn finalize_gotos(&self) -> Result<(), String> {
-        if let Some((_, label)) = self.goto_patches.first() {
-            Err(format!("'goto' to undefined label '{label}'"))
+        if let Some(patch) = self.goto_patches.first() {
+            Err(format!("'goto' to undefined label '{}'", patch.label))
         } else {
             Ok(())
         }

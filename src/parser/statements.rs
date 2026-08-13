@@ -27,15 +27,15 @@ impl Parser {
                 self.advance();
                 return Ok(Stmt::Label(name));
             }
-            if name.eq_ignore_ascii_case("goto") {
-                self.advance();
-                let label = match self.advance() {
-                    Token::Identifier(label) => label,
-                    token => return Err(format!("Expected label after goto, got {token:?}")),
-                };
-                self.expect(&Token::Semicolon)?;
-                return Ok(Stmt::Goto(label));
-            }
+        }
+        if let Token::Goto { line, .. } = self.peek() {
+            self.advance();
+            let name = match self.advance() {
+                Token::Identifier(label) => label,
+                token => return Err(format!("Expected label after goto, got {token:?}")),
+            };
+            self.expect(&Token::Semicolon)?;
+            return Ok(Stmt::Goto { name, line });
         }
         match self.peek() {
             Token::Semicolon => {
@@ -134,6 +134,7 @@ impl Parser {
                 self.advance(); // consume 'const'
                 let name = match self.advance() {
                     Token::Identifier(n) | Token::MagicConstant { name: n, .. } => n,
+                    Token::Goto { name, .. } => name,
                     other => {
                         return Err(format!(
                             "Expected constant name after 'const', got {:?}",

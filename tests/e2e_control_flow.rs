@@ -399,3 +399,88 @@ fn test_goto_supports_forward_and_backward_labels() {
         "012"
     );
 }
+
+fn compile_error_with_source(source: &str, file: &str) -> String {
+    let tokens = rphp::lexer::Lexer::new(source).tokenize().unwrap();
+    let statements = rphp::parser::Parser::new(tokens).parse().unwrap();
+    rphp::compiler::compile::Compiler::new()
+        .with_source_path(file)
+        .compile(&statements)
+        .err()
+        .expect("program should fail during compilation")
+}
+
+#[test]
+fn goto_may_leave_a_loop_and_is_case_insensitive() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+while (true) {
+    echo "a";
+    GOTO complete;
+}
+echo "unreachable";
+complete:
+echo "b";
+"#,
+        ),
+        "ab"
+    );
+}
+
+#[test]
+fn goto_cannot_enter_any_loop_or_switch_body() {
+    let programs = [
+        "<?php\ngoto nested;\nwhile (false) { nested: echo 'bad'; }",
+        "<?php\ngoto nested;\ndo { nested: echo 'bad'; } while (false);",
+        "<?php\ngoto nested;\nfor (; false;) { nested: echo 'bad'; }",
+        "<?php\ngoto nested;\nforeach ([] as $value) { nested: echo $value; }",
+        "<?php\ngoto nested;\nswitch (0) { case 0: nested: echo 'bad'; }",
+    ];
+
+    for source in programs {
+        assert_eq!(
+            compile_error_with_source(source, "/fixture/goto-regions.php"),
+            "'goto' into loop or switch statement is disallowed in /fixture/goto-regions.php on line 2"
+        );
+    }
+}
+
+#[test]
+fn goto_cannot_enter_or_leave_finally() {
+    let into = compile_error_with_source(
+        "<?php\ngoto nested;\ntry { echo 'try'; } finally { nested: echo 'finally'; }",
+        "/fixture/goto-finally.php",
+    );
+    assert_eq!(
+        into,
+        "jump into a finally block is disallowed in /fixture/goto-finally.php on line 2"
+    );
+
+    let out = compile_error_with_source(
+        "<?php\ntry { echo 'try'; } finally {\n    goto complete;\n}\ncomplete: echo 'bad';",
+        "/fixture/goto-finally.php",
+    );
+    assert_eq!(
+        out,
+        "jump out of a finally block is disallowed in /fixture/goto-finally.php on line 3"
+    );
+}
+
+#[test]
+fn goto_within_the_same_finally_block_remains_valid() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+try {
+    echo "a";
+} finally {
+    goto marker;
+    echo "unreachable";
+    marker: echo "b";
+}
+"#,
+        ),
+        "ab"
+    );
+}

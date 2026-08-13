@@ -950,7 +950,7 @@ impl Compiler {
         match stmt {
             Stmt::Noop => {}
             Stmt::Label(name) => self.define_label(name)?,
-            Stmt::Goto(name) => self.emit_goto(name),
+            Stmt::Goto { name, line } => self.emit_goto(name, *line)?,
             Stmt::Echo(expressions) => {
                 for expr in expressions {
                     let (operand, op_type) = self.compile_expr(expr);
@@ -1262,11 +1262,13 @@ impl Compiler {
                     continue_patches: Vec::new(),
                     is_switch: false,
                 });
+                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Compile body
                 for s in body {
                     self.compile_stmt(s)?;
                 }
+                self.leave_goto_region();
 
                 // Jmp back to loop start
                 let mut jmp_back = Instruction::new(OpCode::Jmp);
@@ -1292,11 +1294,13 @@ impl Compiler {
                     continue_patches: Vec::new(),
                     is_switch: false,
                 });
+                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Compile body
                 for s in body {
                     self.compile_stmt(s)?;
                 }
+                self.leave_goto_region();
 
                 // continue target = condition check position
                 let cond_pos = self.instructions.len();
@@ -1360,11 +1364,13 @@ impl Compiler {
                     continue_patches: Vec::new(),
                     is_switch: false,
                 });
+                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Compile body
                 for s in body {
                     self.compile_stmt(s)?;
                 }
+                self.leave_goto_region();
 
                 // Continue target = update expression position
                 let update_pos = self.instructions.len();
@@ -1458,6 +1464,7 @@ impl Compiler {
                     continue_patches: Vec::new(),
                     is_switch: true,
                 });
+                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Phase 1: emit comparison chain for ALL cases (skip default)
                 // For each case value: compare switch_tmp == value, JmpZ → next, Jmp → body
@@ -1525,6 +1532,7 @@ impl Compiler {
                         self.compile_stmt(s)?;
                     }
                 }
+                self.leave_goto_region();
 
                 let after_switch = self.instructions.len() as u16;
 
@@ -1723,11 +1731,13 @@ impl Compiler {
                     continue_patches: Vec::new(),
                     is_switch: false,
                 });
+                self.enter_goto_region(GotoRegionKind::LoopOrSwitch);
 
                 // Compile body
                 for s in body {
                     self.compile_stmt(s)?;
                 }
+                self.leave_goto_region();
 
                 // Jmp back to loop start (ForeachNext)
                 let mut jmp_back = Instruction::new(OpCode::Jmp);
@@ -1878,9 +1888,11 @@ impl Compiler {
                 // Finally block (if any)
                 let finally_start = if let Some(body) = finally_body {
                     let start = self.instructions.len();
+                    self.enter_goto_region(GotoRegionKind::Finally);
                     for s in body {
                         self.compile_stmt(s)?;
                     }
+                    self.leave_goto_region();
                     Some(start)
                 } else {
                     None

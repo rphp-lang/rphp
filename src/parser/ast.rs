@@ -533,7 +533,10 @@ pub struct TraitAlias {
 pub enum Stmt {
     Noop,
     Label(String),
-    Goto(String),
+    Goto {
+        name: String,
+        line: usize,
+    },
     Echo(Vec<Expr>),
     Assign {
         var: String,
@@ -828,7 +831,7 @@ impl Stmt {
                 .any(|(_, value)| value.as_ref().is_some_and(Expr::contains_yield)),
             Stmt::Noop
             | Stmt::Label(_)
-            | Stmt::Goto(_)
+            | Stmt::Goto { .. }
             | Stmt::Break(_)
             | Stmt::Continue(_)
             | Stmt::Function { .. }

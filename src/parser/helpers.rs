@@ -86,6 +86,7 @@ impl Parser {
             Token::IncludeOnce => Some("include_once".to_string()),
             Token::Require => Some("require".to_string()),
             Token::RequireOnce => Some("require_once".to_string()),
+            Token::Goto { name, .. } => Some(name.clone()),
             Token::LogicalXor => Some("xor".to_string()),
             _ => None,
         }
