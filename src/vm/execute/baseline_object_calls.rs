@@ -2053,7 +2053,7 @@ fn op_init_dynamic_call<'a>(
         let mut resolved = crate::stdlib::ResolvedCallback {
             func_ptr,
             prepend_args: vec![],
-            use_vars: closure.captures.clone(),
+            use_vars: closure.clone_captures(),
             called_scope_class_id: closure.called_scope_class_id,
             bound_this,
         };

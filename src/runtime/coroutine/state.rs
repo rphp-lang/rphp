@@ -200,7 +200,7 @@ pub(super) struct CoroutineEntry {
 impl CoroutineEntry {
     pub(super) fn from_value(value: &Value, eg: &ExecutorGlobals) -> Result<Self, VmError> {
         let (function, captures) = if let Some(closure) = value.as_closure() {
-            (closure.func, closure.captures.clone())
+            (closure.func, closure.clone_captures())
         } else if let Some(name) = value.as_str() {
             let function = eg.find_function(name).ok_or_else(|| {
                 VmError::Fatal(format!(

@@ -3398,13 +3398,23 @@ impl Clone for PhpClosure {
             called_scope_class_id: self.called_scope_class_id,
             is_static: self.is_static,
             bound_this: self.bound_this.clone(),
-            captures: self.captures.clone(),
+            captures: self.clone_captures(),
             has_heap_captures: self.has_heap_captures,
         }
     }
 }
 
 impl PhpClosure {
+    /// Materialize one invocation/copy of the lexical environment without
+    /// separating reference captures from their shared cells.
+    #[inline]
+    pub(crate) fn clone_captures(&self) -> Vec<Value> {
+        self.captures
+            .iter()
+            .map(Value::clone_closure_capture)
+            .collect()
+    }
+
     /// PHP callback registries compare closures by object identity, not by
     /// function body or captures.
     #[inline]
@@ -4319,6 +4329,22 @@ impl Value {
             // not to the shared PHP reference cell or any aliases of it.
             type_info: self.type_info & !Self::LOCAL_STATIC_INITIALIZER_FLAG,
             _not_send: PhantomData,
+        }
+    }
+
+    /// Clone a lexical capture while retaining explicit PHP reference
+    /// identity. Ordinary `Value::clone()` intentionally dereferences, which
+    /// is correct for by-value assignment but not for a `use (&$var)` cell.
+    #[inline]
+    pub(crate) fn clone_closure_capture(&self) -> Self {
+        if self.is_owned_reference() {
+            self.clone_owned_reference_alias()
+        } else if self.is_reference() {
+            // Borrowed reference captures are retained for call-frame aliases.
+            // Normal closure construction promotes local CVs to owned cells.
+            Value::reference(unsafe { self.as_ref_ptr() })
+        } else {
+            self.clone()
         }
     }
 

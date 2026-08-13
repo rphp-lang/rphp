@@ -54,6 +54,10 @@ pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;
 /// an object, even when created inside an instance method.
 pub const CLOSURE_FLAG_STATIC: u16 = 1;
 
+/// ClosureUseVar flag: preserve the captured CV's PHP reference cell instead
+/// of snapshotting its current value.
+pub const CLOSURE_USE_REFERENCE: u16 = 1;
+
 /// Instanceof flag: resolve a pseudo-class name against the active trait or
 /// late-static call scope instead of treating it as an ordinary class literal.
 pub const INSTANCEOF_DYNAMIC_STATIC_SCOPE: u16 = 1;

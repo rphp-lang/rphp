@@ -372,23 +372,36 @@ unsafe fn try_init_borrowed_heap_arg(
     true
 }
 
-/// Turn an unowned borrowed frame slot into an ordinary owned heap slot before
-/// exposing the variable itself through a PHP reference. A clone increments
-/// the Rc but deliberately does not drop the raw borrowed bits it replaces.
+/// Return a stable alias for a CV exposed through a PHP reference. Ordinary
+/// locals are promoted to request-owned cells so a reference captured by a
+/// returned closure can outlive every forwarding call frame. A pre-existing
+/// borrowed reference remains a borrowed alias; canonical SendRef paths create
+/// owned cells at their first caller boundary.
 #[inline(always)]
-unsafe fn materialize_borrowed_slot(frame: *mut ExecuteData, ptr: *mut Value) {
+unsafe fn materialize_reference_alias(frame: *mut ExecuteData, ptr: *mut Value) -> Value {
+    if (*ptr).is_owned_reference() {
+        return (*ptr).clone_owned_reference_alias();
+    }
+    if (*ptr).is_reference() {
+        return Value::reference((*ptr).as_ref_ptr());
+    }
+
     let total = (*frame).num_cvs + (*frame).num_temps;
-    if total > 64 || !(*ptr).needs_cleanup() {
-        return;
+    if total <= 64 && (*ptr).needs_cleanup() {
+        let idx = slot_idx(frame, ptr);
+        let bit = 1u64 << idx;
+        if (*frame).heap_bitmap & bit == 0 {
+            let owned = (*ptr).clone();
+            ptr.write(owned);
+            (*frame).has_heap_slots = true;
+            (*frame).heap_bitmap |= bit;
+        }
     }
-    let idx = slot_idx(frame, ptr);
-    let bit = 1u64 << idx;
-    if (*frame).heap_bitmap & bit == 0 {
-        let owned = (*ptr).clone();
-        ptr.write(owned);
-        (*frame).has_heap_slots = true;
-        (*frame).heap_bitmap |= bit;
-    }
+
+    let current = std::mem::replace(&mut *ptr, Value::undef());
+    let binding = Value::owned_reference(current);
+    frame_slot_set(frame, ptr, binding.clone_owned_reference_alias());
+    binding
 }
 
 /// Copy a scalar argument operand directly into a pending call frame.

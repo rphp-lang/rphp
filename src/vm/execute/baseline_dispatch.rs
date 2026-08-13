@@ -1637,29 +1637,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // declared callee argument slot. References are forwarded
                 // without reinterpreting external targets as frame offsets.
                 unsafe {
-                    let caller_cv_ptr =
-                    if opline.op1_type == OpType::Cv {
+                    let argument = if opline.op1_type == OpType::Cv {
                         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
                         let raw_ptr = base.add(opline.op1 as usize);
-                        // If caller's CV is itself a reference, forward the
-                        // external target without treating it as a frame slot.
-                        if (*raw_ptr).is_reference() {
-                            (*raw_ptr).as_ref_ptr()
-                        } else {
-                            materialize_borrowed_slot(frame, raw_ptr);
-                            raw_ptr
-                        }
+                        materialize_reference_alias(frame, raw_ptr)
                     } else {
-                        (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
+                        let caller_value =
+                            (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                        Value::reference(caller_value)
                     };
                     let call = (*frame).call;
                     debug_assert!(!call.is_null());
                     let arg_slot = (*call).cv_mut(opline.op2 as u32);
-                    frame_slot_init(
-                        call,
-                        arg_slot as *mut Value,
-                        Value::reference(caller_cv_ptr),
-                    );
+                    frame_slot_init(call, arg_slot as *mut Value, argument);
                 }
             }
 
@@ -1674,18 +1664,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if is_ref && opline.op1_type == OpType::Cv {
                     // Same logic as SendRef
-                    let caller_cv_ptr = unsafe {
+                    let argument = unsafe {
                         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
                         let raw_ptr = base.add(opline.op1 as usize);
-                        if (*raw_ptr).is_reference() {
-                            (*raw_ptr).as_ref_ptr()
-                        } else {
-                            materialize_borrowed_slot(frame, raw_ptr);
-                            raw_ptr
-                        }
+                        materialize_reference_alias(frame, raw_ptr)
                     };
                     let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
-                    unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
+                    unsafe { frame_slot_init(call, arg_slot as *mut Value, argument) };
                 } else {
                     // Same logic as SendVal
                     let source = unsafe {

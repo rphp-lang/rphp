@@ -4490,13 +4490,16 @@ impl Compiler {
                 self.instructions.push(create);
 
                 // Add captured use_var values
-                for (v, _) in use_vars {
+                for (v, by_reference) in use_vars {
                     let cv = self.resolve_cv(v);
                     let mut use_var = Instruction::new(OpCode::ClosureUseVar);
                     use_var.op1 = tmp;
                     use_var.op1_type = OpType::Tmp;
                     use_var.op2 = cv;
                     use_var.op2_type = OpType::Cv;
+                    if *by_reference {
+                        use_var._pad |= crate::vm::instruction::CLOSURE_USE_REFERENCE;
+                    }
                     self.instructions.push(use_var);
                 }
 

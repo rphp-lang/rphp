@@ -7261,7 +7261,7 @@ fn resolve_callback(
             let resolved = ResolvedCallback {
                 func_ptr: closure.func,
                 prepend_args: vec![],
-                use_vars: closure.captures.clone(),
+                use_vars: closure.clone_captures(),
                 called_scope_class_id: closure.called_scope_class_id,
                 bound_this: closure.bound_this.clone(),
             };

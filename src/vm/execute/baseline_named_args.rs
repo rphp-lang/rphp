@@ -101,17 +101,13 @@ fn op_send_named<'a>(
 
                 if is_ref && opline.op1_type == OpType::Cv {
                     // By-reference: same logic as SendRef
-                    let caller_cv_ptr = unsafe {
+                    let argument = unsafe {
                         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
                         let raw_ptr = base.add(opline.op1 as usize);
-                        if (*raw_ptr).is_reference() {
-                            (*raw_ptr).as_ref_ptr()
-                        } else {
-                            raw_ptr
-                        }
+                        materialize_reference_alias(frame, raw_ptr)
                     };
                     let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
-                    unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
+                    unsafe { frame_slot_init(call, arg_slot as *mut Value, argument) };
                 } else {
                     // By-value: same logic as SendVal
                     let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };

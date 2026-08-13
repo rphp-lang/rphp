@@ -2055,8 +2055,29 @@ fn op_closure_use_var(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) {
-    let value = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let cloned_value = value.clone();
+    let cloned_value = if opline._pad & crate::vm::instruction::CLOSURE_USE_REFERENCE != 0 {
+        // Closure use variables are compiler-guaranteed CVs. Promote an
+        // ordinary local to a request-owned cell so both the active frame and
+        // every closure copy can retain it after this frame returns.
+        let source = unsafe { (*frame).cv_mut(opline.op2 as u32) as *mut Value };
+        unsafe {
+            if (*source).is_owned_reference() {
+                (*source).clone_owned_reference_alias()
+            } else if (*source).is_reference() {
+                Value::reference((*source).as_ref_ptr())
+            } else {
+                let current = std::mem::replace(&mut *source, Value::undef());
+                let binding = Value::owned_reference(current);
+                frame_slot_set(frame, source, binding.clone_owned_reference_alias());
+                binding
+            }
+        }
+    } else {
+        let value = unsafe {
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+        };
+        value.clone()
+    };
     let closure_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
     let closure = unsafe { &mut *closure_ptr }
         .as_closure_mut()

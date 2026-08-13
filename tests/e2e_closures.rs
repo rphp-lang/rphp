@@ -128,6 +128,91 @@ $fn();
 }
 
 #[test]
+fn reference_capture_shares_state_across_recursive_activations() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$remaining = 3;
+$walk = function($self, $depth) use (&$remaining) {
+    echo $depth . ':' . $remaining . '|';
+    $remaining--;
+    if ($depth < 2) {
+        $self($self, $depth + 1);
+    }
+};
+$walk($walk, 0);
+echo 'outer:' . $remaining;
+"#
+        ),
+        "0:3|1:2|2:1|outer:0"
+    );
+}
+
+#[test]
+fn closures_from_one_reference_capture_observe_the_same_cell() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$total = 5;
+$factory = function() use (&$total) {
+    return function($delta) use (&$total) {
+        $total += $delta;
+        return $total;
+    };
+};
+$left = $factory();
+$right = $factory();
+echo $left(2) . '|' . $right(4) . '|' . $total;
+"#
+        ),
+        "7|11|11"
+    );
+}
+
+#[test]
+fn reference_capture_outlives_its_creating_frame() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function make_accumulator() {
+    $total = 7;
+    return function($delta) use (&$total) {
+        $total += $delta;
+        return $total;
+    };
+}
+$accumulate = make_accumulator();
+echo $accumulate(3) . '|' . $accumulate(5);
+"#
+        ),
+        "10|15"
+    );
+}
+
+#[test]
+fn reference_capture_outlives_reference_forwarding_frames() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function bind_accumulator(&$value) {
+    return function($delta) use (&$value) {
+        $value += $delta;
+        return $value;
+    };
+}
+function make_forwarded_accumulator() {
+    $local = 4;
+    return bind_accumulator($local);
+}
+$accumulate = make_forwarded_accumulator();
+echo $accumulate(3) . '|' . $accumulate(5);
+"#
+        ),
+        "7|12"
+    );
+}
+
+#[test]
 fn test_closure_multiple_use_vars() {
     assert_eq!(
         run_php(
