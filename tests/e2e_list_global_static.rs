@@ -351,6 +351,41 @@ class RecursingStatic {
 }
 
 #[test]
+fn repeated_static_declarations_use_the_last_initial_value_only_once() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function repeatedDefaults() {
+    static $first = 10;
+    static $first;
+    static $second;
+    static $second = 11;
+    static $third = 12;
+    static $third = 13;
+    var_dump($first, $second, $third);
+    $first = $second = $third = 20;
+}
+repeatedDefaults();
+repeatedDefaults();
+
+function recursiveDefaults($depth = 0) {
+    static $value = 10;
+    static $value = 11;
+    echo "$depth:$value\n";
+    if ($depth === 0) {
+        $value = 20;
+        recursiveDefaults(1);
+    }
+    echo "$depth:$value\n";
+}
+recursiveDefaults();
+"#,
+        ),
+        "NULL\nint(11)\nint(13)\nint(20)\nint(20)\nint(20)\n0:11\n1:20\n1:20\n0:20\n"
+    );
+}
+
+#[test]
 fn test_destructuring_assignment_is_value_producing_and_allows_skips() {
     assert_eq!(
         run_php(

@@ -1876,18 +1876,36 @@ fn op_bind_static(
         .as_str()
         .unwrap_or("")
         .to_string();
-    // SAFETY: `BindStatic` carries a CV operand belonging to this live frame,
-    // which remains allocated throughout this call.
-    let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
+    // PHP lets a later declaration of the same static replace its initializer
+    // during the frame that first creates the request-owned cell. Recursive
+    // and subsequent calls bind the existing cell without reinitializing it.
+    // SAFETY: `BindStatic` carries validated CV and default-value operands for
+    // this live frame and op array. The raw CV is intentionally not resolved
+    // through `get_op_mut`: rebinding replaces its reference wrapper. When the
+    // frame-local marker is present, it proves that wrapper owns a live,
+    // distinct Rc-backed target whose initialized Value `slot_set` replaces.
+    let cv_ptr = unsafe {
+        let cv_ptr = (*frame).cv_mut(opline.op1 as u32) as *mut Value;
+        if (*cv_ptr).is_local_static_initializer() {
+            let initial = if opline.result_type != OpType::Unused {
+                (&*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)).clone()
+            } else {
+                Value::null()
+            };
+            slot_set((*cv_ptr).as_ref_ptr(), initial);
+            return;
+        }
+        cv_ptr
+    };
 
     let statics = eg.static_vars.entry(func_name).or_default();
-    let binding = if let Some(binding) = statics.get(&var_name) {
+    let (mut binding, created) = if let Some(binding) = statics.get(&var_name) {
         if binding.is_owned_reference() {
-            binding.clone_owned_reference_alias()
+            (binding.clone_owned_reference_alias(), false)
         } else {
             let binding = Value::owned_reference(binding.clone());
             statics.insert(var_name.clone(), binding.clone_owned_reference_alias());
-            binding
+            (binding, false)
         }
     } else {
         let initial = if opline.result_type != OpType::Unused {
@@ -1901,8 +1919,11 @@ fn op_bind_static(
         };
         let binding = Value::owned_reference(initial);
         statics.insert(var_name, binding.clone_owned_reference_alias());
-        binding
+        (binding, true)
     };
+    if created {
+        binding.mark_local_static_initializer();
+    }
     // SAFETY: `cv_ptr` is the initialized live CV slot resolved above, and
     // `slot_set` replaces its value without retaining the raw pointer.
     unsafe { slot_set(cv_ptr, binding) };
