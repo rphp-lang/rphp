@@ -117,25 +117,62 @@ fn run_frame_destructors(
             }
         }
 
-        for (identity, frame_references) in counts {
-            let representative = candidate_indices
-                .iter()
-                .map(|index| &*base.add(*index))
-                .find(|value| value.object_identity() == Some(identity));
-            let Some(representative) = representative else {
-                continue;
-            };
-            let class_name = representative.object_class_name_unchecked().to_string();
-            if eg.find_method_info(&class_name, "__destruct").is_none() {
-                continue;
-            }
-            if representative.object_strong_count() != Some(frame_references)
-                || !representative.mark_object_destructed()
+        // Function frames release local handles in slot order. The root symbol
+        // table shuts down in reverse insertion order. Preserve both orders
+        // explicitly instead of inheriting randomized HashMap iteration.
+        let mut identities = Vec::with_capacity(counts.len());
+        let mut record_identity = |index: usize| {
+            if let Some(identity) = (&*base.add(index)).object_identity()
+                && !identities.contains(&identity)
             {
-                continue;
+                identities.push(identity);
             }
-            let receiver = representative.clone();
-            let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
+        };
+        if (*frame).prev_execute_data.is_null() {
+            for &index in candidate_indices.iter().rev() {
+                record_identity(index);
+            }
+        } else {
+            for &index in &candidate_indices {
+                record_identity(index);
+            }
+        }
+
+        // A destructor may release the last non-frame handle of an object that
+        // was ineligible earlier in the same pass. Revisit only those deferred
+        // identities until a complete pass makes no progress.
+        let mut pending = identities;
+        loop {
+            let mut deferred = Vec::new();
+            let mut progressed = false;
+            for identity in pending {
+                let frame_references = counts[&identity];
+                let representative = candidate_indices
+                    .iter()
+                    .map(|index| &*base.add(*index))
+                    .find(|value| value.object_identity() == Some(identity));
+                let Some(representative) = representative else {
+                    continue;
+                };
+                let class_name = representative.object_class_name_unchecked().to_string();
+                if eg.find_method_info(&class_name, "__destruct").is_none() {
+                    continue;
+                }
+                if representative.object_strong_count() != Some(frame_references) {
+                    deferred.push(identity);
+                    continue;
+                }
+                if !representative.mark_object_destructed() {
+                    continue;
+                }
+                let receiver = representative.clone();
+                let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
+                progressed = true;
+            }
+            if !progressed {
+                break;
+            }
+            pending = deferred;
         }
     }
     Ok(())
@@ -173,23 +210,49 @@ fn release_statement_temps(
                 *object_counts.entry(identity).or_default() += 1;
             }
         }
-        for (identity, range_references) in object_counts {
-            let representative = (first..end)
-                .filter(|index| is_owned(*index))
-                .map(|index| &*base.add(index))
-                .find(|value| value.object_identity() == Some(identity));
-            let Some(representative) = representative else {
-                continue;
-            };
-            let class_name = representative.object_class_name_unchecked().to_string();
-            if eg.find_method_info(&class_name, "__destruct").is_none()
-                || representative.object_strong_count() != Some(range_references)
-                || !representative.mark_object_destructed()
-            {
+        let mut identities = Vec::with_capacity(object_counts.len());
+        for index in first..end {
+            if !is_owned(index) {
                 continue;
             }
-            let receiver = representative.clone();
-            let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
+            if let Some(identity) = (&*base.add(index)).object_identity()
+                && !identities.contains(&identity)
+            {
+                identities.push(identity);
+            }
+        }
+        let mut pending = identities;
+        loop {
+            let mut deferred = Vec::new();
+            let mut progressed = false;
+            for identity in pending {
+                let range_references = object_counts[&identity];
+                let representative = (first..end)
+                    .filter(|index| is_owned(*index))
+                    .map(|index| &*base.add(index))
+                    .find(|value| value.object_identity() == Some(identity));
+                let Some(representative) = representative else {
+                    continue;
+                };
+                let class_name = representative.object_class_name_unchecked().to_string();
+                if eg.find_method_info(&class_name, "__destruct").is_none() {
+                    continue;
+                }
+                if representative.object_strong_count() != Some(range_references) {
+                    deferred.push(identity);
+                    continue;
+                }
+                if !representative.mark_object_destructed() {
+                    continue;
+                }
+                let receiver = representative.clone();
+                let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
+                progressed = true;
+            }
+            if !progressed {
+                break;
+            }
+            pending = deferred;
         }
 
         for index in first..end {

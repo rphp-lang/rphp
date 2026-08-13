@@ -48,6 +48,40 @@ fn destructors_are_not_suppressed_when_allocator_addresses_are_reused() {
 }
 
 #[test]
+fn destructor_order_is_scope_deterministic_and_revisits_released_dependencies() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class OrderedDestructor {
+    public function __construct(private string $name) {}
+    public function __destruct() { echo $this->name; }
+}
+function releaseLocals() {
+    $first = new OrderedDestructor('a');
+    $second = new OrderedDestructor('b');
+    $third = new OrderedDestructor('c');
+}
+releaseLocals();
+echo '|';
+
+class NestedDestructor {
+    public function __construct(private object $child) {}
+    public function __destruct() { echo 'N'; unset($this->child); }
+}
+class ChildDestructor {
+    public function __destruct() { echo 'C'; }
+}
+$child = new ChildDestructor();
+$parent = new NestedDestructor($child);
+$rootFirst = new OrderedDestructor('1');
+$rootLast = new OrderedDestructor('2');
+"#,
+        ),
+        "abc|21NC"
+    );
+}
+
+#[test]
 fn reflection_object_exposes_the_declaring_source_file() {
     let file = "/tmp/rphp-reflection-object-source.php";
     assert_eq!(
