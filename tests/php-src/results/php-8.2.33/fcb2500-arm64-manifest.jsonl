@@ -2447,10 +2447,10 @@
 {"path":"Zend/tests/jump04.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/jump05.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/jump06.phpt","status":"fail","category":"runtime"}
-{"path":"Zend/tests/jump07.phpt","status":"timeout","category":"runtime","reason":"test timed out"}
-{"path":"Zend/tests/jump08.phpt","status":"fail","category":"output"}
-{"path":"Zend/tests/jump09.phpt","status":"timeout","category":"runtime","reason":"test timed out"}
-{"path":"Zend/tests/jump10.phpt","status":"fail","category":"output"}
+{"path":"Zend/tests/jump07.phpt","status":"pass","category":"pass"}
+{"path":"Zend/tests/jump08.phpt","status":"pass","category":"pass"}
+{"path":"Zend/tests/jump09.phpt","status":"pass","category":"pass"}
+{"path":"Zend/tests/jump10.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/jump11.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/jump12.phpt","status":"fail","category":"parse"}
 {"path":"Zend/tests/jump13.phpt","status":"pass","category":"pass"}
@@ -3435,10 +3435,10 @@
 {"path":"Zend/tests/try/catch_finally_006.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/try/catch_novar_1.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/try/catch_novar_2.phpt","status":"fail","category":"runtime"}
-{"path":"Zend/tests/try/finally_goto_001.phpt","status":"fail","category":"output"}
-{"path":"Zend/tests/try/finally_goto_002.phpt","status":"fail","category":"output"}
+{"path":"Zend/tests/try/finally_goto_001.phpt","status":"pass","category":"pass"}
+{"path":"Zend/tests/try/finally_goto_002.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/try/finally_goto_003.phpt","status":"pass","category":"pass"}
-{"path":"Zend/tests/try/finally_goto_004.phpt","status":"fail","category":"output"}
+{"path":"Zend/tests/try/finally_goto_004.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/try/finally_goto_005.phpt","status":"timeout","category":"runtime","reason":"test timed out"}
 {"path":"Zend/tests/try/try_catch_finally_001.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/try/try_catch_finally_002.phpt","status":"pass","category":"pass"}
@@ -3451,9 +3451,9 @@
 {"path":"Zend/tests/try/try_finally_002.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/try/try_finally_003.phpt","status":"fail","category":"runtime"}
 {"path":"Zend/tests/try/try_finally_004.phpt","status":"fail","category":"parse"}
-{"path":"Zend/tests/try/try_finally_005.phpt","status":"fail","category":"output"}
+{"path":"Zend/tests/try/try_finally_005.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/try/try_finally_006.phpt","status":"pass","category":"pass"}
-{"path":"Zend/tests/try/try_finally_007.phpt","status":"timeout","category":"runtime","reason":"test timed out"}
+{"path":"Zend/tests/try/try_finally_007.phpt","status":"pass","category":"pass"}
 {"path":"Zend/tests/try/try_finally_008.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/try/try_finally_009.phpt","status":"fail","category":"output"}
 {"path":"Zend/tests/try/try_finally_010.phpt","status":"fail","category":"output"}

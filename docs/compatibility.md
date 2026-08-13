@@ -12,21 +12,21 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`d7e980a0e7e183e230d6f9cc04ef768608ff6d44`, using the same runner commit. The
+`fcb2500169b8710dac7e6038d1a6acc826c012e3`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 855 | 2,894 | 65 | 1 | 221 | 5 | 10 | 22.806% |
+| `Zend/tests` | 864 | 2,888 | 65 | 1 | 221 | 2 | 10 | 23.028% |
 | `tests/lang` | 86 | 182 | 10 | 0 | 16 | 0 | 0 | 32.090% |
-| **Combined** | **941** | **3,076** | **75** | **1** | **237** | **5** | **10** | **23.425%** |
+| **Combined** | **950** | **3,070** | **75** | **1** | **237** | **2** | **10** | **23.632%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 941 / 4,345, or **21.657%**; including crashes and timeouts in the attempted
-denominator gives **23.338%**. These numbers are intentionally pre-alpha and do
+is 950 / 4,345, or **21.864%**; including crashes and timeouts in the attempted
+denominator gives **23.562%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -37,9 +37,9 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,222 runtime failures, 1,157 output mismatches,
+The largest failure groups are 1,219 runtime failures, 1,151 output mismatches,
 579 parse failures, 127 compile failures and six failed `SKIPIF` evaluations.
-Ten cases terminate by signal and five time out. Of the 75 skips, 45 require
+Ten cases terminate by signal and two time out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
 does not expose, while three require PHPDBG or CGI/header sections outside this
@@ -57,12 +57,22 @@ alternated between an exact pass and a signal termination because VM stack
 growth ignored an oversized frame request. VM pages now retain and deallocate
 their actual allocation size; 1,000 focused repetitions pass without a crash.
 
+Relative to the retained `d7e980a` baseline, the current release run adds nine
+exact passes without losing a previous pass. `goto` now carries its source line
+through the AST and compiler, and labels and pending jumps retain structural
+loop, switch and `finally` regions. Illegal jumps into a loop or switch and
+into or out of `finally` are rejected at compile time with the PHP 8.2 filename,
+line and diagnostic shape. Valid jumps within one region or out of a loop
+remain executable. This converts three timeouts and six ordinary failures to
+passes; crash and unsupported counts are unchanged. Contextual uses of `goto`
+as a method, class-constant or named-argument identifier retain their spelling.
+
 The authoritative per-path result is
-[`d7e980a-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/d7e980a-arm64-manifest.jsonl),
+[`fcb2500-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/fcb2500-arm64-manifest.jsonl),
 with aggregate metadata in
-[`d7e980a-arm64-summary.json`](../tests/php-src/results/php-8.2.33/d7e980a-arm64-summary.json),
+[`fcb2500-arm64-summary.json`](../tests/php-src/results/php-8.2.33/fcb2500-arm64-summary.json),
 a directory/status navigation map and exact hazard list in
-[`d7e980a-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/d7e980a-arm64-coverage-map.json),
+[`fcb2500-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/fcb2500-arm64-coverage-map.json),
 and the full reference aggregate in
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in

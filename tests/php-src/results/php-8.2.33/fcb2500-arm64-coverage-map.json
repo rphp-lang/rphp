@@ -1,32 +1,32 @@
 {
     "schema_version": 1,
-    "manifest_sha256": "d8e8c74e6bc88e52595d0fea8b244999e8db661eddf9325077d6d8d60ba68a54",
+    "manifest_sha256": "47a6cdfe5044622d740c7f45818c0beb04af42352e4ff490eb04e216b8472a39",
     "total": 4345,
     "groups": {
         "Zend/tests/_root": {
             "total": 2370,
             "statuses": {
-                "pass": 514,
-                "fail": 1632,
+                "pass": 518,
+                "fail": 1630,
                 "skip": 39,
                 "xfail": 1,
                 "unsupported": 172,
-                "timeout": 3,
+                "timeout": 1,
                 "crash": 9
             },
             "categories": {
                 "compile": 66,
                 "extension": 23,
-                "output": 551,
+                "output": 549,
                 "parse": 316,
-                "pass": 514,
-                "runtime": 709,
+                "pass": 518,
+                "runtime": 707,
                 "runtime-cli-ini": 170,
                 "section": 2,
                 "skipif": 18,
                 "xfail": 1
             },
-            "headline_pass_rate": 0.23951537744641194
+            "headline_pass_rate": 0.24115456238361266
         },
         "Zend/tests/anon": {
             "total": 16,
@@ -652,21 +652,21 @@
         "Zend/tests/try": {
             "total": 73,
             "statuses": {
-                "pass": 27,
-                "fail": 44,
+                "pass": 32,
+                "fail": 40,
                 "skip": 0,
                 "xfail": 0,
                 "unsupported": 0,
-                "timeout": 2,
+                "timeout": 1,
                 "crash": 0
             },
             "categories": {
-                "output": 36,
+                "output": 32,
                 "parse": 1,
-                "pass": 27,
-                "runtime": 9
+                "pass": 32,
+                "runtime": 8
             },
-            "headline_pass_rate": 0.38028169014084506
+            "headline_pass_rate": 0.4444444444444444
         },
         "Zend/tests/type_declarations": {
             "total": 429,
@@ -959,27 +959,12 @@
             "category": "runtime"
         },
         {
-            "path": "Zend/tests/jump07.phpt",
-            "status": "timeout",
-            "category": "runtime"
-        },
-        {
-            "path": "Zend/tests/jump09.phpt",
-            "status": "timeout",
-            "category": "runtime"
-        },
-        {
             "path": "Zend/tests/property_guard_hash_val.phpt",
             "status": "crash",
             "category": "runtime"
         },
         {
             "path": "Zend/tests/try/finally_goto_005.phpt",
-            "status": "timeout",
-            "category": "runtime"
-        },
-        {
-            "path": "Zend/tests/try/try_finally_007.phpt",
             "status": "timeout",
             "category": "runtime"
         },
