@@ -17,6 +17,29 @@ impl Parser {
             .unwrap_or(Token::Eof)
     }
 
+    fn expect_lbracket(&mut self) -> Result<usize, String> {
+        match self.advance() {
+            Token::LBracket(line) => Ok(line),
+            token => Err(format!("Expected LBracket, got {token:?}")),
+        }
+    }
+
+    fn parse_unset_target(&mut self) -> Result<Expr, String> {
+        let previous = self.empty_dimension_unset_context;
+        self.empty_dimension_unset_context = true;
+        let result = self.parse_expr();
+        self.empty_dimension_unset_context = previous;
+        result
+    }
+
+    fn parse_empty_dimension_target_prefix(&mut self) -> Result<Expr, String> {
+        let previous = self.preserve_empty_dimension_suffix;
+        self.preserve_empty_dimension_suffix = true;
+        let result = self.parse_expr();
+        self.preserve_empty_dimension_suffix = previous;
+        result
+    }
+
     /// Parse comma-separated call arguments supporting both positional and
     /// named (PHP 8 `name: expr`) arguments.  The opening `(` must already
     /// be consumed; this method consumes everything up to and including the
@@ -681,6 +704,7 @@ impl Parser {
             expr,
             Expr::Variable(_)
                 | Expr::Globals { .. }
+                | Expr::CompileError { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess { .. }
                 | Expr::DynamicPropertyAccess { .. }
@@ -707,7 +731,7 @@ impl Parser {
     }
 
     fn is_isset_target(expr: &Expr) -> bool {
-        Self::is_variable_like(expr) || matches!(expr, Expr::PropertyAccess { .. })
+        Self::is_variable_like(expr)
     }
 
     /// Check if current `$var[...]...` chain ends in an assignment. Bracketed
@@ -715,7 +739,7 @@ impl Parser {
     fn is_array_assign(&self) -> bool {
         let mut i = self.pos + 1;
         let mut saw_dimension = false;
-        while self.tokens.get(i) == Some(&Token::LBracket) {
+        while matches!(self.tokens.get(i), Some(Token::LBracket(_))) {
             saw_dimension = true;
             let mut depth = 1usize;
             i += 1;
@@ -725,7 +749,7 @@ impl Parser {
             }
             while i < self.tokens.len() && depth != 0 {
                 match &self.tokens[i] {
-                    Token::LBracket | Token::LParen => depth += 1,
+                    Token::LBracket(_) | Token::LParen => depth += 1,
                     Token::RBracket | Token::RParen => depth -= 1,
                     _ => {}
                 }
@@ -760,7 +784,7 @@ impl Parser {
         let mut depth = 1;
         while i < self.tokens.len() && depth > 0 {
             match &self.tokens[i] {
-                Token::LBracket => depth += 1,
+                Token::LBracket(_) => depth += 1,
                 Token::RBracket => {
                     depth -= 1;
                     if depth == 0 {
@@ -812,7 +836,7 @@ impl Parser {
                 continue;
             }
             // Check for nested: list(...) or [...]
-            if self.peek() == Token::LBracket {
+            if matches!(self.peek(), Token::LBracket(_)) {
                 self.advance(); // consume '['
                 let nested = self.parse_list_targets(&Token::RBracket)?;
                 self.expect(&Token::RBracket)?;
@@ -831,8 +855,10 @@ impl Parser {
                     ));
                 }
             } else if let Token::Variable(_, _) = self.peek() {
-                let target = self.parse_expr()?;
-                if self.peek() == Token::LBracket && self.peek_at(1) == Token::RBracket {
+                let target = self.parse_empty_dimension_target_prefix()?;
+                if matches!(self.peek(), Token::LBracket(_))
+                    && self.peek_at(1) == Token::RBracket
+                {
                     if !matches!(
                         &target,
                         Expr::Variable(_)

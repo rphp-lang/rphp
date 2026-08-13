@@ -471,6 +471,46 @@ fn test_e2e_array_append_assignments_chain_and_produce_the_assigned_value() {
 }
 
 #[test]
+fn empty_array_dimensions_reject_reads_and_unsets_but_allow_append_writes() {
+    fn compile_error(source: &str) -> String {
+        let tokens = Lexer::new(source).tokenize().expect("source must lex");
+        let statements = Parser::new(tokens).parse().expect("source must parse");
+        match Compiler::new().compile(&statements) {
+            Ok(_) => panic!("empty read or unset dimension must fail during compilation"),
+            Err(error) => error,
+        }
+    }
+
+    for source in [
+        "<?php\nif (false) { isset($slots[]); }",
+        "<?php\n$result = empty($slots['missing'][]);",
+        "<?php\n$result = $slots[] ?? 'fallback';",
+        "<?php\n$result = $slots[];",
+    ] {
+        assert_eq!(
+            compile_error(source),
+            "Cannot use [] for reading on line 2",
+            "{source}"
+        );
+    }
+    assert_eq!(
+        compile_error("<?php\nunset($slots['missing'][]);"),
+        "Cannot use [] for unsetting on line 2"
+    );
+    assert_eq!(
+        compile_error("<?php\nisset($slots\n[]);"),
+        "Cannot use [] for reading on line 2"
+    );
+
+    assert_eq!(
+        run_php(
+            "<?php $slots = []; $slots[] = 7; $slots['nested'][] = 9; echo $slots[0], '|', $slots['nested'][0];"
+        ),
+        "7|9"
+    );
+}
+
+#[test]
 fn test_e2e_cast_wraps_the_value_produced_by_a_following_assignment() {
     assert_eq!(
         run_php(

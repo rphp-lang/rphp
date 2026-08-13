@@ -526,7 +526,7 @@ impl<'a> Lexer<'a> {
 
     fn emit_array_access_tokens(tokens: &mut Vec<Token>, name: &str, index: &str) {
         tokens.push(Token::Variable(name.to_string(), 0));
-        tokens.push(Token::LBracket);
+        tokens.push(Token::LBracket(0));
         if let Ok(index) = index.parse::<i64>() {
             tokens.push(Token::Integer(index));
         } else {

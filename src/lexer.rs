@@ -119,29 +119,29 @@ pub enum Token {
     At,                     // @ (error-control operator)
     Colon,                  // :
     // Punctuation
-    Semicolon,   // ;
-    LParen,      // (
-    RParen,      // )
-    LBrace,      // {
-    RBrace,      // }
-    Comma,       // ,
-    LBracket,    // [
-    RBracket,    // ]
-    DoubleArrow, // =>
-    Arrow,       // ->
-    NullSafe,    // ?->
-    DoubleColon, // ::
-    Fn,          // fn (arrow functions)
-    Use,         // use (closure use)
-    Pipe,        // | (bitwise or, multi-catch separator)
-    Ampersand,   // & (bitwise and, reference)
-    Caret,       // ^ (bitwise xor)
-    Tilde,       // ~ (bitwise not)
-    StarStar,    // ** (power)
-    Spaceship,   // <=> (spaceship)
-    ShiftLeft,   // <<
-    ShiftRight,  // >>
-    DotDotDot,   // ... (variadic / spread)
+    Semicolon,       // ;
+    LParen,          // (
+    RParen,          // )
+    LBrace,          // {
+    RBrace,          // }
+    Comma,           // ,
+    LBracket(usize), // [ with source line
+    RBracket,        // ]
+    DoubleArrow,     // =>
+    Arrow,           // ->
+    NullSafe,        // ?->
+    DoubleColon,     // ::
+    Fn,              // fn (arrow functions)
+    Use,             // use (closure use)
+    Pipe,            // | (bitwise or, multi-catch separator)
+    Ampersand,       // & (bitwise and, reference)
+    Caret,           // ^ (bitwise xor)
+    Tilde,           // ~ (bitwise not)
+    StarStar,        // ** (power)
+    Spaceship,       // <=> (spaceship)
+    ShiftLeft,       // <<
+    ShiftRight,      // >>
+    DotDotDot,       // ... (variadic / spread)
     Eof,
 }
 
@@ -442,7 +442,11 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'[' => {
-                    tokens.push(Token::LBracket);
+                    let line = 1 + self.src[..self.pos]
+                        .iter()
+                        .filter(|byte| **byte == b'\n')
+                        .count();
+                    tokens.push(Token::LBracket(line));
                     self.pos += 1;
                 }
                 b']' => {

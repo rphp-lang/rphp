@@ -5,7 +5,7 @@ impl Parser {
     fn parse_dynamic_new_class_expression(&mut self, mut expr: Expr) -> Result<Expr, String> {
         loop {
             match self.peek() {
-                Token::LBracket if self.peek_at(1) != Token::RBracket => {
+                Token::LBracket(_) if self.peek_at(1) != Token::RBracket => {
                     self.advance();
                     let index = self.parse_expr()?;
                     self.expect(&Token::RBracket)?;
@@ -133,14 +133,28 @@ impl Parser {
     /// Parse every PHP postfix family from one left-to-right loop so literals,
     /// calls, arrays, closures and named/static expressions cannot drift apart.
     fn parse_postfix_chain(&mut self, mut expr: Expr) -> Result<Expr, String> {
+        let expression_line = self.last_primary_line;
         loop {
             match self.peek() {
-                Token::LBracket => {
+                Token::LBracket(line) => {
                     // An empty dimension is only valid as a write target. Leave
                     // it for the statement parser instead of trying to parse
                     // `]` as an index expression.
                     if self.peek_at(1) == Token::RBracket {
-                        break;
+                        if self.preserve_empty_dimension_suffix
+                            || self.peek_at(2) == Token::Assign
+                        {
+                            break;
+                        }
+                        self.advance();
+                        self.advance();
+                        let message = if self.empty_dimension_unset_context {
+                            "Cannot use [] for unsetting"
+                        } else {
+                            "Cannot use [] for reading"
+                        };
+                        expr = self.compile_error(message, expression_line.unwrap_or(line));
+                        continue;
                     }
                     self.advance();
                     let index = self.parse_expr()?;

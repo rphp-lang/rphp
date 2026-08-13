@@ -7,6 +7,9 @@ impl Parser {
             class_scope_active: false,
             generic_scopes: Vec::new(),
             deferred_compile_error: None,
+            empty_dimension_unset_context: false,
+            preserve_empty_dimension_suffix: false,
+            last_primary_line: None,
         }
     }
 
@@ -182,7 +185,7 @@ impl Parser {
             Token::Variable(_, _) => {
                 // Peek ahead to determine statement type
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
-                if next == Token::LBracket {
+                if matches!(next, Token::LBracket(_)) {
                     // Could be $a[] = ..., $a[idx] = ..., or expression
                     // Check for $a[] = (array push)
                     let is_push = self.tokens.get(self.pos + 2) == Some(&Token::RBracket)
@@ -216,8 +219,8 @@ impl Parser {
                             _ => unreachable!(),
                         };
                         let mut indices = Vec::new();
-                        while self.peek() == Token::LBracket {
-                            self.advance();
+                        while matches!(self.peek(), Token::LBracket(_)) {
+                            self.expect_lbracket()?;
                             indices.push(self.parse_expr()?);
                             self.expect(&Token::RBracket)?;
                         }
@@ -258,7 +261,7 @@ impl Parser {
                     self.expect(&Token::Assign)?;
                     if self.peek() == Token::Ampersand {
                         self.advance();
-                        let target = self.parse_expr()?;
+                        let target = self.parse_empty_dimension_target_prefix()?;
                         if !self.is_empty_array_dimension_suffix() {
                             self.expect(&Token::Semicolon)?;
                             if var_name == "GLOBALS" {
@@ -289,7 +292,7 @@ impl Parser {
                         ) {
                             return Err("Invalid array reference target".into());
                         }
-                        self.expect(&Token::LBracket)?;
+                        self.expect_lbracket()?;
                         self.expect(&Token::RBracket)?;
                         self.expect(&Token::Semicolon)?;
                         return Ok(Stmt::BindArrayAppendReference {
@@ -541,7 +544,7 @@ impl Parser {
                 } else {
                     false
                 };
-                if self.peek() == Token::LBracket {
+                if matches!(self.peek(), Token::LBracket(_)) {
                     if first_by_ref {
                         return Err("Foreach destructuring target cannot be a reference".into());
                     }
@@ -571,7 +574,7 @@ impl Parser {
                     } else {
                         false
                     };
-                    let value = if self.peek() == Token::LBracket {
+                    let value = if matches!(self.peek(), Token::LBracket(_)) {
                         if by_ref {
                             return Err(
                                 "Foreach destructuring target cannot be a reference".into()
@@ -676,7 +679,7 @@ impl Parser {
                 self.advance();
                 self.expect(&Token::LParen)?;
                 let mut targets = Vec::new();
-                let mut expr = self.parse_expr()?;
+                let mut expr = self.parse_unset_target()?;
                 if !Self::is_variable_like(&expr) {
                     return Err("Cannot use unset() on the result of an expression".into());
                 }
@@ -686,7 +689,7 @@ impl Parser {
                 targets.push(expr);
                 while self.peek() == Token::Comma {
                     self.advance();
-                    let mut expr = self.parse_expr()?;
+                    let mut expr = self.parse_unset_target()?;
                     if !Self::is_variable_like(&expr) {
                         return Err("Cannot use unset() on the result of an expression".into());
                     }
@@ -761,7 +764,7 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 self.finish_static_property_statement(expr)
             }
-            Token::LBracket => {
+            Token::LBracket(_) => {
                 // Try short destructuring: [$a, $b] = expr;
                 if self.is_short_list_assign() {
                     return self.parse_short_list_assign();
@@ -913,7 +916,7 @@ impl Parser {
     }
 
     fn is_empty_array_dimension_suffix(&self) -> bool {
-        self.peek() == Token::LBracket && self.peek_at(1) == Token::RBracket
+        matches!(self.peek(), Token::LBracket(_)) && self.peek_at(1) == Token::RBracket
     }
 
     fn finish_array_append_statement(&mut self, target: Expr) -> Result<Stmt, String> {
@@ -934,7 +937,7 @@ impl Parser {
         ) {
             return Err("Invalid array append target".into());
         }
-        self.expect(&Token::LBracket)?;
+        self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
         let expr = self.parse_expr()?;

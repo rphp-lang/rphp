@@ -16,6 +16,13 @@ pub struct Parser {
     /// dead-branch elimination. The first one is replayed as a top-level AST
     /// marker after the full source has parsed successfully.
     deferred_compile_error: Option<(String, usize)>,
+    /// Empty dimensions use a distinct diagnostic in unset() targets.
+    empty_dimension_unset_context: bool,
+    /// Some write/reference grammars parse the target prefix first and consume
+    /// the trailing [] in their caller.
+    preserve_empty_dimension_suffix: bool,
+    /// Source line of the primary currently entering its postfix chain.
+    last_primary_line: Option<usize>,
 }
 
 include!("parser/generics.rs");

@@ -51,7 +51,7 @@ impl Parser {
         ) {
             return Err("Invalid array append target".into());
         }
-        self.expect(&Token::LBracket)?;
+        self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
         if self.peek() == Token::Ampersand {
@@ -696,6 +696,7 @@ impl Parser {
     /// Parse exactly one primary atom. Postfix operators are deliberately
     /// applied by `parse_power`, so every atom gets the same chaining grammar.
     fn parse_primary_atom(&mut self) -> Result<Expr, String> {
+        self.last_primary_line = None;
         match self.peek() {
             Token::Integer(_) => {
                 let val = match self.advance() {
@@ -735,9 +736,11 @@ impl Parser {
                     Token::Variable(n, line) => (n, line),
                     _ => unreachable!(),
                 };
+                self.last_primary_line = Some(line);
                 Ok(Self::variable_expression(name, line))
             }
-            Token::This(_) => {
+            Token::This(line) => {
+                self.last_primary_line = Some(line);
                 self.advance();
                 Ok(Expr::Variable("this".to_string()))
             }
@@ -1037,7 +1040,7 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 return Ok(Expr::Throw(Box::new(expr)));
             }
-            Token::LBracket => {
+            Token::LBracket(_) => {
                 // Short array syntax: [1, 2, 'a' => 3]
                 if self.is_short_list_assign() {
                     self.advance();
