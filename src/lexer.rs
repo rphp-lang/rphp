@@ -40,7 +40,7 @@ pub enum Token {
     Public,      // public
     Protected,   // protected
     Private,     // private
-    This,        // $this (handled as special variable)
+    This(usize), // $this with source line (handled as special variable)
     Extends,     // extends
     Static,      // static
     Instanceof,  // instanceof
@@ -481,12 +481,21 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 b'$' => {
+                    let variable_start = self.pos;
                     self.pos += 1;
                     let name = self.read_identifier();
                     if name.is_empty() {
                         return Err("Expected variable name after $".into());
                     }
-                    tokens.push(Token::Variable(name));
+                    if name == "this" {
+                        let line = 1 + self.src[..variable_start]
+                            .iter()
+                            .filter(|byte| **byte == b'\n')
+                            .count();
+                        tokens.push(Token::This(line));
+                    } else {
+                        tokens.push(Token::Variable(name));
+                    }
                 }
                 b'0'..=b'9' => {
                     tokens.push(self.read_number()?);
@@ -852,6 +861,7 @@ impl<'a> Lexer<'a> {
                 Token::Integer(_)
                     | Token::Float(_)
                     | Token::Variable(_)
+                    | Token::This(_)
                     | Token::StringLiteral(_)
                     | Token::RParen
                     | Token::RBracket
@@ -1185,7 +1195,7 @@ mod tests {
                 Token::StringLiteral("value=".into()),
                 Token::Dot,
                 Token::LParen,
-                Token::Variable("this".into()),
+                Token::This(1),
                 Token::Arrow,
                 Token::Identifier("render".into()),
                 Token::LParen,

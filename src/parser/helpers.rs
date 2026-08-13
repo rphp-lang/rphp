@@ -192,6 +192,7 @@ impl Parser {
         matches!(
             self.peek(),
             Token::Variable(_)
+                | Token::This(_)
                 | Token::DotDotDot
                 | Token::Ampersand
                 | Token::Question
@@ -623,8 +624,9 @@ impl Parser {
         } else {
             false
         };
-        let name = match self.advance() {
-            Token::Variable(n) => n,
+        let (name, line) = match self.advance() {
+            Token::Variable(n) => (n, 0),
+            Token::This(line) => ("this".to_string(), line),
             other => return Err(format!("Expected parameter variable, got {:?}", other)),
         };
         let default = if self.peek() == Token::Assign {
@@ -641,6 +643,7 @@ impl Parser {
         };
         Ok(Param {
             name,
+            line,
             default,
             is_variadic,
             is_ref,

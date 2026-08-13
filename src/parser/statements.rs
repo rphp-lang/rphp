@@ -693,6 +693,7 @@ impl Parser {
             | Token::Integer(_)
             | Token::Float(_)
             | Token::StringLiteral(_)
+            | Token::This(_)
             | Token::Null
             | Token::True
             | Token::False

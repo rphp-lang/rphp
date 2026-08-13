@@ -3051,6 +3051,12 @@ impl Compiler {
                 });
             }
         }
+        // Expression compilation can discover a nested declaration error
+        // after this statement's entry check. Surface it before a child
+        // function or method finalizes and loses the deferred diagnostic.
+        if let Some(err) = self.deferred_error.take() {
+            return Err(err);
+        }
         Ok(())
     }
 

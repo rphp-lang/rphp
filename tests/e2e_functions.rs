@@ -3,6 +3,34 @@ mod common;
 use common::{make_eg_with_capture, run_php, run_php_expect_error, run_php_with_functions};
 
 #[test]
+fn reserved_this_parameter_is_rejected_without_aliasing_receiver_storage() {
+    for source in [
+        "<?php\nfunction captureReserved($this) {}",
+        "<?php\nclass Worker { public function run($this) {} }",
+        "<?php\n$callback = function ($this) {};",
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(
+            matches!(error, execute::VmError::Fatal(ref message) if message == "Cannot use $this as parameter on line 2"),
+            "{error:?}"
+        );
+    }
+
+    let nested_error = run_php_expect_error(
+        "<?php\nclass CallbackFactory {\n    public function create() { return function ($this) {}; }\n}",
+    );
+    assert!(
+        matches!(nested_error, execute::VmError::Fatal(ref message) if message == "Cannot use $this as parameter on line 3"),
+        "{nested_error:?}"
+    );
+
+    assert_eq!(
+        run_php("<?php function preserveCase($THIS) { return $THIS; } echo preserveCase('ok');"),
+        "ok"
+    );
+}
+
+#[test]
 fn undefined_variables_are_passed_as_null_arguments() {
     assert_eq!(
         run_php(

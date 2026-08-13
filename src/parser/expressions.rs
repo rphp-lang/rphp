@@ -414,9 +414,10 @@ impl Parser {
                         expr: Box::new(left),
                         class_name: "static".to_string(),
                     }
-                } else if matches!(self.peek(), Token::Variable(_)) {
+                } else if matches!(self.peek(), Token::Variable(_) | Token::This(_)) {
                     let class = match self.advance() {
                         Token::Variable(name) => Expr::Variable(name),
+                        Token::This(_) => Expr::Variable("this".to_string()),
                         _ => unreachable!(),
                     };
                     let class = self.parse_dynamic_new_class_expression(class)?;
@@ -572,9 +573,13 @@ impl Parser {
                             expr: Box::new(expr),
                             class_name: "static".to_string(),
                         }
-                    } else if let Token::Variable(class_name) = self.peek() {
-                        self.advance();
-                        let class = self.parse_dynamic_new_class_expression(Expr::Variable(class_name))?;
+                    } else if matches!(self.peek(), Token::Variable(_) | Token::This(_)) {
+                        let class = match self.advance() {
+                            Token::Variable(name) => Expr::Variable(name),
+                            Token::This(_) => Expr::Variable("this".to_string()),
+                            _ => unreachable!(),
+                        };
+                        let class = self.parse_dynamic_new_class_expression(class)?;
                         Expr::DynamicInstanceof {
                             expr: Box::new(expr),
                             class: Box::new(class),
@@ -713,6 +718,10 @@ impl Parser {
                     _ => unreachable!(),
                 };
                 Ok(Expr::Variable(name))
+            }
+            Token::This(_) => {
+                self.advance();
+                Ok(Expr::Variable("this".to_string()))
             }
             Token::PlusPlus => {
                 self.advance();
@@ -962,10 +971,13 @@ impl Parser {
                         methods,
                     });
                 }
-                if let Token::Variable(class_name) = self.peek() {
-                    self.advance();
-                    let class = self
-                        .parse_dynamic_new_class_expression(Expr::Variable(class_name))?;
+                if matches!(self.peek(), Token::Variable(_) | Token::This(_)) {
+                    let class = match self.advance() {
+                        Token::Variable(name) => Expr::Variable(name),
+                        Token::This(_) => Expr::Variable("this".to_string()),
+                        _ => unreachable!(),
+                    };
+                    let class = self.parse_dynamic_new_class_expression(class)?;
                     let args = if self.peek() == Token::LParen {
                         self.advance();
                         self.parse_call_args()?

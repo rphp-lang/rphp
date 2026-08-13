@@ -507,6 +507,8 @@ pub struct GenericAncestor {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub name: std::string::String,
+    /// Declaration line used by compile-time parameter diagnostics.
+    pub line: usize,
     pub default: Option<Expr>,
     pub is_variadic: bool,
     pub is_ref: bool,

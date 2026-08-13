@@ -2807,6 +2807,9 @@ impl Compiler {
         let mut type_hints = Vec::new();
         let mut param_names = Vec::new();
         for (i, param) in params.iter().enumerate() {
+            if param.name == "this" {
+                return Err(self.goto_error("Cannot use $this as parameter", param.line));
+            }
             if param.is_ref && i < 64 {
                 ref_args |= 1u64 << i;
             }
