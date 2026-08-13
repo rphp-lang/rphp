@@ -97,6 +97,106 @@ fn real_php_finite_string_method_and_hash_update_enter_one_native_region() {
 }
 
 #[test]
+fn real_php_read_only_dynamic_string_hash_lookups_enter_native_regions() {
+    let cases = [
+        (
+            "literal assignments",
+            "<?php $values = ['left' => 3, 'right' => 5]; $key = 'left'; $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $values[$key]; if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } } echo $sum . ':' . $key . ':' . $i;",
+            "400000:left:100000",
+        ),
+        (
+            "guarded CV sources",
+            "<?php $values = ['left' => 3, 'right' => 5]; $left = 'left'; $right = 'right'; $key = $left; $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $values[$key]; if (($i % 2) == 0) { $key = $right; } else { $key = $left; } } echo $sum . ':' . $key . ':' . $i;",
+            "400000:left:100000",
+        ),
+        (
+            "shared read-only array",
+            "<?php $values = ['left' => 3, 'right' => 5]; $copy = $values; $key = 'left'; $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $values[$key]; if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } } echo $sum . ':' . $key . ':' . $i . ':' . $copy['right'];",
+            "400000:left:100000:5",
+        ),
+    ];
+
+    for (label, source, expected) in cases {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        let compilation = Compiler::new().compile(&statements).unwrap();
+        let main = make_user_function(compilation.main);
+        let (mut globals, output) = common::make_eg_with_capture();
+
+        execute::execute(&mut globals, &main).unwrap();
+        drop(globals);
+        assert_eq!(captured_output(&output), expected);
+
+        let plan = main
+            .op_array
+            .block_plans
+            .iter()
+            .find_map(|plan| match plan {
+                BlockPlan::QuickLongOps(plan) => Some(plan),
+                _ => None,
+            })
+            .expect("compiler should retain the read-only dynamic hash loop");
+        assert!(
+            plan.native_jit().is_straight_compiled(),
+            "{label} should compile as one native straight region; ops={:#?}",
+            plan.ops
+        );
+        assert_eq!(plan.native_jit().native_entries(), 1);
+        assert!(plan.native_jit().native_chunks() > 1);
+        assert_eq!(plan.native_jit().side_exits(), 0);
+    }
+}
+
+#[test]
+fn read_only_hash_context_rejects_missing_non_long_or_referenced_entry_before_native_entry() {
+    let cases = [
+        (
+            "missing but unreachable payload",
+            "<?php $values = ['left' => 1]; $key = 'left'; $last = 0; $sum = 0; for ($i = 0; $i < 100; $i++) { $last = $values[$key]; $sum += $i; if ($i < 0) { $key = 'missing'; } else { $key = 'left'; } } echo $sum . ':' . $last . ':' . $key . ':' . $i;",
+            "4950:1:left:100",
+        ),
+        (
+            "non-Long payload",
+            "<?php $values = ['left' => 1, 'right' => 'marker']; $key = 'left'; $last = 0; $sum = 0; for ($i = 0; $i < 100; $i++) { $last = $values[$key]; $sum += $i; if ($i == 98) { $key = 'right'; } else { $key = 'left'; } } echo $sum . ':' . $last . ':' . $key . ':' . $i;",
+            "4950:marker:left:100",
+        ),
+        (
+            "referenced Long payload",
+            "<?php $values = ['left' => 1, 'right' => 2]; $alias =& $values['right']; $key = 'left'; $last = 0; $sum = 0; for ($i = 0; $i < 100; $i++) { $last = $values[$key]; $sum += $i; if ($i == 98) { $key = 'right'; } else { $key = 'left'; } } echo $sum . ':' . $last . ':' . $key . ':' . $i . ':' . $alias;",
+            "4950:2:left:100:2",
+        ),
+    ];
+
+    for (label, source, expected) in cases {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        let compilation = Compiler::new().compile(&statements).unwrap();
+        let main = make_user_function(compilation.main);
+        let (mut globals, output) = common::make_eg_with_capture();
+
+        execute::execute(&mut globals, &main).unwrap();
+        drop(globals);
+        assert_eq!(
+            captured_output(&output),
+            expected,
+            "{label} should complete through the canonical path"
+        );
+
+        let plan = main
+            .op_array
+            .block_plans
+            .iter()
+            .find_map(|plan| match plan {
+                BlockPlan::QuickLongOps(plan) => Some(plan),
+                _ => None,
+            })
+            .expect("compiler should retain the guarded read-only hash loop");
+        assert_eq!(plan.native_jit().native_entries(), 0, "{label}");
+        assert_eq!(plan.native_jit().side_exits(), 0, "{label}");
+    }
+}
+
+#[test]
 fn native_mixed_hash_region_replays_taken_cold_edge_after_prior_store() {
     let source = "<?php class MixedColdModel { public function score(int $value, string $key): int { return $value + strlen($key); } } $model = new MixedColdModel(); $values = ['left' => 0, 'right' => 0]; $key = 'left'; $needle = 73; for ($i = 0; $i < 1000; $i++) { if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } $score = $model->score($i, $key); $values[$key] = $values[$key] + $score; if ($i === $needle) { echo 'hit:' . $i . '|'; } } echo $values['left'] . ':' . $values['right'] . ':' . $i;";
     let tokens = Lexer::new(source).tokenize().unwrap();

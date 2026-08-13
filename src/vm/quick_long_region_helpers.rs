@@ -74,14 +74,14 @@ fn instruction_writes_cv(instruction: crate::vm::instruction::Instruction, cv: u
         && instruction.op1 == cv
 }
 
-fn preheader_string_literal_cv(op_array: &OpArray, header_ip: usize, cv: u16) -> bool {
+fn preheader_string_literal_cv(op_array: &OpArray, header_ip: usize, cv: u16) -> Option<u16> {
     op_array.instructions[..header_ip]
         .iter()
         .rev()
         .copied()
         .find(|instruction| instruction_writes_cv(*instruction, cv))
-        .is_some_and(|instruction| {
-            instruction.opcode == OpCode::AssignCv
+        .and_then(|instruction| {
+            (instruction.opcode == OpCode::AssignCv
                 && instruction.op1_type == OpType::Cv
                 && instruction.op2_type == OpType::Const
                 && instruction.result_type == OpType::Unused
@@ -89,7 +89,8 @@ fn preheader_string_literal_cv(op_array: &OpArray, header_ip: usize, cv: u16) ->
                     .literals
                     .get(instruction.op2 as usize)
                     .and_then(Value::as_str)
-                    .is_some()
+                    .is_some())
+            .then_some(instruction.op2)
         })
 }
 

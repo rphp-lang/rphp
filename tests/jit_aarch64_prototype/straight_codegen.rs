@@ -633,6 +633,49 @@ fn finite_string_hash_operations_use_runtime_context_without_embedded_pointers()
 }
 
 #[test]
+fn invalid_finite_string_token_side_exits_at_read_only_hash_load() {
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::HashLoad {
+        key: 2,
+        entry_base: 0,
+        token_count: 2,
+        result: 3,
+        destination: Some(4),
+    };
+    let program = CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 1,
+        post_result: None,
+    })
+    .expect("guarded read-only hash load should lower");
+
+    let mut left = 7i64;
+    let mut right = 20i64;
+    let mut entries = [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+    entries[0] = &mut left;
+    entries[1] = &mut right;
+    let mut slots = [0i64; 64];
+    slots[1] = 1;
+    slots[2] = 3;
+    slots[3] = -1;
+    slots[4] = -2;
+    let outcome = program.call_with_context(&mut slots, 8, &entries).unwrap();
+
+    assert_eq!(
+        outcome.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(outcome.failed_operation, Some(0));
+    assert_eq!(slots[0], 0);
+    assert_eq!(slots[3], -1);
+    assert_eq!(slots[4], -2);
+    assert_eq!(left, 7);
+    assert_eq!(right, 20);
+}
+
+#[test]
 fn straight_long_loop_reports_exact_failed_operation_transactionally() {
     let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::BinaryAssign {

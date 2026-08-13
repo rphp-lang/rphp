@@ -201,6 +201,53 @@ fn invalid_finite_string_token_side_exits_before_hash_mutation() {
     assert_eq!(left, 7);
     assert_eq!(right, 20);
 }
+
+#[test]
+fn invalid_finite_string_token_side_exits_at_read_only_hash_load() {
+    let mut operations =
+        [NativeStraightLongOperation::Unused; super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::HashLoad {
+        key: 2,
+        entry_base: 0,
+        token_count: 2,
+        result: 3,
+        destination: Some(4),
+    };
+    let program = CompiledX86StraightLongLoop::compile(NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 1,
+        post_result: None,
+    })
+    .expect("guarded read-only hash load should lower on x86");
+
+    let mut left = 7i64;
+    let mut right = 20i64;
+    let mut entries =
+        [std::ptr::null_mut(); super::super::NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+    entries[0] = &mut left;
+    entries[1] = &mut right;
+    let mut slots = [0i64; 64];
+    slots[1] = 1;
+    slots[2] = 3;
+    slots[3] = -1;
+    slots[4] = -2;
+    let outcome = program
+        .call_chunk_with_context(&mut slots, 8, &entries)
+        .unwrap();
+
+    assert_eq!(
+        outcome.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(outcome.failed_operation, Some(0));
+    assert_eq!(slots[0], 0);
+    assert_eq!(slots[3], -1);
+    assert_eq!(slots[4], -2);
+    assert_eq!(left, 7);
+    assert_eq!(right, 20);
+}
 use crate::jit::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS;
 use crate::vm::function::{ScalarLongProgram, ScalarLongSelect};
 

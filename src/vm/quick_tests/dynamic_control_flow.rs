@@ -98,6 +98,8 @@ for ($i = 0; $i < 100; $i++) {
         assert!(plan.string_input_mask != 0);
         assert_eq!(plan.string_input_mask, plan.string_output_mask);
         assert_eq!(plan.string_cache_capacity, 2);
+        assert_eq!(plan.finite_string_literal_count, 2);
+        assert!(!plan.finite_string_literal_overflow);
         assert!(plan.ops.iter().any(|op| matches!(
             op,
             QuickLongOp::FetchArrayLong {
@@ -300,6 +302,8 @@ for ($i = 0; $i < 100; $i++) {
         assert_eq!(plan.string_input_mask.count_ones(), 3);
         assert_eq!(plan.string_output_mask.count_ones(), 1);
         assert_eq!(plan.string_cache_capacity, 2);
+        assert_eq!(plan.finite_string_literal_count, 2);
+        assert!(!plan.finite_string_literal_overflow);
         assert_eq!(
             plan.ops
                 .iter()
@@ -307,6 +311,34 @@ for ($i = 0; $i < 100; $i++) {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn marks_native_finite_string_tables_that_exceed_the_shared_limit() {
+        let plan = long_ops_plan(
+            "<?php
+$values = ['a' => 1, 'b' => 2, 'c' => 3, 'd' => 4, 'e' => 5];
+$key = 'a';
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    $remainder = $i % 5;
+    if ($remainder == 0) {
+        $key = 'a';
+    } else if ($remainder == 1) {
+        $key = 'b';
+    } else if ($remainder == 2) {
+        $key = 'c';
+    } else if ($remainder == 3) {
+        $key = 'd';
+    } else {
+        $key = 'e';
+    }
+}
+",
+        );
+        assert_eq!(plan.finite_string_literal_count, 4);
+        assert!(plan.finite_string_literal_overflow);
     }
 
     #[test]

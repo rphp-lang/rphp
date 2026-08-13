@@ -73,25 +73,19 @@ unsafe fn native_quick_long_mixed_kernel(
         return None;
     }
 
+    if plan.finite_string_literal_overflow {
+        return None;
+    }
     let mut string_literals = [0u16; NATIVE_FINITE_STRING_LIMIT];
     let mut string_lengths = [0i64; NATIVE_FINITE_STRING_LIMIT];
-    let mut string_token_count = 0usize;
-    for operation in plan.ops.iter().copied() {
-        let QuickLongOp::AssignStringLiteral { literal, .. } = operation else {
-            continue;
-        };
-        if string_literals[..string_token_count].contains(&literal) {
-            continue;
-        }
-        if string_token_count == NATIVE_FINITE_STRING_LIMIT {
-            return None;
-        }
-        string_literals[string_token_count] = literal;
-        string_lengths[string_token_count] = i64::try_from(
+    let string_token_count = usize::from(plan.finite_string_literal_count);
+    for token in 0..string_token_count {
+        let literal = plan.finite_string_literals[token];
+        string_literals[token] = literal;
+        string_lengths[token] = i64::try_from(
             op_array.literals.get(literal as usize)?.as_str()?.len(),
         )
         .ok()?;
-        string_token_count += 1;
     }
     let mut builder = NativeMixedBuildState {
         operations: [NativeStraightLongOperation::Unused;
@@ -127,7 +121,7 @@ unsafe fn native_quick_long_mixed_kernel(
     let mut trace_guard_condition_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut trace_guard_expected = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut trace_guard_count = 0usize;
-    let mut has_hash_update = false;
+    let mut has_hash_load = false;
     let mut has_indexed_load = false;
     let mut has_indexed_store = false;
     let mut has_virtual_pipeline = false;
@@ -536,12 +530,12 @@ unsafe fn native_quick_long_mixed_kernel(
                 index: QuickArrayIndex::ValueSlot(key),
                 result,
                 destination,
+                next_target,
                 resume_ip,
-                ..
             } => {
-                let fusion = plan.array_update_fusions.get(plan_index).copied().flatten()?;
-                if plan_index + 2 >= body_end
-                    || fusion.next_target.op_index() != Some(plan_index + 3)
+                let fusion = plan.array_update_fusions.get(plan_index).copied().flatten();
+                if next_target.op_index() != Some(plan_index + 1)
+                    || string_token_count == 0
                     || builder.context_count + string_token_count
                         > NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
                 {
@@ -551,6 +545,11 @@ unsafe fn native_quick_long_mixed_kernel(
                 for token in 0..string_token_count {
                     builder.context_array_slots[builder.context_count] = array;
                     builder.context_tokens[builder.context_count] = token as u8;
+                    builder.context_kinds[builder.context_count] = if fusion.is_some() {
+                        NativeMixedContextKind::Entry
+                    } else {
+                        NativeMixedContextKind::ReadOnlyEntry
+                    };
                     builder.context_count += 1;
                 }
                 plan_to_native[plan_index] = builder.operation_count as u8;
@@ -564,6 +563,16 @@ unsafe fn native_quick_long_mixed_kernel(
                     },
                     resume_ip,
                 )?;
+                has_hash_load = true;
+                let Some(fusion) = fusion else {
+                    plan_index += 1;
+                    continue;
+                };
+                if plan_index + 2 >= body_end
+                    || fusion.next_target.op_index() != Some(plan_index + 3)
+                {
+                    return None;
+                }
                 plan_to_native[plan_index + 1] = builder.operation_count as u8;
                 builder.append(
                     NativeStraightLongOperation::Binary {
@@ -591,7 +600,6 @@ unsafe fn native_quick_long_mixed_kernel(
                     },
                     store_resume_ip,
                 )?;
-                has_hash_update = true;
                 plan_index += 2;
             }
             QuickLongOp::FetchArrayLong {
@@ -863,7 +871,7 @@ unsafe fn native_quick_long_mixed_kernel(
     if has_property_read && (has_property_binding || has_typed_method || has_virtual_pipeline) {
         return None;
     }
-    if (!has_hash_update
+    if (!has_hash_load
         && !has_indexed_load
         && !has_indexed_store
         && !has_virtual_pipeline
@@ -871,6 +879,7 @@ unsafe fn native_quick_long_mixed_kernel(
         && !has_property_read)
         || (!has_typed_method
             && !has_property_read
+            && !has_hash_load
             && !has_indexed_load
             && !has_indexed_store)
         || builder.operation_count == 0

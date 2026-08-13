@@ -1113,6 +1113,12 @@ pub struct QuickLongOpsLoop {
     pub string_input_mask: u64,
     pub string_output_mask: u64,
     pub string_append_mask: u64,
+    /// Complete finite set of literals proven for retained dynamic String
+    /// assignments, including immutable preheader CV sources. Native dispatch
+    /// guards every tokenized String input against this table.
+    pub finite_string_literals: [u16; QUICK_STRING_FETCH_CACHE_LIMIT],
+    pub finite_string_literal_count: u8,
+    pub finite_string_literal_overflow: bool,
     pub object_input_mask: u64,
     pub typed_invariant_source: Option<QuickTypedInvariantSource>,
     pub string_cache_capacity: u8,

@@ -253,6 +253,28 @@ unsafe fn run_native_quick_long_mixed_kernel(
                 }
                 context_pointers[index] = value as *mut Value as *mut i64;
             }
+            NativeMixedContextKind::ReadOnlyEntry => {
+                let Some(array) =
+                    (*slot_base.add(kernel.context_array_slots[index] as usize)).as_array()
+                else {
+                    return Ok(None);
+                };
+                let token = kernel.context_tokens[index] as usize;
+                let key = op_array.literals[kernel.string_literals[token] as usize]
+                    .as_str()
+                    .unwrap_unchecked();
+                let value = match canonical_decimal_array_key(key) {
+                    Some(key) => array.get_int(key),
+                    None => array.get_str(key),
+                };
+                let Some(value) = value else {
+                    return Ok(None);
+                };
+                if value.value_type() != ValueType::Long || value.is_reference() {
+                    return Ok(None);
+                }
+                context_pointers[index] = value as *const Value as *mut i64;
+            }
         }
     }
 

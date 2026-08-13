@@ -281,6 +281,15 @@ This is a coverage extension, not a benchmark recognizer: admission depends on
 the existing typed `ValueSlot` key, immutable guarded array and exact fetch
 contract, never on key text, variable names or workload identity.
 
+Completion note (2026-08-13): this selected checkpoint is now implemented and
+verified on ARM64 and physical x86-64. Both isolated controls enter one native
+`typed_ops_loop` with zero side exits, exact fallback tests cover invalid
+tokens plus missing/non-Long/referenced entries, and the target and regression
+distributions pass the dual-architecture gate. The historical selection table
+above remains frozen at its named baseline; the current capability row,
+methodology and full evidence are recorded in
+[`performance-native-string-hash-read.md`](performance-native-string-hash-read.md).
+
 ## Reproduction
 
 Run the complete timing and telemetry scorecard, including the structural
