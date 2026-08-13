@@ -61,9 +61,11 @@ boundary and must not execute untrusted code.
 
 ## Detailed direction
 
-The [runtime roadmap](roadmap-runtime-architecture.md) records source
-boundaries, coroutine work, and accepted checkpoints. The
-[performance/JIT roadmap](roadmap-performance-jit-compatibility.md) records
-the optimization contract, native backends, compatibility work, and
-measurement history. Those documents are engineering logs, not promises of a
-stable public API or release schedule.
+The [active roadmap](roadmap.md) coordinates the separate
+[compatibility](roadmap-compatibility.md) and
+[execution/performance](roadmap-execution-performance.md) workstreams. The
+[runtime architecture log](roadmap-runtime-architecture.md) and the older
+[combined performance/JIT/compatibility log](roadmap-performance-jit-compatibility.md)
+retain source-boundary decisions, rejected candidates, accepted checkpoints and
+measurement history. These documents are engineering direction, not promises
+of a stable public API or release schedule.

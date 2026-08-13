@@ -1,5 +1,27 @@
 # RPHP workspace rules
 
+## Specialized workstreams
+
+- A goal assigned to the **Compatibility Agent** must follow
+  `docs/agent-strategy-compatibility.md` and
+  `docs/roadmap-compatibility.md`.
+- A goal assigned to the **Execution & Performance Agent** must follow
+  `docs/agent-strategy-execution-performance.md` and
+  `docs/roadmap-execution-performance.md`.
+- Both agents use `docs/agent-goal-contract.md` for goal intake, checkpoint
+  evidence and handoff. The user may supply only a role and desired outcome;
+  the assigned agent is responsible for deriving the bounded checkpoint and
+  its verification plan from those documents.
+- Keep one active implementation goal per specialized agent. Use a dedicated
+  `codex/compat-*` or `codex/perf-*` branch and an isolated worktree. Never let
+  two agents edit the same checkout.
+- The integrating agent owns `docs/roadmap.md`, resolves temporary ownership of
+  shared compiler/runtime files, chooses merge order and runs the final joint
+  gate. Specialized agents update their own roadmap only as part of an accepted
+  checkpoint or when the integrating agent asks them to do so.
+- User instructions and the safety, cleanup and public-repository rules in this
+  file take precedence over a workstream strategy.
+
 ## Build artifact hygiene
 
 - Treat build cleanup as a mandatory automatic lifecycle hook. Do not wait for

@@ -87,9 +87,14 @@ described in the [runtime roadmap](docs/roadmap-runtime-architecture.md).
 ## Design and roadmaps
 
 - [Architecture](docs/architecture.md)
+- [Active engineering roadmap](docs/roadmap.md)
 - [Compatibility status](docs/compatibility.md)
-- [Runtime and coroutine roadmap](docs/roadmap-runtime-architecture.md)
-- [Performance, JIT, and compatibility roadmap](docs/roadmap-performance-jit-compatibility.md)
+- [Compatibility roadmap](docs/roadmap-compatibility.md)
+- [Execution and performance roadmap](docs/roadmap-execution-performance.md)
+- [Specialized agent goal contract](docs/agent-goal-contract.md)
+- [Runtime architecture engineering log](docs/roadmap-runtime-architecture.md)
+- [Combined performance/JIT/compatibility engineering
+  log](docs/roadmap-performance-jit-compatibility.md)
 - [Benchmark methodology](docs/benchmarking.md)
 - [Unsafe-code policy](docs/unsafe-policy.md)
 - [Code provenance policy](docs/provenance.md)

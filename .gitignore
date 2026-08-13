@@ -5,9 +5,15 @@
 .idea
 docs/*
 !docs/architecture.md
+!docs/agent-goal-contract.md
+!docs/agent-strategy-compatibility.md
+!docs/agent-strategy-execution-performance.md
 !docs/benchmarking.md
 !docs/compatibility.md
 !docs/performance-dispatch-analysis.md
+!docs/roadmap.md
+!docs/roadmap-compatibility.md
+!docs/roadmap-execution-performance.md
 !docs/provenance.md
 !docs/roadmap-performance-jit-compatibility.md
 !docs/roadmap-runtime-architecture.md
