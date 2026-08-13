@@ -193,6 +193,9 @@ pub enum OpCode {
     BindGlobalRef = 155,
     /// Bind one request-global entry by reference to op2(CV).
     AssignGlobalRef = 156,
+    /// Materialize a value snapshot of the request-global symbol table.
+    /// The result excludes the GLOBALS pseudo-variable itself.
+    FetchGlobals = 157,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

@@ -70,11 +70,11 @@ pub enum Token {
         line: usize,
     },
     // Literals
-    Integer(i64),          // 42, -1
-    Float(f64),            // 3.14, 1.5e10
-    StringLiteral(String), // "hello", 'world'
-    Variable(String),      // $a, $foo
-    Identifier(String),    // my_double, strlen
+    Integer(i64),            // 42, -1
+    Float(f64),              // 3.14, 1.5e10
+    StringLiteral(String),   // "hello", 'world'
+    Variable(String, usize), // $a, $foo with source line
+    Identifier(String),      // my_double, strlen
     MagicConstant {
         name: String,
         line: usize,
@@ -487,14 +487,14 @@ impl<'a> Lexer<'a> {
                     if name.is_empty() {
                         return Err("Expected variable name after $".into());
                     }
+                    let line = 1 + self.src[..variable_start]
+                        .iter()
+                        .filter(|byte| **byte == b'\n')
+                        .count();
                     if name == "this" {
-                        let line = 1 + self.src[..variable_start]
-                            .iter()
-                            .filter(|byte| **byte == b'\n')
-                            .count();
                         tokens.push(Token::This(line));
                     } else {
-                        tokens.push(Token::Variable(name));
+                        tokens.push(Token::Variable(name, line));
                     }
                 }
                 b'0'..=b'9' => {
@@ -860,7 +860,7 @@ impl<'a> Lexer<'a> {
             Some(
                 Token::Integer(_)
                     | Token::Float(_)
-                    | Token::Variable(_)
+                    | Token::Variable(_, _)
                     | Token::This(_)
                     | Token::StringLiteral(_)
                     | Token::RParen
@@ -985,12 +985,12 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Variable("a".into()),
+                Token::Variable("a".into(), 1),
                 Token::Assign,
                 Token::Integer(42),
                 Token::Semicolon,
                 echo(1),
-                Token::Variable("a".into()),
+                Token::Variable("a".into(), 1),
                 Token::Semicolon,
                 Token::Eof,
             ]
@@ -1004,7 +1004,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Variable("value".into()),
+                Token::Variable("value".into(), 1),
                 Token::QuestionQuestionAssign,
                 Token::Integer(42),
                 Token::Semicolon,
@@ -1084,7 +1084,7 @@ mod tests {
                 },
                 Token::Identifier("finish".into()),
                 Token::Semicolon,
-                Token::Variable("object".into()),
+                Token::Variable("object".into(), 2),
                 Token::Arrow,
                 Token::Identifier("goto".into()),
                 Token::LParen,
@@ -1123,13 +1123,13 @@ mod tests {
                 Token::OpenTag,
                 Token::If,
                 Token::LParen,
-                Token::Variable("x".into()),
+                Token::Variable("x".into(), 1),
                 Token::LessEqual,
                 Token::Integer(10),
                 Token::RParen,
                 Token::LBrace,
                 echo(1),
-                Token::Variable("x".into()),
+                Token::Variable("x".into(), 1),
                 Token::Semicolon,
                 Token::RBrace,
                 Token::Eof,
@@ -1163,7 +1163,7 @@ mod tests {
             tokens,
             vec![
                 Token::OpenTag,
-                Token::Variable("name".into()),
+                Token::Variable("name".into(), 1),
                 Token::Assign,
                 Token::StringLiteral("PHP".into()),
                 Token::Semicolon,
@@ -1171,7 +1171,7 @@ mod tests {
                 Token::LParen,
                 Token::StringLiteral("Hello ".into()),
                 Token::Dot,
-                Token::Variable("name".into()),
+                Token::Variable("name".into(), 0),
                 Token::Dot,
                 Token::StringLiteral("!".into()),
                 Token::RParen,

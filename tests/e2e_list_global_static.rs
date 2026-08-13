@@ -1,5 +1,8 @@
 mod common;
 use common::run_php;
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
 
 // list() / destructuring tests
 
@@ -287,6 +290,96 @@ echo $GLOBALS["counter"], "|", $GLOBALS["bag"][0], "|", $linked, "|", $fallback;
 "#
         ),
         "blue|blue\nbool(false)\nbool(false)\nnumeric|round|8|first|6|ready"
+    );
+}
+
+#[test]
+fn globals_root_is_readable_but_not_a_mutation_target() {
+    fn compile_error(source: &str) -> String {
+        let tokens = Lexer::new(source).tokenize().expect("source must lex");
+        let statements = Parser::new(tokens).parse().expect("source must parse");
+        match Compiler::new().compile(&statements) {
+            Ok(_) => panic!("forbidden GLOBALS target must fail during compilation"),
+            Err(error) => error,
+        }
+    }
+
+    let mutation_error =
+        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax on line 2";
+    for source in [
+        "<?php\n$GLOBALS = [];",
+        "<?php\nif (false) { $GLOBALS = []; }",
+        "<?php\n$GLOBALS += [];",
+        "<?php\nunset($GLOBALS);",
+        "<?php\n[$GLOBALS] = [1];",
+        "<?php\n[[[$GLOBALS]]] = [[[1]]];",
+        "<?php\nforeach ([1] as $GLOBALS) {}",
+        "<?php\nforeach ([1] as $key => $GLOBALS) {}",
+        "<?php\nforeach ([1] as $GLOBALS => $value) {}",
+        "<?php\n++$GLOBALS;",
+        "<?php\n$GLOBALS++;",
+        "<?php\n$GLOBALS ??= [];",
+        "<?php\n$replacement = []; $GLOBALS =& $replacement;",
+    ] {
+        assert_eq!(compile_error(source), mutation_error, "{source}");
+    }
+
+    assert_eq!(
+        compile_error("<?php\n$GLOBALS[] = 1;"),
+        "Cannot append to $GLOBALS on line 2"
+    );
+    assert_eq!(
+        compile_error("<?php\n$alias =& $GLOBALS;"),
+        "Cannot acquire reference to $GLOBALS on line 2"
+    );
+    assert_eq!(
+        compile_error("<?php\nfunction make_probe() { return function () use ($GLOBALS) {}; }",),
+        "Cannot use auto-global as lexical variable on line 2"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+$tone = "warm";
+$snapshot = $GLOBALS;
+$before = $snapshot["tone"];
+$snapshot["tone"] = "cool";
+$globals = 3;
+$globals += 4;
+echo $before, "|", $tone, "|", $snapshot["tone"], "|", $globals, "|";
+$GLOBALS["tone"] = "bright";
+$GLOBALS["palette"]["accent"] = "violet";
+unset($GLOBALS["palette"]["accent"]);
+unset($GLOBALS["missing"]["leaf"]);
+echo $tone, "|", isset($GLOBALS["palette"]["accent"]) ? "yes" : "no", "|",
+    isset($GLOBALS["missing"]) ? "yes" : "no";
+"#
+        ),
+        "warm|warm|cool|7|bright|no|no"
+    );
+}
+
+#[test]
+fn globals_root_cannot_satisfy_a_reference_parameter() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function borrow_global(&$slot) {}
+try {
+    borrow_global($GLOBALS);
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+echo "|";
+try {
+    borrow_later($GLOBALS);
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+function borrow_later(&$future) {}
+"#
+        ),
+        "borrow_global(): Argument #1 ($slot) cannot be passed by reference|borrow_later(): Argument #1 ($future) cannot be passed by reference"
     );
 }
 

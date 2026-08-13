@@ -51,6 +51,11 @@ pub const CALL_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 9;
 /// that frame returns or unwinds.
 pub const CALL_FLAG_ERROR_SUPPRESS: u16 = 1 << 10;
 
+/// SendRef/SendVarEx flag: the source expression is the special `$GLOBALS`
+/// root. PHP permits reading that table by value but never exposing it through
+/// a reference parameter.
+pub const SEND_FLAG_GLOBALS: u16 = 1;
+
 /// Late-static property flag: the called class lives in the compact frame's
 /// embedded scope slot. Wide frames and instance methods use the resolver.
 pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;

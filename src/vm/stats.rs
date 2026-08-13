@@ -665,6 +665,7 @@ mod inner {
             154 => Some("UnsetGlobal"),
             155 => Some("BindGlobalRef"),
             156 => Some("AssignGlobalRef"),
+            157 => Some("FetchGlobals"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),

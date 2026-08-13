@@ -1,6 +1,10 @@
 #[derive(Clone, Copy)]
 enum ArrayRootWriteback {
     None,
+    Global {
+        key: u16,
+        key_type: OpType,
+    },
     Object {
         object: u16,
         object_type: OpType,
@@ -136,6 +140,11 @@ impl Compiler {
         source: &Expr,
     ) -> Result<(u16, OpType, ForeachArrayWriteback), String> {
         match source {
+            Expr::CompileError { message, line } => Err(self.goto_error(message, *line)),
+            Expr::Globals { line } => Err(self.goto_error(
+                "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+                *line,
+            )),
             Expr::Variable(var) => {
                 let cv = self.resolve_cv(var);
                 Ok((cv, OpType::Cv, ForeachArrayWriteback::Variable(cv)))
@@ -226,7 +235,7 @@ impl Compiler {
             }
             Expr::ArrayAccess { .. } => {
                 if let Expr::ArrayAccess { array, index } = source
-                    && matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS")
+                    && matches!(array.as_ref(), Expr::Globals { .. })
                 {
                     let (key, key_type) = self.compile_expr(index);
                     let current = self.alloc_tmp();
@@ -442,7 +451,7 @@ impl Compiler {
             }
             Expr::ArrayAccess { .. } => {
                 if let Expr::ArrayAccess { array, index } = target
-                    && matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS")
+                    && matches!(array.as_ref(), Expr::Globals { .. })
                 {
                     let (key, key_type) = self.compile_expr(index);
                     let current = self.alloc_tmp();
@@ -595,6 +604,15 @@ impl Compiler {
         }
 
         let write = match target {
+            Expr::CompileError { message, line } => {
+                return Err(self.goto_error(message, *line));
+            }
+            Expr::Globals { line } => {
+                return Err(self.goto_error(
+                    "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+                    *line,
+                ));
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -718,13 +736,22 @@ impl Compiler {
         target: &Expr,
         source: &Expr,
     ) -> Result<(u16, OpType), String> {
+        if let Expr::Globals { line } = target {
+            return Err(self.goto_error(
+                "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+                *line,
+            ));
+        }
+        if let Expr::Globals { line } = source {
+            return Err(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
+        }
         let Expr::Variable(source) = source else {
             return Err("Reference assignment source must be a variable".into());
         };
         let source = self.resolve_cv(source);
 
         if let Expr::ArrayAccess { array, index } = target
-            && matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS")
+            && matches!(array.as_ref(), Expr::Globals { .. })
         {
             let (key, key_type) = self.compile_expr(index);
             let mut assign = Instruction::new(OpCode::AssignGlobalRef);
@@ -835,8 +862,30 @@ impl Compiler {
         if indices.is_empty() {
             return Err("Array mutation requires at least one dimension".into());
         }
-        let (root, writeback) = match root {
-            Expr::Variable(var) => ((self.resolve_cv(var), OpType::Cv), ArrayRootWriteback::None),
+        let (root, writeback, path_indices) = match root {
+            Expr::Variable(var) => (
+                (self.resolve_cv(var), OpType::Cv),
+                ArrayRootWriteback::None,
+                indices,
+            ),
+            Expr::Globals { .. } => {
+                if indices.len() < 2 {
+                    return Err("Global array mutation path requires a nested dimension".into());
+                }
+                let (key, key_type) = self.compile_expr(&indices[0]);
+                let container = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchGlobal);
+                fetch.op1 = key;
+                fetch.op1_type = key_type;
+                fetch.result = container;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (
+                    (container, OpType::Tmp),
+                    ArrayRootWriteback::Global { key, key_type },
+                    &indices[1..],
+                )
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -864,6 +913,7 @@ impl Compiler {
                         property,
                         property_type: OpType::Const,
                     },
+                    indices,
                 )
             }
             Expr::DynamicPropertyAccess {
@@ -893,6 +943,7 @@ impl Compiler {
                         property,
                         property_type,
                     },
+                    indices,
                 )
             }
             Expr::StaticProperty {
@@ -925,11 +976,12 @@ impl Compiler {
                         property,
                         dynamic,
                     },
+                    indices,
                 )
             }
             _ => return Err("Unsupported array mutation target".into()),
         };
-        let keys: Vec<(u16, OpType)> = indices
+        let keys: Vec<(u16, OpType)> = path_indices
             .iter()
             .map(|index| self.compile_expr(index))
             .collect();
@@ -975,6 +1027,15 @@ impl Compiler {
     fn write_back_mutable_array_root(&mut self, path: &MutableArrayPath) {
         let mut writeback = match path.writeback {
             ArrayRootWriteback::None => return,
+            ArrayRootWriteback::Global { key, key_type } => {
+                let mut instruction = Instruction::new(OpCode::AssignGlobal);
+                instruction.op1 = key;
+                instruction.op1_type = key_type;
+                instruction.op2 = path.root.0;
+                instruction.op2_type = path.root.1;
+                self.instructions.push(instruction);
+                return;
+            }
             ArrayRootWriteback::Object {
                 object,
                 object_type,
@@ -1841,6 +1902,15 @@ impl Compiler {
             Stmt::Unset(targets) => {
                 for target in targets {
                     match target {
+                        Expr::CompileError { message, line } => {
+                            return Err(self.goto_error(message, *line));
+                        }
+                        Expr::Globals { line } => {
+                            return Err(self.goto_error(
+                                "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+                                *line,
+                            ));
+                        }
                         Expr::Variable(name) => {
                             let cv_idx = self.resolve_cv(name);
                             let undef_idx = self.add_literal(Value::undef());
@@ -1860,7 +1930,7 @@ impl Compiler {
                             }
                             indices.reverse();
                             if indices.len() == 1
-                                && matches!(root, Expr::Variable(name) if name == "GLOBALS")
+                                && matches!(root, Expr::Globals { .. })
                             {
                                 let (key, key_type) = self.compile_expr(&indices[0]);
                                 let mut unset = Instruction::new(OpCode::UnsetGlobal);

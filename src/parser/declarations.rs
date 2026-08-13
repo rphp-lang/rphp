@@ -67,13 +67,13 @@ impl Parser {
                 });
             } else if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
-            } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
+            } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 if modifiers.is_abstract {
                     return Err("Properties cannot be declared abstract".into());
                 }
                 let type_hint = self.try_parse_type_hint()?;
                 let name = match self.advance() {
-                    Token::Variable(name) => name,
+                    Token::Variable(name, _) => name,
                     token => return Err(format!("Expected property variable, got {token:?}")),
                 };
                 let default = if self.peek() == Token::Assign {
@@ -128,8 +128,8 @@ impl Parser {
                 types.push(t);
             }
             let var = match self.peek() {
-                Token::Variable(_) => match self.advance() {
-                    Token::Variable(n) => Some(n),
+                Token::Variable(_, _) => match self.advance() {
+                    Token::Variable(n, _) => Some(n),
                     _ => unreachable!(),
                 },
                 Token::RParen => None,
@@ -333,14 +333,14 @@ impl Parser {
                 });
             } else if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
-            } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
+            } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
                 if modifiers.is_abstract {
                     return Err("Properties cannot be declared abstract".into());
                 }
                 let type_hint = self.try_parse_type_hint()?;
                 let prop_name = match self.advance() {
-                    Token::Variable(n) => n,
+                    Token::Variable(n, _) => n,
                     other => return Err(format!("Expected property variable, got {:?}", other)),
                 };
                 let default = if self.peek() == Token::Assign {
@@ -499,14 +499,14 @@ impl Parser {
                 });
             } else if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
-            } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
+            } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
                 if modifiers.is_abstract {
                     return Err("Properties cannot be declared abstract".into());
                 }
                 let type_hint = self.try_parse_type_hint()?;
                 let prop_name = match self.advance() {
-                    Token::Variable(n) => n,
+                    Token::Variable(n, _) => n,
                     other => return Err(format!("Expected property variable, got {:?}", other)),
                 };
                 let default = if self.peek() == Token::Assign {
@@ -1180,6 +1180,8 @@ impl Parser {
             | Expr::StringLiteral(_)
             | Expr::Bool(_)
             | Expr::Null
+            | Expr::Globals { .. }
+            | Expr::CompileError { .. }
             | Expr::Constant(_)
             | Expr::MagicConstant { .. } => {}
             // Yield — collect vars from value/key expressions
@@ -1225,10 +1227,13 @@ impl Parser {
             } else {
                 false
             };
-            let v = match self.advance() {
-                Token::Variable(n) => n,
+            let (v, line) = match self.advance() {
+                Token::Variable(n, line) => (n, line),
                 other => return Err(format!("Expected variable in use, got {:?}", other)),
             };
+            if v == "GLOBALS" {
+                self.compile_error("Cannot use auto-global as lexical variable", line);
+            }
             use_vars.push((v, is_ref));
             while self.peek() == Token::Comma {
                 self.advance();
@@ -1238,10 +1243,13 @@ impl Parser {
                 } else {
                     false
                 };
-                let v = match self.advance() {
-                    Token::Variable(n) => n,
+                let (v, line) = match self.advance() {
+                    Token::Variable(n, line) => (n, line),
                     other => return Err(format!("Expected variable in use, got {:?}", other)),
                 };
+                if v == "GLOBALS" {
+                    self.compile_error("Cannot use auto-global as lexical variable", line);
+                }
                 use_vars.push((v, is_ref));
             }
             self.expect(&Token::RParen)?;

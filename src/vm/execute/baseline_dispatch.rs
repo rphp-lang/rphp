@@ -1582,7 +1582,44 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::SendVal => {
                 // Send value to pending call frame
                 // op1 = value to send, op2 = argument number (0-based)
-                let call = unsafe { (*frame).call };
+                let call = unsafe {
+                    let call = (*frame).call;
+                    if opline._pad & SEND_FLAG_GLOBALS != 0 {
+                        let common = &*(*call).func;
+                        let parameter_index = opline.extended_value as usize;
+                        if common.sig.is_param_by_ref(parameter_index as u32) {
+                            let parameter_name = common
+                                .sig
+                                .param_names
+                                .get(parameter_index)
+                                .map(String::as_str)
+                                .unwrap_or("unknown");
+                            let function_name = registered_function_name(eg, (*call).func);
+                            let error = make_error_value(
+                                "Error",
+                                &format!(
+                                    "{}(): Argument #{} (${}) cannot be passed by reference",
+                                    function_name,
+                                    parameter_index + 1,
+                                    parameter_name
+                                ),
+                            );
+                            cleanup_pending_calls(eg, frame);
+                            match throw_in_frame(eg, frame, error) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    eg.exception = Some(thrown);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                    call
+                };
                 debug_assert!(!call.is_null());
                 let dst = unsafe {
                     (call as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
@@ -1660,6 +1697,40 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // declared callee argument slot. References are forwarded
                 // without reinterpreting external targets as frame offsets.
                 unsafe {
+                    if opline._pad & SEND_FLAG_GLOBALS != 0 {
+                        let call = (*frame).call;
+                        debug_assert!(!call.is_null());
+                        let common = &*(*call).func;
+                        let parameter_index = opline.extended_value as usize;
+                        let parameter_name = common
+                            .sig
+                            .param_names
+                            .get(parameter_index)
+                            .map(String::as_str)
+                            .unwrap_or("unknown");
+                        let function_name = registered_function_name(eg, (*call).func);
+                        let error = make_error_value(
+                            "Error",
+                            &format!(
+                                "{}(): Argument #{} (${}) cannot be passed by reference",
+                                function_name,
+                                parameter_index + 1,
+                                parameter_name
+                            ),
+                        );
+                        cleanup_pending_calls(eg, frame);
+                        match throw_in_frame(eg, frame, error) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(thrown) => {
+                                eg.exception = Some(thrown);
+                                return Ok(());
+                            }
+                        }
+                    }
                     let argument = if opline.op1_type == OpType::Cv {
                         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
                         let raw_ptr = base.add(opline.op1 as usize);
@@ -2564,7 +2635,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
-            OpCode::FetchGlobal
+            OpCode::FetchGlobals
+            | OpCode::FetchGlobal
             | OpCode::AssignGlobal
             | OpCode::UnsetGlobal
             | OpCode::BindGlobalRef

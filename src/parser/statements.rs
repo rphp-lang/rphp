@@ -6,6 +6,7 @@ impl Parser {
             in_class_body: false,
             class_scope_active: false,
             generic_scopes: Vec::new(),
+            deferred_compile_error: None,
         }
     }
 
@@ -15,6 +16,10 @@ impl Parser {
 
         while !self.at_eof() {
             stmts.push(self.parse_stmt()?);
+        }
+
+        if let Some((message, line)) = self.deferred_compile_error.take() {
+            stmts.push(Stmt::ExprStmt(Expr::CompileError { message, line }));
         }
 
         Ok(stmts)
@@ -174,7 +179,7 @@ impl Parser {
                     is_once,
                 })
             }
-            Token::Variable(_) => {
+            Token::Variable(_, _) => {
                 // Peek ahead to determine statement type
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
                 if next == Token::LBracket {
@@ -183,8 +188,8 @@ impl Parser {
                     let is_push = self.tokens.get(self.pos + 2) == Some(&Token::RBracket)
                         && self.tokens.get(self.pos + 3) == Some(&Token::Assign);
                     if is_push {
-                        let var_name = match self.advance() {
-                            Token::Variable(name) => name,
+                        let (var_name, line) = match self.advance() {
+                            Token::Variable(name, line) => (name, line),
                             _ => unreachable!(),
                         };
                         self.advance(); // consume '['
@@ -192,6 +197,11 @@ impl Parser {
                         self.advance(); // consume '='
                         let expr = self.parse_expr()?;
                         self.expect(&Token::Semicolon)?;
+                        if var_name == "GLOBALS" {
+                            return Ok(Stmt::ExprStmt(
+                                self.compile_error("Cannot append to $GLOBALS", line),
+                            ));
+                        }
                         return Ok(Stmt::ArrayPush {
                             var: var_name,
                             expr,
@@ -201,8 +211,8 @@ impl Parser {
                     // dimension in one AST node lets the compiler evaluate
                     // keys once and rebuild COW parents from the leaf.
                     if self.is_array_assign() {
-                        let var_name = match self.advance() {
-                            Token::Variable(name) => name,
+                        let (var_name, line) = match self.advance() {
+                            Token::Variable(name, line) => (name, line),
                             _ => unreachable!(),
                         };
                         let mut indices = Vec::new();
@@ -222,7 +232,7 @@ impl Parser {
                             }
                         } else {
                             Stmt::NestedArrayAssign {
-                                root: Expr::Variable(var_name),
+                                root: Self::variable_expression(var_name, line),
                                 indices,
                                 expr,
                             }
@@ -241,8 +251,8 @@ impl Parser {
                     }
                     self.finish_value_expression_statement(expr)
                 } else if next == Token::Assign {
-                    let var_name = match self.advance() {
-                        Token::Variable(name) => name,
+                    let (var_name, line) = match self.advance() {
+                        Token::Variable(name, line) => (name, line),
                         _ => unreachable!(),
                     };
                     self.expect(&Token::Assign)?;
@@ -251,6 +261,17 @@ impl Parser {
                         let target = self.parse_expr()?;
                         if !self.is_empty_array_dimension_suffix() {
                             self.expect(&Token::Semicolon)?;
+                            if var_name == "GLOBALS" {
+                                return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
+                            }
+                            if let Expr::Globals { line } = &target {
+                                return Ok(Stmt::ExprStmt(
+                                    self.compile_error(
+                                        "Cannot acquire reference to $GLOBALS",
+                                        *line,
+                                    ),
+                                ));
+                            }
                             return Ok(Stmt::ExprStmt(Expr::AssignReference {
                                 var: var_name,
                                 target: Box::new(target),
@@ -278,19 +299,25 @@ impl Parser {
                     }
                     let expr = self.parse_expr()?;
                     self.expect(&Token::Semicolon)?;
+                    if var_name == "GLOBALS" {
+                        return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
+                    }
                     Ok(Stmt::Assign {
                         var: var_name,
                         expr,
                     })
                 } else if let Some(bin_op) = Self::compound_assign_op(&next) {
                     // Compound assignment: $x += expr  →  $x = $x + expr
-                    let var_name = match self.advance() {
-                        Token::Variable(name) => name,
+                    let (var_name, line) = match self.advance() {
+                        Token::Variable(name, line) => (name, line),
                         _ => unreachable!(),
                     };
                     self.advance(); // consume the compound operator
                     let rhs = self.parse_expr()?;
                     self.expect(&Token::Semicolon)?;
+                    if var_name == "GLOBALS" {
+                        return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
+                    }
                     Ok(Stmt::Assign {
                         var: var_name.clone(),
                         expr: Expr::BinaryOp {
@@ -531,7 +558,8 @@ impl Parser {
                        body,
                    });
                }
-                let first = Self::into_foreach_target(self.parse_expr()?)?;
+                let first_expr = self.parse_expr()?;
+                let first = self.into_foreach_target(first_expr)?;
                 let (key, value, by_ref) = if self.peek() == Token::DoubleArrow {
                    if first_by_ref {
                        return Err("Foreach key cannot be a reference".into());
@@ -554,9 +582,16 @@ impl Parser {
                        self.expect(&Token::RBracket)?;
                        ForeachTarget::Destructure(targets)
                    } else {
-                        Self::into_foreach_target(self.parse_expr()?)?
+                        let value_expr = self.parse_expr()?;
+                        self.into_foreach_target(value_expr)?
                    };
-                    if by_ref && !matches!(value, ForeachTarget::Variable(_)) {
+                    if by_ref
+                        && !matches!(
+                            value,
+                            ForeachTarget::Variable(_)
+                                | ForeachTarget::Target(Expr::CompileError { .. })
+                        )
+                    {
                         return Err(
                             "Foreach property and dimension references are not supported yet"
                                 .into(),
@@ -564,7 +599,13 @@ impl Parser {
                     }
                     (Some(first), value, by_ref)
                } else {
-                    if first_by_ref && !matches!(first, ForeachTarget::Variable(_)) {
+                    if first_by_ref
+                        && !matches!(
+                            first,
+                            ForeachTarget::Variable(_)
+                                | ForeachTarget::Target(Expr::CompileError { .. })
+                        )
+                    {
                         return Err(
                             "Foreach property and dimension references are not supported yet"
                                 .into(),
@@ -635,16 +676,22 @@ impl Parser {
                 self.advance();
                 self.expect(&Token::LParen)?;
                 let mut targets = Vec::new();
-                let expr = self.parse_expr()?;
+                let mut expr = self.parse_expr()?;
                 if !Self::is_variable_like(&expr) {
                     return Err("Cannot use unset() on the result of an expression".into());
+                }
+                if let Expr::Globals { line } = expr {
+                    expr = self.globals_modification_error(line);
                 }
                 targets.push(expr);
                 while self.peek() == Token::Comma {
                     self.advance();
-                    let expr = self.parse_expr()?;
+                    let mut expr = self.parse_expr()?;
                     if !Self::is_variable_like(&expr) {
                         return Err("Cannot use unset() on the result of an expression".into());
+                    }
+                    if let Expr::Globals { line } = expr {
+                        expr = self.globals_modification_error(line);
                     }
                     targets.push(expr);
                 }
@@ -727,7 +774,7 @@ impl Parser {
                 let mut vars = Vec::new();
                 loop {
                     match self.advance() {
-                        Token::Variable(name) => vars.push(name),
+                        Token::Variable(name, _) => vars.push(name),
                         other => {
                             return Err(format!(
                                 "Expected variable after 'global', got {:?}",
@@ -744,13 +791,13 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Global(vars))
             }
-            Token::Static if matches!(self.peek_at(1), Token::Variable(_)) => {
+            Token::Static if matches!(self.peek_at(1), Token::Variable(_, _)) => {
                 // static $var = expr; (function-level static variable)
                 self.advance(); // consume 'static'
                 let mut vars = Vec::new();
                 loop {
                     let var_name = match self.advance() {
-                        Token::Variable(name) => name,
+                        Token::Variable(name, _) => name,
                         other => {
                             return Err(format!(
                                 "Expected variable after 'static', got {:?}",
@@ -873,6 +920,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable(_)
+                | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
@@ -891,6 +939,11 @@ impl Parser {
         self.expect(&Token::Assign)?;
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
+        if let Expr::Globals { line } = target {
+            return Ok(Stmt::ExprStmt(
+                self.compile_error("Cannot append to $GLOBALS", line),
+            ));
+        }
         Ok(Stmt::ArrayAppend { target, expr })
     }
 
@@ -898,6 +951,7 @@ impl Parser {
         let valid_target = matches!(
             &target,
             Expr::Variable(_)
+                | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
@@ -915,6 +969,9 @@ impl Parser {
         self.expect(&Token::QuestionQuestionAssign)?;
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
+        if let Expr::Globals { line } = target {
+            return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
+        }
         Ok(Stmt::CoalesceAssign { target, expr })
     }
 
@@ -922,6 +979,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable(_)
+                | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
@@ -939,6 +997,9 @@ impl Parser {
             .ok_or_else(|| "Expected compound assignment operator".to_string())?;
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
+        if let Expr::Globals { line } = target {
+            return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
+        }
         Ok(Stmt::CompoundAssign { target, op, expr })
     }
 
@@ -972,11 +1033,11 @@ impl Parser {
 
     /// Parse for-loop init: either `$var = expr`, `$var op= expr`, or an expression.
     fn parse_for_init(&mut self) -> Result<Stmt, String> {
-        if let Token::Variable(_) = self.peek() {
+        if let Token::Variable(_, _) = self.peek() {
             let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
             if next == Token::Assign {
                 let var_name = match self.advance() {
-                    Token::Variable(name) => name,
+                    Token::Variable(name, _) => name,
                     _ => unreachable!(),
                 };
                 self.expect(&Token::Assign)?;
@@ -987,7 +1048,7 @@ impl Parser {
                 });
             } else if let Some(bin_op) = Self::compound_assign_op(&next) {
                 let var_name = match self.advance() {
-                    Token::Variable(name) => name,
+                    Token::Variable(name, _) => name,
                     _ => unreachable!(),
                 };
                 self.advance(); // consume compound operator

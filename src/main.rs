@@ -143,7 +143,7 @@ fn main() {
         .compile(&stmts)
         .unwrap_or_else(|e| {
             eprintln!("Fatal error: {}", e);
-            std::process::exit(1);
+            std::process::exit(255);
         });
     let main_func = make_user_function(result.main);
     let mut eg = ExecutorGlobals::new();

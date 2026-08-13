@@ -71,6 +71,14 @@ pub enum Expr {
     Null,
     Bool(bool),
     Variable(String),
+    /// The PHP 8.2 global symbol-table pseudo-variable. Keeping its source
+    /// line distinguishes whole-table restrictions from ordinary CVs while
+    /// direct dimensions retain their dedicated compiler lowering.
+    Globals { line: usize },
+    /// A parsed PHP construct whose syntax is valid but whose target is
+    /// rejected during compilation. This preserves PHP's compile-error stage
+    /// and source location without making the parser report a syntax error.
+    CompileError { message: String, line: usize },
     BinaryOp {
         op: BinOp,
         left: Box<Expr>,
@@ -388,6 +396,8 @@ impl Expr {
             | Expr::Null
             | Expr::Bool(_)
             | Expr::Variable(_)
+            | Expr::Globals { .. }
+            | Expr::CompileError { .. }
             | Expr::PostInc(_)
             | Expr::PostDec(_)
             | Expr::PreInc(_)

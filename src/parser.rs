@@ -12,6 +12,10 @@ pub struct Parser {
     /// class scope. Closures inherit it; named functions do not.
     class_scope_active: bool,
     generic_scopes: Vec<Vec<GenericParameter>>,
+    /// PHP compile-time semantic errors discovered while parsing must survive
+    /// dead-branch elimination. The first one is replayed as a top-level AST
+    /// marker after the full source has parsed successfully.
+    deferred_compile_error: Option<(String, usize)>,
 }
 
 include!("parser/generics.rs");

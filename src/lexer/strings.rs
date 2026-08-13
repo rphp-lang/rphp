@@ -480,7 +480,7 @@ impl<'a> Lexer<'a> {
                     tokens.push(Token::LParen);
                     tokens.push(Token::StringLiteral(String::new()));
                     tokens.push(Token::Dot);
-                    tokens.push(Token::Variable(name.clone()));
+                    tokens.push(Token::Variable(name.clone(), 0));
                     tokens.push(Token::RParen);
                 }
                 StringPart::ArrayAccess(name, index) => {
@@ -510,7 +510,7 @@ impl<'a> Lexer<'a> {
             }
             match part {
                 StringPart::Literal(value) => tokens.push(Token::StringLiteral(value.clone())),
-                StringPart::Variable(name) => tokens.push(Token::Variable(name.clone())),
+                StringPart::Variable(name) => tokens.push(Token::Variable(name.clone(), 0)),
                 StringPart::ArrayAccess(name, index) => {
                     Self::emit_array_access_tokens(tokens, name, index);
                 }
@@ -525,7 +525,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn emit_array_access_tokens(tokens: &mut Vec<Token>, name: &str, index: &str) {
-        tokens.push(Token::Variable(name.to_string()));
+        tokens.push(Token::Variable(name.to_string(), 0));
         tokens.push(Token::LBracket);
         if let Ok(index) = index.parse::<i64>() {
             tokens.push(Token::Integer(index));

@@ -37,6 +37,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable(_)
+                | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
@@ -57,6 +58,9 @@ impl Parser {
             self.advance();
         }
         let expr = self.parse_expr()?;
+        if let Expr::Globals { line } = target {
+            return Ok(self.compile_error("Cannot append to $GLOBALS", line));
+        }
         Ok(Expr::ArrayAppendAssign {
             target: Box::new(target),
             expr: Box::new(expr),
@@ -67,6 +71,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable(_)
+                | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
@@ -83,6 +88,9 @@ impl Parser {
         let op = Self::compound_assign_op(&self.advance())
             .ok_or_else(|| "Expected compound assignment operator".to_string())?;
         let expr = self.parse_expr()?;
+        if let Expr::Globals { line } = target {
+            return Ok(self.globals_modification_error(line));
+        }
         Ok(Expr::CompoundAssignExpression {
             target: Box::new(target),
             op,
@@ -99,6 +107,12 @@ impl Parser {
             false
         };
         let expr = Box::new(self.parse_expr()?);
+        if let Expr::Globals { line } = target {
+            return Ok(self.globals_modification_error(line));
+        }
+        if by_reference && let Expr::Globals { line } = expr.as_ref() {
+            return Ok(self.compile_error("Cannot acquire reference to $GLOBALS", *line));
+        }
         if by_reference
             && matches!(
                 &target,
@@ -143,6 +157,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable(_)
+                | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
@@ -158,6 +173,9 @@ impl Parser {
         }
         self.expect(&Token::QuestionQuestionAssign)?;
         let expr = self.parse_expr()?;
+        if let Expr::Globals { line } = target {
+            return Ok(self.globals_modification_error(line));
+        }
         Ok(Expr::CoalesceAssign {
             target: Box::new(target),
             expr: Box::new(expr),
@@ -414,9 +432,9 @@ impl Parser {
                         expr: Box::new(left),
                         class_name: "static".to_string(),
                     }
-                } else if matches!(self.peek(), Token::Variable(_) | Token::This(_)) {
+                } else if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
                     let class = match self.advance() {
-                        Token::Variable(name) => Expr::Variable(name),
+                        Token::Variable(name, line) => Self::variable_expression(name, line),
                         Token::This(_) => Expr::Variable("this".to_string()),
                         _ => unreachable!(),
                     };
@@ -573,9 +591,9 @@ impl Parser {
                             expr: Box::new(expr),
                             class_name: "static".to_string(),
                         }
-                    } else if matches!(self.peek(), Token::Variable(_) | Token::This(_)) {
+                    } else if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
                         let class = match self.advance() {
-                            Token::Variable(name) => Expr::Variable(name),
+                            Token::Variable(name, line) => Self::variable_expression(name, line),
                             Token::This(_) => Expr::Variable("this".to_string()),
                             _ => unreachable!(),
                         };
@@ -712,12 +730,12 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Bool(false))
             }
-            Token::Variable(_) => {
-                let name = match self.advance() {
-                    Token::Variable(n) => n,
+            Token::Variable(_, _) => {
+                let (name, line) = match self.advance() {
+                    Token::Variable(n, line) => (n, line),
                     _ => unreachable!(),
                 };
-                Ok(Expr::Variable(name))
+                Ok(Self::variable_expression(name, line))
             }
             Token::This(_) => {
                 self.advance();
@@ -728,6 +746,7 @@ impl Parser {
                 let target = self.parse_power()?;
                 match target {
                     Expr::Variable(name) => Ok(Expr::PreInc(name)),
+                    Expr::Globals { line } => Ok(self.globals_modification_error(line)),
                     Expr::PropertyAccess {
                         nullsafe: false, ..
                     }
@@ -744,6 +763,7 @@ impl Parser {
                 let target = self.parse_power()?;
                 match target {
                     Expr::Variable(name) => Ok(Expr::PreDec(name)),
+                    Expr::Globals { line } => Ok(self.globals_modification_error(line)),
                     Expr::PropertyAccess {
                         nullsafe: false, ..
                     }
@@ -971,9 +991,9 @@ impl Parser {
                         methods,
                     });
                 }
-                if matches!(self.peek(), Token::Variable(_) | Token::This(_)) {
+                if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
                     let class = match self.advance() {
-                        Token::Variable(name) => Expr::Variable(name),
+                        Token::Variable(name, line) => Self::variable_expression(name, line),
                         Token::This(_) => Expr::Variable("this".to_string()),
                         _ => unreachable!(),
                     };

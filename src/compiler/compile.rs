@@ -30,6 +30,7 @@ use crate::vm::instruction::{
     CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
     FETCH_DIM_ISSET, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
     KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
+    SEND_FLAG_GLOBALS,
 };
 use crate::vm::opcode::OpCode;
 
@@ -199,6 +200,7 @@ fn instructions_may_access_globals(instructions: &[Instruction]) -> bool {
                 | OpCode::InitStaticCall
                 | OpCode::InitLateStaticCall
                 | OpCode::Include
+                | OpCode::FetchGlobals
                 | OpCode::FetchGlobal
                 | OpCode::AssignGlobal
                 | OpCode::UnsetGlobal
@@ -224,7 +226,8 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
             || op_array.instructions.iter().any(|instruction| {
                 matches!(
                     instruction.opcode,
-                    OpCode::FetchGlobal
+                    OpCode::FetchGlobals
+                        | OpCode::FetchGlobal
                         | OpCode::AssignGlobal
                         | OpCode::UnsetGlobal
                         | OpCode::BindGlobalRef
@@ -2216,6 +2219,17 @@ impl Compiler {
     }
 
     pub fn compile(mut self, stmts: &[Stmt]) -> Result<CompileResult, String> {
+        // The parser appends the first valid-syntax compile error at top level
+        // after the entire source has parsed. Check it before constant-branch
+        // elimination or any other lowering can hide it or surface a later
+        // runtime-oriented diagnostic first.
+        if let Some((message, line)) = stmts.iter().find_map(|statement| match statement {
+            Stmt::ExprStmt(Expr::CompileError { message, line }) => Some((message, *line)),
+            _ => None,
+        }) {
+            return Err(self.goto_error(message, line));
+        }
+
         // Pre-scan: collect compile-time constants from the entire file so that
         // property defaults can reference constants declared later (forward refs).
         self.prescan_constants(stmts);
@@ -3111,7 +3125,7 @@ impl Compiler {
                 (result, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index } => {
-                if matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS") {
+                if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
                     let mut isset = Instruction::new(OpCode::FetchGlobal);
@@ -3161,7 +3175,7 @@ impl Compiler {
                 (result, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index } => {
-                if matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS") {
+                if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
                     let mut isset = Instruction::new(OpCode::FetchGlobal);
@@ -3216,6 +3230,19 @@ impl Compiler {
             Expr::Variable(name) => {
                 let idx = self.resolve_cv(name);
                 (idx, OpType::Cv)
+            }
+            Expr::Globals { .. } => {
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchGlobals);
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (result, OpType::Tmp)
+            }
+            Expr::CompileError { message, line } => {
+                self.deferred_error = Some(self.goto_error(message, *line));
+                let null = self.add_literal(Value::null());
+                (null, OpType::Const)
             }
             Expr::BinaryOp { op, left, right } => {
                 // Short-circuit logical operators
@@ -4130,7 +4157,7 @@ impl Compiler {
                 (arr_tmp, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index } => {
-                if matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS") {
+                if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
                     let mut fetch = Instruction::new(OpCode::FetchGlobal);
@@ -5245,6 +5272,12 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::AssignReference { var, target } => {
+                if let Expr::Globals { line } = target.as_ref() {
+                    self.deferred_error =
+                        Some(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
+                    let null = self.add_literal(Value::null());
+                    return (null, OpType::Const);
+                }
                 let destination = self.resolve_cv(var);
                 match target.as_ref() {
                     Expr::PropertyAccess {
@@ -5282,7 +5315,7 @@ impl Compiler {
                         (destination, OpType::Cv)
                     }
                     Expr::ArrayAccess { array, index } => {
-                        if matches!(array.as_ref(), Expr::Variable(name) if name == "GLOBALS") {
+                        if matches!(array.as_ref(), Expr::Globals { .. }) {
                             let (key, key_type) = self.compile_expr(index);
                             let mut bind = Instruction::new(OpCode::BindGlobalRef);
                             bind.op1 = key;
@@ -5742,6 +5775,10 @@ impl Compiler {
                     send.op1 = op;
                     send.op1_type = op_type;
                     send.op2 = (i as u32 + cv_offset) as u16;
+                    if matches!(expr, Expr::Globals { .. }) {
+                        send._pad |= SEND_FLAG_GLOBALS;
+                        send.extended_value = i as u32;
+                    }
                     if set_extended_value {
                         send.extended_value = i as u32;
                     }
@@ -5933,13 +5970,17 @@ impl Compiler {
         debug_assert_eq!(args.len(), compiled_args.len());
         for (index, (arg, (op, op_type, name_idx))) in args.iter().zip(compiled_args).enumerate() {
             match arg {
-                CallArg::Positional(_) | CallArg::Unpack(_) => {
+                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let mut send = Instruction::new(Self::positional_opcode(
                         ref_args, index, *op_type, use_var_ex,
                     ));
                     send.op1 = *op;
                     send.op1_type = *op_type;
                     send.op2 = (index as u32 + cv_offset) as u16;
+                    if matches!(expr, Expr::Globals { .. }) {
+                        send._pad |= SEND_FLAG_GLOBALS;
+                        send.extended_value = index as u32;
+                    }
                     if set_extended_value {
                         send.extended_value = index as u32;
                     }
@@ -6011,6 +6052,9 @@ impl Compiler {
                     self.instructions.push(fetch);
 
                     match target {
+                        Expr::CompileError { message, line } => {
+                            return Err(self.goto_error(message, *line));
+                        }
                         Expr::PropertyAccess {
                             object,
                             property,

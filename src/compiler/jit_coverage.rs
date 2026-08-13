@@ -139,6 +139,7 @@ pub(super) fn loop_miss_reason(
             | OpCode::Include
             | OpCode::BindGlobal
             | OpCode::BindStatic
+            | OpCode::FetchGlobals
             | OpCode::FetchGlobal
             | OpCode::AssignGlobal
             | OpCode::UnsetGlobal

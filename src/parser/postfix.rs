@@ -28,7 +28,7 @@ impl Parser {
                         };
                         continue;
                     }
-                    if let Token::Variable(property) = self.peek() {
+                    if let Token::Variable(property, _) = self.peek() {
                         self.advance();
                         expr = Expr::DynamicPropertyAccess {
                             object: Box::new(expr),
@@ -69,9 +69,9 @@ impl Parser {
                 constant: Box::new(constant),
             });
         }
-        if let Token::Variable(_) = self.peek() {
+        if let Token::Variable(_, _) = self.peek() {
             let property = match self.advance() {
-                Token::Variable(name) => name,
+                Token::Variable(name, _) => name,
                 _ => unreachable!(),
             };
             return Ok(Expr::StaticProperty {
@@ -261,7 +261,7 @@ impl Parser {
                         }
                         continue;
                     }
-                    if let Token::Variable(member_name) = self.peek() {
+                    if let Token::Variable(member_name, _) = self.peek() {
                         self.advance();
                         let member = Expr::Variable(member_name);
                         if self.peek() == Token::LParen {
@@ -363,6 +363,7 @@ impl Parser {
                     expr = match expr {
                         Expr::Variable(name) if increment => Expr::PostInc(name),
                         Expr::Variable(name) => Expr::PostDec(name),
+                        Expr::Globals { line } => self.globals_modification_error(line),
                         Expr::PropertyAccess {
                             nullsafe: false, ..
                         }

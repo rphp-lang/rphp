@@ -191,7 +191,7 @@ impl Parser {
     fn is_param_start(&self) -> bool {
         matches!(
             self.peek(),
-            Token::Variable(_)
+            Token::Variable(_, _)
                 | Token::This(_)
                 | Token::DotDotDot
                 | Token::Ampersand
@@ -330,14 +330,14 @@ impl Parser {
                 }
                 matches!(
                     self.tokens.get(self.pos + 1),
-                    Some(Token::Variable(_)) | Some(Token::Pipe) | Some(Token::Ampersand)
+                    Some(Token::Variable(_, _)) | Some(Token::Pipe) | Some(Token::Ampersand)
                 )
             }
             Token::Backslash => true,
             Token::ArrayKw | Token::Null => {
                 matches!(
                     self.tokens.get(self.pos + 1),
-                    Some(Token::Variable(_)) | Some(Token::Pipe) | Some(Token::Ampersand)
+                    Some(Token::Variable(_, _)) | Some(Token::Pipe) | Some(Token::Ampersand)
                 )
             }
             // `static` is a return-only PHP type. Parameter/property parsing
@@ -347,7 +347,7 @@ impl Parser {
             Token::Static => matches!(
                 self.tokens.get(self.pos + 1),
                 Some(Token::Less)
-                    | Some(Token::Variable(_))
+                    | Some(Token::Variable(_, _))
                     | Some(Token::Pipe)
                     | Some(Token::Ampersand)
             ),
@@ -391,7 +391,7 @@ impl Parser {
                 let next = self.tokens.get(self.pos + 1);
                 let is_type_context = matches!(
                     next,
-                    Some(Token::Variable(_))
+                    Some(Token::Variable(_, _))
                         | Some(Token::Ampersand)
                         | Some(Token::DotDotDot)
                         | Some(Token::Pipe)
@@ -417,7 +417,7 @@ impl Parser {
                 let next = self.tokens.get(self.pos + 1);
                 let is_type_context = matches!(
                     next,
-                    Some(Token::Variable(_))
+                    Some(Token::Variable(_, _))
                         | Some(Token::Ampersand)
                         | Some(Token::DotDotDot)
                         | Some(Token::Pipe)
@@ -625,7 +625,7 @@ impl Parser {
             false
         };
         let (name, line) = match self.advance() {
-            Token::Variable(n) => (n, 0),
+            Token::Variable(n, line) => (n, line),
             Token::This(line) => ("this".to_string(), line),
             other => return Err(format!("Expected parameter variable, got {:?}", other)),
         };
@@ -652,11 +652,35 @@ impl Parser {
         })
     }
 
+    fn variable_expression(name: String, line: usize) -> Expr {
+        if name == "GLOBALS" {
+            Expr::Globals { line }
+        } else {
+            Expr::Variable(name)
+        }
+    }
+
+    fn compile_error(&mut self, message: impl Into<String>, line: usize) -> Expr {
+        let message = message.into();
+        if self.deferred_compile_error.is_none() {
+            self.deferred_compile_error = Some((message.clone(), line));
+        }
+        Expr::CompileError { message, line }
+    }
+
+    fn globals_modification_error(&mut self, line: usize) -> Expr {
+        self.compile_error(
+            "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+            line,
+        )
+    }
+
     /// Check if an expression is a variable-like target (valid for isset/empty/unset).
     fn is_variable_like(expr: &Expr) -> bool {
         matches!(
             expr,
             Expr::Variable(_)
+                | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess { .. }
                 | Expr::DynamicPropertyAccess { .. }
@@ -664,9 +688,12 @@ impl Parser {
         )
     }
 
-    fn into_foreach_target(expr: Expr) -> Result<ForeachTarget, String> {
+    fn into_foreach_target(&mut self, expr: Expr) -> Result<ForeachTarget, String> {
         match expr {
             Expr::Variable(name) => Ok(ForeachTarget::Variable(name)),
+            Expr::Globals { line } => Ok(ForeachTarget::Target(
+                self.globals_modification_error(line),
+            )),
             target @ (Expr::ArrayAccess { .. }
             | Expr::PropertyAccess {
                 nullsafe: false, ..
@@ -803,7 +830,7 @@ impl Parser {
                         name
                     ));
                 }
-            } else if let Token::Variable(_) = self.peek() {
+            } else if let Token::Variable(_, _) = self.peek() {
                 let target = self.parse_expr()?;
                 if self.peek() == Token::LBracket && self.peek_at(1) == Token::RBracket {
                     if !matches!(
@@ -828,11 +855,14 @@ impl Parser {
                 } else {
                     match target {
                         Expr::Variable(var) => targets.push(ListTarget::Variable(var)),
-                        Expr::ArrayAccess { .. }
+                        Expr::Globals { line } => targets.push(ListTarget::Target(
+                            self.globals_modification_error(line),
+                        )),
+                        target @ (Expr::ArrayAccess { .. }
                         | Expr::PropertyAccess {
                             nullsafe: false, ..
                         }
-                        | Expr::StaticProperty { .. } => targets.push(ListTarget::Target(target)),
+                        | Expr::StaticProperty { .. }) => targets.push(ListTarget::Target(target)),
                         _ => return Err("Invalid destructuring assignment target".into()),
                     }
                 }
@@ -840,8 +870,8 @@ impl Parser {
                 // Explicit key: 0 => $var, 'key' => $var
                 let key_expr = self.parse_expr()?;
                 self.expect(&Token::DoubleArrow)?;
-                let var_name = match self.advance() {
-                    Token::Variable(n) => n,
+                let (var_name, line) = match self.advance() {
+                    Token::Variable(n, line) => (n, line),
                     other => {
                         return Err(format!(
                             "Expected variable after '=>' in list, got {:?}",
@@ -849,10 +879,15 @@ impl Parser {
                         ));
                     }
                 };
-                targets.push(ListTarget::KeyedVariable {
-                    key: key_expr,
-                    var: var_name,
-                });
+                if var_name == "GLOBALS" {
+                    let error = self.globals_modification_error(line);
+                    targets.push(ListTarget::Target(error));
+                } else {
+                    targets.push(ListTarget::KeyedVariable {
+                        key: key_expr,
+                        var: var_name,
+                    });
+                }
             } else {
                 return Err(format!(
                     "Unexpected token in list/destructuring: {:?}",

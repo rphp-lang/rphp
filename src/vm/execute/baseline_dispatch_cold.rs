@@ -1862,6 +1862,15 @@ fn op_bind_global(
 }
 
 #[inline(never)]
+fn set_global_snapshot_entry(snapshot: &mut PhpArray, name: &str, value: Value) {
+    if let Some(key) = canonical_decimal_array_key(name) {
+        snapshot.set_int(key, value);
+    } else {
+        snapshot.set_str(name, value);
+    }
+}
+
+#[inline(never)]
 fn op_global_dimension(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -1880,6 +1889,34 @@ fn op_global_dimension(
     // replacement goes through the frame bitmap helpers before old owners
     // are dropped.
     unsafe {
+        if opline.opcode == OpCode::FetchGlobals {
+            let mut snapshot = PhpArray::with_hash_capacity(eg.globals.len() + scope_vars.len());
+
+            for (name, value) in &eg.globals {
+                if name != "GLOBALS" && value.value_type() != ValueType::Undef {
+                    set_global_snapshot_entry(&mut snapshot, name, value.clone());
+                }
+            }
+            for (cv, name) in scope_vars {
+                if name == "GLOBALS" {
+                    continue;
+                }
+                let value = (&*(*frame).get_op_ptr(*cv, OpType::Cv, op_array)).clone();
+                if value.value_type() == ValueType::Undef {
+                    let key = canonical_decimal_array_key(name)
+                        .map(ArrayKey::Int)
+                        .unwrap_or_else(|| ArrayKey::String(name.clone()));
+                    snapshot.remove(&key);
+                } else {
+                    set_global_snapshot_entry(&mut snapshot, name, value);
+                }
+            }
+
+            let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            write_fetch_dim_result(frame, result, Value::array(snapshot));
+            return Ok(());
+        }
+
         let key = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
         let name = value_to_global_name(key)?;
         match opline.opcode {
