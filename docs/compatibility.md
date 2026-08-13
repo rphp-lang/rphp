@@ -12,34 +12,34 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`5173160f01d0ce6dde641a80ca031761cf590fdf`, using the same runner commit. The
+`9db688b1d46e5d6b73c97df0ea7c91eabf7fa532`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 875 | 2,885 | 65 | 1 | 221 | 1 | 3 | 23.271% |
-| `tests/lang` | 86 | 182 | 10 | 0 | 16 | 0 | 0 | 32.090% |
-| **Combined** | **961** | **3,067** | **75** | **1** | **237** | **1** | **3** | **23.858%** |
+| `Zend/tests` | 883 | 2,878 | 65 | 1 | 221 | 1 | 2 | 23.478% |
+| `tests/lang` | 87 | 181 | 10 | 0 | 16 | 0 | 0 | 32.463% |
+| **Combined** | **970** | **3,059** | **75** | **1** | **237** | **1** | **2** | **24.075%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 961 / 4,345, or **22.117%**; including crashes and timeouts in the attempted
-denominator gives **23.834%**. These numbers are intentionally pre-alpha and do
+is 970 / 4,345, or **22.325%**; including crashes and timeouts in the attempted
+denominator gives **24.058%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
 language coverage. Of 4,032 attempted cases, six fail during `SKIPIF` before
-the test body, 706 are rejected in the observed parse/compile stage, and 3,320
-(**82.341%**) execute the test's `FILE` section past that stage. This is not a
+the test body, 712 are rejected in the observed parse/compile stage, and 3,314
+(**82.192%**) execute the test's `FILE` section past that stage. This is not a
 second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,206 runtime failures, 1,153 output mismatches,
-579 parse failures, 127 compile failures and six failed `SKIPIF` evaluations.
-Three cases terminate by signal and one times out. Of the 75 skips, 45 require
+The largest failure groups are 1,200 runtime failures, 1,141 output mismatches,
+585 parse failures, 127 compile failures and six failed `SKIPIF` evaluations.
+Two cases terminate by signal and one times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
 does not expose, while three require PHPDBG or CGI/header sections outside this
@@ -51,30 +51,37 @@ sections, zero timeouts and zero crashes. Five representative cases also pass
 through php-src's official `run-tests.php`. Two independent RPHP executions
 with a matching native PHP 8.2.33 runner produced byte-identical manifests with
 SHA-256
-`4f1ca2230cc3c6c38e6c66b37965c3d7fd974c01058d76b4ff83832e71e084f0`
+`d04c023730a3f4617a9c88e66c5b26dfe67d45b80580c9f94369626a41475751`
 and byte-identical summaries with SHA-256
-`bb70b7932f8ebe99ab2e8e9f2ea1e231c38b2fe346a0ca456bb48be00caa4167`.
+`3303d3c6d98a6ae08274d9cd193f10ce40c9fe1c561845bece8093744aaacea1`.
 
-Relative to the retained `d985086` baseline, this checkpoint adds seven exact
-passes without losing a previous pass or moving another failure to a worse
-stage. Anonymous-closure `use (&$value)` captures now preserve one owned PHP
-reference cell across recursive activations, closure copies, callback and
-coroutine dispatch, and the end of both creating and reference-forwarding call
-frames. Scalar bytecode specialization distinguishes a known referenced value
-from the reference wrapper that stores it, so static locals and reference
-captures compose without unsafe raw-slot reads. This makes the upstream
-`closure_002`, `closure_003`, `closure_004`, `closure_009`, `closure_010`,
-`bug53958` and `bug54358` cases exact; `closure_010` changes from timeout to pass.
-Three crashes and one timeout remain explicitly visible in the coverage map;
-the diagnostic/output gaps behind controlled failures remain compatibility
-work.
+Relative to the retained `5173160` baseline, this checkpoint adds nine exact
+passes without losing a previous pass or moving another case to a worse status.
+An `include` now invalidates caller-local scalar and receiver facts before later
+specialization, so included code may unset or replace a previously proven local
+without stale bytecode or an unchecked read. Generic `echo` reports an undefined
+local at its original file and line and respects the active `E_WARNING` mask.
+Suppressed calls carry PHP 8.2's reporting mask through their callee frame,
+restore it on return or exception unwind, and preserve an explicit
+`error_reporting()` change made inside that frame.
+
+The compiler also rejects the case-sensitive reserved `$this` parameter before
+it can alias hidden receiver storage, retains the declaration line, and surfaces
+a nested declaration error even when it is discovered in the final statement of
+a function or method. The exact additions are `bug41117_1`, `bug71737`,
+`error_reporting03`, `error_reporting08`, `this_as_parameter`, `unset_cv01`,
+`unset_cv03`, `unset_cv04` and `tests/lang/bug23584`; `unset_cv04` changes from
+signal termination to pass. Two pre-existing crashes and one timeout remain
+explicitly visible in the coverage map. `$GLOBALS` unset behavior exercised by
+`unset_cv02`, general non-call `@` warning routing and complete user error-handler
+dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`5173160-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/5173160-arm64-manifest.jsonl),
+[`9db688b-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/9db688b-arm64-manifest.jsonl),
 with aggregate metadata in
-[`5173160-arm64-summary.json`](../tests/php-src/results/php-8.2.33/5173160-arm64-summary.json),
+[`9db688b-arm64-summary.json`](../tests/php-src/results/php-8.2.33/9db688b-arm64-summary.json),
 a directory/status navigation map and exact hazard list in
-[`5173160-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/5173160-arm64-coverage-map.json),
+[`9db688b-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/9db688b-arm64-coverage-map.json),
 and the full reference aggregate in
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in

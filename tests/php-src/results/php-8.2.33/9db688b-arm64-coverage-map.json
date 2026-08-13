@@ -1,0 +1,937 @@
+{
+    "schema_version": 1,
+    "manifest_sha256": "d04c023730a3f4617a9c88e66c5b26dfe67d45b80580c9f94369626a41475751",
+    "total": 4345,
+    "groups": {
+        "Zend/tests/_root": {
+            "total": 2370,
+            "statuses": {
+                "pass": 536,
+                "fail": 1621,
+                "skip": 39,
+                "xfail": 1,
+                "unsupported": 172,
+                "timeout": 0,
+                "crash": 1
+            },
+            "categories": {
+                "compile": 66,
+                "extension": 23,
+                "output": 540,
+                "parse": 322,
+                "pass": 536,
+                "runtime": 692,
+                "runtime-cli-ini": 170,
+                "section": 2,
+                "skipif": 18,
+                "xfail": 1
+            },
+            "headline_pass_rate": 0.24849327770050997
+        },
+        "Zend/tests/anon": {
+            "total": 16,
+            "statuses": {
+                "pass": 8,
+                "fail": 8,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 4,
+                "parse": 4,
+                "pass": 8
+            },
+            "headline_pass_rate": 0.5
+        },
+        "Zend/tests/arg_unpack": {
+            "total": 14,
+            "statuses": {
+                "pass": 0,
+                "fail": 14,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 9,
+                "runtime": 5
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/array_unpack": {
+            "total": 12,
+            "statuses": {
+                "pass": 1,
+                "fail": 11,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 2,
+                "parse": 2,
+                "pass": 1,
+                "runtime": 7
+            },
+            "headline_pass_rate": 0.08333333333333333
+        },
+        "Zend/tests/arrow_functions": {
+            "total": 8,
+            "statuses": {
+                "pass": 2,
+                "fail": 5,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 1,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 3,
+                "parse": 2,
+                "pass": 2,
+                "runtime-cli-ini": 1
+            },
+            "headline_pass_rate": 0.2857142857142857
+        },
+        "Zend/tests/assert": {
+            "total": 22,
+            "statuses": {
+                "pass": 0,
+                "fail": 1,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 21,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "runtime": 1,
+                "runtime-cli-ini": 21
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/ast": {
+            "total": 1,
+            "statuses": {
+                "pass": 0,
+                "fail": 0,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 1,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "runtime-cli-ini": 1
+            },
+            "headline_pass_rate": null
+        },
+        "Zend/tests/attributes": {
+            "total": 34,
+            "statuses": {
+                "pass": 1,
+                "fail": 31,
+                "skip": 1,
+                "xfail": 0,
+                "unsupported": 1,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "extension": 1,
+                "output": 12,
+                "parse": 4,
+                "pass": 1,
+                "runtime": 15,
+                "runtime-cli-ini": 1
+            },
+            "headline_pass_rate": 0.03125
+        },
+        "Zend/tests/bug67436": {
+            "total": 2,
+            "statuses": {
+                "pass": 0,
+                "fail": 1,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 1,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 1,
+                "runtime-cli-ini": 1
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/closures": {
+            "total": 9,
+            "statuses": {
+                "pass": 0,
+                "fail": 9,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 2,
+                "runtime": 7
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/constants": {
+            "total": 17,
+            "statuses": {
+                "pass": 10,
+                "fail": 7,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "parse": 1,
+                "pass": 10,
+                "runtime": 6
+            },
+            "headline_pass_rate": 0.5882352941176471
+        },
+        "Zend/tests/constexpr": {
+            "total": 13,
+            "statuses": {
+                "pass": 0,
+                "fail": 13,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 8,
+                "parse": 3,
+                "runtime": 2
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/enum": {
+            "total": 133,
+            "statuses": {
+                "pass": 24,
+                "fail": 107,
+                "skip": 2,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 4,
+                "extension": 2,
+                "output": 46,
+                "parse": 37,
+                "pass": 24,
+                "runtime": 20
+            },
+            "headline_pass_rate": 0.183206106870229
+        },
+        "Zend/tests/fibers": {
+            "total": 82,
+            "statuses": {
+                "pass": 0,
+                "fail": 77,
+                "skip": 2,
+                "xfail": 0,
+                "unsupported": 3,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "extension": 2,
+                "output": 2,
+                "parse": 3,
+                "runtime": 72,
+                "runtime-cli-ini": 3
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/float_to_int": {
+            "total": 19,
+            "statuses": {
+                "pass": 1,
+                "fail": 16,
+                "skip": 2,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 11,
+                "output": 1,
+                "pass": 1,
+                "runtime": 4,
+                "skipif": 2
+            },
+            "headline_pass_rate": 0.058823529411764705
+        },
+        "Zend/tests/function_arguments": {
+            "total": 30,
+            "statuses": {
+                "pass": 1,
+                "fail": 29,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 2,
+                "parse": 5,
+                "pass": 1,
+                "runtime": 22
+            },
+            "headline_pass_rate": 0.03333333333333333
+        },
+        "Zend/tests/generators": {
+            "total": 157,
+            "statuses": {
+                "pass": 48,
+                "fail": 107,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 2,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 28,
+                "parse": 19,
+                "pass": 48,
+                "runtime": 59,
+                "runtime-cli-ini": 2,
+                "skipif": 1
+            },
+            "headline_pass_rate": 0.3096774193548387
+        },
+        "Zend/tests/grammar": {
+            "total": 24,
+            "statuses": {
+                "pass": 7,
+                "fail": 17,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 2,
+                "output": 3,
+                "parse": 12,
+                "pass": 7
+            },
+            "headline_pass_rate": 0.2916666666666667
+        },
+        "Zend/tests/list": {
+            "total": 11,
+            "statuses": {
+                "pass": 0,
+                "fail": 11,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "parse": 11
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/match": {
+            "total": 30,
+            "statuses": {
+                "pass": 14,
+                "fail": 15,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 1,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 1,
+                "output": 7,
+                "parse": 3,
+                "pass": 14,
+                "runtime": 4,
+                "runtime-cli-ini": 1
+            },
+            "headline_pass_rate": 0.4827586206896552
+        },
+        "Zend/tests/multibyte": {
+            "total": 7,
+            "statuses": {
+                "pass": 0,
+                "fail": 0,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 7,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "runtime-cli-ini": 7
+            },
+            "headline_pass_rate": null
+        },
+        "Zend/tests/named_params": {
+            "total": 31,
+            "statuses": {
+                "pass": 5,
+                "fail": 26,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 7,
+                "parse": 3,
+                "pass": 5,
+                "runtime": 16
+            },
+            "headline_pass_rate": 0.16129032258064516
+        },
+        "Zend/tests/nullable_types": {
+            "total": 11,
+            "statuses": {
+                "pass": 7,
+                "fail": 4,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 1,
+                "output": 1,
+                "pass": 7,
+                "runtime": 2
+            },
+            "headline_pass_rate": 0.6363636363636364
+        },
+        "Zend/tests/nullsafe_operator": {
+            "total": 42,
+            "statuses": {
+                "pass": 9,
+                "fail": 33,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 13,
+                "parse": 10,
+                "pass": 9,
+                "runtime": 10
+            },
+            "headline_pass_rate": 0.21428571428571427
+        },
+        "Zend/tests/numeric_strings": {
+            "total": 7,
+            "statuses": {
+                "pass": 0,
+                "fail": 7,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 1,
+                "output": 4,
+                "parse": 2
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/object_types": {
+            "total": 11,
+            "statuses": {
+                "pass": 2,
+                "fail": 9,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 3,
+                "pass": 2,
+                "runtime": 6
+            },
+            "headline_pass_rate": 0.18181818181818182
+        },
+        "Zend/tests/parameter_default_values": {
+            "total": 7,
+            "statuses": {
+                "pass": 0,
+                "fail": 7,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 6,
+                "parse": 1
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/prop_const_expr": {
+            "total": 20,
+            "statuses": {
+                "pass": 3,
+                "fail": 16,
+                "skip": 1,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 4,
+                "extension": 1,
+                "output": 7,
+                "parse": 2,
+                "pass": 3,
+                "runtime": 3
+            },
+            "headline_pass_rate": 0.15789473684210525
+        },
+        "Zend/tests/readonly_classes": {
+            "total": 18,
+            "statuses": {
+                "pass": 4,
+                "fail": 14,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 5,
+                "parse": 4,
+                "pass": 4,
+                "runtime": 5
+            },
+            "headline_pass_rate": 0.2222222222222222
+        },
+        "Zend/tests/readonly_props": {
+            "total": 27,
+            "statuses": {
+                "pass": 3,
+                "fail": 24,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 2,
+                "output": 6,
+                "parse": 1,
+                "pass": 3,
+                "runtime": 15
+            },
+            "headline_pass_rate": 0.1111111111111111
+        },
+        "Zend/tests/restrict_globals": {
+            "total": 16,
+            "statuses": {
+                "pass": 1,
+                "fail": 15,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 1,
+                "output": 9,
+                "parse": 4,
+                "pass": 1,
+                "runtime": 1
+            },
+            "headline_pass_rate": 0.0625
+        },
+        "Zend/tests/return_types": {
+            "total": 86,
+            "statuses": {
+                "pass": 19,
+                "fail": 60,
+                "skip": 2,
+                "xfail": 0,
+                "unsupported": 5,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 1,
+                "extension": 2,
+                "output": 37,
+                "pass": 19,
+                "runtime": 22,
+                "runtime-cli-ini": 5
+            },
+            "headline_pass_rate": 0.24050632911392406
+        },
+        "Zend/tests/throw": {
+            "total": 4,
+            "statuses": {
+                "pass": 1,
+                "fail": 3,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "parse": 1,
+                "pass": 1,
+                "runtime": 2
+            },
+            "headline_pass_rate": 0.25
+        },
+        "Zend/tests/traits": {
+            "total": 161,
+            "statuses": {
+                "pass": 52,
+                "fail": 107,
+                "skip": 1,
+                "xfail": 0,
+                "unsupported": 1,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 10,
+                "extension": 1,
+                "output": 31,
+                "parse": 22,
+                "pass": 52,
+                "runtime": 44,
+                "runtime-cli-ini": 1
+            },
+            "headline_pass_rate": 0.3270440251572327
+        },
+        "Zend/tests/try": {
+            "total": 73,
+            "statuses": {
+                "pass": 32,
+                "fail": 40,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 1,
+                "crash": 0
+            },
+            "categories": {
+                "output": 32,
+                "parse": 1,
+                "pass": 32,
+                "runtime": 8
+            },
+            "headline_pass_rate": 0.4444444444444444
+        },
+        "Zend/tests/type_declarations": {
+            "total": 429,
+            "statuses": {
+                "pass": 81,
+                "fail": 339,
+                "skip": 5,
+                "xfail": 0,
+                "unsupported": 3,
+                "timeout": 0,
+                "crash": 1
+            },
+            "categories": {
+                "compile": 11,
+                "extension": 3,
+                "output": 214,
+                "parse": 27,
+                "pass": 81,
+                "runtime": 88,
+                "runtime-cli-ini": 3,
+                "skipif": 2
+            },
+            "headline_pass_rate": 0.19285714285714287
+        },
+        "Zend/tests/typehints": {
+            "total": 5,
+            "statuses": {
+                "pass": 1,
+                "fail": 4,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 2,
+                "parse": 1,
+                "pass": 1,
+                "runtime": 1
+            },
+            "headline_pass_rate": 0.2
+        },
+        "Zend/tests/use_const": {
+            "total": 11,
+            "statuses": {
+                "pass": 0,
+                "fail": 11,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "parse": 11
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/use_function": {
+            "total": 16,
+            "statuses": {
+                "pass": 2,
+                "fail": 14,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 1,
+                "parse": 12,
+                "pass": 2,
+                "runtime": 1
+            },
+            "headline_pass_rate": 0.125
+        },
+        "Zend/tests/varSyntax": {
+            "total": 20,
+            "statuses": {
+                "pass": 2,
+                "fail": 17,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 1,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 1,
+                "output": 2,
+                "parse": 10,
+                "pass": 2,
+                "runtime": 4,
+                "runtime-cli-ini": 1
+            },
+            "headline_pass_rate": 0.10526315789473684
+        },
+        "Zend/tests/variadic": {
+            "total": 19,
+            "statuses": {
+                "pass": 6,
+                "fail": 13,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 1,
+                "output": 7,
+                "parse": 1,
+                "pass": 6,
+                "runtime": 4
+            },
+            "headline_pass_rate": 0.3157894736842105
+        },
+        "Zend/tests/weakrefs": {
+            "total": 15,
+            "statuses": {
+                "pass": 0,
+                "fail": 15,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "output": 1,
+                "parse": 1,
+                "runtime": 13
+            },
+            "headline_pass_rate": 0
+        },
+        "Zend/tests/zend_ini": {
+            "total": 11,
+            "statuses": {
+                "pass": 0,
+                "fail": 0,
+                "skip": 10,
+                "xfail": 0,
+                "unsupported": 1,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "extension": 10,
+                "runtime-cli-ini": 1
+            },
+            "headline_pass_rate": null
+        },
+        "tests/lang/_root": {
+            "total": 213,
+            "statuses": {
+                "pass": 71,
+                "fail": 126,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 16,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 5,
+                "output": 61,
+                "parse": 23,
+                "pass": 71,
+                "runtime": 34,
+                "runtime-cli-ini": 15,
+                "section": 1,
+                "skipif": 3
+            },
+            "headline_pass_rate": 0.3604060913705584
+        },
+        "tests/lang/constants": {
+            "total": 2,
+            "statuses": {
+                "pass": 1,
+                "fail": 0,
+                "skip": 1,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "pass": 1,
+                "skipif": 1
+            },
+            "headline_pass_rate": 1
+        },
+        "tests/lang/integer_literals": {
+            "total": 6,
+            "statuses": {
+                "pass": 0,
+                "fail": 3,
+                "skip": 3,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "parse": 3,
+                "skipif": 3
+            },
+            "headline_pass_rate": 0
+        },
+        "tests/lang/operators": {
+            "total": 64,
+            "statuses": {
+                "pass": 13,
+                "fail": 45,
+                "skip": 6,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "compile": 5,
+                "output": 22,
+                "parse": 10,
+                "pass": 13,
+                "runtime": 8,
+                "skipif": 6
+            },
+            "headline_pass_rate": 0.22413793103448276
+        },
+        "tests/lang/string": {
+            "total": 9,
+            "statuses": {
+                "pass": 2,
+                "fail": 7,
+                "skip": 0,
+                "xfail": 0,
+                "unsupported": 0,
+                "timeout": 0,
+                "crash": 0
+            },
+            "categories": {
+                "parse": 7,
+                "pass": 2
+            },
+            "headline_pass_rate": 0.2222222222222222
+        }
+    },
+    "hazards": [
+        {
+            "path": "Zend/tests/bug64660.phpt",
+            "status": "crash",
+            "category": "runtime"
+        },
+        {
+            "path": "Zend/tests/try/finally_goto_005.phpt",
+            "status": "timeout",
+            "category": "runtime"
+        },
+        {
+            "path": "Zend/tests/type_declarations/variance/infinite_recursion.phpt",
+            "status": "crash",
+            "category": "runtime"
+        }
+    ]
+}
