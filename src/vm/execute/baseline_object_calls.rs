@@ -287,6 +287,8 @@ fn op_new_obj<'a>(
 }
 
 #[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_newobj"))]
+#[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_newobj"))]
 fn op_new_obj_resolved<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
