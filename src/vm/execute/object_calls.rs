@@ -1,4 +1,8 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
+use crate::vm::virtual_aggregate_cache::{
+    RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS, ResolvedObjectArrayCall,
+    ResolvedVirtualAggregateCacheEntry,
+};
 #[inline(always)]
 fn resolve_object_long_source(
     source: ObjectLongSource,
@@ -634,28 +638,6 @@ unsafe fn resolve_object_array_long(
     }
 }
 
-#[derive(Clone, Copy)]
-struct ResolvedObjectArrayCall {
-    operation: *const ObjectArrayLongCall,
-    receiver: *const Value,
-    target: *const FunctionCommon,
-    callee: *const UserFunction,
-    plan: *const ObjectLongFunctionPlan,
-    declaring_class: Option<*const str>,
-}
-
-#[cfg(feature = "quick-loops")]
-impl ResolvedObjectArrayCall {
-    const EMPTY: Self = Self {
-        operation: std::ptr::null(),
-        receiver: std::ptr::null(),
-        target: std::ptr::null(),
-        callee: std::ptr::null(),
-        plan: std::ptr::null(),
-        declaring_class: None,
-    };
-}
-
 /// Resolve the invariant dispatch contract for one nested object-array call.
 /// The canonical path invokes this for every call; quick virtual regions can
 /// retain the result while their read-only receiver and inline caches remain
@@ -704,6 +686,7 @@ unsafe fn resolve_object_array_call(
     Some(ResolvedObjectArrayCall {
         operation: call,
         receiver: call_receiver,
+        receiver_identity: (*call_receiver).object_identity_unchecked(),
         target: cache.func,
         callee,
         plan,
@@ -874,13 +857,17 @@ struct ObjectArrayEvaluated {
     called_count: u8,
 }
 
-impl ObjectArrayEvaluated {
-    #[inline(always)]
-    unsafe fn record_calls(&self) {
-        for target in self.called.iter().copied().take(self.called_count as usize) {
+macro_rules! record_object_array_calls {
+    ($evaluated:expr) => {{
+        for target in $evaluated
+            .called
+            .iter()
+            .copied()
+            .take($evaluated.called_count as usize)
+        {
             record_scalar_call(&*target);
         }
-    }
+    }};
 }
 
 /// Evaluate a guarded read-only application region into raw scalar outputs.
@@ -1131,7 +1118,7 @@ pub(crate) unsafe fn try_execute_direct_object_array_call(
         direct_object_array_arguments(eg, caller, caller_op_array, receiver, sends, callee, plan)?;
     let evaluated = evaluate_object_array_values(eg, receiver, &arguments, callee, plan, &[])?;
     let result = materialize_object_array_values(callee, plan, &evaluated)?;
-    evaluated.record_calls();
+    record_object_array_calls!(evaluated);
     Some((result, do_fcall_ptr))
 }
 
@@ -1326,7 +1313,7 @@ unsafe fn commit_object_array_consumers(
     if let Some((result, _result_type, value)) = trailing_value {
         frame_tmp_set_long(caller, slot_base.add(result as usize), value);
     }
-    evaluated.record_calls();
+    record_object_array_calls!(evaluated);
     (*caller).opline = cursor;
     Some(cursor)
 }
@@ -1368,10 +1355,737 @@ pub(crate) unsafe fn try_execute_direct_object_array_consumers(
     )
 }
 
+#[inline(always)]
+fn resolved_virtual_aggregate_cache_index(site: *const Instruction) -> usize {
+    (site as usize >> 4) & (RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS - 1)
+}
+
+/// Resolve immutable bytecode, dispatch, property-layout and consumer facts
+/// for a baseline virtual aggregate. This is deliberately narrower than the
+/// uncached adapter: nested call receivers must be invariant so a cheap
+/// identity guard can make retained raw pointers exact on later hits.
+///
+/// # Safety
+/// `caller` and `new_ptr` must belong to the live frame and immutable op-array
+/// supplied here; every cached runtime target must remain owned by `eg` for
+/// the request lifetime.
+#[inline(never)]
+unsafe fn resolve_baseline_virtual_aggregate(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    new_ptr: *const Instruction,
+) -> Option<ResolvedVirtualAggregateCacheEntry> {
+    let new_object = &*new_ptr;
+    if new_object._pad & NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE == 0
+        || new_object.opcode != OpCode::NewObj
+        || new_object.op1_type != OpType::Const
+        || !matches!(new_object.result_type, OpType::Tmp | OpType::Var)
+        || new_object.extended_value == 0
+        || new_object.extended_value > 8
+    {
+        return None;
+    }
+    let new_ip = usize::try_from(new_ptr.offset_from(caller_op_array.instructions.as_ptr())).ok()?;
+    let new_cache = caller_op_array.cache.get(new_ip)?;
+    if new_cache.class_id == 0 || new_cache.func.is_null() {
+        return None;
+    }
+    let class_def = eg.class_by_id(new_cache.class_id)?;
+    let class_name = caller_op_array
+        .literals
+        .get(new_object.op1 as usize)?
+        .as_str()?;
+    if !class_def.name.eq_ignore_ascii_case(class_name)
+        || class_def
+            .methods
+            .iter()
+            .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__destruct"))
+    {
+        return None;
+    }
+
+    let constructor_common = &*new_cache.func;
+    if constructor_common.fn_type != FunctionType::User
+        || constructor_common.sig.public_arity() != new_object.extended_value
+        || constructor_common.sig.required_num_args != new_object.extended_value
+        || constructor_common.sig.ref_args != 0
+        || constructor_common.sig.is_variadic
+        || !constructor_common.plan.call.is_compact_user_call()
+        || constructor_common.plan.ret != ReturnStrategy::Fast
+    {
+        return None;
+    }
+    let constructor = &*(new_cache.func as *const UserFunction);
+    let constructor_plan = constructor.property_init_plan.as_deref()?;
+    if constructor_plan.public_args as u32 != new_object.extended_value
+        || constructor_plan.assignments.len() > 8
+    {
+        return None;
+    }
+
+    let constructor_declaring_class = eg
+        .declaring_class_of(new_cache.func)
+        .map(|class| class as *const str);
+    let mut constructor_values = [VirtualPropertyValue::Empty; 8];
+    for index in 0..new_object.extended_value as usize {
+        let send = &*new_ptr.add(1 + index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != constructor_common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
+            OpType::Unused => return None,
+        };
+        if value.is_reference()
+            || !check_type_hint(
+                value,
+                constructor_common
+                    .sig
+                    .param_type_hints
+                    .get(index)
+                    .unwrap_or(&ParamTypeHint::None),
+                eg,
+                caller_op_array.strict_types,
+                constructor_declaring_class.map(|class| &*class),
+            )
+        {
+            return None;
+        }
+        constructor_values[index] = if value.value_type() == ValueType::Long {
+            VirtualPropertyValue::Long(value.raw_long())
+        } else {
+            VirtualPropertyValue::Borrowed(value as *const Value)
+        };
+    }
+
+    let constructor_do_ip = new_ip + 1 + new_object.extended_value as usize;
+    let constructor_do = caller_op_array.instructions.get(constructor_do_ip)?;
+    let object_assign = caller_op_array.instructions.get(constructor_do_ip + 1)?;
+    if constructor_do.opcode != OpCode::DoFcall
+        || object_assign.opcode != OpCode::AssignCv
+        || object_assign.op1_type != OpType::Cv
+        || object_assign.op2_type != new_object.result_type
+        || object_assign.op2 != new_object.result
+        || object_assign.result_type != OpType::Unused
+    {
+        return None;
+    }
+
+    let mut assignment_cache_ips = [0u16; 8];
+    let mut assignment_slots = [usize::MAX; 8];
+    let mut assignment_arguments = [0u8; 8];
+    let mut property_slots = [usize::MAX; 8];
+    let mut property_arguments = [0u8; 8];
+    let mut property_count = 0usize;
+    for (index, assignment) in constructor_plan.assignments.iter().copied().enumerate() {
+        let cache = constructor.op_array.cache.get(assignment.cache_ip as usize)?;
+        if cache.class_id != new_cache.class_id
+            || assignment.argument as u32 >= new_object.extended_value
+        {
+            return None;
+        }
+        let value = *constructor_values.get(assignment.argument as usize)?;
+        let accepts_value = match value {
+            VirtualPropertyValue::Long(value) => {
+                let value = Value::long(value);
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    &value,
+                    eg,
+                    &class_def.name,
+                )
+            }
+            VirtualPropertyValue::Borrowed(pointer) if !pointer.is_null() => {
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    &*pointer,
+                    eg,
+                    &class_def.name,
+                )
+            }
+            VirtualPropertyValue::Borrowed(_) | VirtualPropertyValue::Empty => false,
+        };
+        if !accepts_value {
+            return None;
+        }
+        let slot = cache.property_slot();
+        assignment_cache_ips[index] = assignment.cache_ip;
+        assignment_slots[index] = slot;
+        assignment_arguments[index] = assignment.argument;
+        if let Some(existing) = property_slots[..property_count]
+            .iter()
+            .position(|candidate| *candidate == slot)
+        {
+            property_arguments[existing] = assignment.argument;
+        } else {
+            *property_slots.get_mut(property_count)? = slot;
+            property_arguments[property_count] = assignment.argument;
+            property_count += 1;
+        }
+    }
+
+    let method_ip = constructor_do_ip + 2;
+    let method = caller_op_array.instructions.get(method_ip)?;
+    if method.opcode != OpCode::InitMethodCall
+        || method._pad & CALL_FLAG_OBJECT_ARRAY_CONSUMERS == 0
+        || method.extended_value > 8
+    {
+        return None;
+    }
+    let method_receiver = match method.op1_type {
+        OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+            &*(*caller).get_op_ptr(method.op1 as u32, method.op1_type, caller_op_array)
+        }
+        OpType::Unused => return None,
+    };
+    if method_receiver.value_type() != ValueType::Object || method_receiver.is_reference() {
+        return None;
+    }
+    let method_class_id = method_receiver.object_class_id_unchecked();
+    let method_cache = caller_op_array.cache.get(method_ip)?;
+    if method_class_id == 0
+        || method_cache.class_id != method_class_id
+        || method_cache.func.is_null()
+        || !method_return_dispatch_contract_matches(method, &*method_cache.func)
+    {
+        return None;
+    }
+    let method_common = &*method_cache.func;
+    if method_common.fn_type != FunctionType::User
+        || method_common.sig.public_arity() != method.extended_value
+        || method_common.sig.required_num_args != method.extended_value
+        || method_common.sig.ref_args != 0
+        || method_common.sig.is_variadic
+        || !method_common.plan.call.is_compact_user_call()
+        || method_common.plan.ret != ReturnStrategy::Fast
+    {
+        return None;
+    }
+    let method_user = &*(method_cache.func as *const UserFunction);
+    let method_plan = method_user.object_array_plan.as_deref()?;
+    if method_plan.public_args as u32 != method.extended_value {
+        return None;
+    }
+    let method_declaring_class = eg
+        .declaring_class_of(method_cache.func)
+        .map(|class| class as *const str);
+    let virtual_object = VirtualObject {
+        class_id: new_cache.class_id,
+        class_def: class_def as *const crate::compiler::compile::ClassDef,
+        property_slots,
+        property_values: [VirtualPropertyValue::Empty; 8],
+        property_count: property_count as u8,
+    };
+    let mut virtual_argument = u8::MAX;
+    for index in 0..method.extended_value as usize {
+        let send = caller_op_array.instructions.get(method_ip + 1 + index)?;
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != method_common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let hint = method_common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        if send.op1_type == OpType::Cv && send.op1 == object_assign.op1 {
+            if virtual_argument != u8::MAX
+                || !virtual_object_matches_hint(
+                    &virtual_object,
+                    hint,
+                    eg,
+                    method_declaring_class.map(|class| &*class),
+                )
+            {
+                return None;
+            }
+            virtual_argument = index as u8;
+        } else {
+            let value = match send.op1_type {
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                    &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+                }
+                OpType::Unused => return None,
+            };
+            if value.is_reference()
+                || !check_type_hint(
+                    value,
+                    hint,
+                    eg,
+                    caller_op_array.strict_types,
+                    method_declaring_class.map(|class| &*class),
+                )
+            {
+                return None;
+            }
+        }
+    }
+    if virtual_argument == u8::MAX {
+        return None;
+    }
+    let method_do_ip = method_ip + 1 + method.extended_value as usize;
+    let method_do = caller_op_array.instructions.get(method_do_ip)?;
+    if method_do.opcode != OpCode::DoFcall
+        || !matches!(method_do.result_type, OpType::Tmp | OpType::Var)
+    {
+        return None;
+    }
+    let (nested_calls, nested_call_count) =
+        resolve_quick_object_array_calls(eg, method_receiver, method_user, method_plan)?;
+
+    let result_assign = caller_op_array.instructions.get(method_do_ip + 1)?;
+    if result_assign.opcode != OpCode::AssignCv
+        || result_assign.op1_type != OpType::Cv
+        || result_assign.op2_type != method_do.result_type
+        || result_assign.op2 != method_do.result
+        || result_assign.result_type != OpType::Unused
+    {
+        return None;
+    }
+    let array_cv = result_assign.op1;
+    let mut consumer_entries = [u8::MAX; 4];
+    let mut consumer_accumulators = [0u16; 4];
+    let mut consumer_count = 0usize;
+    let mut trailing_entry = u8::MAX;
+    let mut trailing_result = 0u16;
+    let mut cursor = method_do_ip + 2;
+    while consumer_count + usize::from(trailing_entry != u8::MAX) < 4 {
+        let Some(fetch) = caller_op_array.instructions.get(cursor) else {
+            break;
+        };
+        if fetch.opcode != OpCode::FetchDimR
+            || fetch.op1_type != OpType::Cv
+            || fetch.op1 != array_cv
+            || fetch.op2_type != OpType::Const
+            || !matches!(fetch.result_type, OpType::Tmp | OpType::Var)
+        {
+            break;
+        }
+        let entry = u8::try_from(object_array_entry_index_for_key(
+            caller_op_array,
+            fetch.op2,
+            method_user,
+            method_plan,
+        )?)
+        .ok()?;
+        let add = caller_op_array.instructions.get(cursor + 1);
+        let assign = caller_op_array.instructions.get(cursor + 2);
+        let accumulator = if let (Some(add), Some(assign)) = (add, assign)
+            && matches!(
+                add.opcode,
+                OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp
+            )
+            && matches!(add.result_type, OpType::Tmp | OpType::Var)
+            && assign.opcode == OpCode::AssignCv
+            && assign.op1_type == OpType::Cv
+            && assign.op2_type == add.result_type
+            && assign.op2 == add.result
+            && assign.result_type == OpType::Unused
+        {
+            if add.op1_type == OpType::Cv
+                && add.op2_type == fetch.result_type
+                && add.op2 == fetch.result
+                && assign.op1 == add.op1
+            {
+                Some(add.op1)
+            } else if add.op2_type == OpType::Cv
+                && add.op1_type == fetch.result_type
+                && add.op1 == fetch.result
+                && assign.op1 == add.op2
+            {
+                Some(add.op2)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(accumulator) = accumulator {
+            consumer_entries[consumer_count] = entry;
+            consumer_accumulators[consumer_count] = accumulator;
+            consumer_count += 1;
+            cursor += 3;
+        } else {
+            trailing_entry = entry;
+            trailing_result = fetch.result;
+            cursor += 1;
+            break;
+        }
+    }
+    if consumer_count == 0 {
+        return None;
+    }
+
+    Some(ResolvedVirtualAggregateCacheEntry {
+        site: new_ptr,
+        caller_op_array: caller_op_array as *const crate::compiler::OpArray,
+        class_id: new_cache.class_id,
+        class_def: class_def as *const crate::compiler::compile::ClassDef,
+        constructor_target: new_cache.func,
+        constructor_declaring_class,
+        constructor_argument_count: new_object.extended_value as u8,
+        assignment_cache_ips,
+        assignment_slots,
+        assignment_arguments,
+        assignment_count: constructor_plan.assignments.len() as u8,
+        property_slots,
+        property_arguments,
+        property_count: property_count as u8,
+        method_ip: u32::try_from(method_ip).ok()?,
+        method_class_id,
+        method_receiver_identity: method_receiver.object_identity_unchecked(),
+        method_target: method_cache.func,
+        method_declaring_class,
+        method_user,
+        method_plan,
+        method_argument_count: method.extended_value as u8,
+        virtual_argument,
+        nested_calls,
+        nested_call_count,
+        consumer_entries,
+        consumer_accumulators,
+        consumer_count: consumer_count as u8,
+        trailing_entry,
+        trailing_result,
+        next_ip: u32::try_from(cursor).ok()?,
+    })
+}
+
+/// Revalidate only runtime identities that can change while retaining the
+/// immutable resolved descriptor. Current receiver pointers replace retained
+/// pointers before evaluation, so a matching object identity never depends on
+/// an old frame slot address.
+///
+/// # Safety
+/// `resolved` must originate from this request's cache, while `caller` and
+/// `new_ptr` must still identify the live frame/site being revalidated.
+#[inline(always)]
+unsafe fn validate_cached_virtual_aggregate(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    new_ptr: *const Instruction,
+    resolved: &ResolvedVirtualAggregateCacheEntry,
+) -> Option<(*const Value, [ResolvedObjectArrayCall; 8])> {
+    if resolved.site != new_ptr
+        || resolved.caller_op_array != caller_op_array as *const crate::compiler::OpArray
+        || resolved.class_id == 0
+        || resolved.class_def.is_null()
+        || resolved.constructor_target.is_null()
+        || resolved.method_target.is_null()
+        || resolved.method_user.is_null()
+        || resolved.method_plan.is_null()
+    {
+        return None;
+    }
+    let new_ip = usize::try_from(new_ptr.offset_from(caller_op_array.instructions.as_ptr())).ok()?;
+    let new_cache = caller_op_array.cache.get(new_ip)?;
+    if new_cache.class_id != resolved.class_id
+        || new_cache.func != resolved.constructor_target
+        || eg.class_by_id(resolved.class_id)? as *const crate::compiler::compile::ClassDef
+            != resolved.class_def
+    {
+        return None;
+    }
+    let method = caller_op_array.instructions.get(resolved.method_ip as usize)?;
+    let method_receiver = match method.op1_type {
+        OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+            &*(*caller).get_op_ptr(method.op1 as u32, method.op1_type, caller_op_array)
+        }
+        OpType::Unused => return None,
+    };
+    if method_receiver.value_type() != ValueType::Object
+        || method_receiver.is_reference()
+        || method_receiver.object_class_id_unchecked() != resolved.method_class_id
+        || method_receiver.object_identity_unchecked() != resolved.method_receiver_identity
+    {
+        return None;
+    }
+    let method_cache = caller_op_array.cache.get(resolved.method_ip as usize)?;
+    if method_cache.class_id != resolved.method_class_id
+        || method_cache.func != resolved.method_target
+    {
+        return None;
+    }
+
+    let owner = &*resolved.method_user;
+    let plan = &*resolved.method_plan;
+    let no_arguments = [ObjectLongArgument::None; 8];
+    let mut current_calls = [ResolvedObjectArrayCall::EMPTY; 8];
+    let mut current_count = 0usize;
+    for operation in plan.operations.iter() {
+        let ObjectArrayLongOp::Call(call) = operation else {
+            continue;
+        };
+        let cached = *resolved.nested_calls.get(current_count)?;
+        if cached.operation != call as *const ObjectArrayLongCall
+            || cached.target.is_null()
+            || cached.callee.is_null()
+            || cached.plan.is_null()
+        {
+            return None;
+        }
+        let call_receiver = match call.receiver {
+            ObjectArraySource::Receiver => method_receiver as *const Value,
+            ObjectArraySource::Literal(literal) => {
+                owner.op_array.literals.get(literal as usize)? as *const Value
+            }
+            ObjectArraySource::Property {
+                object: ObjectLongObjectSource::Receiver,
+                cache_ip,
+            } => match object_array_property(
+                owner,
+                method_receiver,
+                &no_arguments,
+                ObjectLongObjectSource::Receiver,
+                cache_ip,
+            )? {
+                ObjectArrayResolved::Borrowed(pointer) => pointer,
+                ObjectArrayResolved::Long(_) | ObjectArrayResolved::Virtual(_) => return None,
+            },
+            ObjectArraySource::Argument(_)
+            | ObjectArraySource::LongSlot(_)
+            | ObjectArraySource::Property {
+                object: ObjectLongObjectSource::Argument(_),
+                ..
+            } => return None,
+        };
+        if call_receiver.is_null()
+            || (*call_receiver).is_reference()
+            || (*call_receiver).value_type() != ValueType::Object
+            || (*call_receiver).object_identity_unchecked() != cached.receiver_identity
+        {
+            return None;
+        }
+        let class_id = (*call_receiver).object_class_id_unchecked();
+        let call_cache = owner.op_array.cache.get(call.cache_ip as usize)?;
+        if class_id == 0
+            || call_cache.class_id != class_id
+            || call_cache.func != cached.target
+        {
+            return None;
+        }
+        current_calls[current_count] = ResolvedObjectArrayCall {
+            receiver: call_receiver,
+            ..cached
+        };
+        current_count += 1;
+    }
+    if current_count != resolved.nested_call_count as usize {
+        return None;
+    }
+    Some((method_receiver as *const Value, current_calls))
+}
+
+/// Execute the per-hit scalar portion of a resolved baseline aggregate. Every
+/// visible write remains staged until all type, property, nested-call and
+/// overflow guards have succeeded.
+///
+/// # Safety
+/// The descriptor and refreshed receiver pointers must have passed
+/// `validate_cached_virtual_aggregate` for this live frame immediately before
+/// entry. No observable frame write may occur before all guards succeed.
+#[inline(never)]
+unsafe fn execute_cached_virtual_aggregate(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    resolved: &ResolvedVirtualAggregateCacheEntry,
+    method_receiver: *const Value,
+    nested_calls: &[ResolvedObjectArrayCall; 8],
+) -> Option<*const Instruction> {
+    let constructor_common = &*resolved.constructor_target;
+    let constructor = &*(resolved.constructor_target as *const UserFunction);
+    let class_def = &*resolved.class_def;
+    let mut constructor_values = [VirtualPropertyValue::Empty; 8];
+    for index in 0..resolved.constructor_argument_count as usize {
+        let send = &*resolved.site.add(1 + index);
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
+            OpType::Unused => return None,
+        };
+        if value.is_reference()
+            || !check_type_hint(
+                value,
+                constructor_common
+                    .sig
+                    .param_type_hints
+                    .get(index)
+                    .unwrap_or(&ParamTypeHint::None),
+                eg,
+                caller_op_array.strict_types,
+                resolved.constructor_declaring_class.map(|class| &*class),
+            )
+        {
+            return None;
+        }
+        constructor_values[index] = if value.value_type() == ValueType::Long {
+            VirtualPropertyValue::Long(value.raw_long())
+        } else {
+            VirtualPropertyValue::Borrowed(value as *const Value)
+        };
+    }
+    for index in 0..resolved.assignment_count as usize {
+        let cache = constructor
+            .op_array
+            .cache
+            .get(resolved.assignment_cache_ips[index] as usize)?;
+        if cache.class_id != resolved.class_id
+            || cache.property_slot() != resolved.assignment_slots[index]
+        {
+            return None;
+        }
+        let value = constructor_values[resolved.assignment_arguments[index] as usize];
+        let accepts_value = match value {
+            VirtualPropertyValue::Long(value) => {
+                let value = Value::long(value);
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    &value,
+                    eg,
+                    &class_def.name,
+                )
+            }
+            VirtualPropertyValue::Borrowed(pointer) if !pointer.is_null() => {
+                instance_property_cache_accepts_exact_non_generic_write(
+                    cache,
+                    &*pointer,
+                    eg,
+                    &class_def.name,
+                )
+            }
+            VirtualPropertyValue::Borrowed(_) | VirtualPropertyValue::Empty => false,
+        };
+        if !accepts_value {
+            return None;
+        }
+    }
+
+    let mut virtual_object = VirtualObject {
+        class_id: resolved.class_id,
+        class_def: resolved.class_def,
+        property_slots: resolved.property_slots,
+        property_values: [VirtualPropertyValue::Empty; 8],
+        property_count: resolved.property_count,
+    };
+    for index in 0..resolved.property_count as usize {
+        virtual_object.property_values[index] =
+            constructor_values[resolved.property_arguments[index] as usize];
+    }
+
+    let method_common = &*resolved.method_target;
+    let method_user = &*resolved.method_user;
+    let method_plan = &*resolved.method_plan;
+    let mut method_arguments = [ObjectLongArgument::None; 8];
+    for index in 0..resolved.method_argument_count as usize {
+        if index == resolved.virtual_argument as usize {
+            method_arguments[index] = ObjectLongArgument::Virtual(&virtual_object);
+            continue;
+        }
+        let send = caller_op_array
+            .instructions
+            .get(resolved.method_ip as usize + 1 + index)?;
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
+            OpType::Unused => return None,
+        };
+        if value.is_reference()
+            || !check_type_hint(
+                value,
+                method_common
+                    .sig
+                    .param_type_hints
+                    .get(index)
+                    .unwrap_or(&ParamTypeHint::None),
+                eg,
+                caller_op_array.strict_types,
+                resolved.method_declaring_class.map(|class| &*class),
+            )
+        {
+            return None;
+        }
+        method_arguments[index] = ObjectLongArgument::Borrowed(value as *const Value);
+    }
+    let evaluated = evaluate_object_array_values(
+        eg,
+        &*method_receiver,
+        &method_arguments,
+        method_user,
+        method_plan,
+        &nested_calls[..resolved.nested_call_count as usize],
+    )?;
+
+    let slot_base = (caller as *mut Value).add(CALL_FRAME_SLOTS);
+    let mut destinations = [0u16; 4];
+    let mut results = [0i64; 4];
+    for index in 0..resolved.consumer_count as usize {
+        let accumulator = resolved.consumer_accumulators[index];
+        let current = destinations[..index]
+            .iter()
+            .rposition(|destination| *destination == accumulator)
+            .map(|previous| results[previous])
+            .or_else(|| {
+                let value = &*slot_base.add(accumulator as usize);
+                (value.value_type() == ValueType::Long && !value.is_reference())
+                    .then(|| value.raw_long())
+            })?;
+        let value = *evaluated
+            .values
+            .get(resolved.consumer_entries[index] as usize)?;
+        destinations[index] = accumulator;
+        results[index] = current.checked_add(value)?;
+    }
+    let trailing = (resolved.trailing_entry != u8::MAX)
+        .then(|| {
+            evaluated
+                .values
+                .get(resolved.trailing_entry as usize)
+                .copied()
+        })
+        .flatten();
+    for index in 0..resolved.consumer_count as usize {
+        frame_tmp_set_long(
+            caller,
+            slot_base.add(destinations[index] as usize),
+            results[index],
+        );
+    }
+    if let Some(value) = trailing {
+        frame_tmp_set_long(
+            caller,
+            slot_base.add(resolved.trailing_result as usize),
+            value,
+        );
+    }
+    record_object_array_calls!(evaluated);
+    record_scalar_call(constructor_common);
+    record_scalar_call(method_common);
+    let next = caller_op_array
+        .instructions
+        .as_ptr()
+        .add(resolved.next_ip as usize);
+    (*caller).opline = next;
+    Some(next)
+}
+
 /// Execute a compiler-proven non-escaping constructor → ObjectArray consumer
 /// pipeline without allocating the intermediate object. Constructor write
 /// caches map borrowed/raw arguments onto virtual declared-property slots;
 /// every downstream property access still validates its own canonical cache.
+///
+/// # Safety
+/// `caller` must be the live frame for `caller_op_array`, and `new_ptr` must
+/// point at its current `NewObj` instruction for the duration of the attempt.
 #[inline(never)]
 unsafe fn try_execute_virtual_object_array_pipeline(
     eg: &ExecutorGlobals,
@@ -1379,6 +2093,71 @@ unsafe fn try_execute_virtual_object_array_pipeline(
     caller_op_array: &crate::compiler::OpArray,
     new_ptr: *const Instruction,
 ) -> Option<*const Instruction> {
+    let cache_index = resolved_virtual_aggregate_cache_index(new_ptr);
+    let mut invalidated = false;
+    {
+        let cache = eg.resolved_virtual_aggregate_cache.borrow();
+        let resolved = &cache[cache_index];
+        if resolved.site == new_ptr
+            && resolved.caller_op_array
+                == caller_op_array as *const crate::compiler::OpArray
+        {
+            if let Some((method_receiver, nested_calls)) = validate_cached_virtual_aggregate(
+                eg,
+                caller,
+                caller_op_array,
+                new_ptr,
+                resolved,
+            ) {
+                if let Some(next) = execute_cached_virtual_aggregate(
+                    eg,
+                    caller,
+                    caller_op_array,
+                    resolved,
+                    method_receiver,
+                    &nested_calls,
+                ) {
+                    stats::inc_resolved_virtual_aggregate_cache_hit();
+                    return Some(next);
+                }
+                stats::inc_resolved_virtual_aggregate_guard_fallback();
+                return None;
+            }
+            invalidated = true;
+        }
+    }
+    if invalidated {
+        stats::inc_resolved_virtual_aggregate_cache_invalidation();
+    }
+    stats::inc_resolved_virtual_aggregate_resolve_attempt();
+    if let Some(resolved) = resolve_baseline_virtual_aggregate(
+        eg,
+        caller,
+        caller_op_array,
+        new_ptr,
+    ) && let Some((method_receiver, nested_calls)) = validate_cached_virtual_aggregate(
+            eg,
+            caller,
+            caller_op_array,
+            new_ptr,
+            &resolved,
+        )
+    {
+        let Some(next) = execute_cached_virtual_aggregate(
+            eg,
+            caller,
+            caller_op_array,
+            &resolved,
+            method_receiver,
+            &nested_calls,
+        ) else {
+            return None;
+        };
+        eg.resolved_virtual_aggregate_cache.borrow_mut()[cache_index] = resolved;
+        stats::inc_resolved_virtual_aggregate_resolve_success();
+        return Some(next);
+    }
+
     let new_object = &*new_ptr;
     if new_object._pad & NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE == 0
         || new_object.opcode != OpCode::NewObj
@@ -1646,8 +2425,11 @@ unsafe fn try_execute_virtual_object_array_pipeline(
     Some(next)
 }
 
+/// # Safety
+/// `caller` and `do_fcall_ptr` must identify the live caller frame and its
+/// completed call instruction; `result` must not alias an existing frame slot.
 #[inline(always)]
-pub(crate) unsafe fn complete_direct_object_array_call(
+pub(crate) unsafe fn complete_direct_value_call(
     caller: *mut ExecuteData,
     do_fcall_ptr: *const Instruction,
     result: Value,
@@ -1659,6 +2441,9 @@ pub(crate) unsafe fn complete_direct_object_array_call(
     }
     (*caller).opline = do_fcall_ptr.add(1);
 }
+/// # Safety
+/// `caller` and `do_fcall_ptr` must identify the live caller frame and its
+/// completed call instruction.
 #[inline(always)]
 pub(crate) unsafe fn complete_direct_scalar_long_call(
     caller: *mut ExecuteData,
@@ -1669,34 +2454,6 @@ pub(crate) unsafe fn complete_direct_scalar_long_call(
     if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
         let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
         frame_tmp_set_long(caller, result_ptr, result);
-    }
-    (*caller).opline = do_fcall_ptr.add(1);
-}
-
-#[inline(always)]
-pub(crate) unsafe fn complete_direct_string_call(
-    caller: *mut ExecuteData,
-    do_fcall_ptr: *const Instruction,
-    result: String,
-) {
-    let do_fcall = &*do_fcall_ptr;
-    if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
-        let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
-        frame_tmp_set(caller, result_ptr, Value::string(result));
-    }
-    (*caller).opline = do_fcall_ptr.add(1);
-}
-
-#[inline(always)]
-pub(crate) unsafe fn complete_direct_scalar_double_call(
-    caller: *mut ExecuteData,
-    do_fcall_ptr: *const Instruction,
-    result: f64,
-) {
-    let do_fcall = &*do_fcall_ptr;
-    if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
-        let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
-        frame_tmp_set(caller, result_ptr, Value::double(result));
     }
     (*caller).opline = do_fcall_ptr.add(1);
 }

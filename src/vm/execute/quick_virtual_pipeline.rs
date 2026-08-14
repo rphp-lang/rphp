@@ -22,7 +22,6 @@ struct QuickResolvedVirtualPipeline {
 /// Pre-resolve nested calls whose receiver belongs to the invariant service
 /// object. ObjectArrayFunctionPlan contains no writes, so these receiver and
 /// dispatch guards remain valid for the lifetime of the active quick region.
-#[cfg(feature = "quick-loops")]
 unsafe fn resolve_quick_object_array_calls(
     eg: &ExecutorGlobals,
     receiver: &Value,

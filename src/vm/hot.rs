@@ -600,10 +600,10 @@ pub fn execute_hot_frame(
                                 func_common.call_count.set(count + 1);
                             }
                             unsafe {
-                                super::execute::complete_direct_scalar_double_call(
+                                super::execute::complete_direct_value_call(
                                     frame,
                                     do_fcall_ptr,
-                                    result,
+                                    Value::double(result),
                                 );
                             }
                             opline_ptr = unsafe { do_fcall_ptr.add(1) };
@@ -1505,7 +1505,7 @@ pub fn execute_hot_frame(
                         } {
                             super::execute::record_scalar_call(func_common);
                             unsafe {
-                                super::execute::complete_direct_object_array_call(
+                                super::execute::complete_direct_value_call(
                                     frame,
                                     do_fcall_ptr,
                                     result,
@@ -1621,10 +1621,10 @@ pub fn execute_hot_frame(
                                 func_common.call_count.set(count + 1);
                             }
                             unsafe {
-                                super::execute::complete_direct_scalar_double_call(
+                                super::execute::complete_direct_value_call(
                                     frame,
                                     do_fcall_ptr,
-                                    result,
+                                    Value::double(result),
                                 );
                             }
                             opline_ptr = unsafe { do_fcall_ptr.add(1) };

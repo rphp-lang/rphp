@@ -13,6 +13,9 @@ use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
 use crate::vm::stack::VmStack;
 use crate::vm::stats;
+use crate::vm::virtual_aggregate_cache::{
+    RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS, ResolvedVirtualAggregateCacheEntry,
+};
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[path = "generic_contracts.rs"]
@@ -208,6 +211,12 @@ pub struct ExecutorGlobals {
     pub current_execute_data: Cell<*mut ExecuteData>,
     pub vm_interrupt: AtomicBool,
     pub timed_out: AtomicBool,
+    /// Bounded request-local descriptors for structurally proven virtual
+    /// call/return aggregates. The fixed array allocates nothing and RefCell
+    /// mutation remains confined to the single VM execution thread.
+    pub(crate) resolved_virtual_aggregate_cache: std::cell::RefCell<
+        [ResolvedVirtualAggregateCacheEntry; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
+    >,
     /// Function table — name → pointer to FunctionCommon
     pub function_table: HashMap<String, *const FunctionCommon>,
     /// Class table — name/alias → shared ClassDef. `Rc` keeps metadata and
@@ -401,6 +410,9 @@ impl ExecutorGlobals {
             current_execute_data: Cell::new(std::ptr::null_mut()),
             vm_interrupt: AtomicBool::new(false),
             timed_out: AtomicBool::new(false),
+            resolved_virtual_aggregate_cache: std::cell::RefCell::new(
+                [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
+            ),
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
@@ -472,6 +484,9 @@ impl ExecutorGlobals {
             current_execute_data: Cell::new(std::ptr::null_mut()),
             vm_interrupt: AtomicBool::new(false),
             timed_out: AtomicBool::new(false),
+            resolved_virtual_aggregate_cache: std::cell::RefCell::new(
+                [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
+            ),
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),

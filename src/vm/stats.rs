@@ -179,6 +179,11 @@ mod inner {
     static NEWOBJ_LITERAL_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
     static NEWOBJ_CLASS_NAME_MATERIALIZATIONS: AtomicU64 = AtomicU64::new(0);
     static NEWOBJ_CLASS_HASH_LOOKUPS: AtomicU64 = AtomicU64::new(0);
+    static RESOLVED_VIRTUAL_AGGREGATE_RESOLVE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+    static RESOLVED_VIRTUAL_AGGREGATE_RESOLVE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+    static RESOLVED_VIRTUAL_AGGREGATE_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+    static RESOLVED_VIRTUAL_AGGREGATE_CACHE_INVALIDATIONS: AtomicU64 = AtomicU64::new(0);
+    static RESOLVED_VIRTUAL_AGGREGATE_GUARD_FALLBACKS: AtomicU64 = AtomicU64::new(0);
     static OPCODE_COUNTS: [AtomicU64; OPCODE_KIND_COUNT] =
         [const { AtomicU64::new(0) }; OPCODE_KIND_COUNT];
 
@@ -260,6 +265,11 @@ mod inner {
         NEWOBJ_LITERAL_CACHE_MISSES.store(0, Ordering::Relaxed);
         NEWOBJ_CLASS_NAME_MATERIALIZATIONS.store(0, Ordering::Relaxed);
         NEWOBJ_CLASS_HASH_LOOKUPS.store(0, Ordering::Relaxed);
+        RESOLVED_VIRTUAL_AGGREGATE_RESOLVE_ATTEMPTS.store(0, Ordering::Relaxed);
+        RESOLVED_VIRTUAL_AGGREGATE_RESOLVE_SUCCESSES.store(0, Ordering::Relaxed);
+        RESOLVED_VIRTUAL_AGGREGATE_CACHE_HITS.store(0, Ordering::Relaxed);
+        RESOLVED_VIRTUAL_AGGREGATE_CACHE_INVALIDATIONS.store(0, Ordering::Relaxed);
+        RESOLVED_VIRTUAL_AGGREGATE_GUARD_FALLBACKS.store(0, Ordering::Relaxed);
         for counter in &OPCODE_COUNTS {
             counter.store(0, Ordering::Relaxed);
         }
@@ -576,6 +586,41 @@ mod inner {
     pub fn inc_newobj_class_hash_lookup() {
         if enabled() {
             NEWOBJ_CLASS_HASH_LOOKUPS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_resolved_virtual_aggregate_resolve_attempt() {
+        if enabled() {
+            RESOLVED_VIRTUAL_AGGREGATE_RESOLVE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_resolved_virtual_aggregate_resolve_success() {
+        if enabled() {
+            RESOLVED_VIRTUAL_AGGREGATE_RESOLVE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_resolved_virtual_aggregate_cache_hit() {
+        if enabled() {
+            RESOLVED_VIRTUAL_AGGREGATE_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_resolved_virtual_aggregate_cache_invalidation() {
+        if enabled() {
+            RESOLVED_VIRTUAL_AGGREGATE_CACHE_INVALIDATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_resolved_virtual_aggregate_guard_fallback() {
+        if enabled() {
+            RESOLVED_VIRTUAL_AGGREGATE_GUARD_FALLBACKS.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1065,6 +1110,32 @@ mod inner {
             "newobj_class_hash_lookups={}",
             NEWOBJ_CLASS_HASH_LOOKUPS.load(Ordering::Relaxed)
         );
+        let _ = writeln!(err, "-- resolved virtual aggregate --");
+        let _ = writeln!(
+            err,
+            "resolved_virtual_aggregate_resolve_attempts={}",
+            RESOLVED_VIRTUAL_AGGREGATE_RESOLVE_ATTEMPTS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "resolved_virtual_aggregate_resolve_successes={}",
+            RESOLVED_VIRTUAL_AGGREGATE_RESOLVE_SUCCESSES.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "resolved_virtual_aggregate_cache_hits={}",
+            RESOLVED_VIRTUAL_AGGREGATE_CACHE_HITS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "resolved_virtual_aggregate_cache_invalidations={}",
+            RESOLVED_VIRTUAL_AGGREGATE_CACHE_INVALIDATIONS.load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "resolved_virtual_aggregate_guard_fallbacks={}",
+            RESOLVED_VIRTUAL_AGGREGATE_GUARD_FALLBACKS.load(Ordering::Relaxed)
+        );
 
         let mut opcodes = Vec::new();
         for (idx, counter) in OPCODE_COUNTS.iter().enumerate() {
@@ -1476,6 +1547,51 @@ pub fn inc_newobj_class_hash_lookup() {
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_newobj_class_hash_lookup() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_resolve_attempt() {
+    inner::inc_resolved_virtual_aggregate_resolve_attempt();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_resolve_attempt() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_resolve_success() {
+    inner::inc_resolved_virtual_aggregate_resolve_success();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_resolve_success() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_cache_hit() {
+    inner::inc_resolved_virtual_aggregate_cache_hit();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_cache_hit() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_cache_invalidation() {
+    inner::inc_resolved_virtual_aggregate_cache_invalidation();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_cache_invalidation() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_guard_fallback() {
+    inner::inc_resolved_virtual_aggregate_guard_fallback();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_resolved_virtual_aggregate_guard_fallback() {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

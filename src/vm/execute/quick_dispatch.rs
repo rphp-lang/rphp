@@ -1207,7 +1207,7 @@ unsafe fn run_quick_long_ops_loop(
                     stats::inc_quick_loop_deoptimized(iterations);
                     return Ok(QuickLoopOutcome::Deoptimized);
                 };
-                evaluated.record_calls();
+                record_object_array_calls!(evaluated);
                 object_call_recorder.record(op_index);
                 dirty_long_mask |= output_mask;
                 next_target

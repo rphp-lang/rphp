@@ -1501,9 +1501,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array,
                             opline_ptr,
                         )
-                    }?
+                }?
                 {
-                    unsafe { complete_direct_string_call(frame, do_fcall_ptr, result) };
+                    // SAFETY: the callback pipeline returns this live frame's DoFcall site.
+                    unsafe {
+                        complete_direct_value_call(frame, do_fcall_ptr, Value::string(result))
+                    };
                     continue 'vm;
                 }
 
@@ -1622,10 +1625,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 common.call_count.set(count + 1);
                             }
                             unsafe {
-                                complete_direct_scalar_double_call(
+                                complete_direct_value_call(
                                     frame,
                                     do_fcall_ptr,
-                                    result,
+                                    Value::double(result),
                                 );
                             }
                             continue 'vm;
@@ -1646,10 +1649,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             )
                         } {
                             unsafe {
-                                complete_direct_scalar_double_call(
+                                complete_direct_value_call(
                                     frame,
                                     do_fcall_ptr,
-                                    result,
+                                    Value::double(result),
                                 );
                             }
                             continue 'vm;
@@ -3635,7 +3638,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 } {
                                     record_scalar_call(common);
                                     unsafe {
-                                        complete_direct_object_array_call(
+                                        complete_direct_value_call(
                                             frame,
                                             do_fcall_ptr,
                                             result,
@@ -3739,10 +3742,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         common.call_count.set(count + 1);
                                     }
                                     unsafe {
-                                        complete_direct_scalar_double_call(
+                                        complete_direct_value_call(
                                             frame,
                                             do_fcall_ptr,
-                                            result,
+                                            Value::double(result),
                                         );
                                     }
                                     continue 'vm;
@@ -3763,10 +3766,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     )
                                 } {
                                     unsafe {
-                                        complete_direct_scalar_double_call(
+                                        complete_direct_value_call(
                                             frame,
                                             do_fcall_ptr,
-                                            result,
+                                            Value::double(result),
                                         );
                                     }
                                     continue 'vm;

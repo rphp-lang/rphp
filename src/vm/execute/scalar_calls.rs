@@ -790,7 +790,7 @@ pub(crate) unsafe fn resolve_deferred_scalar_call(
         && let Some(result) = try_execute_deferred_scalar_double_call(compact)
     {
         record_scalar_call(common);
-        complete_direct_scalar_double_call(caller, do_fcall_ptr, result);
+        complete_direct_value_call(caller, do_fcall_ptr, Value::double(result));
     } else {
         return materialize_deferred_scalar_call(eg, compact);
     }

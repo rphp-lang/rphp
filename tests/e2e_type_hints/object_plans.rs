@@ -405,6 +405,54 @@ echo gettype($sum);
 }
 
 #[test]
+fn test_virtual_pipeline_revalidates_replaced_nested_receiver() {
+    let source = r#"<?php
+class CachedRequest {
+    public $value = 0;
+    public function __construct(int $value) { $this->value = $value; }
+}
+class CachedPolicy {
+    public function amount(CachedRequest $request): int { return $request->value; }
+}
+class ReplacementCachedPolicy extends CachedPolicy {
+    public function amount(CachedRequest $request): int { return $request->value + 10; }
+}
+class CachedService {
+    public $policy;
+    public function __construct(CachedPolicy $policy) { $this->policy = $policy; }
+    public function quote(CachedRequest $request): array {
+        $value = $this->policy->amount($request);
+        return ['value' => $value];
+    }
+}
+function runCachedReplacement(): int {
+    $service = new CachedService(new CachedPolicy());
+    $sum = 0;
+    for ($i = 0; $i < 50; $i++) {
+        if ($i === 30) $service->policy = new ReplacementCachedPolicy();
+        $request = new CachedRequest(2);
+        $result = $service->quote($request);
+        $sum = $sum + $result['value'];
+    }
+    return $sum;
+}
+echo runCachedReplacement();
+"#;
+    let compiled = compile_types(source);
+    let run = compiled
+        .functions
+        .iter()
+        .find(|(name, _)| name == "runCachedReplacement")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(run.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::NewObj
+            && instruction._pad & NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE != 0
+    }));
+    assert_eq!(run_php(source), "300");
+}
+
+#[test]
 fn test_request_and_array_escape_disable_scalar_pipeline_markers() {
     let compiled = compile_types(
         r#"<?php
