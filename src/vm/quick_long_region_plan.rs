@@ -3,6 +3,88 @@
 /// This deliberately supports only side-effect-free long operations and
 /// forward branches inside the body. Unsupported instructions leave the
 /// original backedge untouched.
+#[derive(Clone, Copy)]
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+struct VirtualClosureAlias {
+    source: u16,
+    destination: u16,
+    resume_ip: usize,
+}
+
+#[derive(Clone, Copy)]
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+struct PendingIndirectScalarCall {
+    guard: ScalarLongCallGuard,
+    callable_slot: u16,
+    outer_argument_count: u8,
+    next_argument: u8,
+    arguments: [QuickLongOperand; 8],
+    resume_ip: usize,
+}
+
+/// Admit one dead local alias used solely as the first argument of the
+/// immediately following named call. Eliding the Rc copy is safe because the
+/// destination has no other read or write anywhere in the function; every
+/// side exit resumes at the original assignment before the call protocol.
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+fn virtual_closure_alias(
+    op_array: &OpArray,
+    region: &[crate::vm::instruction::Instruction],
+    relative_ip: usize,
+    absolute_ip: usize,
+) -> Option<VirtualClosureAlias> {
+    let assignment = *region.get(relative_ip)?;
+    let initializer = *region.get(relative_ip + 1)?;
+    let send = *region.get(relative_ip + 2)?;
+    if assignment.opcode != OpCode::AssignCv
+        || assignment.op1_type != OpType::Cv
+        || assignment.op2_type != OpType::Cv
+        || assignment.result_type != OpType::Unused
+        || assignment.op1 == assignment.op2
+        || initializer.opcode != OpCode::InitFcall
+        || send.opcode != OpCode::SendVal
+        || send.op1_type != OpType::Cv
+        || send.op1 != assignment.op1
+        || send.op2 != 0
+        || !cv_unmodified_in_region(region, assignment.op2)
+    {
+        return None;
+    }
+
+    let destination = assignment.op1;
+    let mut allowed_assignment = false;
+    let mut allowed_send = false;
+    for instruction in &op_array.instructions {
+        if instruction.op1_type == OpType::Cv && instruction.op1 == destination {
+            if instruction.opcode == OpCode::AssignCv
+                && instruction.op2_type == OpType::Cv
+                && instruction.op2 == assignment.op2
+                && !allowed_assignment
+            {
+                allowed_assignment = true;
+            } else if instruction.opcode == OpCode::SendVal
+                && instruction.op2 == 0
+                && !allowed_send
+            {
+                allowed_send = true;
+            } else {
+                return None;
+            }
+        }
+        if instruction.op2_type == OpType::Cv && instruction.op2 == destination {
+            return None;
+        }
+        if instruction.result_type == OpType::Cv && instruction.result == destination {
+            return None;
+        }
+    }
+    (allowed_assignment && allowed_send).then_some(VirtualClosureAlias {
+        source: assignment.op2,
+        destination,
+        resume_ip: absolute_ip,
+    })
+}
+
 pub fn detect_long_ops_loop(
     op_array: &OpArray,
     header_ip: usize,
@@ -65,6 +147,8 @@ fn detect_long_ops_region_inner(
     let mut string_output_mask = 0u64;
     let mut string_append_mask = 0u64;
     let mut object_input_mask = 0u64;
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    let mut closure_input_mask = 0u64;
     let mut typed_invariant_source = None;
     let mut json_projections = InvariantJsonProjectionState::new(total_slots);
     let mut has_add = false;
@@ -183,6 +267,10 @@ fn detect_long_ops_region_inner(
         .min(QUICK_STRING_FETCH_CACHE_LIMIT);
 
     let mut passthrough_ips = Vec::new();
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    let mut closure_alias = None;
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    let mut pending_indirect_call: Option<PendingIndirectScalarCall> = None;
     while ip <= backedge_ip {
         let instruction = op_array.instructions[ip];
         if instruction.opcode == OpCode::ReleaseTemps {
@@ -194,6 +282,74 @@ fn detect_long_ops_region_inner(
             {
                 return None;
             }
+            passthrough_ips.push(ip);
+            ip += 1;
+            continue;
+        }
+        #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+        if pending_indirect_call.is_none()
+            && closure_alias.is_none()
+            && instruction.opcode == OpCode::AssignCv
+            && let Some(alias) = virtual_closure_alias(op_array, region, ip - header_ip, ip)
+        {
+            add_mask_slot(&mut closure_input_mask, alias.source, total_slots)?;
+            closure_alias = Some(alias);
+            passthrough_ips.push(ip);
+            ip += 1;
+            continue;
+        }
+        #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+        if pending_indirect_call.is_none()
+            && instruction.opcode == OpCode::InitFcall
+            && let Some(alias) = closure_alias.take()
+        {
+            let outer_argument_count = u8::try_from(instruction.op1).ok()?;
+            let first_send = *op_array.instructions.get(ip + 1)?;
+            if outer_argument_count == 0
+                || outer_argument_count > 8
+                || instruction.op2_type != OpType::Const
+                || first_send.opcode != OpCode::SendVal
+                || first_send.op1_type != OpType::Cv
+                || first_send.op1 != alias.destination
+                || first_send.op2 != 0
+            {
+                return None;
+            }
+            pending_indirect_call = Some(PendingIndirectScalarCall {
+                guard: ScalarLongCallGuard::FunctionCache {
+                    cache_ip: u32::try_from(ip).ok()?,
+                },
+                callable_slot: alias.source,
+                outer_argument_count,
+                next_argument: 1,
+                arguments: [QuickLongOperand::Const(0); 8],
+                resume_ip: alias.resume_ip,
+            });
+            passthrough_ips.push(ip);
+            passthrough_ips.push(ip + 1);
+            ip += 2;
+            continue;
+        }
+        #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+        if let Some(mut pending) = pending_indirect_call
+            && matches!(instruction.opcode, OpCode::SendVal | OpCode::SendVarEx)
+        {
+            if pending.next_argument >= pending.outer_argument_count
+                || instruction.op2 != u16::from(pending.next_argument)
+            {
+                return None;
+            }
+            let argument = match instruction.op1_type {
+                OpType::Cv | OpType::Tmp | OpType::Var => {
+                    add_mask_slot(&mut long_input_mask, instruction.op1, total_slots)?;
+                    QuickLongOperand::Slot(instruction.op1)
+                }
+                OpType::Const => QuickLongOperand::Const(long_literal(op_array, instruction.op1)?),
+                OpType::Unused => return None,
+            };
+            pending.arguments[usize::from(pending.next_argument - 1)] = argument;
+            pending.next_argument += 1;
+            pending_indirect_call = Some(pending);
             passthrough_ips.push(ip);
             ip += 1;
             continue;
@@ -1351,6 +1507,34 @@ fn detect_long_ops_region_inner(
                     }
                 }
             }
+            #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+            OpCode::DoFcall => {
+                let pending = pending_indirect_call.take()?;
+                if pending.next_argument != pending.outer_argument_count
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                {
+                    return None;
+                }
+                add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
+                has_object_call = true;
+                let operation_ip = ip;
+                ip += 1;
+                QuickLongOp::IndirectScalarFunctionCall {
+                    call: QuickIndirectScalarCall {
+                        leaf: QuickTypedMethodCall {
+                            guard: pending.guard,
+                            arguments: pending.arguments,
+                            argument_count: pending.outer_argument_count - 1,
+                            next_target: QuickLongTarget::unresolved(ip)?,
+                            resume_ip: pending.resume_ip,
+                        },
+                        callable_slot: pending.callable_slot,
+                        outer_argument_count: pending.outer_argument_count,
+                        operation_ip,
+                    },
+                    result: instruction.result,
+                }
+            }
             OpCode::AssignConcat => {
                 if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
                     return None;
@@ -1484,6 +1668,16 @@ fn detect_long_ops_region_inner(
             _ => return None,
         };
 
+        #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+        let mut op = op;
+        #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+        if let Some(pending) = pending_indirect_call {
+            match &mut op {
+                QuickLongOp::Binary { resume_ip, .. } => *resume_ip = pending.resume_ip,
+                _ => return None,
+            }
+        }
+
         let op_ip = match op {
             QuickLongOp::BranchUnlessLt { resume_ip, .. }
             | QuickLongOp::BranchUnlessEq { resume_ip, .. }
@@ -1511,6 +1705,8 @@ fn detect_long_ops_region_inner(
             QuickLongOp::PropertyMethodCall { call }
             | QuickLongOp::PropertyGetterCall { call, .. }
             | QuickLongOp::ScalarMethodCall { call, .. } => call.resume_ip,
+            #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+            QuickLongOp::IndirectScalarFunctionCall { call, .. } => call.operation_ip,
             QuickLongOp::ObjectLongMethodCall { call, .. } => call.resume_ip,
             QuickLongOp::AddAssign { add_resume_ip, .. } => add_resume_ip,
             QuickLongOp::ConditionalAddAssign {
@@ -1540,6 +1736,10 @@ fn detect_long_ops_region_inner(
     }
 
     if !passthrough_ips.is_empty() {
+        return None;
+    }
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    if closure_alias.is_some() || pending_indirect_call.is_some() {
         return None;
     }
 
@@ -1671,6 +1871,19 @@ fn detect_long_ops_region_inner(
     {
         return None;
     }
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    if closure_input_mask
+        & (long_mask
+            | bool_output_mask
+            | array_input_mask
+            | array_output_mask
+            | string_input_mask
+            | string_append_mask
+            | object_input_mask)
+        != 0
+    {
+        return None;
+    }
     let involved_mask = long_input_mask
         | long_output_mask
         | bool_output_mask
@@ -1680,6 +1893,8 @@ fn detect_long_ops_region_inner(
         | string_output_mask
         | string_append_mask
         | object_input_mask;
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    let involved_mask = involved_mask | closure_input_mask;
 
     let array_update_fusions = detect_array_update_fusions(&ops);
     let mut plan = QuickLongOpsLoop {
@@ -1702,6 +1917,8 @@ fn detect_long_ops_region_inner(
         finite_string_literal_count: finite_string_literal_count as u8,
         finite_string_literal_overflow,
         object_input_mask,
+        #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+        closure_input_mask,
         typed_invariant_source,
         string_cache_capacity: string_cache_capacity as u8,
         involved_mask,

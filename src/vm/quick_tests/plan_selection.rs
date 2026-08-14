@@ -71,6 +71,8 @@
                     BlockPlan::QuickLongOps(_) => "long-ops",
                     #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
                     BlockPlan::FunctionIndirectScalarLong(_) => "function-indirect-scalar",
+                    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+                    BlockPlan::FunctionCapturedTypedLong(_) => "function-captured-typed",
                 })
                 .collect::<Vec<_>>();
             panic!(

@@ -9,16 +9,16 @@ unsafe fn run_quick_long_ops_loop(
     op_array: &crate::compiler::OpArray,
     plan: &QuickLongOpsLoop,
 ) -> Result<QuickLoopOutcome, VmError> {
+    let allowed_heap_mask = plan.array_input_mask
+        | plan.array_output_mask
+        | plan.string_input_mask
+        | plan.string_append_mask
+        | plan.object_input_mask;
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    let allowed_heap_mask = allowed_heap_mask | plan.closure_input_mask;
     if (*frame).num_cvs != op_array.num_cvs
         || (*frame).num_cvs + (*frame).num_temps > 64
-        || (*frame).heap_bitmap
-            & (plan.involved_mask
-                & !(plan.array_input_mask
-                    | plan.array_output_mask
-                    | plan.string_input_mask
-                    | plan.string_append_mask
-                    | plan.object_input_mask))
-            != 0
+        || (*frame).heap_bitmap & (plan.involved_mask & !allowed_heap_mask) != 0
     {
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
@@ -64,6 +64,19 @@ unsafe fn run_quick_long_ops_loop(
         object_mask &= object_mask - 1;
         let value = &*slot_base.add(slot);
         if value.value_type() != ValueType::Object || value.is_reference() {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+    }
+
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    let mut closure_mask = plan.closure_input_mask;
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    while closure_mask != 0 {
+        let slot = closure_mask.trailing_zeros() as usize;
+        closure_mask &= closure_mask - 1;
+        let value = &*slot_base.add(slot);
+        if value.value_type() != ValueType::Closure || value.is_reference() {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         }
@@ -301,12 +314,23 @@ unsafe fn run_quick_long_ops_loop(
             .ops
             .iter()
             .any(|operation| matches!(operation, QuickLongOp::VirtualDeclaredObjectReads { .. }));
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    let has_resolved_object_ops = has_resolved_object_ops || plan.closure_input_mask != 0;
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    let mut bound_scalar_plans = Vec::new();
     let resolved_object_ops = if !has_resolved_object_ops {
         Vec::new()
     } else {
-        let Some(resolved) =
-            resolve_quick_object_ops(eg, op_array, slot_base, &slots, &string_state, plan)
-        else {
+        let Some(resolved) = resolve_quick_object_ops(
+            eg,
+            op_array,
+            slot_base,
+            &slots,
+            &string_state,
+            plan,
+            #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+            &mut bound_scalar_plans,
+        ) else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         };
@@ -1066,6 +1090,35 @@ unsafe fn run_quick_long_ops_loop(
                         dirty_bool_mask,
                         &mut string_state,
                         call,
+                        iterations,
+                    ));
+                }
+            }
+            #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+            QuickLongOp::IndirectScalarFunctionCall { call, result } => {
+                let leaf = call.leaf;
+                let arguments = quick_typed_method_arguments(&slots, &leaf);
+                let value = match *resolved_object_ops.get_unchecked(op_index) {
+                    QuickResolvedObjectOp::ScalarMethod { plan, .. } => {
+                        evaluate_scalar_long_plan(&*plan, &arguments)
+                    }
+                    _ => unreachable!("resolved indirect scalar function operation"),
+                };
+                if let Some(value) = value {
+                    slots[result as usize] = value;
+                    dirty_long_mask |= 1u64 << result;
+                    object_call_recorder.record(op_index);
+                    leaf.next_target
+                } else {
+                    return Ok(deopt_quick_typed_method_call(
+                        frame,
+                        op_array,
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                        &mut string_state,
+                        leaf,
                         iterations,
                     ));
                 }

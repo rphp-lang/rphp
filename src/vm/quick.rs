@@ -632,6 +632,19 @@ pub struct QuickTypedMethodCall {
     pub resume_ip: usize,
 }
 
+/// Direct function wrapper whose first public argument is an immutable
+/// closure. The leaf call contains only the forwarded Long arguments; the
+/// outer arity and callable slot are retained for exact wrapper/identity
+/// guards at region entry.
+#[derive(Debug, Clone, Copy)]
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+pub struct QuickIndirectScalarCall {
+    pub leaf: QuickTypedMethodCall,
+    pub callable_slot: u16,
+    pub outer_argument_count: u8,
+    pub operation_ip: usize,
+}
+
 /// Positional input to a read-only mixed scalar method. The enclosing region
 /// retains Longs unboxed and immutable Strings as borrowed slot state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -961,6 +974,12 @@ pub enum QuickLongOp {
         call: QuickTypedMethodCall,
         result: u16,
     },
+    /// Pure named wrapper around an immutable closure-valued first argument.
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    IndirectScalarFunctionCall {
+        call: QuickIndirectScalarCall,
+        result: u16,
+    },
     /// Monomorphic read-only method with mixed Long/String inputs and a Long
     /// result, executed through ObjectLongFunctionPlan without a PHP frame.
     ObjectLongMethodCall {
@@ -1104,6 +1123,8 @@ impl QuickLongOp {
             Self::PropertyMethodCall { call }
             | Self::PropertyGetterCall { call, .. }
             | Self::ScalarMethodCall { call, .. } => resolve(&mut call.next_target),
+            #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+            Self::IndirectScalarFunctionCall { call, .. } => resolve(&mut call.leaf.next_target),
             Self::ObjectLongMethodCall { call, .. } => resolve(&mut call.next_target),
             Self::PostIncJump { target, .. } | Self::Jump { target } => resolve(target),
             Self::PostIncLoopLt {
@@ -1144,6 +1165,10 @@ pub struct QuickLongOpsLoop {
     pub finite_string_literal_count: u8,
     pub finite_string_literal_overflow: bool,
     pub object_input_mask: u64,
+    /// Immutable closure values whose identity/capture envelope is resolved
+    /// once at region entry. These heap inputs never enter the scalar slots.
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    pub closure_input_mask: u64,
     pub typed_invariant_source: Option<QuickTypedInvariantSource>,
     pub string_cache_capacity: u8,
     pub involved_mask: u64,

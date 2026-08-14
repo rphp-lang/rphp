@@ -54,7 +54,7 @@ enum QuickResolvedObjectOp {
 #[cfg(feature = "quick-loops")]
 fn quick_object_property_reads_are_invariant(plan: &QuickLongOpsLoop) -> bool {
     !plan.ops.iter().any(|operation| {
-        matches!(
+        let ordinary_call = matches!(
             operation,
             QuickLongOp::PropertyMethodCall { .. }
                 | QuickLongOp::PropertyGetterCall { .. }
@@ -63,7 +63,15 @@ fn quick_object_property_reads_are_invariant(plan: &QuickLongOpsLoop) -> bool {
                 | QuickLongOp::ComposedPropertyCall { .. }
                 | QuickLongOp::VirtualObjectArrayPipeline { .. }
                 | QuickLongOp::VirtualDeclaredObjectReads { .. }
-        )
+        );
+        #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+        {
+            ordinary_call || matches!(operation, QuickLongOp::IndirectScalarFunctionCall { .. })
+        }
+        #[cfg(not(all(feature = "quick-loops", feature = "jit-prototype")))]
+        {
+            ordinary_call
+        }
     })
 }
 
@@ -438,19 +446,127 @@ unsafe fn quick_object_property_read(
     Some(property)
 }
 
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+fn bind_captured_typed_long_plan(
+    plan: &CapturedTypedLongFunctionPlan,
+    closure: &PhpClosure,
+) -> Option<Box<ScalarLongFunctionPlan>> {
+    if closure.captures.len() != usize::from(plan.capture_count)
+        || plan.program.operations.len() > 8
+        || plan.program.output_count != 1
+    {
+        return None;
+    }
+    for (capture_index, capture) in closure.captures.iter().enumerate() {
+        if capture.is_reference() {
+            return None;
+        }
+        let input = usize::from(plan.public_args) + capture_index;
+        let bit = 1u8 << input;
+        if (plan.long_input_mask & bit != 0 && capture.value_type() != ValueType::Long)
+            || (plan.string_input_mask & bit != 0
+                && capture.value_type() != ValueType::String)
+        {
+            return None;
+        }
+    }
+
+    let mut replacements = [None; 8];
+    let mut operations = Vec::with_capacity(plan.program.operations.len());
+    let resolve = |source: ScalarLongSource,
+                   replacements: &[Option<ScalarLongSource>; 8]|
+     -> Option<ScalarLongSource> {
+        match source {
+            ScalarLongSource::Input(input) if input < u16::from(plan.public_args) => Some(source),
+            ScalarLongSource::Input(input) => {
+                let capture = usize::from(input.checked_sub(u16::from(plan.public_args))?);
+                closure
+                    .captures
+                    .get(capture)?
+                    .as_long()
+                    .map(ScalarLongSource::Constant)
+            }
+            ScalarLongSource::Temporary(temporary) => {
+                replacements.get(usize::from(temporary)).copied().flatten()
+            }
+            ScalarLongSource::Constant(_) => Some(source),
+        }
+    };
+
+    for (old_index, operation) in plan.program.operations.iter().enumerate() {
+        replacements[old_index] = Some(match *operation {
+            ComposedTypedLongOp::Arithmetic(operation) => {
+                let new_index = u8::try_from(operations.len()).ok()?;
+                operations.push(ScalarLongOp {
+                    kind: operation.kind,
+                    lhs: resolve(operation.lhs, &replacements)?,
+                    rhs: resolve(operation.rhs, &replacements)?,
+                });
+                ScalarLongSource::Temporary(new_index)
+            }
+            ComposedTypedLongOp::StringLength(ScalarStringSource::Input(input)) => {
+                let capture = usize::from(input.checked_sub(plan.public_args)?);
+                let length = i64::try_from(closure.captures.get(capture)?.as_str()?.len()).ok()?;
+                ScalarLongSource::Constant(length)
+            }
+            ComposedTypedLongOp::Call(_)
+            | ComposedTypedLongOp::StringCall(_)
+            | ComposedTypedLongOp::StringConcatLiteral { .. }
+            | ComposedTypedLongOp::StringLength(ScalarStringSource::Temporary(_)) => return None,
+        });
+    }
+    let output = resolve(plan.program.outputs[0], &replacements)?;
+    Some(Box::new(ScalarLongFunctionPlan::new(
+        plan.public_args,
+        ScalarLongProgram {
+            operations: operations.into_boxed_slice(),
+            outputs: [output],
+            output_count: 1,
+        },
+        None,
+    )))
+}
+
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+fn quick_closure_scalar_plan(
+    closure: &PhpClosure,
+    closure_user: &UserFunction,
+    argument_count: usize,
+    bound_plans: &mut Vec<Box<ScalarLongFunctionPlan>>,
+) -> Option<*const ScalarLongFunctionPlan> {
+    if closure.called_scope_class_id != 0 || closure.bound_this.is_some() {
+        return None;
+    }
+    if closure_user.common.sig.public_arity() != argument_count as u32 {
+        return None;
+    }
+    if closure.captures.is_empty() {
+        let plan = closure_user.scalar_long_plan.as_deref()?;
+        return (usize::from(plan.public_args) == argument_count)
+            .then_some(plan as *const ScalarLongFunctionPlan);
+    }
+    let captured = closure_user.captured_typed_long_plan()?;
+    if usize::from(captured.public_args) != argument_count {
+        return None;
+    }
+    bound_plans.push(bind_captured_typed_long_plan(captured, closure)?);
+    Some(&**bound_plans.last()? as *const ScalarLongFunctionPlan)
+}
+
 /// Remap a compiler-proven dynamic-call wrapper onto the same leaf scalar ABI
 /// used by named functions and monomorphic methods. Property and closure
-/// identity are resolved by the owning unsafe region-entry boundary; this
+/// identity are resolved by the owning region-entry boundary; this
 /// helper only translates already-guarded scalar inputs.
 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
 #[cold]
 #[inline(never)]
-unsafe fn quick_indirect_scalar_call(
-    receiver: *const Value,
+fn quick_indirect_scalar_call(
     outer_target: *const FunctionCommon,
-    outer_user: *const UserFunction,
+    closure: &PhpClosure,
+    closure_user: &UserFunction,
     outer_call: QuickTypedMethodCall,
     wrapper: &IndirectScalarLongFunctionPlan,
+    bound_plans: &mut Vec<Box<ScalarLongFunctionPlan>>,
 ) -> Option<QuickResolvedObjectOp> {
     if wrapper.public_args != outer_call.argument_count
         || wrapper.arguments.len() != outer_call.argument_count as usize
@@ -463,34 +579,46 @@ unsafe fn quick_indirect_scalar_call(
         return None;
     }
 
-    let IndirectScalarLongCallable::ReceiverProperty { cache_ip } = wrapper.callable else {
-        // Public-argument callables require a retained heap input in the
-        // enclosing region, which this method-only consumer does not yet own.
-        return None;
-    };
-    let property_cache = (&*outer_user).op_array.cache.get(cache_ip as usize)?;
-    if property_cache.is_dynamic_property_read() {
-        return None;
-    }
-    let callable = quick_object_property_read(
-        &(&*outer_user).op_array,
-        receiver,
-        u32::from(cache_ip),
-        ValueType::Closure,
+    let scalar_plan = quick_closure_scalar_plan(
+        closure,
+        closure_user,
+        wrapper.arguments.len(),
+        bound_plans,
     )?;
-    let closure = (&*callable).as_closure()?;
-    if closure.called_scope_class_id != 0
-        || closure.bound_this.is_some()
-        || !closure.captures.is_empty()
+
+    Some(QuickResolvedObjectOp::ScalarMethod {
+        target: outer_target,
+        plan: scalar_plan,
+    })
+}
+
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+#[cold]
+#[inline(never)]
+fn quick_indirect_scalar_function_call(
+    outer_target: *const FunctionCommon,
+    outer_user: &UserFunction,
+    closure: &PhpClosure,
+    call: QuickIndirectScalarCall,
+    bound_plans: &mut Vec<Box<ScalarLongFunctionPlan>>,
+) -> Option<QuickResolvedObjectOp> {
+    let wrapper = outer_user.indirect_scalar_long_plan()?;
+    if wrapper.public_args != call.outer_argument_count
+        || wrapper.callable != IndirectScalarLongCallable::PublicArgument(0)
+        || wrapper.arguments.len() != usize::from(call.leaf.argument_count)
+        || wrapper.arguments.iter().enumerate().any(|(index, source)| {
+            *source != ScalarLongSource::Input(u16::try_from(index + 1).unwrap_or(u16::MAX))
+        })
     {
         return None;
     }
-    let closure_user = guarded_scalar_user_target(closure.func, wrapper.arguments.len())?;
-    let scalar_plan = (&*closure_user).scalar_long_plan.as_deref()?;
-    if scalar_plan.public_args as usize != wrapper.arguments.len() {
-        return None;
-    }
-
+    let closure_user = closure.user_function()?;
+    let scalar_plan = quick_closure_scalar_plan(
+        closure,
+        closure_user,
+        wrapper.arguments.len(),
+        bound_plans,
+    )?;
     Some(QuickResolvedObjectOp::ScalarMethod {
         target: outer_target,
         plan: scalar_plan,
@@ -597,6 +725,8 @@ unsafe fn resolve_quick_object_ops(
     slots: &[i64; 64],
     string_state: &QuickStringSlotState,
     plan: &QuickLongOpsLoop,
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    bound_plans: &mut Vec<Box<ScalarLongFunctionPlan>>,
 ) -> Option<Vec<QuickResolvedObjectOp>> {
     let mut resolved = vec![QuickResolvedObjectOp::None; plan.ops.len()];
     for (index, operation) in plan.ops.iter().copied().enumerate() {
@@ -684,8 +814,31 @@ unsafe fn resolve_quick_object_ops(
                     'resolve_scalar: {
                         #[cfg(feature = "jit-prototype")]
                         if let Some(wrapper) = (&*user).indirect_scalar_long_plan() {
+                            let IndirectScalarLongCallable::ReceiverProperty { cache_ip } =
+                                wrapper.callable
+                            else {
+                                return None;
+                            };
+                            let property_cache = (&*user).op_array.cache.get(cache_ip as usize)?;
+                            if property_cache.is_dynamic_property_read() {
+                                return None;
+                            }
+                            let callable = quick_object_property_read(
+                                &(&*user).op_array,
+                                receiver,
+                                u32::from(cache_ip),
+                                ValueType::Closure,
+                            )?;
+                            let closure = (&*callable).as_closure()?;
+                            let closure_user =
+                                guarded_user_target(closure.func, wrapper.arguments.len())?;
                             break 'resolve_scalar quick_indirect_scalar_call(
-                                receiver, target, user, call, wrapper,
+                                target,
+                                closure,
+                                &*closure_user,
+                                call,
+                                wrapper,
+                                bound_plans,
                             )?;
                         }
                         let object_plan = (&*user).object_long_plan.as_deref()?;
@@ -706,6 +859,26 @@ unsafe fn resolve_quick_object_ops(
                         };
                     }
                 }
+            }
+            #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+            QuickLongOp::IndirectScalarFunctionCall { call, .. } => {
+                let (outer_target, outer_user) = guarded_cached_user_call_target(
+                    op_array,
+                    call.leaf.guard,
+                    None,
+                    usize::from(call.outer_argument_count),
+                )?;
+                let callable = &*slot_base.add(usize::from(call.callable_slot));
+                if callable.value_type() != ValueType::Closure || callable.is_reference() {
+                    return None;
+                }
+                quick_indirect_scalar_function_call(
+                    outer_target,
+                    &*outer_user,
+                    callable.as_closure()?,
+                    call,
+                    bound_plans,
+                )?
             }
             QuickLongOp::ObjectLongMethodCall { call, .. } => {
                 let string_arguments = call

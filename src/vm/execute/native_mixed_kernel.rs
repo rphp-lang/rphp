@@ -544,6 +544,25 @@ unsafe fn native_quick_long_mixed_kernel(
                 }
                 has_typed_method = true;
             }
+            #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+            QuickLongOp::IndirectScalarFunctionCall { call, result } => {
+                if call.leaf.next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let QuickResolvedObjectOp::ScalarMethod {
+                    target,
+                    plan: scalar_plan,
+                } = *resolved_object_ops.get(plan_index)?
+                else {
+                    return None;
+                };
+                builder.lower_scalar_method(target, &*scalar_plan, &call.leaf, result)?;
+                let completion = u8::try_from(builder.operation_count.checked_sub(1)?).ok()?;
+                // The outer wrapper and closure body are two logical PHP
+                // calls, while the hot resolved-op layout retains one target.
+                builder.record_call(target, completion)?;
+                has_typed_method = true;
+            }
             QuickLongOp::ObjectLongMethodCall { call, result } => {
                 if call.next_target.op_index() != Some(plan_index + 1) {
                     return None;

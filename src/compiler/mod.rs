@@ -23,7 +23,9 @@ use crate::vm::function::{
     ScalarStringSelect, ScalarStringSource, SignatureInfo, UserFunction,
 };
 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
-use crate::vm::function::{IndirectScalarLongCallable, IndirectScalarLongFunctionPlan};
+use crate::vm::function::{
+    CapturedTypedLongFunctionPlan, IndirectScalarLongCallable, IndirectScalarLongFunctionPlan,
+};
 use crate::vm::instruction::{
     InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OpType,
 };
@@ -4773,6 +4775,217 @@ pub(crate) fn build_composed_typed_long_function_plan(
             ScalarLongSource::Temporary(result_index),
         );
         ip += 1;
+    }
+
+    None
+}
+
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+fn captured_typed_input_index(common: &FunctionCommon, capture_count: u8, cv: u16) -> Option<u8> {
+    let public_args = common.sig.public_arity();
+    if u32::from(cv) >= common.sig.this_offset
+        && u32::from(cv) < common.sig.this_offset + public_args
+    {
+        return u8::try_from(u32::from(cv) - common.sig.this_offset).ok();
+    }
+    let capture_start = common.sig.parameter_cv_count();
+    let capture = u32::from(cv).checked_sub(capture_start)?;
+    (capture < u32::from(capture_count)).then(|| u8::try_from(public_args + capture).ok())?
+}
+
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+fn captured_typed_long_source(
+    function: &UserFunction,
+    capture_count: u8,
+    long_input_mask: u8,
+    temporary_results: &HashMap<u16, ScalarLongSource>,
+    op_type: OpType,
+    operand: u16,
+) -> Option<ScalarLongSource> {
+    match op_type {
+        OpType::Cv => {
+            if let Some(input) =
+                captured_typed_input_index(&function.common, capture_count, operand)
+            {
+                (long_input_mask & (1u8 << input) != 0)
+                    .then_some(ScalarLongSource::Input(u16::from(input)))
+            } else {
+                temporary_results.get(&operand).copied()
+            }
+        }
+        OpType::Const => function
+            .op_array
+            .literals
+            .get(operand as usize)
+            .and_then(Value::as_long)
+            .map(ScalarLongSource::Constant),
+        OpType::Tmp | OpType::Var => temporary_results.get(&operand).copied(),
+        OpType::Unused => None,
+    }
+}
+
+/// Build a side-effect-free scalar program for a closure whose lexical
+/// captures are immutable inputs. This is intentionally constructed only
+/// from the closure declaration; live capture values and types are guarded at
+/// region entry and then bound to an ordinary scalar leaf plan.
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+pub(super) fn build_captured_typed_long_function_plan(
+    function: &UserFunction,
+    capture_count: u8,
+) -> Option<Box<CapturedTypedLongFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    let input_count = public_args.checked_add(u32::from(capture_count))?;
+    let capture_start = common.sig.parameter_cv_count();
+    let capture_end = capture_start.checked_add(u32::from(capture_count))?;
+    if capture_count == 0
+        || input_count > SCALAR_LONG_PLAN_MAX_ARGS
+        || common.sig.this_offset != 0
+        || common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || public_args != common.sig.required_num_args
+        || common.plan.ret != ReturnStrategy::Fast
+        || op_array.is_generator
+        || !op_array.global_vars.is_empty()
+        || !op_array.static_vars.is_empty()
+        || !op_array.try_entries.is_empty()
+        || op_array.instructions.len() > SCALAR_LONG_PLAN_MAX_OPS + 6
+        || capture_end > op_array.num_cvs
+        || function
+            .reference_cvs
+            .iter()
+            .any(|cv| *cv >= capture_start && *cv < capture_end)
+        || !matches!(
+            common.sig.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+        )
+        || common.sig.param_type_hints.iter().any(|hint| {
+            !matches!(
+                hint,
+                ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+            )
+        })
+    {
+        return None;
+    }
+
+    let mut string_input_mask = 0u8;
+    for instruction in &op_array.instructions {
+        if matches!(
+            instruction.opcode,
+            OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String
+        ) && instruction.op1_type == OpType::Cv
+        {
+            let input = captured_typed_input_index(common, capture_count, instruction.op1)?;
+            if u32::from(input) < public_args {
+                return None;
+            }
+            string_input_mask |= 1u8 << input;
+        }
+    }
+    let input_mask = if input_count == 8 {
+        u8::MAX
+    } else {
+        (1u8 << input_count) - 1
+    };
+    let long_input_mask = input_mask & !string_input_mask;
+    let mut temporary_results = HashMap::new();
+    let mut string_results = HashMap::new();
+    for input in public_args as u8..input_count as u8 {
+        if string_input_mask & (1u8 << input) != 0 {
+            let capture = u32::from(input) - public_args;
+            string_results.insert(
+                u16::try_from(capture_start + capture).ok()?,
+                ScalarStringSource::Input(input),
+            );
+        }
+    }
+
+    let mut operations = Vec::new();
+    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        if instruction.opcode == OpCode::Return {
+            if instruction.extended_value == 0 {
+                return None;
+            }
+            let output = captured_typed_long_source(
+                function,
+                capture_count,
+                long_input_mask,
+                &temporary_results,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            if op_array.instructions[ip + 1..]
+                .iter()
+                .any(|trailing| trailing.opcode != OpCode::Return || trailing.extended_value != 0)
+            {
+                return None;
+            }
+            return Some(Box::new(CapturedTypedLongFunctionPlan {
+                public_args: public_args as u8,
+                capture_count,
+                long_input_mask,
+                string_input_mask,
+                program: ScalarLongProgram {
+                    operations: operations.into_boxed_slice(),
+                    outputs: [output],
+                    output_count: 1,
+                },
+            }));
+        }
+
+        if matches!(
+            instruction.opcode,
+            OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String
+        ) {
+            if operations.len() == SCALAR_LONG_PLAN_MAX_OPS
+                || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+            {
+                return None;
+            }
+            let source = *string_results.get(&instruction.op1)?;
+            let result_index = operations.len() as u8;
+            operations.push(ComposedTypedLongOp::StringLength(source));
+            temporary_results.insert(
+                instruction.result,
+                ScalarLongSource::Temporary(result_index),
+            );
+            continue;
+        }
+
+        let kind = scalar_long_op_kind(instruction.opcode)?;
+        if operations.len() == SCALAR_LONG_PLAN_MAX_OPS
+            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+        {
+            return None;
+        }
+        let lhs = captured_typed_long_source(
+            function,
+            capture_count,
+            long_input_mask,
+            &temporary_results,
+            instruction.op1_type,
+            instruction.op1,
+        )?;
+        let rhs = captured_typed_long_source(
+            function,
+            capture_count,
+            long_input_mask,
+            &temporary_results,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        let result_index = operations.len() as u8;
+        operations.push(ComposedTypedLongOp::Arithmetic(ScalarLongOp {
+            kind,
+            lhs,
+            rhs,
+        }));
+        temporary_results.insert(
+            instruction.result,
+            ScalarLongSource::Temporary(result_index),
+        );
     }
 
     None

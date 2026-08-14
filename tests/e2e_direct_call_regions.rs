@@ -57,3 +57,29 @@ echo runTransform($referenced, 1000), ':', runTransform($named, 1000);
     );
     assert_eq!(output, "2000:1000");
 }
+
+#[test]
+fn captured_argument_closure_preserves_live_alias_and_reference_captures() {
+    let output = common::run_php(
+        r#"<?php
+function invokeCaptured(Closure $callback, int $value): int {
+    return $callback($value);
+}
+function runLiveAlias(Closure $callback): string {
+    $sum = 0;
+    for ($index = 0; $index < 1000; $index++) {
+        $copy = $callback;
+        $sum += invokeCaptured($copy, $index & 7);
+    }
+    return $sum . ':' . $copy(1);
+}
+$offset = 0;
+$reference = function ($value) use (&$offset) {
+    $offset++;
+    return $value + $offset;
+};
+echo runLiveAlias($reference), ':', $offset;
+"#,
+    );
+    assert_eq!(output, "504000:1002:1001");
+}

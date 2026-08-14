@@ -16,9 +16,9 @@ use crate::compiler::OpArray;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{Value, ValueType};
 use crate::vm::frame::{CALL_FRAME_SLOTS, ExecuteData};
-#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
-use crate::vm::function::IndirectScalarLongFunctionPlan;
 use crate::vm::function::{CallStrategy, FunctionCommon, FunctionType, UserFunction};
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+use crate::vm::function::{CapturedTypedLongFunctionPlan, IndirectScalarLongFunctionPlan};
 use crate::vm::instruction::{Instruction, OpType};
 use crate::vm::opcode::OpCode;
 use crate::vm::quick::{
@@ -59,6 +59,11 @@ pub enum BlockPlan {
     /// adds no field or ordinary-path access to every `UserFunction`.
     #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
     FunctionIndirectScalarLong(Box<IndirectScalarLongFunctionPlan>),
+    /// Capture-aware pure closure body. Like other function-level metadata it
+    /// lives after the indexed per-block prefix and is never selected as a
+    /// block execution plan.
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    FunctionCapturedTypedLong(Box<CapturedTypedLongFunctionPlan>),
 }
 
 /// A compiled macro plan for a single basic block.

@@ -90,7 +90,7 @@ echo runTransform($first, 100000), ':', runTransform($second, 100000);
 }
 
 #[test]
-fn captured_property_closure_stays_on_canonical_boundary() {
+fn immutable_captured_property_closure_enters_native_region() {
     let (functions, output) = compile_and_execute(
         r#"<?php
 final class Transform {
@@ -116,7 +116,68 @@ echo runCapturedTransform($transform, 100000);
     assert_eq!(output, "300000");
 
     let plan = closure_ops_plan(&functions, "runCapturedTransform");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn reference_captured_property_closure_stays_on_canonical_boundary() {
+    let (functions, output) = compile_and_execute(
+        r#"<?php
+final class Transform {
+    public $callback;
+    public function __construct($callback) { $this->callback = $callback; }
+    public function apply($value) {
+        $callback = $this->callback;
+        return $callback($value);
+    }
+}
+function runReferenceTransform($transform, $iterations) {
+    $result = 0;
+    for ($index = 0; $index < $iterations; $index++) {
+        $result = $transform->apply($result);
+    }
+    return $result;
+}
+$offset = 3;
+$transform = new Transform(function ($value) use (&$offset) { return $value + $offset; });
+echo runReferenceTransform($transform, 100000);
+"#,
+    );
+    assert_eq!(output, "300000");
+
+    let plan = closure_ops_plan(&functions, "runReferenceTransform");
     assert_eq!(plan.native_jit().native_entries(), 0);
+}
+
+#[test]
+fn captured_argument_closure_and_dead_alias_enter_one_native_region() {
+    let (functions, output) = compile_and_execute(
+        r#"<?php
+function invokeCaptured(Closure $callback, int $value): int {
+    return $callback($value);
+}
+function runCapturedArgument(int $iterations): int {
+    $prefix = 'kept';
+    $offset = 7;
+    $callback = static function (int $value) use ($prefix, $offset): int {
+        return strlen($prefix) + $offset + $value;
+    };
+    $sum = 0;
+    for ($index = 0; $index < $iterations; ++$index) {
+        $copy = $callback;
+        $sum += invokeCaptured($copy, $index & 255);
+    }
+    return $sum;
+}
+echo runCapturedArgument(100000);
+"#,
+    );
+    assert_eq!(output, "13842320");
+
+    let plan = closure_ops_plan(&functions, "runCapturedArgument");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
 #[test]
@@ -168,6 +229,53 @@ runOverflowTransform($transform);
     assert!(output.lock().unwrap().is_empty());
 
     let plan = closure_ops_plan(&functions, "runOverflowTransform");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn captured_argument_overflow_replays_from_the_virtual_alias() {
+    let source = r#"<?php
+function invokeCapturedOverflow(Closure $callback, int $value): int {
+    return $callback($value);
+}
+function runCapturedOverflow() {
+    $offset = 1;
+    $callback = static function (int $value) use ($offset): int {
+        return (($value * 100000000000000000) + $offset) % 7;
+    };
+    $result = 0;
+    for ($index = 0; $index < 100; $index++) {
+        $copy = $callback;
+        $result = invokeCapturedOverflow($copy, $index);
+        if ($index === -1) { echo 'unreachable'; }
+    }
+    return $result;
+}
+runCapturedOverflow();
+"#;
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    let error = execute::execute(&mut globals, &main).unwrap_err();
+    drop(globals);
+    assert!(matches!(
+        error,
+        execute::VmError::Fatal(message)
+            if message == "Unsupported operand types for %"
+    ));
+    assert!(output.lock().unwrap().is_empty());
+
+    let plan = closure_ops_plan(&functions, "runCapturedOverflow");
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }

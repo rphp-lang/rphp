@@ -898,6 +898,19 @@ pub struct IndirectScalarLongFunctionPlan {
     pub arguments: Box<[ScalarLongSource]>,
 }
 
+/// Pure scalar closure body whose immutable by-value captures are additional
+/// guarded inputs. Input indices address public arguments first and captures
+/// second; region entry binds the capture half to constants before execution
+/// or native lowering.
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+pub struct CapturedTypedLongFunctionPlan {
+    pub public_args: u8,
+    pub capture_count: u8,
+    pub long_input_mask: u8,
+    pub string_input_mask: u8,
+    pub program: ScalarLongProgram<ComposedTypedLongOp, 1>,
+}
+
 /// String result produced by an earlier typed operation. String values remain
 /// separate from Long temporaries even though both use the operation index as
 /// their compact SSA identity.
@@ -1424,6 +1437,35 @@ impl UserFunction {
         if let Some(plan) = plan {
             self.op_array.block_plans.push(
                 crate::vm::planner::BlockPlan::FunctionIndirectScalarLong(plan),
+            );
+        }
+    }
+
+    #[inline]
+    pub fn captured_typed_long_plan(&self) -> Option<&CapturedTypedLongFunctionPlan> {
+        self.op_array
+            .block_plans
+            .iter()
+            .rev()
+            .find_map(|plan| match plan {
+                crate::vm::planner::BlockPlan::FunctionCapturedTypedLong(plan) => Some(&**plan),
+                _ => None,
+            })
+    }
+
+    pub(crate) fn set_captured_typed_long_plan(
+        &mut self,
+        plan: Option<Box<CapturedTypedLongFunctionPlan>>,
+    ) {
+        self.op_array.block_plans.retain(|block_plan| {
+            !matches!(
+                block_plan,
+                crate::vm::planner::BlockPlan::FunctionCapturedTypedLong(_)
+            )
+        });
+        if let Some(plan) = plan {
+            self.op_array.block_plans.push(
+                crate::vm::planner::BlockPlan::FunctionCapturedTypedLong(plan),
             );
         }
     }

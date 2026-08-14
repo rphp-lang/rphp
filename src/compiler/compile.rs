@@ -5066,6 +5066,13 @@ impl Compiler {
                     cp.return_type_hint,
                 );
                 user_func.reference_cvs = closure_reference_cvs;
+                #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+                {
+                    let captured_plan = u8::try_from(use_vars.len()).ok().and_then(|count| {
+                        super::build_captured_typed_long_function_plan(&user_func, count)
+                    });
+                    user_func.set_captured_typed_long_plan(captured_plan);
+                }
                 user_func.common.sig.returns_reference = *returns_by_ref;
 
                 self.functions.extend(func_compiler.functions);

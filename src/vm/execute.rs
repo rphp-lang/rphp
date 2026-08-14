@@ -19,7 +19,9 @@ use super::function::{
     ScalarStringFunctionPlan, ScalarStringSource, UserFunction,
 };
 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
-use super::function::{IndirectScalarLongCallable, IndirectScalarLongFunctionPlan};
+use super::function::{
+    CapturedTypedLongFunctionPlan, IndirectScalarLongCallable, IndirectScalarLongFunctionPlan,
+};
 use super::instruction::{
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION,
     ASSIGN_CV_REBIND, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,
@@ -36,6 +38,8 @@ use super::instruction::{
     SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
 };
 use super::opcode::OpCode;
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+use super::quick::QuickIndirectScalarCall;
 use super::quick::{
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
     QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT, QuickArrayIndex,
