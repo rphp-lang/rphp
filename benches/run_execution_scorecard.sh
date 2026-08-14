@@ -216,7 +216,7 @@ emit_stats() {
         section == "coverage" && /^[a-z_]+=[0-9]+(,side_exits=[0-9]+)?$/ {
             print "stats\t" workload "\t" mode "\t" $0; next
         }
-        /^(push_call_frame|cleanup_frame|write_val|write_frame_slot|do_fcall|return|quick_loop|quick_packed_array_|closure_payload_|declared_object_|declared_property_|newobj_|jit_loop|jit_straight_)[a-z_]*=[0-9]+$/ {
+        /^(push_call_frame|cleanup_frame|write_val|write_frame_slot|do_fcall|return|quick_loop|quick_packed_array_|array_owner_|closure_payload_|declared_object_|declared_property_|newobj_|jit_loop|jit_straight_)[a-z_]*=[0-9]+$/ {
             print "stats\t" workload "\t" mode "\t" $0
         }
         END {

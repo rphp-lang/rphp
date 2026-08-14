@@ -3862,6 +3862,7 @@ impl Value {
     #[inline]
     pub fn array(arr: PhpArray) -> Self {
         let rc = Rc::new(arr);
+        stats::inc_array_owner_allocation();
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(rc) as *mut u8,

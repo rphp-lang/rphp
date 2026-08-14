@@ -168,6 +168,7 @@ mod inner {
         [const { AtomicU64::new(0) }; VALUE_KIND_COUNT];
     static VALUE_DROPS: [AtomicU64; VALUE_KIND_COUNT] =
         [const { AtomicU64::new(0) }; VALUE_KIND_COUNT];
+    static ARRAY_OWNER_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
     static CLOSURE_PAYLOAD_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
     static CLOSURE_CAPTURE_STORAGE_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
     static DECLARED_OBJECT_OWNER_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
@@ -248,6 +249,7 @@ mod inner {
         for counter in &VALUE_DROPS {
             counter.store(0, Ordering::Relaxed);
         }
+        ARRAY_OWNER_ALLOCATIONS.store(0, Ordering::Relaxed);
         CLOSURE_PAYLOAD_ALLOCATIONS.store(0, Ordering::Relaxed);
         CLOSURE_CAPTURE_STORAGE_ALLOCATIONS.store(0, Ordering::Relaxed);
         DECLARED_OBJECT_OWNER_ALLOCATIONS.store(0, Ordering::Relaxed);
@@ -497,6 +499,13 @@ mod inner {
     pub fn inc_value_drop(kind: usize) {
         if enabled() && kind < VALUE_KIND_COUNT {
             VALUE_DROPS[kind].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_array_owner_allocation() {
+        if enabled() {
+            ARRAY_OWNER_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -997,6 +1006,12 @@ mod inner {
                 let _ = writeln!(err, "{}={}", value_kind_name(idx), count);
             }
         }
+        let _ = writeln!(err, "-- array ownership --");
+        let _ = writeln!(
+            err,
+            "array_owner_allocations={}",
+            ARRAY_OWNER_ALLOCATIONS.load(Ordering::Relaxed)
+        );
         let _ = writeln!(err, "-- closure ownership --");
         let _ = writeln!(
             err,
@@ -1362,6 +1377,15 @@ pub fn inc_value_drop(kind: usize) {
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_value_drop(_kind: usize) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_array_owner_allocation() {
+    inner::inc_array_owner_allocation();
+}
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_array_owner_allocation() {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

@@ -429,17 +429,12 @@ impl OpArray {
     /// stores the header block index + 1, so runtime activation does not scan
     /// instructions or build a plan.
     pub fn prepare_quick_loops(&mut self) {
-        if !cfg!(feature = "quick-loops") {
-            return;
-        }
-        if std::env::var_os("RPHP_DISABLE_QUICK_LOOPS").is_some() {
-            return;
-        }
-
-        // Establish caller-side escape facts before closed-loop planning. A
-        // loop may consume the complete constructor/result span as one typed
-        // operation, while baseline execution can independently use the same
-        // markers at the original NewObj/InitMethodCall boundaries.
+        // Establish caller-side escape facts independently of closed-loop
+        // planning. Baseline execution uses these markers at the original
+        // NewObj/InitMethodCall boundaries, while a typed loop may consume the
+        // same complete constructor/result span as one operation. Keeping the
+        // proof outside the feature gate makes the guarded call/return
+        // aggregate path available to a baseline-only build as well.
         for init_ip in 0..self.instructions.len() {
             if crate::vm::quick::detect_object_array_consumer_span(self, init_ip).is_some() {
                 self.instructions[init_ip]._pad |=
@@ -451,6 +446,16 @@ impl OpArray {
                 self.instructions[new_ip]._pad |=
                     crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE;
             }
+        }
+
+        if !cfg!(feature = "quick-loops") {
+            return;
+        }
+        if std::env::var_os("RPHP_DISABLE_QUICK_LOOPS").is_some() {
+            return;
+        }
+
+        for new_ip in 0..self.instructions.len() {
             if crate::vm::quick::detect_virtual_declared_object_read_span(self, new_ip).is_some() {
                 self.instructions[new_ip]._pad |=
                     crate::vm::instruction::NEW_FLAG_VIRTUAL_DECLARED_READS;

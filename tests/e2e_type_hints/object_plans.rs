@@ -246,7 +246,6 @@ echo gettype($result['value']);
     );
 }
 
-#[cfg(feature = "quick-loops")]
 #[test]
 fn test_dead_object_array_result_and_request_get_scalar_pipeline_markers() {
     let source = r#"<?php
@@ -295,6 +294,7 @@ echo runPipeline(100);
         instruction.opcode == OpCode::NewObj
             && instruction._pad & NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE != 0
     }));
+    #[cfg(feature = "quick-loops")]
     assert!(run.op_array.block_plans.iter().any(|block| {
         matches!(
             block,
