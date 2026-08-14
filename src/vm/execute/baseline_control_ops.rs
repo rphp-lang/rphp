@@ -289,6 +289,9 @@ pub(crate) fn execute_included_file(
         (*inc_frame).return_value = &mut inc_return_value;
         (*inc_frame).opline = main_func.op_array.instructions.as_ptr();
     }
+    if let Some((caller_frame, _)) = caller {
+        eg.alias_dynamic_scope(inc_frame as usize, caller_frame as usize);
+    }
     if caller.is_some() {
         for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
             if let Some(val) = eg.globals.get(var_name) {

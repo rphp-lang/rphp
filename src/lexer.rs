@@ -70,9 +70,13 @@ pub enum Token {
         line: usize,
     },
     // Literals
-    Integer(i64),              // 42, -1
-    Float(f64),                // 3.14, 1.5e10
-    StringLiteral(String),     // "hello", 'world'
+    Integer(i64),          // 42, -1
+    Float(f64),            // 3.14, 1.5e10
+    StringLiteral(String), // "hello", 'world'
+    /// One indirect-variable sigil. Ordinary `$name` remains a single
+    /// `Variable` token; `$$name` and `${expr}` retain the leading sigil so
+    /// the parser can build PHP's right-associated variable-variable tree.
+    Dollar(usize),
     Variable(String, usize),   // $a, $foo with source line
     Identifier(String, usize), // identifier with source line
     MagicConstant {
@@ -495,14 +499,18 @@ impl<'a> Lexer<'a> {
                 b'$' => {
                     let variable_start = self.pos;
                     self.pos += 1;
-                    let name = self.read_identifier();
-                    if name.is_empty() {
-                        return Err("Expected variable name after $".into());
-                    }
                     let line = 1 + self.src[..variable_start]
                         .iter()
                         .filter(|byte| **byte == b'\n')
                         .count();
+                    if matches!(self.src.get(self.pos), Some(b'$' | b'{')) {
+                        tokens.push(Token::Dollar(line));
+                        continue;
+                    }
+                    let name = self.read_identifier();
+                    if name.is_empty() {
+                        return Err("Expected variable name after $".into());
+                    }
                     if name == "this" {
                         tokens.push(Token::This(line));
                     } else {

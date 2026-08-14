@@ -601,6 +601,27 @@ echo serialize([1, $shared, $shared]);
 }
 
 #[test]
+fn array_serialization_tracks_reference_cycles() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$array = [];
+$array[0] =& $array;
+var_dump($array);
+echo serialize($array);
+"#,
+        ),
+        concat!(
+            "array(1) {\n",
+            "  [0]=>\n",
+            "  *RECURSION*\n",
+            "}\n",
+            "a:1:{i:0;a:1:{i:0;R:2;}}"
+        )
+    );
+}
+
+#[test]
 fn levenshtein_supports_default_and_custom_edit_costs() {
     assert_eq!(
         run_php(

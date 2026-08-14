@@ -5,29 +5,33 @@
 /// suspended caller's tracked CVs. Ordinary VM calls do this while unwinding;
 /// callbacks entered directly from an opcode or stdlib handler return across
 /// an execution boundary and need the same synchronization explicitly.
-pub(crate) unsafe fn sync_dirty_globals_to_frame(
-    eg: &mut ExecutorGlobals,
-    frame: *mut ExecuteData,
-) {
-    if frame.is_null() || eg.dirty_globals.is_empty() {
+pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut ExecuteData) {
+    if eg.dirty_globals.is_empty() {
         return;
     }
-    let op_array = unsafe { (*frame).op_array() };
-    let vars = if !op_array.main_scope_vars.is_empty() {
-        &op_array.main_scope_vars
-    } else {
-        &op_array.global_vars
-    };
-    for (cv, name) in vars {
-        if eg.dirty_globals.contains(name)
-            && let Some(value) = eg.globals.get(name).cloned()
-        {
-            let destination = unsafe { (*frame).get_op_mut(*cv, OpType::Cv) };
-            unsafe { frame_slot_set(frame, destination, value) };
+    // SAFETY: `frame` is borrowed from the active executor and every `cv` was
+    // published by that same frame's immutable op-array. The canonical slot
+    // writer keeps heap cleanup metadata synchronized with the replacement.
+    unsafe {
+        let vars = {
+            let op_array = frame.op_array();
+            if !op_array.main_scope_vars.is_empty() {
+                op_array.main_scope_vars.clone()
+            } else {
+                op_array.global_vars.clone()
+            }
+        };
+        for (cv, name) in &vars {
+            if eg.dirty_globals.contains(name)
+                && let Some(value) = eg.globals.get(name).cloned()
+            {
+                let destination = frame.get_op_mut(*cv, OpType::Cv);
+                frame_slot_set(frame, destination, value);
+            }
         }
-    }
-    if !vars.is_empty() {
-        eg.dirty_globals.clear();
+        if !vars.is_empty() {
+            eg.dirty_globals.clear();
+        }
     }
 }
 
@@ -44,6 +48,35 @@ fn report_undefined_variable_read(
     let name = op_array.literals()[name_literal as usize]
         .as_str()
         .unwrap_or("");
+    report_undefined_variable_name(eg, frame, op_array, opline, name, suppressed)
+}
+
+fn report_undefined_variable_name(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    name: &str,
+    suppressed: bool,
+) -> Result<(), VmError> {
+    report_php_warning(
+        eg,
+        frame,
+        op_array,
+        opline,
+        &format!("Undefined variable ${name}"),
+        suppressed,
+    )
+}
+
+fn report_php_warning(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    message: &str,
+    suppressed: bool,
+) -> Result<(), VmError> {
     let instruction_index = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
@@ -53,11 +86,10 @@ fn report_undefined_variable_read(
     } else {
         op_array.source_file.as_str()
     };
-    let message = format!("Undefined variable ${name}");
     if suppressed {
         eg.begin_error_suppression(frame as usize);
     }
-    let handled = crate::stdlib::dispatch_php_error(eg, frame, 2, &message, file, line);
+    let handled = crate::stdlib::dispatch_php_error(eg, frame, 2, message, file, line);
     // Decide whether the built-in diagnostic is visible while the suppression
     // scope is still active. Restoring the caller's mask first would make an
     // ordinary `@$missing` warn merely because the outer mask contains
@@ -72,6 +104,305 @@ fn report_undefined_variable_read(
         eg.write_output(format!("\nWarning: {message} in {file} on line {line}\n").as_bytes());
     }
     Ok(())
+}
+
+fn scalar_dynamic_variable_name(value: &Value) -> Result<String, VmError> {
+    Ok(match value.value_type() {
+        ValueType::Undef | ValueType::Null | ValueType::False => String::new(),
+        ValueType::True => "1".to_string(),
+        ValueType::Long | ValueType::Double | ValueType::String | ValueType::Resource => {
+            value.echo_to_string()
+        }
+        ValueType::Array => "Array".to_string(),
+        ValueType::Object => unreachable!("object names require VM re-entry"),
+        other => return Err(VmError::Fatal(format!("Cannot convert {other:?} to string"))),
+    })
+}
+
+fn dynamic_scope_frame(eg: &ExecutorGlobals, frame: *mut ExecuteData) -> *mut ExecuteData {
+    eg.dynamic_scope_owner(frame as usize) as *mut ExecuteData
+}
+
+fn dynamic_scope_cv(
+    frame: *mut ExecuteData,
+    name: &str,
+) -> Option<u32> {
+    if frame.is_null() {
+        return None;
+    }
+    if name == "this" {
+        let function = unsafe { (*frame).func };
+        if !function.is_null() && unsafe { (*function).sig.this_offset == 1 } {
+            return Some(0);
+        }
+    }
+    // SAFETY: dynamic-scope owners are live call frames. Their user op-array
+    // metadata outlives execution and each advertised CV belongs to the same
+    // frame allocation.
+    let op_array = unsafe { (*frame).op_array() };
+    op_array
+        .all_cvs
+        .iter()
+        .find(|(_, candidate)| candidate == name)
+        .map(|(cv, _)| *cv)
+}
+
+fn dynamic_scope_is_global(frame: *mut ExecuteData) -> bool {
+    // Included frames are first resolved to their owner. The remaining root
+    // frame is the request-global script scope; ordinary function frames have
+    // a live predecessor.
+    unsafe { !frame.is_null() && (*frame).prev_execute_data.is_null() }
+}
+
+#[inline(never)]
+fn op_dynamic_variable<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let raw_key = unsafe {
+        (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone()
+    };
+    let key = reference_initial_value(raw_key);
+    let name = if key.value_type() == ValueType::Object {
+        let class_name = key
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| "object".to_string());
+        let rendered = call_magic_method(eg, &key, "__tostring", &[])?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
+        let Some(rendered) = rendered else {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Object of class {class_name} could not be converted to string"),
+            ));
+        };
+        let Some(rendered) = rendered.as_str() else {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                format!(
+                    "{class_name}::__toString(): Return value must be of type string"
+                ),
+            ));
+        };
+        rendered.to_string()
+    } else {
+        if key.value_type() == ValueType::Array {
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                "Array to string conversion",
+                opline._pad & FETCH_DYNAMIC_ERROR_SUPPRESS != 0,
+            )?;
+        }
+        scalar_dynamic_variable_name(&key)?
+    };
+    let owner = dynamic_scope_frame(eg, frame);
+    let direct_cv = dynamic_scope_cv(owner, &name);
+    let global_scope = dynamic_scope_is_global(owner);
+
+    if name == "this"
+        && matches!(
+            opline.opcode,
+            OpCode::AssignDynamicVar
+                | OpCode::UnsetDynamicVar
+                | OpCode::BindDynamicVarRef
+                | OpCode::AssignDynamicVarRef
+                | OpCode::BindDynamicGlobal
+        )
+    {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            "Cannot re-assign $this".to_string(),
+        ));
+    }
+
+    match opline.opcode {
+        OpCode::FetchDynamicVar => {
+            let value = if let Some(cv) = direct_cv {
+                unsafe { (&*(*owner).get_op_ptr(cv, OpType::Cv, (*owner).op_array())).clone() }
+            } else if global_scope {
+                eg.globals.get(&name).cloned().unwrap_or_else(Value::undef)
+            } else {
+                eg.dynamic_variables
+                    .get(&(owner as usize))
+                    .and_then(|variables| variables.get(&name))
+                    .cloned()
+                    .unwrap_or_else(Value::undef)
+            };
+            let value = if opline._pad & FETCH_DIM_ISSET != 0 {
+                Value::bool(!matches!(value.value_type(), ValueType::Null | ValueType::Undef))
+            } else if value.is_undef() {
+                if opline._pad & FETCH_DYNAMIC_SILENT == 0 {
+                    report_undefined_variable_name(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &name,
+                        opline._pad & FETCH_DYNAMIC_ERROR_SUPPRESS != 0,
+                    )?;
+                }
+                Value::null()
+            } else {
+                value
+            };
+            let result = unsafe {
+                (*frame).get_op_mut(opline.result as u32, opline.result_type)
+            };
+            write_fetch_dim_result(frame, result, value);
+        }
+        OpCode::AssignDynamicVar => {
+            let value = unsafe {
+                (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone()
+            };
+            if let Some(cv) = direct_cv {
+                unsafe {
+                    let raw = (*owner).cv_mut(cv);
+                    if raw.is_reference() {
+                        slot_set((*owner).get_op_mut(cv, OpType::Cv), value);
+                    } else {
+                        frame_slot_set(owner, raw, value);
+                    }
+                }
+            } else if global_scope {
+                globals_assign(&mut eg.globals, &name, value);
+                eg.dirty_globals.insert(name);
+            } else {
+                let variables = eg.dynamic_variables.entry(owner as usize).or_default();
+                globals_assign(variables, &name, value);
+            }
+        }
+        OpCode::UnsetDynamicVar => {
+            if let Some(cv) = direct_cv {
+                unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), Value::undef()) };
+            } else if global_scope {
+                globals_set(&mut eg.globals, &name, Value::undef());
+                eg.dirty_globals.insert(name);
+            } else if let Some(variables) = eg.dynamic_variables.get_mut(&(owner as usize)) {
+                variables.remove(&name);
+            }
+        }
+        OpCode::BindDynamicVarRef => {
+            let binding = if let Some(cv) = direct_cv {
+                unsafe {
+                    let slot = (*owner).cv_mut(cv);
+                    if slot.is_owned_reference() {
+                        slot.clone_owned_reference_alias()
+                    } else {
+                        let owned = Value::owned_reference(reference_initial_value(slot.clone()));
+                        let alias = owned.clone_owned_reference_alias();
+                        frame_slot_set(owner, slot, owned);
+                        alias
+                    }
+                }
+            } else if global_scope {
+                let binding = eg.globals.get(&name).map_or_else(
+                    || Value::owned_reference(Value::null()),
+                    |value| {
+                        if value.is_owned_reference() {
+                            value.clone_owned_reference_alias()
+                        } else {
+                            Value::owned_reference(reference_initial_value(value.clone()))
+                        }
+                    },
+                );
+                globals_set(&mut eg.globals, &name, binding.clone_owned_reference_alias());
+                binding
+            } else {
+                let variables = eg.dynamic_variables.entry(owner as usize).or_default();
+                let binding = variables.get(&name).map_or_else(
+                    || Value::owned_reference(Value::null()),
+                    |value| {
+                        if value.is_owned_reference() {
+                            value.clone_owned_reference_alias()
+                        } else {
+                            Value::owned_reference(reference_initial_value(value.clone()))
+                        }
+                    },
+                );
+                globals_set(variables, &name, binding.clone_owned_reference_alias());
+                binding
+            };
+            let destination = unsafe {
+                (*frame).get_op_mut(opline.result as u32, opline.result_type)
+            };
+            unsafe { frame_slot_set(frame, destination, binding) };
+        }
+        OpCode::AssignDynamicVarRef => {
+            let source = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
+            let binding = unsafe {
+                if (*source).is_owned_reference() {
+                    (*source).clone_owned_reference_alias()
+                } else {
+                    let owned = Value::owned_reference(reference_initial_value((*source).clone()));
+                    let alias = owned.clone_owned_reference_alias();
+                    if opline.op2_type == OpType::Cv {
+                        frame_slot_set(frame, source, owned);
+                    } else {
+                        frame_tmp_set(frame, source, owned);
+                    }
+                    alias
+                }
+            };
+            if let Some(cv) = direct_cv {
+                unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), binding.clone_owned_reference_alias()) };
+            } else if global_scope {
+                globals_set(&mut eg.globals, &name, binding.clone_owned_reference_alias());
+                eg.dirty_globals.insert(name);
+            } else {
+                globals_set(
+                    eg.dynamic_variables.entry(owner as usize).or_default(),
+                    &name,
+                    binding.clone_owned_reference_alias(),
+                );
+            }
+        }
+        OpCode::BindDynamicGlobal => {
+            let binding = eg.globals.get(&name).map_or_else(
+                || Value::owned_reference(Value::null()),
+                |value| {
+                    if value.is_owned_reference() {
+                        value.clone_owned_reference_alias()
+                    } else {
+                        Value::owned_reference(reference_initial_value(value.clone()))
+                    }
+                },
+            );
+            globals_set(&mut eg.globals, &name, binding.clone_owned_reference_alias());
+            // The local binding can mutate the shared reference cell without
+            // executing another global-table opcode. Publish it back into a
+            // suspended request-scope CV when this function returns.
+            eg.dirty_globals.insert(name.clone());
+            if let Some(cv) = direct_cv {
+                unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), binding.clone_owned_reference_alias()) };
+            } else if !global_scope {
+                globals_set(
+                    eg.dynamic_variables.entry(owner as usize).or_default(),
+                    &name,
+                    binding.clone_owned_reference_alias(),
+                );
+            }
+        }
+        _ => unreachable!("dynamic-variable helper called for another opcode"),
+    }
+    Ok(ColdResult::Done)
 }
 
 /// Snapshot a runtime-resolved send operand. A by-reference caller bypasses
@@ -1122,6 +1453,35 @@ fn clone_heap_static_property_value(value: &Value) -> Value {
     value.clone()
 }
 
+fn dynamic_static_property_owner(
+    eg: &ExecutorGlobals,
+    raw_value: &Value,
+) -> Result<(String, u32), VmError> {
+    let value = if raw_value.is_reference() {
+        // SAFETY: the reference tag retains either the owned cell or the live
+        // frame slot reached by `as_ref_ptr()` for this synchronous dispatch.
+        unsafe { &*raw_value.as_ref_ptr() }
+    } else {
+        raw_value
+    };
+    if let Some(object) = value.as_object() {
+        let class_name = object.class_name.to_string();
+        let class_id = if object.class_id == 0 {
+            eg.class_id_of(&class_name)
+        } else {
+            object.class_id
+        };
+        return Ok((class_name, class_id));
+    }
+    if let Some(class_name) = value.as_str() {
+        let class_name = class_name.strip_prefix('\\').unwrap_or(class_name);
+        return Ok((class_name.to_string(), eg.class_id_of(class_name)));
+    }
+    Err(VmError::Fatal(
+        "Class name must be a valid object or a string".to_string(),
+    ))
+}
+
 #[inline]
 fn static_property_throw<'a>(
     eg: &mut ExecutorGlobals,
@@ -1159,11 +1519,24 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         )
     };
 
-    let raw_class = class_name_val.as_str().unwrap_or("");
+    let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
+    let dynamic_owner_value = dynamic_owner
+        .then(|| dynamic_static_property_owner(eg, class_name_val))
+        .transpose()?;
+    let raw_class = dynamic_owner_value
+        .as_ref()
+        .map_or_else(|| class_name_val.as_str().unwrap_or(""), |(name, _)| name);
     let prop = prop_name_val.as_str().unwrap_or("");
-    let class_id = static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class);
+    let class_id = dynamic_owner_value.as_ref().map_or_else(
+        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        |(_, class_id)| *class_id,
+    );
 
-    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 1 {
+    if opline._pad & STATIC_PROP_DYNAMIC_NAME == 0
+        && class_id != 0
+        && cache.class_id == class_id
+        && cache.property_flags() == 1
+    {
         // SAFETY: the class/cache guards prove the storage slot is valid; the
         // compiler-emitted result pointer was validated above.
         unsafe {
@@ -1503,6 +1876,81 @@ fn op_assign_late_static_prop<'a>(
     op_assign_static_prop_impl::<true>(eg, frame, op_array, opline)
 }
 
+#[inline(never)]
+fn op_unset_static_prop<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: both compiler operands belong to the active frame/op-array and
+    // remain live for this cold opcode; no mutable slot access occurs here.
+    let (class_value, property_value) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+        )
+    };
+    let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
+    let dynamic_owner_value = dynamic_owner
+        .then(|| dynamic_static_property_owner(eg, class_value))
+        .transpose()?;
+    let raw_class = dynamic_owner_value
+        .as_ref()
+        .map_or_else(|| class_value.as_str().unwrap_or(""), |(name, _)| name);
+    // SAFETY: dispatch passes an opline from this immutable instruction slice.
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    // SAFETY: every instruction owns one aligned cache record at the same
+    // index; the op-array outlives this frame and the returned shared borrow.
+    let cache = unsafe {
+        &*(op_array.cache.as_ptr().add(ip) as *const crate::vm::instruction::InlineCache)
+    };
+    let late_static = opline.extended_value != 0;
+    let class_id = dynamic_owner_value.as_ref().map_or_else(
+        || {
+            if late_static {
+                static_property_class_id::<true>(eg, frame, opline, cache, raw_class)
+            } else {
+                static_property_class_id::<false>(eg, frame, opline, cache, raw_class)
+            }
+        },
+        |(_, class_id)| *class_id,
+    );
+    if class_id == 0
+        && matches!(
+            raw_class.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        )
+    {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!(
+                "Cannot access \"{}\" when no class scope is active",
+                raw_class.to_ascii_lowercase()
+            ),
+        ));
+    }
+    let Some(class) = eg.class_by_id(class_id) else {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Class \"{}\" not found", raw_class),
+        ));
+    };
+    let property = property_value.as_str().unwrap_or("");
+    Ok(static_property_throw(
+        eg,
+        frame,
+        "Error",
+        format!("Attempt to unset static property {}::${}", class.name, property),
+    ))
+}
+
 #[inline(always)]
 fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
@@ -1555,7 +2003,13 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         source
     };
     let mut value = clone_static_property_value(source);
-    let raw_class = class_name.as_str().unwrap_or("");
+    let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
+    let dynamic_owner_value = dynamic_owner
+        .then(|| dynamic_static_property_owner(eg, class_name))
+        .transpose()?;
+    let raw_class = dynamic_owner_value
+        .as_ref()
+        .map_or_else(|| class_name.as_str().unwrap_or(""), |(name, _)| name);
     let property = property_name.as_str().unwrap_or("");
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
@@ -1564,8 +2018,14 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         &mut *(op_array.cache.as_ptr().add(ip)
             as *mut crate::vm::instruction::InlineCache)
     };
-    let class_id = static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class);
-    if class_id != 0 && cache.class_id == class_id {
+    let class_id = dynamic_owner_value.as_ref().map_or_else(
+        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        |(_, class_id)| *class_id,
+    );
+    if opline._pad & STATIC_PROP_DYNAMIC_NAME == 0
+        && class_id != 0
+        && cache.class_id == class_id
+    {
         if cache.property_flags() == 3 {
             unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
             return Ok(ColdResult::Done);
@@ -1737,7 +2197,13 @@ fn assign_static_property_cache_miss<'a>(
     property: &str,
     mut value: Value,
 ) -> Result<ColdResult<'a>, VmError> {
-    let resolved = resolve_static_property(eg, frame, class_id, raw_class, property, true)?;
+    let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, true) {
+        Ok(resolved) => resolved,
+        Err(VmError::Fatal(message)) => {
+            return Ok(static_property_throw(eg, frame, "Error", message));
+        }
+        Err(error) => return Err(error),
+    };
     let definition = unsafe { &*resolved.definition };
     if definition.is_typed() {
         let called_class = eg
@@ -1814,8 +2280,13 @@ fn resolve_static_property_read_cache_miss<'a>(
     property: &str,
     silent: bool,
 ) -> Result<ColdResult<'a>, VmError> {
-    let resolved =
-        resolve_static_property(eg, frame, class_id, raw_class, property, false)?;
+    let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, false) {
+        Ok(resolved) => resolved,
+        Err(VmError::Fatal(message)) => {
+            return Ok(static_property_throw(eg, frame, "Error", message));
+        }
+        Err(error) => return Err(error),
+    };
     let stored = eg
         .static_property_value(resolved.storage_slot)
         .ok_or_else(|| VmError::Fatal("Invalid static property storage slot".into()))?;
@@ -1858,6 +2329,17 @@ fn resolve_static_property(
     property: &str,
     for_write: bool,
 ) -> Result<ResolvedStaticProperty, VmError> {
+    if class_id == 0
+        && matches!(
+            raw_class.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        )
+    {
+        return Err(VmError::Fatal(format!(
+            "Cannot access \"{}\" when no class scope is active",
+            raw_class.to_ascii_lowercase()
+        )));
+    }
     let class = eg.class_by_id(class_id).ok_or_else(|| {
         VmError::Fatal(format!("Class \"{}\" not found", raw_class))
     })?;

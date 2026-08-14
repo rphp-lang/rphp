@@ -2112,12 +2112,46 @@ fn op_init_dynamic_call<'a>(
     let callable = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
     if callable.value_type() == ValueType::Array {
+        let callable_array = callable
+            .as_array()
+            .expect("array-tagged dynamic callable must expose array storage");
+        if callable_array.len() == 2
+            && callable_array
+                .get_value_at(1)
+                .is_some_and(|method| method.as_str().is_none())
+        {
+            let error = make_error_value("Error", "Method name must be a string");
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
         let class_name = callable.as_array().and_then(|array| {
             if array.len() != 2 || array.get_value_at(1)?.as_str().is_none() {
                 return None;
             }
             array.get_value_at(0)?.as_str().map(str::to_string)
         });
+        if let Some(class_name) = class_name.as_deref()
+            && matches!(class_name.to_ascii_lowercase().as_str(), "self" | "parent" | "static")
+            && get_caller_class(frame, eg).is_none()
+        {
+            let error = make_error_value(
+                "Error",
+                &format!(
+                    "Cannot access \"{}\" when no class scope is active",
+                    class_name.to_ascii_lowercase()
+                ),
+            );
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
         if let Some(class_name) = class_name
             && eg.find_class(&class_name).is_none()
         {

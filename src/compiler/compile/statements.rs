@@ -1,6 +1,11 @@
 #[derive(Clone, Copy)]
 enum ArrayRootWriteback {
     None,
+    DynamicVariable {
+        key: u16,
+        key_type: OpType,
+        line: usize,
+    },
     Global {
         key: u16,
         key_type: OpType,
@@ -13,8 +18,11 @@ enum ArrayRootWriteback {
     },
     Static {
         class: u16,
+        class_type: OpType,
         property: u16,
-        dynamic: bool,
+        property_type: OpType,
+        late_static: bool,
+        dynamic_owner: bool,
     },
 }
 
@@ -27,6 +35,11 @@ pub(super) struct MutableArrayPath {
 
 enum CoalesceWrite {
     Variable(u16),
+    DynamicVariable {
+        key: u16,
+        key_type: OpType,
+        line: usize,
+    },
     Global {
         key: u16,
         key_type: OpType,
@@ -39,14 +52,22 @@ enum CoalesceWrite {
     },
     StaticProperty {
         class: u16,
+        class_type: OpType,
         property: u16,
-        dynamic: bool,
+        property_type: OpType,
+        late_static: bool,
+        dynamic_owner: bool,
     },
     Array(MutableArrayPath),
 }
 
 pub(super) enum ForeachArrayWriteback {
     Variable(u16),
+    DynamicVariable {
+        key: u16,
+        key_type: OpType,
+        line: usize,
+    },
     Global {
         key: u16,
         key_type: OpType,
@@ -59,8 +80,11 @@ pub(super) enum ForeachArrayWriteback {
     },
     StaticProperty {
         class: u16,
+        class_type: OpType,
         property: u16,
-        dynamic: bool,
+        property_type: OpType,
+        late_static: bool,
+        dynamic_owner: bool,
     },
     Array(MutableArrayPath),
 }
@@ -116,6 +140,15 @@ impl Compiler {
 
         let destination = self.resolve_cv(&format!("\0array_reference_{}", self.next_cv));
         match source {
+            Expr::DynamicVariable { name, line } => {
+                let (key, key_type) = self.compile_expr(name);
+                let mut bind = Instruction::new(OpCode::BindDynamicVarRef);
+                bind.op1 = key;
+                bind.op1_type = key_type;
+                bind.result = destination;
+                bind.result_type = OpType::Cv;
+                self.push_instruction_at_line(bind, *line);
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -189,6 +222,25 @@ impl Compiler {
                 let cv = self.resolve_cv(var);
                 Ok((cv, OpType::Cv, ForeachArrayWriteback::Variable(cv)))
             }
+            Expr::DynamicVariable { name, line } => {
+                let (key, key_type) = self.compile_expr(name);
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
+                fetch.op1 = key;
+                fetch.op1_type = key_type;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.push_instruction_at_line(fetch, *line);
+                Ok((
+                    current,
+                    OpType::Tmp,
+                    ForeachArrayWriteback::DynamicVariable {
+                        key,
+                        key_type,
+                        line: *line,
+                    },
+                ))
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -243,33 +295,48 @@ impl Compiler {
                     },
                 ))
             }
-            Expr::StaticProperty {
-                class_name,
-                property,
-            } => {
-                let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
-                let class = self.add_literal(Value::string(resolved));
-                let property = self.add_literal(Value::string(property.clone()));
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                let (
+                    class,
+                    class_type,
+                    property,
+                    property_type,
+                    late_static,
+                    dynamic_owner,
+                ) = self
+                    .compile_static_property_operands(static_property)
+                    .expect("matched static-property form");
                 let current = self.alloc_tmp();
-                let mut fetch = Instruction::new(if dynamic {
+                let mut fetch = Instruction::new(if late_static {
                     OpCode::FetchLateStaticProp
                 } else {
                     OpCode::FetchStaticProp
                 });
                 fetch.op1 = class;
-                fetch.op1_type = OpType::Const;
+                fetch.op1_type = class_type;
                 fetch.op2 = property;
-                fetch.op2_type = OpType::Const;
+                fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                if dynamic_owner {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
                 self.instructions.push(fetch);
                 Ok((
                     current,
                     OpType::Tmp,
                     ForeachArrayWriteback::StaticProperty {
                         class,
+                        class_type,
                         property,
-                        dynamic,
+                        property_type,
+                        late_static,
+                        dynamic_owner,
                     },
                 ))
             }
@@ -347,6 +414,18 @@ impl Compiler {
                 assign.op2_type = array_type;
                 self.instructions.push(assign);
             }
+            ForeachArrayWriteback::DynamicVariable {
+                key,
+                key_type,
+                line,
+            } => {
+                let mut assign = Instruction::new(OpCode::AssignDynamicVar);
+                assign.op1 = key;
+                assign.op1_type = key_type;
+                assign.op2 = array;
+                assign.op2_type = array_type;
+                self.push_instruction_at_line(assign, line);
+            }
             ForeachArrayWriteback::Global { key, key_type } => {
                 let mut assign = Instruction::new(OpCode::AssignGlobal);
                 assign.op1 = key;
@@ -372,20 +451,29 @@ impl Compiler {
             }
             ForeachArrayWriteback::StaticProperty {
                 class,
+                class_type,
                 property,
-                dynamic,
+                property_type,
+                late_static,
+                dynamic_owner,
             } => {
-                let mut assign = Instruction::new(if dynamic {
+                let mut assign = Instruction::new(if late_static {
                     OpCode::AssignLateStaticProp
                 } else {
                     OpCode::AssignStaticProp
                 });
                 assign.op1 = class;
-                assign.op1_type = OpType::Const;
+                assign.op1_type = class_type;
                 assign.op2 = property;
-                assign.op2_type = OpType::Const;
+                assign.op2_type = property_type;
                 assign.result = array;
                 assign.result_type = array_type;
+                if dynamic_owner {
+                    assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    assign._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
                 self.instructions.push(assign);
             }
             ForeachArrayWriteback::Array(path) => {
@@ -414,6 +502,26 @@ impl Compiler {
             Expr::Variable { name: var, .. } => {
                 let cv = self.resolve_cv(var);
                 (cv, OpType::Cv, CoalesceWrite::Variable(cv))
+            }
+            Expr::DynamicVariable { name, line } => {
+                let (key, key_type) = self.compile_expr(name);
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
+                fetch.op1 = key;
+                fetch.op1_type = key_type;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_DYNAMIC_SILENT;
+                self.push_instruction_at_line(fetch, *line);
+                (
+                    current,
+                    OpType::Tmp,
+                    CoalesceWrite::DynamicVariable {
+                        key,
+                        key_type,
+                        line: *line,
+                    },
+                )
             }
             Expr::PropertyAccess {
                 object,
@@ -471,34 +579,49 @@ impl Compiler {
                     },
                 )
             }
-            Expr::StaticProperty {
-                class_name,
-                property,
-            } => {
-                let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
-                let class = self.add_literal(Value::string(resolved));
-                let property = self.add_literal(Value::string(property.clone()));
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                let (
+                    class,
+                    class_type,
+                    property,
+                    property_type,
+                    late_static,
+                    dynamic_owner,
+                ) = self
+                    .compile_static_property_operands(static_property)
+                    .expect("matched static-property form");
                 let current = self.alloc_tmp();
-                let mut fetch = Instruction::new(if dynamic {
+                let mut fetch = Instruction::new(if late_static {
                     OpCode::FetchLateStaticProp
                 } else {
                     OpCode::FetchStaticProp
                 });
                 fetch.op1 = class;
-                fetch.op1_type = OpType::Const;
+                fetch.op1_type = class_type;
                 fetch.op2 = property;
-                fetch.op2_type = OpType::Const;
+                fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
                 fetch._pad |= FETCH_OBJ_SILENT;
+                if dynamic_owner {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
                 self.instructions.push(fetch);
                 (
                     current,
                     OpType::Tmp,
                     CoalesceWrite::StaticProperty {
                         class,
+                        class_type,
                         property,
-                        dynamic,
+                        property_type,
+                        late_static,
+                        dynamic_owner,
                     },
                 )
             }
@@ -567,6 +690,18 @@ impl Compiler {
                 assign.op2_type = value_type;
                 self.instructions.push(assign);
             }
+            CoalesceWrite::DynamicVariable {
+                key,
+                key_type,
+                line,
+            } => {
+                let mut assign = Instruction::new(OpCode::AssignDynamicVar);
+                assign.op1 = key;
+                assign.op1_type = key_type;
+                assign.op2 = value;
+                assign.op2_type = value_type;
+                self.push_instruction_at_line(assign, line);
+            }
             CoalesceWrite::Global { key, key_type } => {
                 let mut assign = Instruction::new(OpCode::AssignGlobal);
                 assign.op1 = key;
@@ -592,20 +727,29 @@ impl Compiler {
             }
             CoalesceWrite::StaticProperty {
                 class,
+                class_type,
                 property,
-                dynamic,
+                property_type,
+                late_static,
+                dynamic_owner,
             } => {
-                let mut assign = Instruction::new(if dynamic {
+                let mut assign = Instruction::new(if late_static {
                     OpCode::AssignLateStaticProp
                 } else {
                     OpCode::AssignStaticProp
                 });
                 assign.op1 = class;
-                assign.op1_type = OpType::Const;
+                assign.op1_type = class_type;
                 assign.op2 = property;
-                assign.op2_type = OpType::Const;
+                assign.op2_type = property_type;
                 assign.result = value;
                 assign.result_type = value_type;
+                if dynamic_owner {
+                    assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    assign._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
                 self.instructions.push(assign);
             }
             CoalesceWrite::Array(path) => {
@@ -650,6 +794,11 @@ impl Compiler {
         expr: &Expr,
     ) -> Result<(u16, OpType), String> {
         enum WriteTarget {
+            DynamicVariable {
+                key: u16,
+                key_type: OpType,
+                line: usize,
+            },
             Object {
                 object: u16,
                 object_type: OpType,
@@ -658,8 +807,11 @@ impl Compiler {
             },
             Static {
                 class: u16,
+                class_type: OpType,
                 property: u16,
-                dynamic: bool,
+                property_type: OpType,
+                late_static: bool,
+                dynamic_owner: bool,
             },
             Array(MutableArrayPath),
         }
@@ -673,6 +825,14 @@ impl Compiler {
                     "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
                     *line,
                 ));
+            }
+            Expr::DynamicVariable { name, line } => {
+                let (key, key_type) = self.compile_expr(name);
+                WriteTarget::DynamicVariable {
+                    key,
+                    key_type,
+                    line: *line,
+                }
             }
             Expr::PropertyAccess {
                 object,
@@ -702,15 +862,26 @@ impl Compiler {
                     property_type,
                 }
             }
-            Expr::StaticProperty {
-                class_name,
-                property,
-            } => {
-                let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                let (
+                    class,
+                    class_type,
+                    property,
+                    property_type,
+                    late_static,
+                    dynamic_owner,
+                ) = self
+                    .compile_static_property_operands(static_property)
+                    .expect("matched static-property form");
                 WriteTarget::Static {
-                    class: self.add_literal(Value::string(resolved)),
-                    property: self.add_literal(Value::string(property.clone())),
-                    dynamic,
+                    class,
+                    class_type,
+                    property,
+                    property_type,
+                    late_static,
+                    dynamic_owner,
                 }
             }
             Expr::ArrayAccess { .. } => {
@@ -740,6 +911,18 @@ impl Compiler {
         self.instructions.push(preserve);
 
         match write {
+            WriteTarget::DynamicVariable {
+                key,
+                key_type,
+                line,
+            } => {
+                let mut assign = Instruction::new(OpCode::AssignDynamicVar);
+                assign.op1 = key;
+                assign.op1_type = key_type;
+                assign.op2 = result;
+                assign.op2_type = OpType::Tmp;
+                self.push_instruction_at_line(assign, line);
+            }
             WriteTarget::Object {
                 object,
                 object_type,
@@ -757,20 +940,29 @@ impl Compiler {
             }
             WriteTarget::Static {
                 class,
+                class_type,
                 property,
-                dynamic,
+                property_type,
+                late_static,
+                dynamic_owner,
             } => {
-                let mut assign = Instruction::new(if dynamic {
+                let mut assign = Instruction::new(if late_static {
                     OpCode::AssignLateStaticProp
                 } else {
                     OpCode::AssignStaticProp
                 });
                 assign.op1 = class;
-                assign.op1_type = OpType::Const;
+                assign.op1_type = class_type;
                 assign.op2 = property;
-                assign.op2_type = OpType::Const;
+                assign.op2_type = property_type;
                 assign.result = result;
                 assign.result_type = OpType::Tmp;
+                if dynamic_owner {
+                    assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    assign._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
                 self.instructions.push(assign);
             }
             WriteTarget::Array(path) => {
@@ -806,10 +998,7 @@ impl Compiler {
         if let Expr::Globals { line } = source {
             return Err(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
         }
-        let Expr::Variable { name: source, .. } = source else {
-            return Err("Reference assignment source must be a variable".into());
-        };
-        let source = self.resolve_cv(source);
+        let source = self.compile_array_element_reference_source(source)?;
 
         if let Expr::ArrayAccess { array, index } = target
             && matches!(array.as_ref(), Expr::Globals { .. })
@@ -825,6 +1014,15 @@ impl Compiler {
         }
 
         match target {
+            Expr::DynamicVariable { name, line } => {
+                let (key, key_type) = self.compile_expr(name);
+                let mut assign = Instruction::new(OpCode::AssignDynamicVarRef);
+                assign.op1 = key;
+                assign.op1_type = key_type;
+                assign.op2 = source;
+                assign.op2_type = OpType::Cv;
+                self.push_instruction_at_line(assign, *line);
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -894,6 +1092,7 @@ impl Compiler {
                 assign.op2_type = key_type;
                 assign.result = source;
                 assign.result_type = OpType::Cv;
+                assign._pad |= ASSIGN_DIM_REFERENCE;
                 self.instructions.push(assign);
 
                 let mut bind = Instruction::new(OpCode::BindArrayDimRef);
@@ -929,6 +1128,28 @@ impl Compiler {
                 ArrayRootWriteback::None,
                 indices,
             ),
+            Expr::DynamicVariable { name, line } => {
+                let (key, key_type) = self.compile_expr(name);
+                let container = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
+                fetch.op1 = key;
+                fetch.op1_type = key_type;
+                fetch.result = container;
+                fetch.result_type = OpType::Tmp;
+                if silent_root_fetch {
+                    fetch._pad |= FETCH_DYNAMIC_SILENT;
+                }
+                self.push_instruction_at_line(fetch, *line);
+                (
+                    (container, OpType::Tmp),
+                    ArrayRootWriteback::DynamicVariable {
+                        key,
+                        key_type,
+                        line: *line,
+                    },
+                    indices,
+                )
+            }
             Expr::Globals { .. } => {
                 if indices.len() < 2 {
                     return Err("Global array mutation path requires a nested dimension".into());
@@ -1007,35 +1228,50 @@ impl Compiler {
                     indices,
                 )
             }
-            Expr::StaticProperty {
-                class_name,
-                property,
-            } => {
-                let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
-                let class = self.add_literal(Value::string(resolved));
-                let property = self.add_literal(Value::string(property.clone()));
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                let (
+                    class,
+                    class_type,
+                    property,
+                    property_type,
+                    late_static,
+                    dynamic_owner,
+                ) = self
+                    .compile_static_property_operands(static_property)
+                    .expect("matched static-property form");
                 let container = self.alloc_tmp();
-                let mut fetch = Instruction::new(if dynamic {
+                let mut fetch = Instruction::new(if late_static {
                     OpCode::FetchLateStaticProp
                 } else {
                     OpCode::FetchStaticProp
                 });
                 fetch.op1 = class;
-                fetch.op1_type = OpType::Const;
+                fetch.op1_type = class_type;
                 fetch.op2 = property;
-                fetch.op2_type = OpType::Const;
+                fetch.op2_type = property_type;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
                 if silent_root_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
+                }
+                if dynamic_owner {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
                 self.instructions.push(fetch);
                 (
                     (container, OpType::Tmp),
                     ArrayRootWriteback::Static {
                         class,
+                        class_type,
                         property,
-                        dynamic,
+                        property_type,
+                        late_static,
+                        dynamic_owner,
                     },
                     indices,
                 )
@@ -1088,6 +1324,19 @@ impl Compiler {
     fn write_back_mutable_array_root(&mut self, path: &MutableArrayPath) {
         let mut writeback = match path.writeback {
             ArrayRootWriteback::None => return,
+            ArrayRootWriteback::DynamicVariable {
+                key,
+                key_type,
+                line,
+            } => {
+                let mut instruction = Instruction::new(OpCode::AssignDynamicVar);
+                instruction.op1 = key;
+                instruction.op1_type = key_type;
+                instruction.op2 = path.root.0;
+                instruction.op2_type = path.root.1;
+                self.push_instruction_at_line(instruction, line);
+                return;
+            }
             ArrayRootWriteback::Global { key, key_type } => {
                 let mut instruction = Instruction::new(OpCode::AssignGlobal);
                 instruction.op1 = key;
@@ -1112,18 +1361,27 @@ impl Compiler {
             }
             ArrayRootWriteback::Static {
                 class,
+                class_type,
                 property,
-                dynamic,
+                property_type,
+                late_static,
+                dynamic_owner,
             } => {
-                let mut instruction = Instruction::new(if dynamic {
+                let mut instruction = Instruction::new(if late_static {
                     OpCode::AssignLateStaticProp
                 } else {
                     OpCode::AssignStaticProp
                 });
                 instruction.op1 = class;
-                instruction.op1_type = OpType::Const;
+                instruction.op1_type = class_type;
                 instruction.op2 = property;
-                instruction.op2_type = OpType::Const;
+                instruction.op2_type = property_type;
+                if dynamic_owner {
+                    instruction._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    instruction._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
                 instruction
             }
         };
@@ -2064,6 +2322,13 @@ impl Compiler {
                             assign._pad |= ASSIGN_CV_REBIND;
                             self.instructions.push(assign);
                         }
+                        Expr::DynamicVariable { name, line } => {
+                            let (key, key_type) = self.compile_expr(name);
+                            let mut unset = Instruction::new(OpCode::UnsetDynamicVar);
+                            unset.op1 = key;
+                            unset.op1_type = key_type;
+                            self.push_instruction_at_line(unset, *line);
+                        }
                         Expr::ArrayAccess { .. } => {
                             let mut root = target;
                             let mut indices = Vec::new();
@@ -2120,6 +2385,35 @@ impl Compiler {
                             unset.op1_type = object_type;
                             unset.op2 = property;
                             unset.op2_type = property_type;
+                            self.instructions.push(unset);
+                        }
+                        static_property @ (Expr::StaticProperty { .. }
+                        | Expr::DynamicNamedStaticProperty { .. }
+                        | Expr::DynamicStaticProperty { .. }) => {
+                            let (
+                                class,
+                                class_type,
+                                property,
+                                property_type,
+                                late_static,
+                                dynamic_owner,
+                            ) = self
+                                .compile_static_property_operands(static_property)
+                                .expect("matched static-property form");
+                            let mut unset = Instruction::new(OpCode::UnsetStaticProp);
+                            unset.op1 = class;
+                            unset.op1_type = class_type;
+                            unset.op2 = property;
+                            unset.op2_type = property_type;
+                            if late_static {
+                                unset.extended_value = 1;
+                            }
+                            if dynamic_owner {
+                                unset._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                            }
+                            if property_type != OpType::Const {
+                                unset._pad |= STATIC_PROP_DYNAMIC_NAME;
+                            }
                             self.instructions.push(unset);
                         }
                         _ => return Err("unset() requires a variable".into()),
@@ -2417,20 +2711,31 @@ impl Compiler {
                 self.compile_list_targets(targets, rhs_tmp, OpType::Tmp, 0)?;
             }
             Stmt::Global(vars) => {
-                for var_name in vars {
-                    let cv_idx = self.resolve_cv(var_name);
-                    let name_idx = self.add_literal(Value::string(var_name.clone()));
-                    let mut instr = Instruction::new(OpCode::BindGlobal);
-                    instr.op1_type = OpType::Cv;
-                    instr.op1 = cv_idx;
-                    instr.op2_type = OpType::Const;
-                    instr.op2 = name_idx;
-                    self.instructions.push(instr);
-                    self.global_vars.push((cv_idx as u32, var_name.clone()));
-                    // `global $name` creates the symbol when it is absent. Its
-                    // local binding is therefore defined as null immediately
-                    // and subsequent reads are not undefined-variable reads.
-                    self.definitely_defined_cvs.insert(cv_idx);
+                for target in vars {
+                    match target {
+                        GlobalTarget::Variable(var_name) => {
+                            let cv_idx = self.resolve_cv(var_name);
+                            let name_idx = self.add_literal(Value::string(var_name.clone()));
+                            let mut instr = Instruction::new(OpCode::BindGlobal);
+                            instr.op1_type = OpType::Cv;
+                            instr.op1 = cv_idx;
+                            instr.op2_type = OpType::Const;
+                            instr.op2 = name_idx;
+                            self.instructions.push(instr);
+                            self.global_vars.push((cv_idx as u32, var_name.clone()));
+                            // `global $name` creates the symbol when it is absent. Its
+                            // local binding is therefore defined as null immediately
+                            // and subsequent reads are not undefined-variable reads.
+                            self.definitely_defined_cvs.insert(cv_idx);
+                        }
+                        GlobalTarget::Dynamic(name) => {
+                            let (name, name_type) = self.compile_expr(name);
+                            let mut bind = Instruction::new(OpCode::BindDynamicGlobal);
+                            bind.op1 = name;
+                            bind.op1_type = name_type;
+                            self.instructions.push(bind);
+                        }
+                    }
                 }
             }
             Stmt::StaticVar { vars } => {

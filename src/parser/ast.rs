@@ -29,6 +29,12 @@ pub enum ForeachTarget {
     Destructure(Vec<ListTarget>),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum GlobalTarget {
+    Variable(String),
+    Dynamic(Expr),
+}
+
 impl ForeachTarget {
     pub(crate) fn contains_yield(&self) -> bool {
         match self {
@@ -74,6 +80,12 @@ pub enum Expr {
         name: String,
         /// Source line of the variable token. Synthetic compiler expressions
         /// use zero so they never acquire user-visible diagnostics.
+        line: usize,
+    },
+    /// PHP variable-variable lookup. The name expression is evaluated exactly
+    /// once before the surrounding read or l-value operation starts.
+    DynamicVariable {
+        name: Box<Expr>,
         line: usize,
     },
     /// The PHP 8.2 global symbol-table pseudo-variable. Keeping its source
@@ -226,6 +238,16 @@ pub enum Expr {
         class_name: String,
         property: String,
     },
+    DynamicNamedStaticProperty {
+        // ClassName::$$name or ClassName::${expression}
+        class_name: String,
+        property: Box<Expr>,
+    },
+    DynamicStaticProperty {
+        // $class::$prop, $class::$$name, or expression::${expression}
+        class: Box<Expr>,
+        property: Box<Expr>,
+    },
     ClassConstant {
         // ClassName::CONSTANT, self::CONSTANT, parent::CONSTANT, static::CONSTANT
         class_name: String,
@@ -272,9 +294,10 @@ pub enum Expr {
         expr: Box<Expr>,
     },
     ArrayAppendAssign {
-        // $target[] = expression used inside a larger expression.
+        // $target[] = expression / $target[] =& variable.
         target: Box<Expr>,
         expr: Box<Expr>,
+        by_ref: bool,
     },
     ListAssign {
         // [$first, , $third] = expression used inside a larger expression.
@@ -334,7 +357,8 @@ impl Expr {
             | Expr::Throw { expr: inner, .. }
             | Expr::Include { path: inner, .. }
             | Expr::BitwiseNot(inner)
-            | Expr::Clone(inner) => inner.contains_yield(),
+            | Expr::Clone(inner)
+            | Expr::DynamicVariable { name: inner, .. } => inner.contains_yield(),
             Expr::Ternary {
                 condition,
                 then_expr,
@@ -358,6 +382,10 @@ impl Expr {
             Expr::DynamicPropertyAccess {
                 object, property, ..
             } => object.contains_yield() || property.contains_yield(),
+            Expr::DynamicNamedStaticProperty { property, .. } => property.contains_yield(),
+            Expr::DynamicStaticProperty { class, property } => {
+                class.contains_yield() || property.contains_yield()
+            }
             Expr::Cast { expr, .. }
             | Expr::PropertyAccess { object: expr, .. }
             | Expr::Instanceof { expr, .. }
@@ -372,7 +400,7 @@ impl Expr {
                 target,
                 source: expr,
             }
-            | Expr::ArrayAppendAssign { target, expr } => {
+            | Expr::ArrayAppendAssign { target, expr, .. } => {
                 target.contains_yield() || expr.contains_yield()
             }
             Expr::ListAssign { targets, expr } => {
@@ -747,7 +775,7 @@ pub enum Stmt {
         targets: Vec<ListTarget>,
         expr: Expr,
     },
-    Global(Vec<String>), // global $a, $b;
+    Global(Vec<GlobalTarget>), // global $a, $$name, ${expr};
     StaticVar {
         // static $a = 0, $b = "";
         vars: Vec<(String, Option<Expr>)>,
@@ -875,6 +903,10 @@ impl Stmt {
             Stmt::StaticVar { vars } => vars
                 .iter()
                 .any(|(_, value)| value.as_ref().is_some_and(Expr::contains_yield)),
+            Stmt::Global(targets) => targets.iter().any(|target| match target {
+                GlobalTarget::Variable(_) => false,
+                GlobalTarget::Dynamic(expr) => expr.contains_yield(),
+            }),
             Stmt::Noop
             | Stmt::Label(_)
             | Stmt::Goto { .. }
@@ -886,7 +918,6 @@ impl Stmt {
             | Stmt::Trait { .. }
             | Stmt::Declare { .. }
             | Stmt::UseDecl { .. }
-            | Stmt::Global(_)
             | Stmt::Enum { .. } => false,
         }
     }

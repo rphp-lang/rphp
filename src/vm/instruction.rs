@@ -80,6 +80,14 @@ pub const JMP_FLAG_FINALLY_END: u16 = 1 << 1;
 /// embedded scope slot. Wide frames and instance methods use the resolver.
 pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;
 
+/// Fetch/assign static-property flag: op1 is a runtime class expression and
+/// may therefore be either a class-name string or an object instance.
+pub const STATIC_PROP_DYNAMIC_OWNER: u16 = 1 << 4;
+
+/// Fetch/assign static-property flag: op2 was computed at runtime. Cache hits
+/// must therefore verify or re-resolve the selected property name.
+pub const STATIC_PROP_DYNAMIC_NAME: u16 = 1 << 5;
+
 /// CreateClosure flag: PHP's `static function`/`static fn` form cannot bind
 /// an object, even when created inside an instance method.
 pub const CLOSURE_FLAG_STATIC: u16 = 1;
@@ -113,6 +121,16 @@ pub const FETCH_OBJ_SILENT: u16 = 1;
 /// of invoking `offsetGet()` and potentially observing or throwing on a miss.
 pub const FETCH_DIM_ISSET: u16 = 1;
 
+/// `FetchDynamicVar` reads the symbol-table entry without reporting an
+/// undefined-variable diagnostic. Unlike `FETCH_DIM_ISSET`, the fetched value
+/// is preserved; this is required by `??=` and by mutations rooted at a
+/// runtime-named variable.
+pub const FETCH_DYNAMIC_SILENT: u16 = 1 << 1;
+
+/// `FetchDynamicVar` performs an ordinary read while PHP's `@` reporting mask
+/// is active. Custom error handlers still run and observe the masked level.
+pub const FETCH_DYNAMIC_ERROR_SUPPRESS: u16 = 1 << 2;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that
@@ -138,6 +156,12 @@ pub const CALL_USER_FUNC_ARRAY_SOURCE_UNPACK: u16 = 1;
 /// an existing reference cell. PHP `unset($variable)` uses this to detach the
 /// local name while leaving every other alias and the referenced value intact.
 pub const ASSIGN_CV_REBIND: u16 = 1;
+
+/// AssignDim stores the source l-value's PHP reference cell in the selected
+/// element. Ordinary assignments intentionally dereference their source;
+/// reference assignments must retain the cell so self-referential arrays and
+/// later aliases observe one identity.
+pub const ASSIGN_DIM_REFERENCE: u16 = 1;
 
 /// NewObj flag: a literal zero-argument object is assigned to a dead local
 /// whose only uses are an immediate bounded span of declared-property reads.

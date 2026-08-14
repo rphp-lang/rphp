@@ -273,6 +273,7 @@ fn release_statement_temps(
 #[inline(always)]
 unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
+    eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
     if (*call).deferred_scalar_call {
         eg.pending_call_stack.pop_call_frame(call);
@@ -285,6 +286,7 @@ unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
 #[inline(never)]
 fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
+    eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
     eg.function_arguments.remove(&(call as usize));
     eg.vm_stack.pop_call_frame(call);
@@ -618,6 +620,24 @@ fn throw_in_frame<'a>(
     mut frame: *mut ExecuteData,
     thrown: Value,
 ) -> ThrowResult<'a> {
+    // Runtime helpers commonly construct Error/TypeError immediately before
+    // entering this shared throw boundary. Stamp that first raise site here so
+    // every catchable runtime error exposes the same immutable file, line and
+    // trace metadata as an explicit `throw`. Existing metadata wins inside the
+    // helper, which preserves the original site for rethrows and exceptions
+    // propagating out of a callee.
+    // SAFETY: `frame` is the live frame entering the shared throw boundary;
+    // its opline points into the immutable instruction slice of its op-array.
+    let (origin_op_array, origin_ip) = unsafe {
+        let origin_op_array = (*frame).op_array();
+        let origin_ip =
+        (*frame)
+            .opline
+            .offset_from(origin_op_array.instructions.as_ptr()) as usize;
+        (origin_op_array, origin_ip)
+    };
+    attach_throwable_origin(&thrown, eg, frame, origin_op_array, origin_ip);
+
     let mut search_frame = frame;
     loop {
         let sf_op_array = unsafe { (*search_frame).op_array() };

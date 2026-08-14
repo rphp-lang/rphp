@@ -17,8 +17,8 @@ use crate::generics::{
     PendingGenericUseSite,
 };
 use crate::parser::{
-    BinOp, CallArg, CastType, ClassConstant, Expr, ForeachTarget, GenericAncestor, ListTarget,
-    Param, Stmt, TypeHint, UseKind, Visibility,
+    BinOp, CallArg, CastType, ClassConstant, Expr, ForeachTarget, GenericAncestor, GlobalTarget,
+    ListTarget, Param, Stmt, TypeHint, UseKind, Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -26,12 +26,13 @@ use crate::value::{
 };
 use crate::vm::instruction::{
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION,
-    ASSIGN_CV_REBIND, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
-    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
-    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
-    FETCH_DIM_ISSET, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
-    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_UNPACKED_ARGUMENTS, OpType, SEND_FLAG_GLOBALS,
+    ASSIGN_CV_REBIND, ASSIGN_DIM_REFERENCE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
+    CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT,
+    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
+    OpType, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
 };
 use crate::vm::opcode::OpCode;
 
@@ -211,6 +212,7 @@ fn instructions_may_access_globals(instructions: &[Instruction]) -> bool {
                 | OpCode::UnsetGlobal
                 | OpCode::BindGlobalRef
                 | OpCode::AssignGlobalRef
+                | OpCode::BindDynamicGlobal
         )
     })
 }
@@ -237,6 +239,7 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
                         | OpCode::UnsetGlobal
                         | OpCode::BindGlobalRef
                         | OpCode::AssignGlobalRef
+                        | OpCode::BindDynamicGlobal
                 )
             });
 
@@ -749,7 +752,13 @@ fn propagate_declared_scalar_types(
             | OpCode::AssignGlobal
             | OpCode::UnsetGlobal
             | OpCode::BindGlobalRef
-            | OpCode::AssignGlobalRef => {
+            | OpCode::AssignGlobalRef
+            | OpCode::FetchDynamicVar
+            | OpCode::AssignDynamicVar
+            | OpCode::UnsetDynamicVar
+            | OpCode::BindDynamicVarRef
+            | OpCode::AssignDynamicVarRef
+            | OpCode::BindDynamicGlobal => {
                 slots.fill(KnownScalarType::Unknown);
                 receiver_classes.fill(None);
             }
@@ -3225,6 +3234,67 @@ impl Compiler {
         (resolved, dynamic_static_scope)
     }
 
+    /// Lower every static-property owner/name form to the shared two-operand
+    /// VM protocol. Runtime names are explicitly cast once, preserving PHP's
+    /// integer and `__toString()` member-name conversions and evaluation order.
+    fn compile_static_property_operands(
+        &mut self,
+        expr: &Expr,
+    ) -> Option<(u16, OpType, u16, OpType, bool, bool)> {
+        match expr {
+            Expr::StaticProperty {
+                class_name,
+                property,
+            } => {
+                let (resolved, late_static) = self.resolve_static_member_owner(class_name);
+                Some((
+                    self.add_literal(Value::string(resolved)),
+                    OpType::Const,
+                    self.add_literal(Value::string(property.clone())),
+                    OpType::Const,
+                    late_static,
+                    false,
+                ))
+            }
+            Expr::DynamicNamedStaticProperty {
+                class_name,
+                property,
+            } => {
+                let (resolved, late_static) = self.resolve_static_member_owner(class_name);
+                let class = self.add_literal(Value::string(resolved));
+                let (property, property_type) = self.compile_expr(property);
+                let property = self.emit_string_cast(property, property_type);
+                Some((
+                    class,
+                    OpType::Const,
+                    property,
+                    OpType::Tmp,
+                    late_static,
+                    false,
+                ))
+            }
+            Expr::DynamicStaticProperty { class, property } => {
+                let (class, class_type) = self.compile_expr(class);
+                let (property, property_type) = self.compile_expr(property);
+                let property = self.emit_string_cast(property, property_type);
+                Some((class, class_type, property, OpType::Tmp, false, true))
+            }
+            _ => None,
+        }
+    }
+
+    fn emit_string_cast(&mut self, operand: u16, operand_type: OpType) -> u16 {
+        let result = self.alloc_tmp();
+        let mut cast = Instruction::new(OpCode::Cast);
+        cast.op1 = operand;
+        cast.op1_type = operand_type;
+        cast.result = result;
+        cast.result_type = OpType::Tmp;
+        cast.extended_value = CastType::String as u32;
+        self.instructions.push(cast);
+        result
+    }
+
     /// Compile expression. Returns (operand_index, OpType).
     fn compile_isset_object_base(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
@@ -3267,6 +3337,34 @@ impl Compiler {
                 self.instructions.push(fetch);
                 (result, OpType::Tmp)
             }
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                let (class, class_type, property, property_type, late_static, dynamic_owner) = self
+                    .compile_static_property_operands(static_property)
+                    .expect("matched static-property form");
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(if late_static {
+                    OpCode::FetchLateStaticProp
+                } else {
+                    OpCode::FetchStaticProp
+                });
+                fetch.op1 = class;
+                fetch.op1_type = class_type;
+                fetch.op2 = property;
+                fetch.op2_type = property_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_SILENT;
+                if dynamic_owner {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
+                self.instructions.push(fetch);
+                (result, OpType::Tmp)
+            }
             Expr::ArrayAccess { array, index } => {
                 if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
@@ -3299,6 +3397,18 @@ impl Compiler {
 
     fn compile_isset_operand(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
+            Expr::DynamicVariable { name, line } => {
+                let (name, name_type) = self.compile_expr(name);
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
+                fetch.op1 = name;
+                fetch.op1_type = name_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_DIM_ISSET;
+                self.push_instruction_at_line(fetch, *line);
+                (result, OpType::Tmp)
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -3431,6 +3541,18 @@ impl Compiler {
                 (idx, OpType::Const)
             }
             Expr::Variable { name, line } => self.compile_variable_read(name, *line),
+            Expr::DynamicVariable { name, line } => {
+                let (name, name_type) = self.compile_expr(name);
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
+                fetch.op1 = name;
+                fetch.op1_type = name_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                self.push_instruction_at_line(fetch, *line);
+                self.invalidate_reentrant_definitions();
+                (result, OpType::Tmp)
+            }
             Expr::Globals { .. } => {
                 let result = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchGlobals);
@@ -4247,6 +4369,8 @@ impl Compiler {
                                         ..
                                     }
                                     | Expr::StaticProperty { .. }
+                                    | Expr::DynamicNamedStaticProperty { .. }
+                                    | Expr::DynamicStaticProperty { .. }
                             )
                         )
                 });
@@ -4544,6 +4668,10 @@ impl Compiler {
                         instruction._pad |= CALL_FLAG_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::FetchCvR {
                         instruction._pad |= crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS;
+                    } else if instruction.opcode == OpCode::FetchDynamicVar
+                        && instruction._pad & FETCH_DIM_ISSET == 0
+                    {
+                        instruction._pad |= FETCH_DYNAMIC_ERROR_SUPPRESS;
                     } else if matches!(instruction.opcode, OpCode::SendVarEx | OpCode::SendNamed)
                         && instruction._pad & crate::vm::instruction::SEND_FLAG_FETCH_CV_R != 0
                     {
@@ -4569,7 +4697,9 @@ impl Compiler {
                 let tmp = if tmp_type == OpType::Tmp
                     && matches!(
                         args[0],
-                        Expr::PropertyAccess { .. } | Expr::ArrayAccess { .. }
+                        Expr::DynamicVariable { .. }
+                            | Expr::PropertyAccess { .. }
+                            | Expr::ArrayAccess { .. }
                     ) {
                     tmp
                 } else {
@@ -4594,8 +4724,12 @@ impl Compiler {
 
                     let (operand, operand_type) = self.compile_isset_operand(arg);
                     let tmp2 = if operand_type == OpType::Tmp
-                        && matches!(arg, Expr::PropertyAccess { .. } | Expr::ArrayAccess { .. })
-                    {
+                        && matches!(
+                            arg,
+                            Expr::DynamicVariable { .. }
+                                | Expr::PropertyAccess { .. }
+                                | Expr::ArrayAccess { .. }
+                        ) {
                         operand
                     } else {
                         let result = self.alloc_tmp();
@@ -5581,13 +5715,19 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::StaticProperty {
-                class_name,
-                property,
-            } => {
-                let (resolved, dynamic_static_scope) = self.resolve_static_member_owner(class_name);
-                let class_idx = self.add_literal(Value::string(resolved));
-                let prop_idx = self.add_literal(Value::string(property.clone()));
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                let (
+                    class_idx,
+                    class_type,
+                    prop_idx,
+                    prop_type,
+                    dynamic_static_scope,
+                    dynamic_owner,
+                ) = self
+                    .compile_static_property_operands(static_property)
+                    .expect("matched static-property form");
                 let tmp = self.alloc_tmp();
                 let mut fetch = Instruction::new(if dynamic_static_scope {
                     OpCode::FetchLateStaticProp
@@ -5595,11 +5735,17 @@ impl Compiler {
                     OpCode::FetchStaticProp
                 });
                 fetch.op1 = class_idx;
-                fetch.op1_type = OpType::Const;
+                fetch.op1_type = class_type;
                 fetch.op2 = prop_idx;
-                fetch.op2_type = OpType::Const;
+                fetch.op2_type = prop_type;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
+                if dynamic_owner {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if prop_type != OpType::Const {
+                    fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
                 self.instructions.push(fetch);
                 (tmp, OpType::Tmp)
             }
@@ -5765,6 +5911,16 @@ impl Compiler {
                 let destination = self.resolve_cv(var);
                 self.definitely_defined_cvs.insert(destination);
                 match target.as_ref() {
+                    Expr::DynamicVariable { name, line } => {
+                        let (key, key_type) = self.compile_expr(name);
+                        let mut bind = Instruction::new(OpCode::BindDynamicVarRef);
+                        bind.op1 = key;
+                        bind.op1_type = key_type;
+                        bind.result = destination;
+                        bind.result_type = OpType::Cv;
+                        self.push_instruction_at_line(bind, *line);
+                        (destination, OpType::Cv)
+                    }
                     Expr::PropertyAccess {
                         object,
                         property,
@@ -5857,7 +6013,11 @@ impl Compiler {
                     }
                 }
             }
-            Expr::ArrayAppendAssign { target, expr } => {
+            Expr::ArrayAppendAssign {
+                target,
+                expr,
+                by_ref,
+            } => {
                 let direct_cv = if let Expr::Variable { name, .. } = target.as_ref() {
                     Some(self.resolve_cv(name))
                 } else {
@@ -5875,8 +6035,21 @@ impl Compiler {
                 } else {
                     None
                 };
-                let (value, value_type) = self.compile_expr(expr);
-                let (assigned, assigned_type) = if value_type == OpType::Cv {
+                let reference_source = if *by_ref {
+                    match self.compile_array_element_reference_source(expr) {
+                        Ok(source) => Some(source),
+                        Err(error) => {
+                            self.deferred_error = Some(error);
+                            let null = self.add_literal(Value::null());
+                            return (null, OpType::Const);
+                        }
+                    }
+                } else {
+                    None
+                };
+                let (value, value_type) = reference_source
+                    .map_or_else(|| self.compile_expr(expr), |source| (source, OpType::Cv));
+                let (assigned, assigned_type) = if !*by_ref && value_type == OpType::Cv {
                     let assigned = self.alloc_tmp();
                     let mut preserve = Instruction::new(OpCode::AssignCv);
                     preserve.op1 = assigned;
@@ -5902,6 +6075,9 @@ impl Compiler {
                 append.op1_type = array_type;
                 append.op2 = assigned;
                 append.op2_type = assigned_type;
+                if *by_ref {
+                    append._pad |= ARRAY_ELEMENT_REFERENCE;
+                }
                 self.instructions.push(append);
                 if let Some((_, _, writeback)) = mutable_source {
                     self.emit_foreach_reference_source_writeback(writeback, array, array_type);
@@ -6702,6 +6878,15 @@ impl Compiler {
                         Expr::CompileError { message, line } => {
                             return Err(self.goto_error(message, *line));
                         }
+                        Expr::DynamicVariable { name, line } => {
+                            let (key, key_type) = self.compile_expr(name);
+                            let mut assign = Instruction::new(OpCode::AssignDynamicVar);
+                            assign.op1 = key;
+                            assign.op1_type = key_type;
+                            assign.op2 = fetch_tmp;
+                            assign.op2_type = OpType::Tmp;
+                            self.push_instruction_at_line(assign, *line);
+                        }
                         Expr::PropertyAccess {
                             object,
                             property,
@@ -6734,24 +6919,36 @@ impl Compiler {
                             assign.result_type = OpType::Tmp;
                             self.instructions.push(assign);
                         }
-                        Expr::StaticProperty {
-                            class_name,
-                            property,
-                        } => {
-                            let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
-                            let class = self.add_literal(Value::string(resolved));
-                            let property = self.add_literal(Value::string(property.clone()));
-                            let mut assign = Instruction::new(if dynamic {
+                        static_property @ (Expr::StaticProperty { .. }
+                        | Expr::DynamicNamedStaticProperty { .. }
+                        | Expr::DynamicStaticProperty { .. }) => {
+                            let (
+                                class,
+                                class_type,
+                                property,
+                                property_type,
+                                late_static,
+                                dynamic_owner,
+                            ) = self
+                                .compile_static_property_operands(static_property)
+                                .expect("matched static-property form");
+                            let mut assign = Instruction::new(if late_static {
                                 OpCode::AssignLateStaticProp
                             } else {
                                 OpCode::AssignStaticProp
                             });
                             assign.op1 = class;
-                            assign.op1_type = OpType::Const;
+                            assign.op1_type = class_type;
                             assign.op2 = property;
-                            assign.op2_type = OpType::Const;
+                            assign.op2_type = property_type;
                             assign.result = fetch_tmp;
                             assign.result_type = OpType::Tmp;
+                            if dynamic_owner {
+                                assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                            }
+                            if property_type != OpType::Const {
+                                assign._pad |= STATIC_PROP_DYNAMIC_NAME;
+                            }
                             self.instructions.push(assign);
                         }
                         Expr::ArrayAccess { .. } => {

@@ -152,6 +152,9 @@ impl OpArray {
                 OpCode::AssignGlobalRef if instruction.op2_type == OpType::Cv => {
                     mark(instruction.op2)
                 }
+                OpCode::BindDynamicVarRef
+                | OpCode::AssignDynamicVarRef
+                | OpCode::BindDynamicGlobal => may_reference.fill(true),
                 OpCode::ClosureUseVar
                     if instruction.op2_type == OpType::Cv
                         && instruction._pad & crate::vm::instruction::CLOSURE_USE_REFERENCE
@@ -1221,6 +1224,14 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             // Foreach target placement is intentionally conservative until
             // its destination CV is explicit in the ownership analysis.
             OpCode::ForeachNext | OpCode::ForeachNextPlain => return 0,
+            // A runtime-selected symbol-table name may designate any
+            // parameter CV. Mutation or reference binding therefore defeats
+            // every per-parameter uniqueness proof in this frame.
+            OpCode::AssignDynamicVar
+            | OpCode::UnsetDynamicVar
+            | OpCode::BindDynamicVarRef
+            | OpCode::AssignDynamicVarRef
+            | OpCode::BindDynamicGlobal => return 0,
             // A direct return transfers a Value out of the frame. Aliases made
             // through another CV are owned clones and remain eligible.
             OpCode::Return if instruction.op1_type == OpType::Cv => {

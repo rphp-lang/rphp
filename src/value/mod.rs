@@ -4277,6 +4277,13 @@ impl Value {
         }
     }
 
+    /// Stable allocation identity for an array's current COW storage.
+    #[inline]
+    pub(crate) fn array_identity(&self) -> Option<usize> {
+        self.as_array()
+            .map(|array| array as *const PhpArray as usize)
+    }
+
     /// Get mutable array reference with COW semantics.
     /// If sole owner (refcount == 1): returns mutable reference in place (no copy).
     /// If shared (refcount > 1): detaches — clones the PhpArray into a new Rc, updates pointer.
@@ -4708,6 +4715,15 @@ impl Value {
     #[inline]
     pub fn is_reference(&self) -> bool {
         self.value_type() == ValueType::Reference
+    }
+
+    /// Stable identity of the referenced PHP value cell while this handle is
+    /// live. Serialization uses it to emit `R:n` for repeated aliases and to
+    /// terminate self-referential arrays.
+    #[inline]
+    pub(crate) fn reference_identity(&self) -> Option<usize> {
+        self.is_reference()
+            .then(|| self.dereferenced() as *const Value as usize)
     }
 
     #[inline]

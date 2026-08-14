@@ -207,6 +207,22 @@ pub enum OpCode {
     /// Materialize a value snapshot of the request-global symbol table.
     /// The result excludes the GLOBALS pseudo-variable itself.
     FetchGlobals = 157,
+    /// Read a runtime-named entry from the active PHP symbol table.
+    FetchDynamicVar = 158,
+    /// Assign a runtime-named entry in the active PHP symbol table.
+    AssignDynamicVar = 159,
+    /// Remove a runtime-named entry from the active PHP symbol table.
+    UnsetDynamicVar = 160,
+    /// Bind result(CV) to a runtime-named entry by reference.
+    BindDynamicVarRef = 161,
+    /// Bind a runtime-named entry by reference to op2(CV).
+    AssignDynamicVarRef = 162,
+    /// `global ${expr}`: bind the runtime-named local entry to the request
+    /// global entry with the same name.
+    BindDynamicGlobal = 163,
+    /// Resolve a static-property owner/name and raise PHP's runtime Error;
+    /// static properties cannot be unset even when selected dynamically.
+    UnsetStaticProp = 164,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

@@ -37,6 +37,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -48,15 +49,20 @@ impl Parser {
                     ..
                 }
                 | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
         ) {
             return Err("Invalid array append target".into());
         }
         self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
-        if self.peek() == Token::Ampersand {
+        let by_ref = if self.peek() == Token::Ampersand {
             self.advance();
-        }
+            true
+        } else {
+            false
+        };
         let expr = self.parse_expr()?;
         if let Expr::Globals { line } = target {
             return Ok(self.compile_error("Cannot append to $GLOBALS", line));
@@ -64,6 +70,7 @@ impl Parser {
         Ok(Expr::ArrayAppendAssign {
             target: Box::new(target),
             expr: Box::new(expr),
+            by_ref,
         })
     }
 
@@ -71,6 +78,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -82,6 +90,8 @@ impl Parser {
                     ..
                 }
                 | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
         ) {
             return Err("Invalid compound assignment target".into());
         }
@@ -116,7 +126,8 @@ impl Parser {
         if by_reference
             && matches!(
                 &target,
-                Expr::ArrayAccess { .. }
+                Expr::DynamicVariable { .. }
+                    | Expr::ArrayAccess { .. }
                     | Expr::PropertyAccess {
                         nullsafe: false,
                         ..
@@ -138,14 +149,17 @@ impl Parser {
                 target: expr,
             }),
             Expr::Variable { name: var, .. } => Ok(Expr::Assign { var, expr }),
-            Expr::ArrayAccess { .. }
+            Expr::DynamicVariable { .. }
+            | Expr::ArrayAccess { .. }
             | Expr::PropertyAccess {
                 nullsafe: false, ..
             }
             | Expr::DynamicPropertyAccess {
                 nullsafe: false, ..
             }
-            | Expr::StaticProperty { .. } => Ok(Expr::AssignTarget {
+            | Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. } => Ok(Expr::AssignTarget {
                 target: Box::new(target),
                 expr,
             }),
@@ -157,6 +171,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -168,6 +183,8 @@ impl Parser {
                     ..
                 }
                 | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
         ) {
             return Err("Invalid null-coalescing assignment target".into());
         }
@@ -745,6 +762,24 @@ impl Parser {
                 self.last_primary_line = Some(line);
                 Ok(Self::variable_expression(name, line))
             }
+            Token::Dollar(line) => {
+                self.advance();
+                self.last_primary_line = Some(line);
+                let name = if self.peek() == Token::LBrace {
+                    self.advance();
+                    let name = self.parse_expr()?;
+                    self.expect(&Token::RBrace)?;
+                    name
+                } else {
+                    // The outer postfix loop owns calls, dimensions and
+                    // properties. This makes `$$name()` mean `${$name}()`.
+                    self.parse_primary_atom()?
+                };
+                Ok(Expr::DynamicVariable {
+                    name: Box::new(name),
+                    line,
+                })
+            }
             Token::This(line) => {
                 self.last_primary_line = Some(line);
                 self.advance();
@@ -758,6 +793,7 @@ impl Parser {
                 let target = self.parse_power()?;
                 match target {
                     Expr::Variable { name, line } => Ok(Expr::PreInc { name, line }),
+                    Expr::DynamicVariable { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
                     Expr::Globals { line } => Ok(self.globals_modification_error(line)),
                     Expr::PropertyAccess {
                         nullsafe: false, ..
@@ -766,6 +802,8 @@ impl Parser {
                         nullsafe: false, ..
                     }
                     | Expr::StaticProperty { .. }
+                    | Expr::DynamicNamedStaticProperty { .. }
+                    | Expr::DynamicStaticProperty { .. }
                     | Expr::ArrayAccess { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
                     other => Err(format!("Invalid increment target: {other:?}")),
                 }
@@ -775,6 +813,7 @@ impl Parser {
                 let target = self.parse_power()?;
                 match target {
                     Expr::Variable { name, line } => Ok(Expr::PreDec { name, line }),
+                    Expr::DynamicVariable { .. } => Ok(Expr::PreDecTarget(Box::new(target))),
                     Expr::Globals { line } => Ok(self.globals_modification_error(line)),
                     Expr::PropertyAccess {
                         nullsafe: false, ..
@@ -783,6 +822,8 @@ impl Parser {
                         nullsafe: false, ..
                     }
                     | Expr::StaticProperty { .. }
+                    | Expr::DynamicNamedStaticProperty { .. }
+                    | Expr::DynamicStaticProperty { .. }
                     | Expr::ArrayAccess { .. } => Ok(Expr::PreDecTarget(Box::new(target))),
                     other => Err(format!("Invalid decrement target: {other:?}")),
                 }

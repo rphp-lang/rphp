@@ -375,6 +375,8 @@ impl Parser {
                                     ..
                                 }
                                 | Expr::StaticProperty { .. }
+                                | Expr::DynamicNamedStaticProperty { .. }
+                                | Expr::DynamicStaticProperty { .. }
                         ) {
                             return Err("Invalid array reference target".into());
                         }
@@ -466,6 +468,8 @@ impl Parser {
                                 Expr::Variable { .. }
                                     | Expr::PropertyAccess { .. }
                                     | Expr::StaticProperty { .. }
+                                    | Expr::DynamicNamedStaticProperty { .. }
+                                    | Expr::DynamicStaticProperty { .. }
                             ) {
                                 return Ok(Stmt::NestedArrayAssign {
                                     root,
@@ -829,6 +833,7 @@ impl Parser {
             | Token::Integer(_)
             | Token::Float(_)
             | Token::StringLiteral(_)
+            | Token::Dollar(_)
             | Token::This(_)
             | Token::Null
             | Token::True
@@ -862,8 +867,25 @@ impl Parser {
                 self.advance(); // consume 'global'
                 let mut vars = Vec::new();
                 loop {
-                    match self.advance() {
-                        Token::Variable(name, _) => vars.push(name),
+                    match self.peek() {
+                        Token::Variable(_, _) => match self.advance() {
+                            Token::Variable(name, _) => {
+                                vars.push(GlobalTarget::Variable(name))
+                            }
+                            _ => unreachable!(),
+                        },
+                        Token::Dollar(_) => {
+                            self.advance();
+                            let name = if self.peek() == Token::LBrace {
+                                self.advance();
+                                let name = self.parse_expr()?;
+                                self.expect(&Token::RBrace)?;
+                                name
+                            } else {
+                                self.parse_primary_atom()?
+                            };
+                            vars.push(GlobalTarget::Dynamic(name));
+                        }
                         other => {
                             return Err(format!(
                                 "Expected variable after 'global', got {:?}",
@@ -948,7 +970,12 @@ impl Parser {
         }
         if self.peek() == Token::Assign && matches!(expr, Expr::ArrayAccess { .. }) {
             let (root, indices) = Self::split_array_access(expr);
-            if !matches!(root, Expr::StaticProperty { .. }) {
+            if !matches!(
+                root,
+                Expr::StaticProperty { .. }
+                    | Expr::DynamicNamedStaticProperty { .. }
+                    | Expr::DynamicStaticProperty { .. }
+            ) {
                 return Err("Unsupported static array assignment target".into());
             }
             self.advance();
@@ -1009,6 +1036,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -1020,6 +1048,8 @@ impl Parser {
                     ..
                 }
                 | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
         ) {
             return Err("Invalid array append target".into());
         }
@@ -1040,6 +1070,7 @@ impl Parser {
         let valid_target = matches!(
             &target,
             Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -1051,6 +1082,8 @@ impl Parser {
                     ..
                 }
                 | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
         );
         if !valid_target {
             return Err("Invalid null-coalescing assignment target".into());
@@ -1068,6 +1101,7 @@ impl Parser {
         if !matches!(
             &target,
             Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -1079,6 +1113,8 @@ impl Parser {
                     ..
                 }
                 | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
         ) {
             return Err("Invalid compound assignment target".into());
         }
@@ -1198,10 +1234,24 @@ impl Parser {
                 target: *target,
                 expr: *expr,
             }),
-            Expr::ArrayAppendAssign { target, expr } => match *target {
+            Expr::ArrayAppendAssign {
+                target,
+                expr,
+                by_ref,
+            } if by_ref => Ok(Stmt::ExprStmt(Expr::ArrayAppendAssign {
+                target,
+                expr,
+                by_ref,
+            })),
+            Expr::ArrayAppendAssign {
+                target,
+                expr,
+                by_ref,
+            } => match *target {
                 target @ Expr::Variable { .. } => Ok(Stmt::ExprStmt(Expr::ArrayAppendAssign {
                     target: Box::new(target),
                     expr,
+                    by_ref,
                 })),
                 target => Ok(Stmt::ArrayAppend {
                     target,
@@ -1209,6 +1259,12 @@ impl Parser {
                 }),
             },
             Expr::AssignTarget { target, expr } => match *target {
+                target @ Expr::DynamicVariable { .. } => {
+                    Ok(Stmt::ExprStmt(Expr::AssignTarget {
+                        target: Box::new(target),
+                        expr,
+                    }))
+                }
                 Expr::PropertyAccess {
                     object,
                     property,
@@ -1226,6 +1282,13 @@ impl Parser {
                     property,
                     expr: *expr,
                 }),
+                target @ (Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }) => {
+                    Ok(Stmt::ExprStmt(Expr::AssignTarget {
+                        target: Box::new(target),
+                        expr,
+                    }))
+                }
                 target @ Expr::DynamicPropertyAccess {
                     nullsafe: false, ..
                 } => Ok(Stmt::ExprStmt(Expr::AssignTarget {

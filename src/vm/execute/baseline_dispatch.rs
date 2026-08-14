@@ -43,6 +43,75 @@ const FINALLY_JUMP_CLEAR: u8 = 0;
 const FINALLY_JUMP_RESUME: u8 = 1;
 const FINALLY_JUMP_START: u8 = 2;
 
+fn increment_php_alphanumeric_string(value: &str) -> String {
+    if value.is_empty() {
+        return "1".to_string();
+    }
+    let mut bytes = value.as_bytes().to_vec();
+    let mut carry = true;
+    let mut carry_prefix = None;
+    for byte in bytes.iter_mut().rev() {
+        if !carry {
+            break;
+        }
+        match *byte {
+            b'0'..=b'8' | b'a'..=b'y' | b'A'..=b'Y' => {
+                *byte += 1;
+                carry = false;
+            }
+            b'9' => {
+                *byte = b'0';
+                carry_prefix = Some(b'1');
+            }
+            b'z' => {
+                *byte = b'a';
+                carry_prefix = Some(b'a');
+            }
+            b'Z' => {
+                *byte = b'A';
+                carry_prefix = Some(b'A');
+            }
+            _ => return value.to_string(),
+        }
+    }
+    if carry {
+        bytes.insert(0, carry_prefix.unwrap_or(b'1'));
+    }
+    String::from_utf8(bytes).expect("ASCII increment preserves UTF-8")
+}
+
+fn increment_php_value(value: &Value) -> Value {
+    if let Some(number) = value.as_long() {
+        return number.checked_add(1).map_or_else(
+            || Value::double(number as f64 + 1.0),
+            Value::long,
+        );
+    }
+    match value.value_type() {
+        ValueType::Null | ValueType::Undef => Value::long(1),
+        ValueType::True | ValueType::False => value.clone(),
+        ValueType::String => {
+            let text = value.as_str().unwrap();
+            let numeric = text.trim();
+            if !numeric.is_empty() {
+                if let Ok(number) = numeric.parse::<i64>() {
+                    return number.checked_add(1).map_or_else(
+                        || Value::double(number as f64 + 1.0),
+                        Value::long,
+                    );
+                }
+                if let Ok(number) = numeric.parse::<f64>() {
+                    return Value::double(number + 1.0);
+                }
+            }
+            Value::string(increment_php_alphanumeric_string(text))
+        }
+        _ => value
+            .to_double()
+            .map_or_else(|| Value::long(1), |number| Value::double(number + 1.0)),
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn finally_jump_state(
@@ -289,35 +358,41 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::FetchCvR => {
                 // Snapshot before invoking the handler: PHP consumes null for
                 // this read even when the handler assigns the same CV.
-                let source = unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, OpType::Cv, op_array)
-                };
-                let result = unsafe {
-                    (*frame).get_op_mut(opline.result as u32, opline.result_type)
-                };
-                if !source.is_undef() {
-                    unsafe { frame_tmp_set(frame, result, source.clone()) };
-                } else {
-                    unsafe { frame_tmp_set(frame, result, Value::null()) };
-                    report_undefined_variable_read(
-                        eg,
-                        frame,
+                // SAFETY: both operands belong to the active frame/op-array;
+                // the TMP writer owns cleanup bookkeeping, and pending calls
+                // are released only while this same frame remains suspended.
+                unsafe {
+                    let source = &*(*frame).get_op_ptr(
+                        opline.op1 as u32,
+                        OpType::Cv,
                         op_array,
-                        opline,
-                        opline.op2,
-                        opline._pad & crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS != 0,
-                    )?;
-                    if let Some(exception) = eg.exception.take() {
-                        unsafe { cleanup_pending_calls(eg, frame) };
-                        match throw_in_frame(eg, frame, exception) {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue 'vm;
-                            }
-                            ThrowResult::Unhandled(exception) => {
-                                eg.exception = Some(exception);
-                                return Ok(());
+                    );
+                    let result =
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                    if !source.is_undef() {
+                        frame_tmp_set(frame, result, source.clone());
+                    } else {
+                        frame_tmp_set(frame, result, Value::null());
+                        report_undefined_variable_read(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            opline.op2,
+                            opline._pad & crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS != 0,
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            cleanup_pending_calls(eg, frame);
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
                             }
                         }
                     }
@@ -2508,184 +2583,179 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // publish it to the destination CV. Maybe-undefined reads use
                 // a TMP snapshot so a re-entrant handler cannot replace the
                 // value consumed by this operation.
-                let old = unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                };
-                let old = if old.is_undef() {
-                    Value::null()
-                } else {
-                    old.clone()
-                };
-                let new_val = if let Some(n) = old.as_long() {
-                    match n.checked_add(1) {
-                        Some(v) => Value::long(v),
-                        None => Value::double(n as f64 + 1.0),
+                // SAFETY: the compiler resolves the read, optional result and
+                // writeback CV into initialized slots of this active frame.
+                unsafe {
+                    let old = &*(*frame).get_op_ptr(
+                        opline.op1 as u32,
+                        opline.op1_type,
+                        op_array,
+                    );
+                    let old = if old.is_undef() {
+                        Value::null()
+                    } else {
+                        old.clone()
+                    };
+                    let new_val = increment_php_value(&old);
+                    if opline.result_type != OpType::Unused {
+                        let result_ptr =
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                        slot_set(result_ptr, new_val.clone());
                     }
-                } else if matches!(old.value_type(), ValueType::Null | ValueType::Undef) {
-                    Value::long(1)
-                } else if matches!(old.value_type(), ValueType::True | ValueType::False) {
-                    // PHP 8 leaves booleans unchanged for increment/decrement.
-                    old.clone()
-                } else if let Some(d) = old.to_double() {
-                    Value::double(d + 1.0)
-                } else {
-                    Value::long(1) // PHP: null++ = 1
-                };
-                if opline.result_type != OpType::Unused {
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                    unsafe { slot_set(result_ptr, new_val.clone()) };
+                    let cv_ptr = if opline.op2_type == OpType::Cv {
+                        (*frame).get_op_mut(opline.op2 as u32, OpType::Cv)
+                    } else {
+                        debug_assert_eq!(opline.op1_type, OpType::Cv);
+                        (*frame).get_op_mut(opline.op1 as u32, OpType::Cv)
+                    };
+                    slot_set(cv_ptr, new_val);
                 }
-                let cv_ptr = if opline.op2_type == OpType::Cv {
-                    unsafe { (*frame).get_op_mut(opline.op2 as u32, OpType::Cv) }
-                } else {
-                    debug_assert_eq!(opline.op1_type, OpType::Cv);
-                    unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) }
-                };
-                unsafe { slot_set(cv_ptr, new_val) };
             }
 
             OpCode::PreDec => {
-                let old = unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                };
-                let old = if old.is_undef() {
-                    Value::null()
-                } else {
-                    old.clone()
-                };
-                let cv_ptr = if opline.op2_type == OpType::Cv {
-                    unsafe { (*frame).get_op_mut(opline.op2 as u32, OpType::Cv) }
-                } else {
-                    debug_assert_eq!(opline.op1_type, OpType::Cv);
-                    unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) }
-                };
-                if let Some(n) = old.as_long() {
-                    let new_val = match n.checked_sub(1) {
-                        Some(v) => Value::long(v),
-                        None => Value::double(n as f64 - 1.0),
+                // SAFETY: the compiler resolves the read, optional result and
+                // writeback CV into initialized slots of this active frame.
+                unsafe {
+                    let old = &*(*frame).get_op_ptr(
+                        opline.op1 as u32,
+                        opline.op1_type,
+                        op_array,
+                    );
+                    let old = if old.is_undef() {
+                        Value::null()
+                    } else {
+                        old.clone()
                     };
-                    if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                        unsafe { slot_set(result_ptr, new_val.clone()) };
-                    }
-                    unsafe { slot_set(cv_ptr, new_val) };
-                } else if matches!(
-                    old.value_type(),
-                    ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False
-                ) {
-                    // PHP 8 leaves null and booleans unchanged on decrement.
-                    if opline.result_type != OpType::Unused {
-                        // SAFETY: a used decrement result names a compiler-owned,
-                        // initialized slot in the live frame.
-                        let result_ptr = unsafe {
-                            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                    let cv_ptr = if opline.op2_type == OpType::Cv {
+                        (*frame).get_op_mut(opline.op2 as u32, OpType::Cv)
+                    } else {
+                        debug_assert_eq!(opline.op1_type, OpType::Cv);
+                        (*frame).get_op_mut(opline.op1 as u32, OpType::Cv)
+                    };
+                    if let Some(n) = old.as_long() {
+                        let new_val = match n.checked_sub(1) {
+                            Some(v) => Value::long(v),
+                            None => Value::double(n as f64 - 1.0),
                         };
-                        unsafe { slot_set(result_ptr, old.clone()) };
-                    }
-                    unsafe { slot_set(cv_ptr, old) };
-                } else if let Some(d) = old.to_double() {
-                    let new_val = Value::double(d - 1.0);
-                    if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                        unsafe { slot_set(result_ptr, new_val.clone()) };
-                    }
-                    unsafe { slot_set(cv_ptr, new_val) };
-                } else {
-                    // Non-numeric values retain the legacy no-effect path.
-                    if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                        unsafe { slot_set(result_ptr, Value::null()) };
+                        if opline.result_type != OpType::Unused {
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            slot_set(result_ptr, new_val.clone());
+                        }
+                        slot_set(cv_ptr, new_val);
+                    } else if matches!(
+                        old.value_type(),
+                        ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False
+                    ) {
+                        // PHP 8 leaves null and booleans unchanged on decrement.
+                        if opline.result_type != OpType::Unused {
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            slot_set(result_ptr, old.clone());
+                        }
+                        slot_set(cv_ptr, old);
+                    } else if let Some(d) = old.to_double() {
+                        let new_val = Value::double(d - 1.0);
+                        if opline.result_type != OpType::Unused {
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            slot_set(result_ptr, new_val.clone());
+                        }
+                        slot_set(cv_ptr, new_val);
+                    } else if opline.result_type != OpType::Unused {
+                        // Non-numeric values retain the legacy no-effect path.
+                        let result_ptr =
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                        slot_set(result_ptr, Value::null());
                     }
                 }
             }
 
             OpCode::PostInc => {
                 // $var++: increment CV in place, result = old value
-                let old = unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                };
-                let old = if old.is_undef() {
-                    Value::null()
-                } else {
-                    old.clone()
-                };
-                let new_val = if let Some(n) = old.as_long() {
-                    match n.checked_add(1) {
-                        Some(v) => Value::long(v),
-                        None => Value::double(n as f64 + 1.0),
+                // SAFETY: the compiler resolves the read, optional result and
+                // writeback CV into initialized slots of this active frame.
+                unsafe {
+                    let old = &*(*frame).get_op_ptr(
+                        opline.op1 as u32,
+                        opline.op1_type,
+                        op_array,
+                    );
+                    let old = if old.is_undef() {
+                        Value::null()
+                    } else {
+                        old.clone()
+                    };
+                    let new_val = increment_php_value(&old);
+                    if opline.result_type != OpType::Unused {
+                        let result_ptr =
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                        slot_set(result_ptr, old.clone());
                     }
-                } else if matches!(old.value_type(), ValueType::Null | ValueType::Undef) {
-                    Value::long(1)
-                } else if matches!(old.value_type(), ValueType::True | ValueType::False) {
-                    old.clone()
-                } else if let Some(d) = old.to_double() {
-                    Value::double(d + 1.0)
-                } else {
-                    Value::long(1)
-                };
-                if opline.result_type != OpType::Unused {
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                    unsafe { slot_set(result_ptr, old.clone()) };
+                    let cv_ptr = if opline.op2_type == OpType::Cv {
+                        (*frame).get_op_mut(opline.op2 as u32, OpType::Cv)
+                    } else {
+                        debug_assert_eq!(opline.op1_type, OpType::Cv);
+                        (*frame).get_op_mut(opline.op1 as u32, OpType::Cv)
+                    };
+                    slot_set(cv_ptr, new_val);
                 }
-                let cv_ptr = if opline.op2_type == OpType::Cv {
-                    unsafe { (*frame).get_op_mut(opline.op2 as u32, OpType::Cv) }
-                } else {
-                    debug_assert_eq!(opline.op1_type, OpType::Cv);
-                    unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) }
-                };
-                unsafe { slot_set(cv_ptr, new_val) };
             }
 
             OpCode::PostDec => {
-                let old = unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                };
-                let old = if old.is_undef() {
-                    Value::null()
-                } else {
-                    old.clone()
-                };
-                let cv_ptr = if opline.op2_type == OpType::Cv {
-                    unsafe { (*frame).get_op_mut(opline.op2 as u32, OpType::Cv) }
-                } else {
-                    debug_assert_eq!(opline.op1_type, OpType::Cv);
-                    unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) }
-                };
-                if let Some(n) = old.as_long() {
-                    let new_val = match n.checked_sub(1) {
-                        Some(v) => Value::long(v),
-                        None => Value::double(n as f64 - 1.0),
+                // SAFETY: the compiler resolves the read, optional result and
+                // writeback CV into initialized slots of this active frame.
+                unsafe {
+                    let old = &*(*frame).get_op_ptr(
+                        opline.op1 as u32,
+                        opline.op1_type,
+                        op_array,
+                    );
+                    let old = if old.is_undef() {
+                        Value::null()
+                    } else {
+                        old.clone()
                     };
-                    if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                        unsafe { slot_set(result_ptr, old.clone()) };
-                    }
-                    unsafe { slot_set(cv_ptr, new_val) };
-                } else if matches!(
-                    old.value_type(),
-                    ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False
-                ) {
-                    if opline.result_type != OpType::Unused {
-                        // SAFETY: a used decrement result names a compiler-owned,
-                        // initialized slot in the live frame.
-                        let result_ptr = unsafe {
-                            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                    let cv_ptr = if opline.op2_type == OpType::Cv {
+                        (*frame).get_op_mut(opline.op2 as u32, OpType::Cv)
+                    } else {
+                        debug_assert_eq!(opline.op1_type, OpType::Cv);
+                        (*frame).get_op_mut(opline.op1 as u32, OpType::Cv)
+                    };
+                    if let Some(n) = old.as_long() {
+                        let new_val = match n.checked_sub(1) {
+                            Some(v) => Value::long(v),
+                            None => Value::double(n as f64 - 1.0),
                         };
-                        unsafe { slot_set(result_ptr, old.clone()) };
-                    }
-                    unsafe { slot_set(cv_ptr, old) };
-                } else if let Some(d) = old.to_double() {
-                    let new_val = Value::double(d - 1.0);
-                    if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                        unsafe { slot_set(result_ptr, old.clone()) };
-                    }
-                    unsafe { slot_set(cv_ptr, new_val) };
-                } else {
-                    // Non-numeric values retain the legacy no-effect path.
-                    if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                        unsafe { slot_set(result_ptr, Value::null()) };
+                        if opline.result_type != OpType::Unused {
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            slot_set(result_ptr, old.clone());
+                        }
+                        slot_set(cv_ptr, new_val);
+                    } else if matches!(
+                        old.value_type(),
+                        ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False
+                    ) {
+                        if opline.result_type != OpType::Unused {
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            slot_set(result_ptr, old.clone());
+                        }
+                        slot_set(cv_ptr, old);
+                    } else if let Some(d) = old.to_double() {
+                        let new_val = Value::double(d - 1.0);
+                        if opline.result_type != OpType::Unused {
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            slot_set(result_ptr, old.clone());
+                        }
+                        slot_set(cv_ptr, new_val);
+                    } else if opline.result_type != OpType::Unused {
+                        // Non-numeric values retain the legacy no-effect path.
+                        let result_ptr =
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                        slot_set(result_ptr, Value::null());
                     }
                 }
             }
@@ -2949,11 +3019,46 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 op_global_dimension(eg, frame, op_array, opline)?;
             }
 
+            OpCode::FetchDynamicVar
+            | OpCode::AssignDynamicVar
+            | OpCode::UnsetDynamicVar
+            | OpCode::BindDynamicVarRef
+            | OpCode::AssignDynamicVarRef
+            | OpCode::BindDynamicGlobal => {
+                match op_dynamic_variable(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             OpCode::AssignDim => {
                 // op1[op2] = result (value source encoded in result/result_type)
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
-                let cloned_val = val.clone();
+                let cloned_val = if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
+                    if opline.result_type != OpType::Cv {
+                        return Err(VmError::Fatal(
+                            "Reference array assignment source must be a variable".into(),
+                        ));
+                    }
+                    // SAFETY: the reference flag is emitted only for a source
+                    // CV in this live frame. Materialization retains any heap
+                    // payload and updates the frame cleanup bitmap atomically.
+                    unsafe {
+                        let source = (*frame).cv_mut(opline.result as u32) as *mut Value;
+                        materialize_reference_alias(frame, source)
+                    }
+                } else {
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
+                    val.clone()
+                };
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
                 if arr.value_type() == ValueType::Object {
@@ -3010,8 +3115,23 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::ArrayPushOp => {
                 // op1[] = op2
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let cloned_val = val.clone();
+                let cloned_val = if opline._pad & crate::vm::instruction::ARRAY_ELEMENT_REFERENCE != 0 {
+                    if opline.op2_type != OpType::Cv {
+                        return Err(VmError::Fatal(
+                            "Reference array append source must be a variable".into(),
+                        ));
+                    }
+                    // SAFETY: the reference flag is emitted only for a source
+                    // CV in this live frame. Materialization retains any heap
+                    // payload and updates the frame cleanup bitmap atomically.
+                    unsafe {
+                        let source = (*frame).cv_mut(opline.op2 as u32) as *mut Value;
+                        materialize_reference_alias(frame, source)
+                    }
+                } else {
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                    val.clone()
+                };
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
                 if arr.value_type() == ValueType::Object {
@@ -4201,6 +4321,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::AssignLateStaticProp => {
                 match op_assign_late_static_prop(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
+            OpCode::UnsetStaticProp => {
+                match op_unset_static_prop(eg, frame, op_array, opline)? {
                     ColdResult::NewFrame(nf, no) => {
                         frame = nf;
                         op_array = no;

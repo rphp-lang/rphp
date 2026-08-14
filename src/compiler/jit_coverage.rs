@@ -124,7 +124,8 @@ pub(super) fn loop_miss_reason(
             | OpCode::AssignObjDim
             | OpCode::NullSafeCheck
             | OpCode::CloneObj
-            | OpCode::UnsetObj => has_object_shape = true,
+            | OpCode::UnsetObj
+            | OpCode::UnsetStaticProp => has_object_shape = true,
 
             OpCode::InitFcall
             | OpCode::DoFcall
@@ -147,7 +148,13 @@ pub(super) fn loop_miss_reason(
             | OpCode::AssignGlobal
             | OpCode::UnsetGlobal
             | OpCode::BindGlobalRef
-            | OpCode::AssignGlobalRef => has_semantic_boundary = true,
+            | OpCode::AssignGlobalRef
+            | OpCode::FetchDynamicVar
+            | OpCode::AssignDynamicVar
+            | OpCode::UnsetDynamicVar
+            | OpCode::BindDynamicVarRef
+            | OpCode::AssignDynamicVarRef
+            | OpCode::BindDynamicGlobal => has_semantic_boundary = true,
 
             OpCode::JmpZ
             | OpCode::JmpNZ

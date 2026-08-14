@@ -742,18 +742,22 @@ impl Parser {
         matches!(
             expr,
             Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
                 | Expr::CompileError { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess { .. }
                 | Expr::DynamicPropertyAccess { .. }
                 | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
         )
     }
 
     fn into_foreach_target(&mut self, expr: Expr) -> Result<ForeachTarget, String> {
         match expr {
             Expr::Variable { name, .. } => Ok(ForeachTarget::Variable(name)),
+            target @ Expr::DynamicVariable { .. } => Ok(ForeachTarget::Target(target)),
             Expr::Globals { line } => Ok(ForeachTarget::Target(
                 self.globals_modification_error(line),
             )),
@@ -764,7 +768,9 @@ impl Parser {
             | Expr::DynamicPropertyAccess {
                 nullsafe: false, ..
             }
-            | Expr::StaticProperty { .. }) => Ok(ForeachTarget::Target(target)),
+            | Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => Ok(ForeachTarget::Target(target)),
             _ => Err("Invalid foreach assignment target".into()),
         }
     }
@@ -910,7 +916,10 @@ impl Parser {
                         name
                     ));
                 }
-            } else if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+            } else if matches!(
+                self.peek(),
+                Token::Variable(_, _) | Token::This(_) | Token::Dollar(_)
+            ) {
                 let target = self.parse_empty_dimension_target_prefix()?;
                 if matches!(self.peek(), Token::LBracket(_))
                     && self.peek_at(1) == Token::RBracket
@@ -928,6 +937,8 @@ impl Parser {
                                 ..
                             }
                             | Expr::StaticProperty { .. }
+                            | Expr::DynamicNamedStaticProperty { .. }
+                            | Expr::DynamicStaticProperty { .. }
                     ) {
                         return Err("Invalid array append destructuring target".into());
                     }
@@ -942,6 +953,9 @@ impl Parser {
                         Expr::Variable { name: var, .. } => {
                             targets.push(ListTarget::Variable(var))
                         }
+                        target @ Expr::DynamicVariable { .. } => {
+                            targets.push(ListTarget::Target(target))
+                        }
                         Expr::Globals { line } => targets.push(ListTarget::Target(
                             self.globals_modification_error(line),
                         )),
@@ -952,7 +966,11 @@ impl Parser {
                         | Expr::DynamicPropertyAccess {
                             nullsafe: false, ..
                         }
-                        | Expr::StaticProperty { .. }) => targets.push(ListTarget::Target(target)),
+                        | Expr::StaticProperty { .. }
+                        | Expr::DynamicNamedStaticProperty { .. }
+                        | Expr::DynamicStaticProperty { .. }) => {
+                            targets.push(ListTarget::Target(target))
+                        }
                         _ => return Err("Invalid destructuring assignment target".into()),
                     }
                 }

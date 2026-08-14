@@ -271,6 +271,14 @@ pub struct ExecutorGlobals {
     pub active_generator: Option<crate::vm::generator::GeneratorRef>,
     /// Global variables — shared across function calls via `global $x;`
     pub globals: HashMap<String, crate::value::Value>,
+    /// Names created only through `$$name`/`${expr}` have no compiler-owned CV
+    /// slot. Keep those rare entries in a frame-keyed cold symbol table while
+    /// statically known names continue to live directly in their CVs.
+    pub(crate) dynamic_variables: HashMap<usize, HashMap<String, crate::value::Value>>,
+    /// Included code executes in its caller's variable scope. This sparse map
+    /// aliases an include frame to the owning caller frame without changing
+    /// the ordinary ExecuteData layout.
+    pub(crate) dynamic_scope_owners: HashMap<usize, usize>,
     /// Globals modified by the last callee Return (for selective re-read by caller)
     pub dirty_globals: std::collections::HashSet<String>,
     /// Static variables — persisted across function calls: func_name → (var_name → value)
@@ -463,6 +471,8 @@ impl ExecutorGlobals {
             function_arguments: HashMap::new(),
             active_generator: None,
             globals: HashMap::new(),
+            dynamic_variables: HashMap::new(),
+            dynamic_scope_owners: HashMap::new(),
             dirty_globals: std::collections::HashSet::new(),
             static_vars: HashMap::new(),
             pending_invoke_this: None,
@@ -538,6 +548,8 @@ impl ExecutorGlobals {
             function_arguments: HashMap::new(),
             active_generator: None,
             globals: HashMap::new(),
+            dynamic_variables: HashMap::new(),
+            dynamic_scope_owners: HashMap::new(),
             dirty_globals: std::collections::HashSet::new(),
             static_vars: HashMap::new(),
             pending_invoke_this: None,
@@ -553,6 +565,30 @@ impl ExecutorGlobals {
             #[cfg(feature = "php-generics-reified")]
             static_generic_property_contracts: Vec::new(),
         }
+    }
+
+    pub(crate) fn dynamic_scope_owner(&self, frame: usize) -> usize {
+        let mut owner = frame;
+        for _ in 0..16 {
+            let Some(parent) = self.dynamic_scope_owners.get(&owner).copied() else {
+                break;
+            };
+            if parent == owner {
+                break;
+            }
+            owner = parent;
+        }
+        owner
+    }
+
+    pub(crate) fn alias_dynamic_scope(&mut self, frame: usize, owner: usize) {
+        let owner = self.dynamic_scope_owner(owner);
+        self.dynamic_scope_owners.insert(frame, owner);
+    }
+
+    pub(crate) fn discard_dynamic_scope(&mut self, frame: usize) {
+        self.dynamic_scope_owners.remove(&frame);
+        self.dynamic_variables.remove(&frame);
     }
 
     /// Reuse the existing cold packed call-side state so ordinary builds do

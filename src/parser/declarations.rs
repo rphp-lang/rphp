@@ -1017,7 +1017,8 @@ impl Parser {
             | Expr::Empty(inner)
             | Expr::Print(inner)
             | Expr::Include { path: inner, .. }
-            | Expr::BitwiseNot(inner) => {
+            | Expr::BitwiseNot(inner)
+            | Expr::DynamicVariable { name: inner, .. } => {
                 Self::collect_free_vars(inner, bound, out);
             }
             Expr::Assign { var, expr: inner } => {
@@ -1037,7 +1038,7 @@ impl Parser {
                 target,
                 source: expr,
             }
-            | Expr::ArrayAppendAssign { target, expr } => {
+            | Expr::ArrayAppendAssign { target, expr, .. } => {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);
             }
@@ -1171,6 +1172,13 @@ impl Parser {
             Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
             | Expr::FirstClassFunctionCallable(_) => {}
+            Expr::DynamicNamedStaticProperty { property, .. } => {
+                Self::collect_free_vars(property, bound, out);
+            }
+            Expr::DynamicStaticProperty { class, property } => {
+                Self::collect_free_vars(class, bound, out);
+                Self::collect_free_vars(property, bound, out);
+            }
             Expr::ArrayAppendArgument { target, .. } => {
                 Self::collect_free_vars(target, bound, out);
             }

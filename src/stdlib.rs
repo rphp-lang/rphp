@@ -6027,7 +6027,10 @@ pub(crate) fn dispatch_php_error(
         ],
     );
     eg.handling_error = false;
-    unsafe { crate::vm::execute::sync_dirty_globals_to_frame(eg, ed) };
+    // SAFETY: `ed` is the suspended active call frame supplied to this
+    // synchronous internal handler and remains live across the callback.
+    let frame = unsafe { &mut *ed };
+    crate::vm::execute::sync_dirty_globals_to_frame(eg, frame);
     let result = result?;
     Ok(eg.exception.is_some() || result.value_type() != ValueType::False)
 }
@@ -6521,17 +6524,30 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 }
 
 fn var_dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
-    var_dump_value_inner(val, indent, eg, &mut std::collections::HashSet::new())
+    var_dump_value_inner(
+        val,
+        indent,
+        eg,
+        &mut std::collections::HashSet::new(),
+        &mut std::collections::HashSet::new(),
+    )
 }
 
 fn var_dump_value_inner(
     val: &Value,
     indent: usize,
     eg: &ExecutorGlobals,
+    visited_arrays: &mut std::collections::HashSet<usize>,
     visited_objects: &mut std::collections::HashSet<usize>,
 ) -> String {
     if val.is_reference() {
-        return var_dump_value_inner(val.dereferenced(), indent, eg, visited_objects);
+        return var_dump_value_inner(
+            val.dereferenced(),
+            indent,
+            eg,
+            visited_arrays,
+            visited_objects,
+        );
     }
     let prefix = "  ".repeat(indent);
     match val.value_type() {
@@ -6545,6 +6561,12 @@ fn var_dump_value_inner(
             format!("{}string({}) \"{}\"\n", prefix, s.len(), s)
         }
         ValueType::Array => {
+            let identity = val
+                .array_identity()
+                .expect("array tag must expose array identity");
+            if !visited_arrays.insert(identity) {
+                return format!("{}*RECURSION*\n", prefix);
+            }
             let arr = val.as_array().unwrap();
             let mut out = format!("{}array({}) {{\n", prefix, arr.len());
             for (key, v) in arr.iter() {
@@ -6553,9 +6575,16 @@ fn var_dump_value_inner(
                     ArrayKey::String(k) => format!("[\"{}\"]", k),
                 };
                 out.push_str(&format!("{}  {}=>\n", prefix, key_str));
-                out.push_str(&var_dump_value_inner(v, indent + 1, eg, visited_objects));
+                out.push_str(&var_dump_value_inner(
+                    v,
+                    indent + 1,
+                    eg,
+                    visited_arrays,
+                    visited_objects,
+                ));
             }
             out.push_str(&format!("{}}}\n", prefix));
+            visited_arrays.remove(&identity);
             out
         }
         ValueType::Object => {
@@ -6593,6 +6622,7 @@ fn var_dump_value_inner(
                         &value,
                         indent + 1,
                         eg,
+                        visited_arrays,
                         visited_objects,
                     ));
                 }

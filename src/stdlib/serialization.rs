@@ -17,6 +17,7 @@ fn return_value(rv: *mut Value, value: Value) -> Result<(), VmError> {
 struct SerializeState {
     next_reference: usize,
     objects: HashMap<usize, usize>,
+    references: HashMap<usize, usize>,
 }
 
 impl SerializeState {
@@ -24,6 +25,7 @@ impl SerializeState {
         Self {
             next_reference: 1,
             objects: HashMap::new(),
+            references: HashMap::new(),
         }
     }
 }
@@ -34,9 +36,18 @@ fn serialize_value(
     eg: &mut ExecutorGlobals,
     state: &mut SerializeState,
 ) -> Result<(), VmError> {
-    let value = value.dereferenced();
     let reference = state.next_reference;
     state.next_reference += 1;
+    if let Some(identity) = value.reference_identity() {
+        if let Some(reference) = state.references.get(&identity) {
+            output.push_str("R:");
+            output.push_str(&reference.to_string());
+            output.push(';');
+            return Ok(());
+        }
+        state.references.insert(identity, reference);
+    }
+    let value = value.dereferenced();
     match value.value_type() {
         ValueType::Undef | ValueType::Null => output.push_str("N;"),
         ValueType::False => output.push_str("b:0;"),
