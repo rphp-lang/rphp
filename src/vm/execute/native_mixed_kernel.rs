@@ -499,6 +499,22 @@ unsafe fn native_quick_long_mixed_kernel(
                         target,
                         plan: scalar_plan,
                     } => builder.lower_scalar_method(target, &*scalar_plan, &call, result)?,
+                    QuickResolvedObjectOp::IndirectScalarMethod {
+                        outer_target,
+                        closure_target,
+                        plan: scalar_plan,
+                        call: indirect_call,
+                    } => {
+                        builder.lower_scalar_method(
+                            outer_target,
+                            &*scalar_plan,
+                            &indirect_call,
+                            result,
+                        )?;
+                        let completion = u8::try_from(builder.operation_count.checked_sub(1)?)
+                            .ok()?;
+                        builder.record_call(closure_target, completion)?;
+                    }
                     QuickResolvedObjectOp::ObjectLongMethod {
                         target,
                         user,
@@ -902,7 +918,8 @@ unsafe fn native_quick_long_mixed_kernel(
         && !has_indexed_store
         && !has_virtual_pipeline
         && !has_property_binding
-        && !has_property_read)
+        && !has_property_read
+        && !has_typed_method)
         || (!has_typed_method
             && !has_property_read
             && !has_hash_load

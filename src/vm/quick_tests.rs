@@ -17,4 +17,5 @@ mod tests {
     include!("quick_tests/scalar_loops.rs");
     include!("quick_tests/array_and_hash_loops.rs");
     include!("quick_tests/dynamic_control_flow.rs");
+    include!("quick_tests/direct_call_regions.rs");
 }

@@ -7,8 +7,9 @@ use crate::vm::function::{
     BinaryLongRecursionPlan, CallPlan, CallStrategy, CleanupMode, ComposedScalarDoubleFunctionPlan,
     ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
     ComposedTypedLongFunctionPlan, ComposedTypedLongOp, DirectInternalFunctionHandler, FrameLayout,
-    FunctionCommon, FunctionType, HotStatus, InternalFunction, InternalFunctionHandler,
-    LongPlanProperty, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, LongRecursiveBase,
+    FunctionCommon, FunctionType, HotStatus, IndirectScalarLongCallable,
+    IndirectScalarLongFunctionPlan, InternalFunction, InternalFunctionHandler, LongPlanProperty,
+    LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, LongRecursiveBase,
     LongRecursiveCombine, LongRecursiveCondition, ObjectArrayEntry, ObjectArrayFunctionPlan,
     ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongConditionalAdjustment,
     ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongModuloAnySelect,
@@ -987,6 +988,7 @@ pub fn make_user_function_full(
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
+        indirect_scalar_long_plan: None,
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
     };
@@ -1008,6 +1010,7 @@ pub fn make_user_function_full(
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
+    function.indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
     function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
 }
@@ -1146,6 +1149,7 @@ pub fn make_user_function_typed(
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
+        indirect_scalar_long_plan: None,
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
     };
@@ -1167,6 +1171,7 @@ pub fn make_user_function_typed(
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
+    function.indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
     function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
 }
@@ -4355,6 +4360,150 @@ fn build_composed_scalar_long_function_plan(
     None
 }
 
+/// Recognize a bounded wrapper around one dynamic closure call. This plan does
+/// not assume which closure will occupy the source: the live Value, exact
+/// function signature, empty initial capture envelope and scalar leaf plan are
+/// all guarded when a typed region is entered.
+fn build_indirect_scalar_long_function_plan(
+    function: &UserFunction,
+) -> Option<Box<IndirectScalarLongFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    if !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+        || common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || public_args != common.sig.required_num_args
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || op_array.instructions.len() > 10
+        || !matches!(
+            common.sig.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+        )
+    {
+        return None;
+    }
+
+    let mut ip = 0usize;
+    let callable = if let Some(fetch) = op_array.instructions.get(ip)
+        && fetch.opcode == OpCode::FetchObjR
+        && common.sig.this_offset == 1
+        && fetch.op1_type == OpType::Cv
+        && fetch.op1 == 0
+        && fetch.op2_type == OpType::Const
+        && op_array
+            .literals
+            .get(fetch.op2 as usize)
+            .and_then(Value::as_str)
+            .is_some()
+        && matches!(fetch.result_type, OpType::Tmp | OpType::Var)
+    {
+        let cache_ip = u16::try_from(ip).ok()?;
+        let mut callable_type = fetch.result_type;
+        let mut callable_slot = fetch.result;
+        ip += 1;
+        if let Some(assign) = op_array.instructions.get(ip)
+            && assign.opcode == OpCode::AssignCv
+            && assign.op1_type == OpType::Cv
+            && assign.op2_type == callable_type
+            && assign.op2 == callable_slot
+        {
+            let destination = u32::from(assign.op1);
+            let argument_start = common.sig.this_offset;
+            let argument_end = argument_start + public_args;
+            if destination < argument_start
+                || (destination >= argument_start && destination < argument_end)
+            {
+                return None;
+            }
+            callable_type = OpType::Cv;
+            callable_slot = assign.op1;
+            ip += 1;
+        }
+        let initializer = op_array.instructions.get(ip)?;
+        if initializer.opcode != OpCode::InitDynamicCall
+            || initializer.op1_type != callable_type
+            || initializer.op1 != callable_slot
+        {
+            return None;
+        }
+        IndirectScalarLongCallable::ReceiverProperty { cache_ip }
+    } else {
+        let initializer = op_array.instructions.get(ip)?;
+        if initializer.opcode != OpCode::InitDynamicCall || initializer.op1_type != OpType::Cv {
+            return None;
+        }
+        let callable_cv = u32::from(initializer.op1);
+        let callable_index = callable_cv.checked_sub(common.sig.this_offset)?;
+        if callable_index >= public_args {
+            return None;
+        }
+        IndirectScalarLongCallable::PublicArgument(u8::try_from(callable_index).ok()?)
+    };
+
+    let initializer = op_array.instructions.get(ip)?;
+    let argument_count = usize::try_from(initializer.extended_value).ok()?;
+    if argument_count > SCALAR_LONG_PLAN_MAX_ARGS as usize {
+        return None;
+    }
+    let empty_temporaries = HashMap::new();
+    let mut arguments = Vec::with_capacity(argument_count);
+    for argument_index in 0..argument_count {
+        let send = op_array.instructions.get(ip + 1 + argument_index)?;
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as usize != argument_index
+        {
+            return None;
+        }
+        let source = scalar_long_source(
+            op_array,
+            &empty_temporaries,
+            common.sig.this_offset,
+            public_args,
+            send.op1_type,
+            send.op1,
+        )?;
+        if let ScalarLongSource::Input(index) = source
+            && !matches!(
+                common
+                    .sig
+                    .param_type_hints
+                    .get(index as usize)
+                    .unwrap_or(&ParamTypeHint::None),
+                ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+            )
+        {
+            return None;
+        }
+        arguments.push(source);
+    }
+
+    let do_ip = ip + 1 + argument_count;
+    let do_fcall = op_array.instructions.get(do_ip)?;
+    let return_instruction = op_array.instructions.get(do_ip + 1)?;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+        || return_instruction.opcode != OpCode::Return
+        || return_instruction.extended_value == 0
+        || return_instruction.op1_type != do_fcall.result_type
+        || return_instruction.op1 != do_fcall.result
+        || op_array.instructions[do_ip + 2..]
+            .iter()
+            .any(|instruction| {
+                instruction.opcode != OpCode::Return || instruction.extended_value != 0
+            })
+    {
+        return None;
+    }
+
+    Some(Box::new(IndirectScalarLongFunctionPlan {
+        public_args: public_args as u8,
+        callable,
+        arguments: arguments.into_boxed_slice(),
+    }))
+}
+
 /// Recognize a typed composed body whose borrowed String results are consumed
 /// by scalar operations such as `strlen`. Runtime still guards every leaf and
 /// falls back before materializing or observing a speculative value.
@@ -5306,6 +5455,7 @@ pub fn finalize_user_method(
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
+    function.indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
 
     function
 }

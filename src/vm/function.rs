@@ -876,6 +876,26 @@ pub struct ScalarLongCall {
     pub arguments: Box<[ScalarLongSource]>,
 }
 
+/// Stable source of an indirect callable inside a compiler-proven scalar
+/// wrapper. The shared plan vocabulary can name either a closure-valued public
+/// argument or a declared property of the method receiver; consumers resolve
+/// both through the same frame-free Long callback ABI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndirectScalarLongCallable {
+    PublicArgument(u8),
+    ReceiverProperty { cache_ip: u16 },
+}
+
+/// Compile-time proof for a small wrapper whose only observable action is one
+/// dynamic closure invocation and return. Runtime still guards the closure
+/// identity, signature, capture envelope and scalar body before executing it
+/// without either canonical frame.
+pub struct IndirectScalarLongFunctionPlan {
+    pub public_args: u8,
+    pub callable: IndirectScalarLongCallable,
+    pub arguments: Box<[ScalarLongSource]>,
+}
+
 /// String result produced by an earlier typed operation. String values remain
 /// separate from Long temporaries even though both use the operation index as
 /// their compact SSA identity.
@@ -1366,6 +1386,7 @@ pub struct UserFunction {
     pub scalar_string_plan: Option<Box<ScalarStringFunctionPlan>>,
     pub composed_scalar_long_plan: Option<Box<ComposedScalarLongFunctionPlan>>,
     pub composed_typed_long_plan: Option<Box<ComposedTypedLongFunctionPlan>>,
+    pub indirect_scalar_long_plan: Option<Box<IndirectScalarLongFunctionPlan>>,
     /// Last one- or two-class argument tuple that satisfied this declaration.
     /// Stable class IDs make repeated monomorphic DTO/service calls a single
     /// integer guard while new subclasses retain the canonical hierarchy check.

@@ -281,6 +281,7 @@ workloads=(
     benches/bench_string.php
     benches/bench_array.php
     benches/bench_closure_copy.php
+    benches/holdout_closure_service_pipeline.php
     benches/bench_closure_storage.php
     benches/bench_declared_object_lifecycle.php
 )
@@ -289,6 +290,7 @@ labels=(
     dynamic_string_read dynamic_string_cv_read mixed_string_update
     packed_foreach hash_foreach string_append array_build_read
     closure_copy
+    closure_service_holdout
     closure_storage
     declared_object_lifecycle
 )
