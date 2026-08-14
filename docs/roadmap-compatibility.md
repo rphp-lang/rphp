@@ -47,19 +47,20 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `c92a29e` against
-php-src 8.2.33 `651db3e`: 1,083 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with two exact additions and no lost pass relative to
-`caf5590`. Unkeyed spread in short, `list()`, nested and `foreach`
-destructuring is preserved through parsing and rejected at compile time with
-PHP's located diagnostic, before the right-hand side can execute; keyed spread
-keeps its separate parse-error boundary. The change advances
-`Zend/tests/array_unpack/in_destructuring.phpt` and
-`array_unpack/in_destructuring_2.phpt`. The remaining three failures in that
-directory expose general diagnostic-formatting boundaries. The corpus retains
-zero crashes and zero timeouts. The Symfony S3 slice remains green against PHP
-8.2.33 through cold, cached, deleted-cache, malformed-cache and concurrent
-publication transitions, including exact health and missing-route results.
+The current pinned PHP 8.2 differential baseline is RPHP `e0d94aa` against
+php-src 8.2.33 `651db3e`: 1,084 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with one exact addition and no lost pass relative to
+`c92a29e`. Array unpack preserves the source line of `...` and rejects
+statically known scalar expressions, magic and built-in constants, and known
+scalar class constants during compilation with PHP's located fatal diagnostic.
+Ordinary user constants, variables and constructed objects remain catchable
+runtime errors. The change advances
+`Zend/tests/array_unpack/unpack_invalid_type_compile_time.phpt`; the two
+remaining failures in that directory expose general uncaught-Throwable and
+undefined-variable warning boundaries. The corpus retains zero crashes and
+zero timeouts. The Symfony S3 slice remains green against PHP 8.2.33 through
+cold, cached, deleted-cache, malformed-cache and concurrent publication
+transitions, including exact health and missing-route results.
 Runtime-resolved method/static/dynamic calls, by-reference returns, indirect
 `ArrayAccess` and `WeakMap` appends, general uncaught stack-trace formatting,
 variable-variable syntax, generic undefined-variable warnings, delayed class
