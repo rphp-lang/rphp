@@ -2915,8 +2915,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let array = (&mut *array_ptr).as_array_mut().ok_or_else(|| {
                         VmError::Fatal("Cannot append a reference to a non-array".into())
                     })?;
-                    let target =
-                        (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                    debug_assert_eq!(opline.result_type, OpType::Cv);
+                    // Reference assignment rebinds the CV itself. Following an
+                    // existing reference here would replace the caller's value
+                    // and leave this local bound to the old cell.
+                    let target = (*frame).cv_mut(opline.result as u32) as *mut Value;
                     frame_slot_set(frame, target, Value::owned_reference(Value::null()));
                     array.push((*target).clone_owned_reference_alias());
                 }
@@ -2987,8 +2990,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
-            OpCode::ForeachNext | OpCode::ForeachNextRef => {
-                match op_foreach_next(eg, frame, op_array, opline)? {
+            OpCode::ForeachNext => {
+                match op_foreach_next::<true, false>(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => continue,
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
+                }
+            }
+
+            OpCode::ForeachNextPlain => {
+                match op_foreach_next::<false, false>(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => continue,
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
+                }
+            }
+
+            OpCode::ForeachNextRef => {
+                match op_foreach_next::<false, true>(eg, frame, op_array, opline)? {
                     ColdResult::Continue => continue,
                     ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
                     ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }

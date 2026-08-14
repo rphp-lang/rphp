@@ -95,6 +95,7 @@ pub(super) fn loop_miss_reason(
             | OpCode::UnsetDim
             | OpCode::ForeachInit
             | OpCode::ForeachNext => has_array_shape = true,
+            OpCode::ForeachNextPlain => has_array_shape = true,
 
             OpCode::Concat
             | OpCode::AssignConcat

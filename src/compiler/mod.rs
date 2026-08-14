@@ -84,6 +84,90 @@ impl OpArray {
         &self.literals
     }
 
+    /// Split by-value foreach writes after the complete function body is
+    /// available. CVs that can become PHP references keep the canonical
+    /// assignment-aware opcode; proven frame-local CVs use a branch-free
+    /// opcode without weakening reference semantics.
+    pub fn specialize_foreach_target_writes(
+        &mut self,
+        ref_args: u64,
+        this_offset: u32,
+        reference_cvs: &[u32],
+    ) {
+        let mut may_reference = vec![false; self.num_cvs as usize];
+        for parameter in 0..64 {
+            if ref_args & (1u64 << parameter) != 0 {
+                let cv = this_offset + parameter;
+                if let Some(slot) = may_reference.get_mut(cv as usize) {
+                    *slot = true;
+                }
+            }
+        }
+        for &cv in reference_cvs {
+            if let Some(slot) = may_reference.get_mut(cv as usize) {
+                *slot = true;
+            }
+        }
+        for &(cv, _) in self.global_vars.iter().chain(&self.static_vars) {
+            if let Some(slot) = may_reference.get_mut(cv as usize) {
+                *slot = true;
+            }
+        }
+
+        for instruction in &self.instructions {
+            let mut mark = |cv: u16| {
+                if let Some(slot) = may_reference.get_mut(cv as usize) {
+                    *slot = true;
+                }
+            };
+            match instruction.opcode {
+                OpCode::BindGlobal | OpCode::BindStatic => mark(instruction.op1),
+                OpCode::SendRef | OpCode::SendVarEx | OpCode::SendNamed
+                    if instruction.op1_type == OpType::Cv =>
+                {
+                    mark(instruction.op1)
+                }
+                OpCode::BindArrayAppendRef
+                | OpCode::BindObjPropRef
+                | OpCode::BindArrayDimRef
+                | OpCode::BindGlobalRef
+                    if instruction.result_type == OpType::Cv =>
+                {
+                    mark(instruction.result)
+                }
+                OpCode::AssignGlobalRef if instruction.op2_type == OpType::Cv => {
+                    mark(instruction.op2)
+                }
+                OpCode::ClosureUseVar
+                    if instruction.op2_type == OpType::Cv
+                        && instruction._pad & crate::vm::instruction::CLOSURE_USE_REFERENCE
+                            != 0 =>
+                {
+                    mark(instruction.op2)
+                }
+                OpCode::ForeachNextRef => mark(instruction.extended_value as u16),
+                // Included code shares the current symbol table and may bind
+                // any visible local by reference.
+                OpCode::Include => may_reference.fill(true),
+                _ => {}
+            }
+        }
+
+        for instruction in &mut self.instructions {
+            if matches!(
+                instruction.opcode,
+                OpCode::ForeachNext | OpCode::ForeachNextPlain
+            ) {
+                let value_cv = (instruction.extended_value & 0xffff) as usize;
+                instruction.opcode = if may_reference.get(value_cv).copied().unwrap_or(true) {
+                    OpCode::ForeachNext
+                } else {
+                    OpCode::ForeachNextPlain
+                };
+            }
+        }
+    }
+
     /// Rewrite Tmp/Var operand indices from relative (0-based tmp index) to
     /// absolute slot offset (num_cvs + tmp_index). After this pass, runtime
     /// can access Tmp slots as `frame_base.add(operand)` without loading num_cvs.
@@ -780,6 +864,7 @@ pub fn make_user_function_full(
     variadic_cv_index: u32,
     ref_args: u64,
 ) -> UserFunction {
+    op_array.specialize_foreach_target_writes(ref_args, 0, &[]);
     op_array.resolve_tmp_offsets();
     op_array.specialize_opcodes();
     if op_array.cache.len() != op_array.instructions.len() {
@@ -909,6 +994,7 @@ pub fn make_user_function_typed(
     param_names: Vec<String>,
     return_type_hint: ParamTypeHint,
 ) -> UserFunction {
+    op_array.specialize_foreach_target_writes(ref_args, 0, &[]);
     op_array.resolve_tmp_offsets();
     op_array.specialize_opcodes_with_hints(&param_type_hints);
     if op_array.cache.len() != op_array.instructions.len() {
@@ -1109,7 +1195,7 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             }
             // Foreach target placement is intentionally conservative until
             // its destination CV is explicit in the ownership analysis.
-            OpCode::ForeachNext => return 0,
+            OpCode::ForeachNext | OpCode::ForeachNextPlain => return 0,
             // A direct return transfers a Value out of the frame. Aliases made
             // through another CV are owned clones and remain eligible.
             OpCode::Return if instruction.op1_type == OpType::Cv => {
@@ -5094,6 +5180,11 @@ pub fn finalize_user_method(
     is_static: bool,
 ) -> UserFunction {
     function.common.sig.this_offset = 1;
+    function.op_array.specialize_foreach_target_writes(
+        function.common.sig.ref_args,
+        function.common.sig.this_offset,
+        &function.reference_cvs,
+    );
 
     // A non-static method recovers its late-called class directly from the
     // receiver in CV 0. It never needs the sparse static-call sidecar, so

@@ -81,7 +81,7 @@ pub fn detect_foreach_long_accumulate_loop(
     let assign = op_array.instructions[header_ip + 3];
     let backedge = op_array.instructions[backedge_ip];
 
-    if next.opcode != OpCode::ForeachNext
+    if !matches!(next.opcode, OpCode::ForeachNext | OpCode::ForeachNextPlain)
         || next.op1_type != OpType::Tmp
         || next.op2_type != OpType::Tmp
         || next.result_type != OpType::Tmp

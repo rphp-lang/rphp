@@ -1,6 +1,32 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 #[inline]
+fn assign_foreach_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
+    // SAFETY: `cv` is compiler-allocated in the active frame. Assignment may
+    // follow a reference target outside the frame, so only direct CV writes use
+    // frame bitmap bookkeeping.
+    unsafe {
+        let slot = (*frame).cv_mut(cv);
+        if (*slot).is_reference() {
+            slot_set((*slot).as_ref_ptr(), value);
+        } else {
+            frame_slot_set(frame, slot, value);
+        }
+    }
+}
+
+#[inline]
+fn bind_foreach_value_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
+    // SAFETY: `cv` is compiler-allocated in the active frame. A by-reference
+    // foreach value rebinds this CV itself, so the destination remains a frame
+    // slot and must use frame bitmap bookkeeping.
+    unsafe {
+        let slot = (*frame).cv_mut(cv);
+        frame_slot_set(frame, slot, value);
+    }
+}
+
+#[inline]
 fn flush_foreach_reference_value(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
@@ -178,7 +204,7 @@ fn op_foreach_init<'a>(
 }
 
 #[inline(never)]
-fn op_foreach_next<'a>(
+fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_LOOP: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
@@ -187,7 +213,7 @@ fn op_foreach_next<'a>(
     let val_cv = (opline.extended_value & 0xFFFF) as u32;
     let key_encoded = (opline.extended_value >> 16) as u32;
 
-    if opline.opcode == OpCode::ForeachNextRef {
+    if BY_REFERENCE_LOOP {
         flush_foreach_reference_value(
             frame,
             op_array,
@@ -228,13 +254,15 @@ fn op_foreach_next<'a>(
         let gen_data = gen_ref.borrow();
         if gen_data.state != crate::vm::generator::GeneratorState::Completed {
             // Write current value to value_cv
-            let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-            unsafe { frame_slot_set(frame, val_ptr, gen_data.value.clone()) };
+            if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
+                bind_foreach_value_cv(frame, val_cv, gen_data.value.clone());
+            } else {
+                assign_foreach_cv(frame, val_cv, gen_data.value.clone());
+            }
             // Write key if requested
             if key_encoded > 0 {
                 let key_cv = key_encoded - 1;
-                let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                unsafe { frame_slot_set(frame, key_ptr, gen_data.key.clone()) };
+                assign_foreach_cv(frame, key_cv, gen_data.key.clone());
             }
             drop(gen_data);
             // Increment position
@@ -260,20 +288,25 @@ fn op_foreach_next<'a>(
                 if key_encoded > 0 {
                     // Need both key and value — use get_at()
                     let (val, key) = arr.get_at(pos).unwrap();
-                    let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                    unsafe { frame_slot_set(frame, val_ptr, val.clone()) };
+                    if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
+                        bind_foreach_value_cv(frame, val_cv, val.clone());
+                    } else {
+                        assign_foreach_cv(frame, val_cv, val.clone());
+                    }
                     let key_cv = key_encoded - 1;
                     let key_val = match key {
                         ArrayKey::Int(k) => Value::long(k),
                         ArrayKey::String(k) => Value::string(k),
                     };
-                    let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                    unsafe { frame_slot_set(frame, key_ptr, key_val) };
+                    assign_foreach_cv(frame, key_cv, key_val);
                 } else {
                     // Only value needed — use get_value_at() (avoids key clone)
                     let val = arr.get_value_at(pos).unwrap();
-                    let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                    unsafe { frame_slot_set(frame, val_ptr, val.clone()) };
+                    if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
+                        bind_foreach_value_cv(frame, val_cv, val.clone());
+                    } else {
+                        assign_foreach_cv(frame, val_cv, val.clone());
+                    }
                 }
                 let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
                 unsafe {

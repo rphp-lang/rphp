@@ -504,6 +504,12 @@ fn check_type_hint_in_scopes(
             })
         }
         ParamTypeHint::ClassName(class_name) => {
+            if class_name.eq_ignore_ascii_case("false") {
+                return val.value_type() == ValueType::False;
+            }
+            if class_name.eq_ignore_ascii_case("true") {
+                return val.value_type() == ValueType::True;
+            }
             if val.value_type() == ValueType::Closure
                 && (class_name.eq_ignore_ascii_case("Closure")
                     || class_name.eq_ignore_ascii_case("object"))

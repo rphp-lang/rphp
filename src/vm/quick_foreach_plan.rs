@@ -121,7 +121,7 @@ pub fn detect_foreach_object_property_accumulate_loop(
     let next = op_array.instructions[header_ip];
     let branch = op_array.instructions[header_ip + 1];
     let backedge = op_array.instructions[backedge_ip];
-    if next.opcode != OpCode::ForeachNext
+    if !matches!(next.opcode, OpCode::ForeachNext | OpCode::ForeachNextPlain)
         || next.op1_type != OpType::Tmp
         || next.op2_type != OpType::Tmp
         || next.result_type != OpType::Tmp

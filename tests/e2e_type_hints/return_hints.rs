@@ -444,6 +444,34 @@ try { f(); } catch (TypeError $e) { echo "caught"; }
 }
 
 #[test]
+fn literal_false_in_callable_union_is_not_namespaced() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace Feature;
+
+function choose(bool $enabled): callable|false {
+    if (!$enabled) {
+        return false;
+    }
+    return fn() => 'called';
+}
+
+function passThrough(callable|false $value): callable|false {
+    return $value;
+}
+
+echo passThrough(choose(false)) === false ? 'false' : 'bad';
+echo '|';
+$callback = passThrough(choose(true));
+echo $callback();
+"#,
+        ),
+        "false|called"
+    );
+}
+
+#[test]
 fn test_union_param_types() {
     assert_eq!(
         run_php(

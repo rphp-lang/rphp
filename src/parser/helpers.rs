@@ -869,7 +869,7 @@ impl Parser {
                         name
                     ));
                 }
-            } else if let Token::Variable(_, _) = self.peek() {
+            } else if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
                 let target = self.parse_empty_dimension_target_prefix()?;
                 if matches!(self.peek(), Token::LBracket(_))
                     && self.peek_at(1) == Token::RBracket
@@ -895,12 +895,18 @@ impl Parser {
                     targets.push(ListTarget::AppendTarget(target));
                 } else {
                     match target {
+                        Expr::Variable(var) if var == "this" => {
+                            return Err("Cannot re-assign $this".into());
+                        }
                         Expr::Variable(var) => targets.push(ListTarget::Variable(var)),
                         Expr::Globals { line } => targets.push(ListTarget::Target(
                             self.globals_modification_error(line),
                         )),
                         target @ (Expr::ArrayAccess { .. }
                         | Expr::PropertyAccess {
+                            nullsafe: false, ..
+                        }
+                        | Expr::DynamicPropertyAccess {
                             nullsafe: false, ..
                         }
                         | Expr::StaticProperty { .. }) => targets.push(ListTarget::Target(target)),

@@ -1,6 +1,48 @@
 /// E2E tests: foreach loops — value only, key-value, nested, break/continue, edge cases.
 mod common;
 use common::run_php;
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
+use rphp::vm::opcode::OpCode;
+
+fn foreach_opcodes(source: &str, function_name: &str) -> Vec<OpCode> {
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    result
+        .functions
+        .iter()
+        .find(|(name, _)| name == function_name)
+        .unwrap()
+        .1
+        .op_array
+        .instructions
+        .iter()
+        .map(|instruction| instruction.opcode)
+        .collect()
+}
+
+#[test]
+fn foreach_specialization_keeps_reference_capable_targets_canonical() {
+    let source = r#"<?php
+function plain($values) {
+    foreach ($values as $value) {}
+}
+function parameter(&$value, $values) {
+    foreach ($values as $value) {}
+}
+function captured($values) {
+    $value = null;
+    $closure = function () use (&$value) {};
+    foreach ($values as $value) {}
+}
+"#;
+
+    assert!(foreach_opcodes(source, "plain").contains(&OpCode::ForeachNextPlain));
+    assert!(foreach_opcodes(source, "parameter").contains(&OpCode::ForeachNext));
+    assert!(foreach_opcodes(source, "captured").contains(&OpCode::ForeachNext));
+}
 
 #[test]
 fn iterator_aggregate_resolves_nested_aggregates_and_generator_keys() {
@@ -257,6 +299,25 @@ fn test_e2e_foreach_by_reference_nested_object_array() {
 }
 
 #[test]
+fn by_value_foreach_updates_a_reference_parameter() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function overwrite(&$slot) {
+    foreach (['after'] as $slot) {
+    }
+}
+
+$value = 'before';
+overwrite($value);
+echo $value;
+"#,
+        ),
+        "after"
+    );
+}
+
+#[test]
 fn test_e2e_nested_object_array_append() {
     assert_eq!(
         run_php(
@@ -273,6 +334,80 @@ fn test_e2e_bind_appended_nested_array_element_reference() {
             "<?php class Store { public $items = []; } function build() { $store = new Store(); $slot = &$store->items['group'][]; $store->items['group'][] = 'next'; $slot = 'bound'; return $store->items; } $items = build(); echo $items['group'][0], ',', $items['group'][1];"
         ),
         "bound,next"
+    );
+}
+
+#[test]
+fn binding_an_appended_element_rebinds_a_reference_parameter_locally() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function appendThrough(&$slot, &$items) {
+    $slot = &$items[];
+    $slot = 'new';
+}
+
+$outside = 'old';
+$items = [];
+appendThrough($outside, $items);
+echo $outside, '|', $items[0];
+"#,
+        ),
+        "old|new"
+    );
+}
+
+#[test]
+fn by_reference_foreach_rebinds_lazy_listener_captures() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+final class Listener {
+    public function __construct(private string $name) {}
+    public function invoke(object $event): void { echo $this->name, "\n"; }
+}
+
+final class Dispatcher {
+    private array $listeners = [];
+    private array $optimized;
+
+    public function __construct() {
+        $this->optimized = [];
+        $this->listeners['event'][32][] = [fn () => new Listener('one'), 'invoke'];
+        $this->listeners['event'][16][] = [fn () => new Listener('two'), 'invoke'];
+        $this->listeners['event'][100][] = [fn () => new Listener('three'), 'invoke'];
+    }
+
+    public function dispatch(object $event, string $eventName): void {
+        $listeners = $this->optimized[$eventName]
+            ?? $this->optimizeListeners($eventName);
+        foreach ($listeners as $listener) {
+            $listener($event, $eventName, $this);
+        }
+    }
+
+    private function optimizeListeners(string $eventName): array {
+        krsort($this->listeners[$eventName]);
+        $this->optimized[$eventName] = [];
+        foreach ($this->listeners[$eventName] as &$listeners) {
+            foreach ($listeners as &$listener) {
+                $closure = &$this->optimized[$eventName][];
+                $closure = static function (...$args) use (&$listener, &$closure): void {
+                    if ($listener[0] instanceof Closure) {
+                        $listener[0] = $listener[0]();
+                    }
+                    ($closure = $listener(...))(...$args);
+                };
+            }
+        }
+        return $this->optimized[$eventName];
+    }
+}
+
+(new Dispatcher())->dispatch(new stdClass(), 'event');
+"#,
+        ),
+        "three\none\ntwo\n",
     );
 }
 

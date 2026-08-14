@@ -80,6 +80,9 @@ pub enum OpCode {
     ForeachNextRef = 82, // Fetch by-reference loop value, flushing the previous value first
     ForeachWriteback = 83, // Flush the current by-reference loop value without advancing
     BindArrayAppendRef = 84, // Append null and bind result(CV) to the new element
+    /// By-value foreach whose destination CV is proven never to become a PHP
+    /// reference. This keeps the common frame-local write branch-free.
+    ForeachNextPlain = 85,
 
     // Exceptions
     Throw = 90, // Throw exception: op1 = value to throw

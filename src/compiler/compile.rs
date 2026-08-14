@@ -635,6 +635,7 @@ fn propagate_declared_scalar_types(
                 | OpCode::QuickLongLoopJmp
                 | OpCode::ForeachInit
                 | OpCode::ForeachNext
+                | OpCode::ForeachNextPlain
                 | OpCode::BindDefaultParam
         )
     });
@@ -679,7 +680,7 @@ fn propagate_declared_scalar_types(
                     *aliased = true;
                 }
             }
-            OpCode::ForeachNext => directly_mutated_params.fill(true),
+            OpCode::ForeachNext | OpCode::ForeachNextPlain => directly_mutated_params.fill(true),
             _ => {}
         }
     }
@@ -733,7 +734,7 @@ fn propagate_declared_scalar_types(
                     *slot = None;
                 }
             }
-            OpCode::ForeachNext => {
+            OpCode::ForeachNext | OpCode::ForeachNextPlain => {
                 slots.fill(KnownScalarType::Unknown);
                 receiver_classes.fill(None);
             }
@@ -2280,6 +2281,11 @@ impl Compiler {
         let method_facts = declared_method_facts(&self.class_defs);
         for (_, function) in &mut self.functions {
             let signature = &function.common.sig;
+            function.op_array.specialize_foreach_target_writes(
+                signature.ref_args,
+                signature.this_offset,
+                &function.reference_cvs,
+            );
             propagate_declared_scalar_types(
                 &mut function.op_array,
                 &function.reference_cvs,
@@ -2299,6 +2305,11 @@ impl Compiler {
             let parent_class = class.parent.clone();
             for (_, _, _, _, method) in &mut class.methods {
                 let signature = &method.common.sig;
+                method.op_array.specialize_foreach_target_writes(
+                    signature.ref_args,
+                    signature.this_offset,
+                    &method.reference_cvs,
+                );
                 propagate_declared_scalar_types(
                     &mut method.op_array,
                     &method.reference_cvs,
@@ -2949,7 +2960,7 @@ impl Compiler {
             Some(TypeHint::ClassName(name)) => {
                 // `self` and `parent` are special PHP pseudo-types — don't resolve through namespaces
                 match name.as_str() {
-                    "self" | "parent" | "static" | "object" | "iterable" => {
+                    "self" | "parent" | "static" | "object" | "iterable" | "false" | "true" => {
                         ParamTypeHint::ClassName(name.clone())
                     }
                     _ => ParamTypeHint::ClassName(self.resolve_name(name)),
@@ -6167,6 +6178,22 @@ impl Compiler {
                             assign.op1_type = object_type;
                             assign.op2 = property;
                             assign.op2_type = OpType::Const;
+                            assign.result = fetch_tmp;
+                            assign.result_type = OpType::Tmp;
+                            self.instructions.push(assign);
+                        }
+                        Expr::DynamicPropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                        } => {
+                            let (object, object_type) = self.compile_expr(object);
+                            let (property, property_type) = self.compile_expr(property);
+                            let mut assign = Instruction::new(OpCode::AssignObjProp);
+                            assign.op1 = object;
+                            assign.op1_type = object_type;
+                            assign.op2 = property;
+                            assign.op2_type = property_type;
                             assign.result = fetch_tmp;
                             assign.result_type = OpType::Tmp;
                             self.instructions.push(assign);

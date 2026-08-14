@@ -55,7 +55,10 @@ fn instruction_writes_cv(instruction: crate::vm::instruction::Instruction, cv: u
     if instruction.result_type == OpType::Cv && instruction.result == cv {
         return true;
     }
-    if instruction.opcode == OpCode::ForeachNext {
+    if matches!(
+        instruction.opcode,
+        OpCode::ForeachNext | OpCode::ForeachNextPlain
+    ) {
         let value_cv = instruction.extended_value as u16;
         let encoded_key = (instruction.extended_value >> 16) as u16;
         return value_cv == cv || (encoded_key != 0 && encoded_key - 1 == cv);

@@ -17,3 +17,30 @@ fn list_assignment_supports_array_append_targets() {
         "Probe:before,42:7"
     );
 }
+
+#[test]
+fn destructuring_assigns_to_this_property_targets() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class AssignmentSink {
+    public string $left = '';
+    public string $right = '';
+    public string $slot = 'right';
+    public array $bag = [];
+
+    public function fill(): void {
+        [$this->left, $this->bag['entry']] = ['alpha', 'nested'];
+        list($this->{$this->slot}) = ['dynamic'];
+        echo $this->left, '|', $this->right, '|', $this->bag['entry'], "\n";
+    }
+}
+
+$sink = new AssignmentSink();
+$sink->fill();
+echo $sink->left, '|', $sink->right, '|', $sink->bag['entry'];
+"#,
+        ),
+        "alpha|dynamic|nested\nalpha|dynamic|nested"
+    );
+}

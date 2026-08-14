@@ -645,6 +645,7 @@ mod inner {
             82 => Some("ForeachNextRef"),
             83 => Some("ForeachWriteback"),
             84 => Some("BindArrayAppendRef"),
+            85 => Some("ForeachNextPlain"),
             90 => Some("Throw"),
             100 => Some("NewObj"),
             101 => Some("FetchObjR"),
