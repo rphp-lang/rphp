@@ -47,22 +47,25 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `1f4352b` against
-php-src 8.2.33 `651db3e`: 1,038 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with no lost pass relative to `a30abdd`. Thirty-one
-exact additions come from enforcing concrete-parent method variance and its
-shared PHP type relations, including lexical/trait scopes, aliases,
-`Stringable`, `iterable`, union/intersection and variadic subsumption. The
-formerly crashing `type_declarations/variance/infinite_recursion` case is now
-an exact declaration fatal, so the corpus has one remaining crash and no
-timeout. The Symfony S3 slice remains green through general PHP contracts for
-destructuring, literal types, references and `foreach` rebinding.
+The current pinned PHP 8.2 differential baseline is RPHP `0afbae3` against
+php-src 8.2.33 `651db3e`: 1,039 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with no lost pass relative to `1f4352b`. The exact
+addition `Zend/tests/bug64660.phpt` now reports PHP's source-qualified parser
+memory-exhaustion diagnostic instead of overflowing the native stack. A
+bounded structural preflight and a dedicated stack for valid deeper recursive
+descent remove the selected corpus's last crash; it now has zero crashes and
+zero timeouts. The preceding 31 exact variance additions continue to enforce
+concrete-parent method contracts and shared PHP type relations across
+lexical/trait scopes, aliases, `Stringable`, `iterable`, union/intersection and
+variadic subsumption. The Symfony S3 slice remains green through general PHP
+contracts for destructuring, literal types, references and `foreach`
+rebinding.
 Runtime-resolved method/static/dynamic calls, by-reference returns, indirect
 `ArrayAccess` and `WeakMap` appends, general uncaught stack-trace formatting,
 variable-variable syntax, generic undefined-variable warnings, delayed class
-linking/autoload validation and the large nested-array parser resource boundary
-remain visible boundaries; the broader adoption goal remains active until the
-selected PHP 8.2 contract corpus converges.
+linking/autoload validation and other visible failure clusters remain
+boundaries; the broader adoption goal remains active until the selected PHP 8.2
+contract corpus converges.
 
 ## Measurement system
 
