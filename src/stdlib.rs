@@ -1465,11 +1465,19 @@ fn fn_throwable_get_trace(
 }
 
 fn fn_throwable_get_trace_as_string(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::string(""));
+    let trace = arg!(ed, 0)
+        .as_object()
+        .and_then(|object| object.get_property("trace").cloned())
+        .and_then(|trace| trace.as_array().cloned())
+        .unwrap_or_else(PhpArray::new);
+    ret!(
+        rv,
+        Value::string(crate::vm::trace::format_throwable_trace(&trace))
+    );
 }
 
 fn bind_closure_value(
@@ -6202,24 +6210,33 @@ fn fn_func_get_args(
 
 /// Collect the live PHP call chain behind the internal debug_backtrace frame.
 ///
-/// # Safety
+/// # Safety (debug and creation modes)
 ///
-/// The frame must be the active internal-function frame supplied to its
-/// handler. Every predecessor and function header must remain live for this
-/// synchronous walk, as guaranteed by the VM call-frame stack.
-unsafe fn collect_debug_backtrace(
+/// The frame must be either the active internal-function frame supplied to its
+/// handler or the live Throwable creation frame selected by
+/// `include_creation_frame`. Every predecessor and function header must remain
+/// live for this synchronous walk, as guaranteed by the VM call-frame stack.
+pub(crate) unsafe fn collect_debug_backtrace(
     ed: *mut ExecuteData,
     options: i64,
     limit: usize,
     eg: &ExecutorGlobals,
+    include_creation_frame: bool,
 ) -> PhpArray {
     let include_object = options & 1 != 0;
     let include_arguments = options & 2 == 0;
     let mut trace = PhpArray::new();
     // The built-in call frame itself is not part of PHP's reported trace;
     // frame zero is the user/internal caller that invoked debug_backtrace().
-    let mut frame = (*ed).prev_execute_data;
+    let mut frame = if include_creation_frame {
+        ed
+    } else {
+        (*ed).prev_execute_data
+    };
     while !frame.is_null() && (limit == 0 || trace.len() < limit) {
+        if include_creation_frame && (*frame).prev_execute_data.is_null() {
+            break;
+        }
         let function = Function::from_common_ptr((*frame).func);
         let name = match function.fn_type() {
             FunctionType::User => {
@@ -6227,7 +6244,11 @@ unsafe fn collect_debug_backtrace(
                 if name.is_empty() {
                     break;
                 }
-                name
+                if name.starts_with("__closure_") {
+                    "{closure}".to_string()
+                } else {
+                    name
+                }
             }
             FunctionType::Internal => {
                 let Some(name) = eg
@@ -6244,10 +6265,38 @@ unsafe fn collect_debug_backtrace(
         };
         let common = &*(*frame).func;
         let mut entry = PhpArray::new();
+        if include_creation_frame {
+            let caller = (*frame).prev_execute_data;
+            if !caller.is_null() && !(*caller).func.is_null() {
+                let caller_function = Function::from_common_ptr((*caller).func);
+                if caller_function.fn_type() == FunctionType::User {
+                    let caller_op_array = &caller_function.as_user().op_array;
+                    if !caller_op_array.source_file.is_empty()
+                        && !caller_op_array.instructions.is_empty()
+                    {
+                        let next = (*caller)
+                            .opline
+                            .offset_from(caller_op_array.instructions.as_ptr());
+                        if let Ok(next) = usize::try_from(next)
+                            && let Some(call_index) = next.checked_sub(1)
+                            && let Some(line) = caller_op_array.source_line(call_index)
+                        {
+                            entry.set_str(
+                                "file",
+                                Value::shared_string(caller_op_array.source_file.clone()),
+                            );
+                            entry.set_str("line", Value::long(line as i64));
+                        }
+                    }
+                }
+            }
+        }
         if let Some((class, method)) = name.rsplit_once("::") {
             entry.set_str("function", Value::string(method.to_string()));
             entry.set_str("class", Value::string(class.to_string()));
-            let is_instance = common.sig.this_offset != 0;
+            let is_instance = !eg
+                .find_method_info(class, method)
+                .is_some_and(|(_, is_static, _)| is_static);
             entry.set_str("type", Value::string(if is_instance { "->" } else { "::" }));
             if include_object && is_instance {
                 let object = (*frame).cv(0).dereferenced();
@@ -6302,7 +6351,9 @@ fn fn_debug_backtrace(
         .unwrap_or(0);
     // SAFETY: internal handlers receive their currently active call frame and
     // the VM keeps its entire synchronous predecessor chain alive.
-    let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg) };
+    // SAFETY: the internal debug_backtrace activation and its synchronous
+    // predecessor chain stay live until this handler returns.
+    let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg, false) };
     ret!(rv, Value::array(trace));
 }
 

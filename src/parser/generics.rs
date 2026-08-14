@@ -61,7 +61,7 @@ impl Parser {
                 _ => GenericVariance::Invariant,
             };
             let name = match self.advance() {
-                Token::Identifier(name) => name,
+                Token::Identifier(name, _) => name,
                 other => {
                     return Err(format!(
                         "Expected generic parameter name, got {:?}",

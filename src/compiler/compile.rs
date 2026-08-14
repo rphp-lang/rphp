@@ -3847,6 +3847,7 @@ impl Compiler {
                 name,
                 args,
                 generic_args,
+                line,
             } => {
                 if generic_args.is_empty()
                     && args
@@ -3879,7 +3880,7 @@ impl Compiler {
                     call.result_type = OpType::Tmp;
                     call.extended_value = fallback_idx as u32;
                     call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
-                    self.instructions.push(call);
+                    self.push_instruction_at_line(call, *line);
                     return (tmp, OpType::Tmp);
                 }
 
@@ -3979,7 +3980,7 @@ impl Compiler {
                                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                                 do_fcall.result = tmp;
                                 do_fcall.result_type = OpType::Tmp;
-                                self.instructions.push(do_fcall);
+                                self.push_instruction_at_line(do_fcall, *line);
                                 return (tmp, OpType::Tmp);
                             }
                         }
@@ -4017,7 +4018,7 @@ impl Compiler {
                                     let mut do_fcall = Instruction::new(OpCode::DoFcall);
                                     do_fcall.result = tmp;
                                     do_fcall.result_type = OpType::Tmp;
-                                    self.instructions.push(do_fcall);
+                                    self.push_instruction_at_line(do_fcall, *line);
                                     return (tmp, OpType::Tmp);
                                 }
                             }
@@ -4035,7 +4036,7 @@ impl Compiler {
                             call.op2_type = array_type;
                             call.result = tmp;
                             call.result_type = OpType::Tmp;
-                            self.instructions.push(call);
+                            self.push_instruction_at_line(call, *line);
                             return (tmp, OpType::Tmp);
                         }
                     }
@@ -4192,7 +4193,7 @@ impl Compiler {
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
-                self.instructions.push(do_fcall);
+                self.push_instruction_at_line(do_fcall, *line);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
                 for (writeback, value, value_type) in reference_writebacks {
                     self.emit_foreach_reference_source_writeback(writeback, value, value_type);
@@ -4787,6 +4788,7 @@ impl Compiler {
                 args,
                 generic_args,
                 line,
+                call_line,
             } => {
                 if generic_args.is_empty()
                     && args
@@ -4869,12 +4871,17 @@ impl Compiler {
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = discard;
                 do_fcall.result_type = OpType::Tmp;
-                self.instructions.push(do_fcall);
+                self.push_instruction_at_line(do_fcall, *call_line);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }
-            Expr::DynamicNew { class, args, line } => {
+            Expr::DynamicNew {
+                class,
+                args,
+                line,
+                call_line,
+            } => {
                 if args
                     .iter()
                     .any(|argument| matches!(argument, CallArg::Unpack(_)))
@@ -4924,7 +4931,7 @@ impl Compiler {
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = discard;
                 do_fcall.result_type = OpType::Tmp;
-                self.instructions.push(do_fcall);
+                self.push_instruction_at_line(do_fcall, *call_line);
 
                 (tmp, OpType::Tmp)
             }
@@ -4936,6 +4943,7 @@ impl Compiler {
                 constants,
                 methods,
                 line,
+                call_line,
             } => {
                 let unpacked_arguments = args
                     .iter()
@@ -4998,7 +5006,7 @@ impl Compiler {
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = discard;
                 do_fcall.result_type = OpType::Tmp;
-                self.instructions.push(do_fcall);
+                self.push_instruction_at_line(do_fcall, *call_line);
                 (tmp, OpType::Tmp)
             }
             Expr::PropertyAccess {
@@ -5081,6 +5089,7 @@ impl Compiler {
                 args,
                 generic_args,
                 nullsafe,
+                line,
             } => {
                 if generic_args.is_empty()
                     && args
@@ -5133,7 +5142,7 @@ impl Compiler {
                     call.result = tmp;
                     call.result_type = OpType::Tmp;
                     call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
-                    self.instructions.push(call);
+                    self.push_instruction_at_line(call, *line);
                     if let Some(index) = nullsafe_patch {
                         self.instructions[index].op2 = self.instructions.len() as u16;
                     }
@@ -5171,6 +5180,7 @@ impl Compiler {
                         args,
                         &compiled_args,
                         generic_args,
+                        *line,
                     );
                 }
                 let (obj_op, obj_type) = self.compile_expr(object);
@@ -5226,7 +5236,7 @@ impl Compiler {
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
-                self.instructions.push(do_fcall);
+                self.push_instruction_at_line(do_fcall, *line);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 if let Some(idx) = nullsafe_patch {
@@ -5240,6 +5250,7 @@ impl Compiler {
                 method,
                 args,
                 generic_args,
+                line,
             } => {
                 // Pseudo-class names are runtime call-scope tokens, not names
                 // that can be namespace-qualified. Their spelling is also
@@ -5283,7 +5294,7 @@ impl Compiler {
                     call.result = tmp;
                     call.result_type = OpType::Tmp;
                     call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
-                    self.instructions.push(call);
+                    self.push_instruction_at_line(call, *line);
                     return (tmp, OpType::Tmp);
                 }
                 let generic_class = match pseudo_class.as_str() {
@@ -5368,7 +5379,7 @@ impl Compiler {
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
-                self.instructions.push(do_fcall);
+                self.push_instruction_at_line(do_fcall, *line);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
@@ -5435,6 +5446,7 @@ impl Compiler {
                 callable,
                 args,
                 generic_args,
+                line,
             } => {
                 // Compile the callable expression (e.g. $var, $arr[0])
                 let (callable_op, callable_type) = self.compile_expr(callable);
@@ -5453,7 +5465,7 @@ impl Compiler {
                     call.result = tmp;
                     call.result_type = OpType::Tmp;
                     call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
-                    self.instructions.push(call);
+                    self.push_instruction_at_line(call, *line);
                     return (tmp, OpType::Tmp);
                 }
                 let compiled_args = args
@@ -5492,7 +5504,7 @@ impl Compiler {
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
-                self.instructions.push(do_fcall);
+                self.push_instruction_at_line(do_fcall, *line);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
@@ -6228,6 +6240,7 @@ impl Compiler {
         args: &[CallArg],
         compiled_args: &[(u16, OpType, Option<u16>)],
         generic_args: &[TypeHint],
+        line: usize,
     ) -> (u16, OpType) {
         let method_idx = self.add_literal(Value::string(method.to_string()));
         let runtime_generic_check = self.emit_generic_check(
@@ -6253,7 +6266,7 @@ impl Compiler {
         let mut do_fcall = Instruction::new(OpCode::DoFcall);
         do_fcall.result = tmp;
         do_fcall.result_type = OpType::Tmp;
-        self.instructions.push(do_fcall);
+        self.push_instruction_at_line(do_fcall, line);
         self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
         if let Some(index) = nullsafe_patch {
             self.instructions[index].op2 = self.instructions.len() as u16;

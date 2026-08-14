@@ -24,6 +24,13 @@ impl Parser {
         }
     }
 
+    fn expect_lparen(&mut self) -> Result<usize, String> {
+        match self.advance() {
+            Token::LParen(line) => Ok(line),
+            token => Err(format!("Expected LParen, got {token:?}")),
+        }
+    }
+
     fn parse_unset_target(&mut self) -> Result<Expr, String> {
         let previous = self.empty_dimension_unset_context;
         self.empty_dimension_unset_context = true;
@@ -66,7 +73,7 @@ impl Parser {
     /// PHP allows all reserved words as named arg labels.
     fn token_as_named_arg_label(tok: &Token) -> Option<String> {
         match tok {
-            Token::Identifier(n) => Some(n.clone()),
+            Token::Identifier(n, _) => Some(n.clone()),
             // All keyword tokens — PHP accepts any reserved word as a named arg label
             Token::ArrayKw => Some("array".to_string()),
             Token::Null => Some("null".to_string()),
@@ -252,8 +259,8 @@ impl Parser {
                 | Token::ArrayKw
                 | Token::Null
                 | Token::Static
-                | Token::LParen
-                | Token::Identifier(_)
+                | Token::LParen(_)
+                | Token::Identifier(_, _)
                 | Token::Public
                 | Token::Protected
                 | Token::Private
@@ -275,7 +282,10 @@ impl Parser {
             false
         };
         match self.advance() {
-            Token::Identifier(n) => parts.push(n),
+            Token::Identifier(n, line) => {
+                self.last_primary_line = Some(line);
+                parts.push(n);
+            }
             other => {
                 return Err(format!(
                     "Expected identifier in qualified name, got {:?}",
@@ -286,7 +296,7 @@ impl Parser {
         while self.peek() == Token::Backslash {
             self.advance(); // consume '\'
             match self.advance() {
-                Token::Identifier(n) => parts.push(n),
+                Token::Identifier(n, _) => parts.push(n),
                 other => {
                     return Err(format!(
                         "Expected identifier after '\\' in qualified name, got {:?}",
@@ -346,7 +356,7 @@ impl Parser {
         while self.peek() == Token::Ampersand
             && matches!(
                 self.tokens.get(self.pos + 1),
-                Some(Token::Identifier(_))
+                Some(Token::Identifier(_, _))
                     | Some(Token::Backslash)
                     | Some(Token::ArrayKw)
                     | Some(Token::Null)
@@ -369,14 +379,14 @@ impl Parser {
             Token::Question => {
                 matches!(
                     self.tokens.get(self.pos + 1),
-                    Some(Token::Identifier(_))
+                    Some(Token::Identifier(_, _))
                         | Some(Token::Backslash)
                         | Some(Token::ArrayKw)
                         | Some(Token::Null)
                         | Some(Token::Static)
                 )
             }
-            Token::Identifier(_) => {
+            Token::Identifier(_, _) => {
                 if self.peek_at(1) == Token::Less {
                     return true;
                 }
@@ -405,7 +415,7 @@ impl Parser {
             ),
             // PHP DNF types parenthesize intersection arms, for example
             // `(Countable&Iterator)|null`.
-            Token::LParen => true,
+            Token::LParen(_) => true,
             _ => false,
         }
     }
@@ -423,7 +433,7 @@ impl Parser {
             }
             let is_type = matches!(
                 next,
-                Some(Token::Identifier(_))
+                Some(Token::Identifier(_, _))
                     | Some(Token::Backslash)
                     | Some(Token::ArrayKw)
                     | Some(Token::Null)
@@ -439,7 +449,7 @@ impl Parser {
         // Disambiguate: Identifier followed by $var, &, or ... means it's a type hint
         // Identifier NOT followed by those means it's not a type hint (shouldn't happen in param context)
         match self.peek() {
-            Token::Identifier(_) => {
+            Token::Identifier(_, _) => {
                 let next = self.tokens.get(self.pos + 1);
                 let is_type_context = matches!(
                     next,
@@ -485,7 +495,7 @@ impl Parser {
                 Ok(None)
             }
             Token::Static => Err("static is only allowed as a return type".to_string()),
-            Token::LParen => {
+            Token::LParen(_) => {
                 let hint = self.parse_base_type_hint()?;
                 let hint = self.maybe_parse_compound_type(hint)?;
                 if Self::type_hint_uses_static(&hint) {
@@ -500,7 +510,7 @@ impl Parser {
     /// Parse a non-nullable type hint (int, string, float, bool, array, ClassName).
     fn parse_base_type_hint(&mut self) -> Result<TypeHint, String> {
         match self.advance() {
-            Token::Identifier(name) => match name.as_str() {
+            Token::Identifier(name, _) => match name.as_str() {
                 "int" | "integer" => Ok(TypeHint::Int),
                 "float" | "double" => Ok(TypeHint::Float),
                 "string" => Ok(TypeHint::String),
@@ -536,7 +546,7 @@ impl Parser {
             },
             Token::Backslash => {
                 let first = match self.advance() {
-                    Token::Identifier(name) => name,
+                    Token::Identifier(name, _) => name,
                     other => {
                         return Err(format!(
                             "Expected identifier after leading '\\' in type hint, got {:?}",
@@ -588,7 +598,7 @@ impl Parser {
                     Ok(TypeHint::ClassName("static".to_string()))
                 }
             }
-            Token::LParen => {
+            Token::LParen(_) => {
                 let first = self.parse_base_type_hint()?;
                 let intersection = self.maybe_parse_intersection_type(first)?;
                 self.expect(&Token::RParen)?;
@@ -607,7 +617,7 @@ impl Parser {
         while self.peek() == Token::Backslash {
             self.advance();
             match self.advance() {
-                Token::Identifier(name) => parts.push(name),
+                Token::Identifier(name, _) => parts.push(name),
                 other => {
                     return Err(format!(
                         "Expected identifier after '\\' in type hint, got {:?}",
@@ -653,7 +663,7 @@ impl Parser {
                     _ => unreachable!(),
                 };
                 // Check for 'readonly' after visibility
-                if matches!(self.peek(), Token::Identifier(ref s) if s == "readonly") {
+                if matches!(self.peek(), Token::Identifier(ref s, _) if s == "readonly") {
                     self.advance();
                     promo_readonly = true;
                 }
@@ -778,7 +788,7 @@ impl Parser {
             }
             while i < self.tokens.len() && depth != 0 {
                 match &self.tokens[i] {
-                    Token::LBracket(_) | Token::LParen => depth += 1,
+                    Token::LBracket(_) | Token::LParen(_) => depth += 1,
                     Token::RBracket | Token::RParen => depth -= 1,
                     _ => {}
                 }
@@ -830,7 +840,7 @@ impl Parser {
     /// Parse `list($a, $b, ...) = expr;`
     fn parse_list_assign(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'list' identifier
-        self.expect(&Token::LParen)?;
+        self.expect_lparen()?;
         let targets = self.parse_list_targets(&Token::RParen)?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::Assign)?;
@@ -887,10 +897,10 @@ impl Parser {
                 let nested = self.parse_list_targets(&Token::RBracket)?;
                 self.expect(&Token::RBracket)?;
                 targets.push(ListTarget::Nested(nested));
-            } else if let Token::Identifier(ref name) = self.peek() {
-                if name == "list" && self.peek_at(1) == Token::LParen {
+            } else if let Token::Identifier(ref name, _) = self.peek() {
+                if name == "list" && matches!(self.peek_at(1), Token::LParen(_)) {
                     self.advance(); // consume 'list'
-                    self.expect(&Token::LParen)?;
+                    self.expect_lparen()?;
                     let nested = self.parse_list_targets(&Token::RParen)?;
                     self.expect(&Token::RParen)?;
                     targets.push(ListTarget::Nested(nested));

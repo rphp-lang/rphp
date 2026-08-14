@@ -350,17 +350,17 @@ fn op_new_obj_resolved<'a>(
             PhpObject::dynamic(name.to_string(), 0, std::collections::HashMap::new()),
         )
     };
-    // SAFETY: NewObj writes a compiler-owned TMP/VAR for the first time. Stack
+    // SAFETY: NewObj writes a compiler-owned TMP/VAR in this live frame for the first time. Stack
     // reuse intentionally leaves dead scalar bytes uninitialized, so dropping
     // the old bytes here is invalid; the tracked TMP writer treats an unset
     // bitmap bit as no live value and records the new object's ownership. The
     // active frame remains live for the complete opcode dispatch.
-    let (object, is_root_frame) = unsafe {
+    let object = unsafe {
         frame_tmp_set(frame, result_ptr, Value::object(obj));
-        (&*result_ptr, (*frame).prev_execute_data.is_null())
+        &*result_ptr
     };
     if eg.class_is_a(name, "Throwable") {
-        attach_throwable_origin(object, op_array, ip, is_root_frame);
+        attach_throwable_origin(object, eg, frame, op_array, ip);
     }
     #[cfg(feature = "php-generics-reified")]
     if let Some(binding) = eg.reified_bindings.last().copied().filter(|binding| {

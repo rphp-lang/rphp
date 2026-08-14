@@ -351,13 +351,17 @@ fn prepare_named_call_frame(
     // 0. Shift only that prefix; named destinations already include `$this`.
     let call_key = call as usize;
     if let Some(this_val) = take_pending_invoke_this(eg, call_key) {
-        for index in (0..positional).rev() {
-            let value = unsafe { (*call).cv(index).clone() };
-            let destination = unsafe { (*call).cv_mut(index + 1) } as *mut Value;
-            unsafe { frame_slot_set(call, destination, value) };
+        // SAFETY: `call` is the pending live activation selected by call_key;
+        // its compiler-sized CV prefix contains every positional/source slot.
+        unsafe {
+            for index in (0..positional).rev() {
+                let value = (*call).cv(index).clone();
+                let destination = (*call).cv_mut(index + 1) as *mut Value;
+                frame_slot_set(call, destination, value);
+            }
+            let this_slot = (*call).cv_mut(0) as *mut Value;
+            frame_slot_set(call, this_slot, this_val);
         }
-        let this_slot = unsafe { (*call).cv_mut(0) } as *mut Value;
-        unsafe { frame_slot_set(call, this_slot, this_val) };
         // Keep the call on the full DoFcall path. Undef records that `$this`
         // has already been installed and the positional prefix already moved.
         push_pending_invoke_this(eg, call_key, Value::undef());
@@ -366,12 +370,16 @@ fn prepare_named_call_frame(
     // `push_call_frame` leaves the source argument prefix uninitialized because
     // ordinary SendVal writes every slot. Named sends can leave holes, so keep
     // preceding positional values and make every remaining parameter readable.
-    for public_index in positional..func_common.sig.public_arity() {
-        let cv_index = func_common.sig.param_cv_index(public_index);
-        let slot = unsafe { (*call).cv_mut(cv_index) } as *mut Value;
-        unsafe { slot.write(Value::undef()) };
+    // SAFETY: signature-derived CV indices are within the same pending live
+    // activation; each remaining named-argument hole is initialized once.
+    unsafe {
+        for public_index in positional..func_common.sig.public_arity() {
+            let cv_index = func_common.sig.param_cv_index(public_index);
+            let slot = (*call).cv_mut(cv_index) as *mut Value;
+            slot.write(Value::undef());
+        }
+        (*call).named_args_used = true;
     }
-    unsafe { (*call).named_args_used = true };
 }
 
 /// Abandon every not-yet-executed call owned by `frame`. This is required when
@@ -550,14 +558,14 @@ enum ThrowResult<'a> {
 
 /// Attach the immutable creation/raise origin that PHP exposes through
 /// Throwable::getFile()/getLine(). Existing metadata wins so rethrowing an
-/// object never moves its origin. An empty trace is recorded only for a root
-/// creation site; nested frame rendering stays disabled until call-site source
-/// locations can produce the complete PHP trace rather than a plausible fake.
+/// object never moves its origin. The trace is captured at the same creation
+/// site and therefore also survives a later throw or rethrow unchanged.
 fn attach_throwable_origin(
     throwable: &Value,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     instruction_index: usize,
-    is_root_frame: bool,
 ) {
     let Some(line) = op_array.source_line(instruction_index) else {
         return;
@@ -577,6 +585,9 @@ fn attach_throwable_origin(
     }) {
         return;
     }
+    // SAFETY: opcode dispatch keeps the complete synchronous frame chain live
+    // for the duration of this cold metadata snapshot.
+    let trace = unsafe { crate::stdlib::collect_debug_backtrace(frame, 0, 0, eg, true) };
     let Some(mut object) = throwable.as_object_mut() else {
         return;
     };
@@ -594,8 +605,8 @@ fn attach_throwable_origin(
     {
         object.set_property("line", Value::long(line as i64));
     }
-    if is_root_frame && !object.contains_property("trace") {
-        object.set_property("trace", Value::array(PhpArray::new()));
+    if !object.contains_property("trace") {
+        object.set_property("trace", Value::array(trace));
     }
 }
 

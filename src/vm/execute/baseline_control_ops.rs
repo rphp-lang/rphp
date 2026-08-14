@@ -474,13 +474,12 @@ fn op_throw<'a>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    // SAFETY: `opline` and its compiler-allocated operand belong to `op_array`
-    // and the active frame for the complete opcode dispatch.
-    let (val, instruction_index, is_root_frame) = unsafe {
+    // SAFETY: `opline`, its compiler-allocated operand and the predecessor bit
+    // all belong to the live active frame for the complete opcode dispatch.
+    let (val, instruction_index) = unsafe {
         (
             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
-            (*frame).prev_execute_data.is_null(),
         )
     };
     // PHP 8: only Throwable objects can be thrown
@@ -509,7 +508,7 @@ fn op_throw<'a>(
         )));
     }
     let thrown = val.clone();
-    attach_throwable_origin(&thrown, op_array, instruction_index, is_root_frame);
+    attach_throwable_origin(&thrown, eg, frame, op_array, instruction_index);
 
     match throw_in_frame(eg, frame, thrown) {
         ThrowResult::Handled(new_frame, new_op_array) => {

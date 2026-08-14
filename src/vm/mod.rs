@@ -13,4 +13,5 @@ mod quick_foreach;
 mod quick_foreach_plan;
 pub mod stack;
 pub mod stats;
+pub(crate) mod trace;
 pub(crate) mod virtual_aggregate_cache;

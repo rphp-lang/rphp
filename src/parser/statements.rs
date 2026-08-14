@@ -84,7 +84,7 @@ impl Parser {
             };
 
             match token {
-                Token::LParen | Token::LBrace | Token::LBracket(_) => {
+                Token::LParen(_) | Token::LBrace | Token::LBracket(_) => {
                     depth += 1;
                     if depth > max_depth {
                         max_depth = depth;
@@ -115,7 +115,7 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
-        if let Token::Identifier(name) = self.peek() {
+        if let Token::Identifier(name, _) = self.peek() {
             if self.peek_at(1) == Token::Colon {
                 self.advance();
                 self.advance();
@@ -125,7 +125,7 @@ impl Parser {
         if let Token::Goto { line, .. } = self.peek() {
             self.advance();
             let name = match self.advance() {
-                Token::Identifier(label) => label,
+                Token::Identifier(label, _) => label,
                 token => return Err(format!("Expected label after goto, got {token:?}")),
             };
             self.expect(&Token::Semicolon)?;
@@ -138,9 +138,9 @@ impl Parser {
             }
             Token::Declare => {
                 self.advance(); // consume 'declare'
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let directive = match self.advance() {
-                    Token::Identifier(n) => n,
+                    Token::Identifier(n, _) => n,
                     other => {
                         return Err(format!(
                             "Expected directive name in declare(), got {:?}",
@@ -202,7 +202,7 @@ impl Parser {
                     let alias = if self.peek() == Token::As {
                         self.advance(); // consume 'as'
                         match self.advance() {
-                            Token::Identifier(n) => n,
+                            Token::Identifier(n, _) => n,
                             other => {
                                 return Err(format!(
                                     "Expected alias name after 'as', got {:?}",
@@ -227,7 +227,7 @@ impl Parser {
             Token::Const => {
                 self.advance(); // consume 'const'
                 let name = match self.advance() {
-                    Token::Identifier(n) | Token::MagicConstant { name: n, .. } => n,
+                    Token::Identifier(n, _) | Token::MagicConstant { name: n, .. } => n,
                     Token::Goto { name, .. } => name,
                     other => {
                         return Err(format!(
@@ -487,7 +487,7 @@ impl Parser {
             }
             Token::While => {
                 self.advance(); // consume 'while'
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let condition = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 let body = self.parse_block_or_stmt()?;
@@ -497,7 +497,7 @@ impl Parser {
                 self.advance(); // consume 'do'
                 let body = self.parse_block_or_stmt()?;
                 self.expect(&Token::While)?;
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let condition = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 self.expect(&Token::Semicolon)?;
@@ -517,7 +517,7 @@ impl Parser {
             }
             Token::Switch => {
                 self.advance(); // consume 'switch'
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 self.expect(&Token::LBrace)?;
@@ -574,7 +574,7 @@ impl Parser {
             }
             Token::For => {
                 self.advance(); // consume 'for'
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
 
                 // Init: optional assignment or expression before first ;
                 let mut init = Vec::new();
@@ -619,7 +619,7 @@ impl Parser {
             }
             Token::Foreach => {
                 self.advance(); // consume 'foreach'
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let array = self.parse_expr()?;
                 self.expect(&Token::As)?;
                 // foreach ($arr as $key => $val), foreach ($arr as $val),
@@ -720,7 +720,7 @@ impl Parser {
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let name = match self.advance() {
-                    Token::Identifier(n) => n,
+                    Token::Identifier(n, _) => n,
                     other => return Err(format!("Expected function name, got {:?}", other)),
                 };
                 // A named function never inherits the surrounding method's
@@ -729,7 +729,7 @@ impl Parser {
                 self.class_scope_active = false;
                 let generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&generic_params);
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
@@ -763,7 +763,7 @@ impl Parser {
             }
             Token::Unset => {
                 self.advance();
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let mut targets = Vec::new();
                 let mut expr = self.parse_unset_target()?;
                 if !Self::is_variable_like(&expr) {
@@ -797,7 +797,7 @@ impl Parser {
                 Ok(Stmt::Throw { expr, line })
             }
             Token::Class | Token::Abstract | Token::Final => self.parse_class(),
-            Token::Identifier(ref name)
+            Token::Identifier(ref name, _)
                 if name.eq_ignore_ascii_case("readonly")
                     && matches!(
                         self.peek_at(1),
@@ -825,7 +825,7 @@ impl Parser {
             | Token::Yield
             | Token::Clone
             | Token::Print
-            | Token::LParen
+            | Token::LParen(_)
             | Token::Fn
             | Token::Integer(_)
             | Token::Float(_)
@@ -841,10 +841,10 @@ impl Parser {
             | Token::PlusPlus
             | Token::MinusMinus
             | Token::ArrayKw => self.parse_expression_statement(),
-            Token::Identifier(_) | Token::Backslash => {
+            Token::Identifier(_, _) | Token::Backslash => {
                 // Check for list() destructuring: list($a, $b) = expr;
-                if let Token::Identifier(ref name) = self.peek() {
-                    if name == "list" && self.peek_at(1) == Token::LParen {
+                if let Token::Identifier(ref name, _) = self.peek() {
+                    if name == "list" && matches!(self.peek_at(1), Token::LParen(_)) {
                         return self.parse_list_assign();
                     }
                 }
@@ -1096,7 +1096,7 @@ impl Parser {
     /// Parse if / elseif / else chain.
     fn parse_if(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'if' or 'elseif'
-        self.expect(&Token::LParen)?;
+        self.expect_lparen()?;
         let condition = self.parse_expr()?;
         self.expect(&Token::RParen)?;
         let then_body = self.parse_block_or_stmt()?;

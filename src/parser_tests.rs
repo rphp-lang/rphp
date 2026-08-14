@@ -476,6 +476,7 @@ fn test_parse_assignment_on_comparison_rhs() {
                     name: "find_position".into(),
                     args: vec![],
                     generic_args: vec![],
+                    line: 1,
                 }),
             }),
         }])]
@@ -499,6 +500,7 @@ fn test_parse_assignment_on_logical_rhs() {
                     name: "find_file".into(),
                     args: vec![],
                     generic_args: vec![],
+                    line: 1,
                 }),
             }),
         }])]
@@ -515,6 +517,7 @@ fn test_parse_function_call() {
             name: "my_double".into(),
             args: vec![CallArg::Positional(Expr::Integer(21))],
             generic_args: vec![],
+            line: 1,
         }])]
     );
 }

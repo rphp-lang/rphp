@@ -88,6 +88,7 @@ pub enum Expr {
         name: String,
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
+        line: usize,
     },
     PostInc(String),       // $i++
     PostDec(String),       // $i--
@@ -167,12 +168,14 @@ pub enum Expr {
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
         line: usize,
+        call_line: usize,
     },
     DynamicNew {
         // new $class(args)
         class: Box<Expr>,
         args: Vec<CallArg>,
         line: usize,
+        call_line: usize,
     },
     AnonymousNew {
         args: Vec<CallArg>,
@@ -182,6 +185,7 @@ pub enum Expr {
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
         line: usize,
+        call_line: usize,
     },
     PropertyAccess {
         // $obj->prop or $obj?->prop
@@ -202,6 +206,7 @@ pub enum Expr {
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
         nullsafe: bool,
+        line: usize,
     },
     StaticCall {
         // ClassName::method(args)
@@ -209,6 +214,7 @@ pub enum Expr {
         method: String,
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
+        line: usize,
     },
     StaticProperty {
         // ClassName::$prop
@@ -275,6 +281,7 @@ pub enum Expr {
         callable: Box<Expr>,
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
+        line: usize,
     },
     FirstClassFunctionCallable(String),
     FirstClassCallable(Box<Expr>),

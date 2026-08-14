@@ -20,12 +20,12 @@ fn unpack_throw<'a>(
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     instruction_index: usize,
-    is_root_frame: bool,
+    _is_root_frame: bool,
     class: &str,
     message: &str,
 ) -> ColdResult<'a> {
     let error = make_error_value(class, message);
-    attach_throwable_origin(&error, op_array, instruction_index, is_root_frame);
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
     match throw_in_frame(eg, frame, error) {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)

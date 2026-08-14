@@ -70,11 +70,11 @@ pub enum Token {
         line: usize,
     },
     // Literals
-    Integer(i64),            // 42, -1
-    Float(f64),              // 3.14, 1.5e10
-    StringLiteral(String),   // "hello", 'world'
-    Variable(String, usize), // $a, $foo with source line
-    Identifier(String),      // my_double, strlen
+    Integer(i64),              // 42, -1
+    Float(f64),                // 3.14, 1.5e10
+    StringLiteral(String),     // "hello", 'world'
+    Variable(String, usize),   // $a, $foo with source line
+    Identifier(String, usize), // identifier with source line
     MagicConstant {
         name: String,
         line: usize,
@@ -120,7 +120,7 @@ pub enum Token {
     Colon,                  // :
     // Punctuation
     Semicolon,        // ;
-    LParen,           // (
+    LParen(usize),    // ( with source line
     RParen,           // )
     LBrace,           // {
     RBrace,           // }
@@ -426,7 +426,11 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'(' => {
-                    tokens.push(Token::LParen);
+                    let line = 1 + self.src[..self.pos]
+                        .iter()
+                        .filter(|&&byte| byte == b'\n')
+                        .count();
+                    tokens.push(Token::LParen(line));
                     self.pos += 1;
                 }
                 b')' => {
@@ -511,6 +515,10 @@ impl<'a> Lexer<'a> {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'\x80'..=b'\xff' => {
                     let identifier_start = self.pos;
                     let ident = self.read_identifier();
+                    let line = 1 + self.src[..identifier_start]
+                        .iter()
+                        .filter(|byte| **byte == b'\n')
+                        .count();
                     let is_member_name = matches!(
                         tokens.last(),
                         Some(
@@ -530,27 +538,15 @@ impl<'a> Lexer<'a> {
                                 | "__NAMESPACE__"
                         )
                     {
-                        let line = 1 + self.src[..identifier_start]
-                            .iter()
-                            .filter(|byte| **byte == b'\n')
-                            .count();
                         tokens.push(Token::MagicConstant { name: ident, line });
                         continue;
                     }
                     if !is_member_name && ident.eq_ignore_ascii_case("goto") {
-                        let line = 1 + self.src[..identifier_start]
-                            .iter()
-                            .filter(|byte| **byte == b'\n')
-                            .count();
                         tokens.push(Token::Goto { name: ident, line });
                         continue;
                     }
                     match ident.as_str() {
                         "echo" => {
-                            let line = 1 + self.src[..identifier_start]
-                                .iter()
-                                .filter(|byte| **byte == b'\n')
-                                .count();
                             tokens.push(Token::Echo { line });
                         }
                         "function" => tokens.push(Token::Function),
@@ -580,18 +576,10 @@ impl<'a> Lexer<'a> {
                         "catch" => tokens.push(Token::Catch),
                         "finally" => tokens.push(Token::Finally),
                         "throw" => {
-                            let line = 1 + self.src[..identifier_start]
-                                .iter()
-                                .filter(|byte| **byte == b'\n')
-                                .count();
                             tokens.push(Token::Throw(u32::try_from(line).unwrap_or(u32::MAX)));
                         }
                         "class" => tokens.push(Token::Class),
                         "new" => {
-                            let line = 1 + self.src[..identifier_start]
-                                .iter()
-                                .filter(|byte| **byte == b'\n')
-                                .count();
                             tokens.push(Token::New(u32::try_from(line).unwrap_or(u32::MAX)));
                         }
                         "public" => tokens.push(Token::Public),
@@ -621,7 +609,7 @@ impl<'a> Lexer<'a> {
                         "require" => tokens.push(Token::Require),
                         "require_once" => tokens.push(Token::RequireOnce),
                         "xor" => tokens.push(Token::LogicalXor),
-                        _ => tokens.push(Token::Identifier(ident)),
+                        _ => tokens.push(Token::Identifier(ident, line)),
                     }
                 }
                 b'^' => {
@@ -885,7 +873,7 @@ impl<'a> Lexer<'a> {
                     | Token::StringLiteral(_)
                     | Token::RParen
                     | Token::RBracket
-                    | Token::Identifier(_)
+                    | Token::Identifier(_, _)
                     | Token::MagicConstant { .. }
                     | Token::True
                     | Token::False
@@ -1039,7 +1027,7 @@ mod tests {
             .tokenize()
             .unwrap();
         assert_eq!(tokens[1], Token::At);
-        assert_eq!(tokens[2], Token::Identifier("trigger_error".into()));
+        assert_eq!(tokens[2], Token::Identifier("trigger_error".into(), 1));
     }
 
     #[test]
@@ -1084,8 +1072,8 @@ mod tests {
             vec![
                 Token::OpenTag,
                 echo(1),
-                Token::Identifier("my_double".into()),
-                Token::LParen,
+                Token::Identifier("my_double".into(), 1),
+                Token::LParen(1),
                 Token::Integer(21),
                 Token::RParen,
                 Token::Semicolon,
@@ -1111,12 +1099,12 @@ mod tests {
                 Token::Semicolon,
                 echo(2),
                 Token::Backslash,
-                Token::Identifier("__FILE__".into()),
+                Token::Identifier("__FILE__".into(), 2),
                 Token::Semicolon,
                 echo(2),
-                Token::Identifier("Example".into()),
+                Token::Identifier("Example".into(), 2),
                 Token::DoubleColon,
-                Token::Identifier("__CLASS__".into()),
+                Token::Identifier("__CLASS__".into(), 2),
                 Token::Semicolon,
                 Token::Eof,
             ]
@@ -1136,15 +1124,15 @@ mod tests {
                     name: "GOTO".into(),
                     line: 2,
                 },
-                Token::Identifier("finish".into()),
+                Token::Identifier("finish".into(), 2),
                 Token::Semicolon,
                 Token::Variable("object".into(), 2),
                 Token::Arrow,
-                Token::Identifier("goto".into()),
-                Token::LParen,
+                Token::Identifier("goto".into(), 2),
+                Token::LParen(2),
                 Token::RParen,
                 Token::Semicolon,
-                Token::Identifier("finish".into()),
+                Token::Identifier("finish".into(), 2),
                 Token::Colon,
                 Token::Eof,
             ]
@@ -1176,7 +1164,7 @@ mod tests {
             vec![
                 Token::OpenTag,
                 Token::If,
-                Token::LParen,
+                Token::LParen(1),
                 Token::Variable("x".into(), 1),
                 Token::LessEqual,
                 Token::Integer(10),
@@ -1222,7 +1210,7 @@ mod tests {
                 Token::StringLiteral("PHP".into()),
                 Token::Semicolon,
                 echo(1),
-                Token::LParen,
+                Token::LParen(0),
                 Token::StringLiteral("Hello ".into()),
                 Token::Dot,
                 Token::Variable("name".into(), 0),
@@ -1245,14 +1233,14 @@ mod tests {
             vec![
                 Token::OpenTag,
                 echo(1),
-                Token::LParen,
+                Token::LParen(0),
                 Token::StringLiteral("value=".into()),
                 Token::Dot,
-                Token::LParen,
+                Token::LParen(0),
                 Token::This(1),
                 Token::Arrow,
-                Token::Identifier("render".into()),
-                Token::LParen,
+                Token::Identifier("render".into(), 1),
+                Token::LParen(1),
                 Token::StringLiteral("x".into()),
                 Token::Comma,
                 Token::Integer(2),
@@ -1295,7 +1283,7 @@ mod tests {
         let source = decode_php_source(b"<?php class \xa9 {} echo '\xa9';");
         let tokens = Lexer::new(&source).tokenize().unwrap();
 
-        assert!(tokens.contains(&Token::Identifier("©".into())));
+        assert!(tokens.contains(&Token::Identifier("©".into(), 1)));
         assert!(tokens.contains(&Token::StringLiteral("©".into())));
     }
 

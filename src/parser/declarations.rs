@@ -47,7 +47,7 @@ impl Parser {
                     .ok_or_else(|| format!("Expected method name, got {token:?}"))?;
                 let generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&generic_params);
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
@@ -117,7 +117,7 @@ impl Parser {
         let mut catches = Vec::new();
         while self.peek() == Token::Catch {
             self.advance(); // consume 'catch'
-            self.expect(&Token::LParen)?;
+            self.expect_lparen()?;
             // Parse exception type(s): ExA | ExB
             let mut types = Vec::new();
             let type_name = self.parse_qualified_name()?;
@@ -190,7 +190,7 @@ impl Parser {
                     self.advance();
                     is_final = true;
                 }
-                Token::Identifier(ref name) if name.eq_ignore_ascii_case("readonly") => {
+                Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("readonly") => {
                     self.advance();
                     is_readonly = true;
                 }
@@ -202,7 +202,7 @@ impl Parser {
         }
         self.advance(); // consume 'class'
         let name = match self.advance() {
-            Token::Identifier(n) => n,
+            Token::Identifier(n, _) => n,
             other => return Err(format!("Expected class name, got {:?}", other)),
         };
         let generic_params = self.parse_generic_parameters()?;
@@ -312,7 +312,7 @@ impl Parser {
                 self.class_scope_active = true;
                 let generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&generic_params);
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
@@ -395,7 +395,7 @@ impl Parser {
     fn parse_trait(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'trait'
         let name = match self.advance() {
-            Token::Identifier(n) => n,
+            Token::Identifier(n, _) => n,
             other => return Err(format!("Expected trait name, got {:?}", other)),
         };
         let generic_params = self.parse_generic_parameters()?;
@@ -478,7 +478,7 @@ impl Parser {
                 self.class_scope_active = true;
                 let method_generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&method_generic_params);
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
@@ -546,7 +546,7 @@ impl Parser {
     fn parse_interface(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'interface'
         let name = match self.advance() {
-            Token::Identifier(n) => n,
+            Token::Identifier(n, _) => n,
             other => return Err(format!("Expected interface name, got {:?}", other)),
         };
         let generic_params = self.parse_generic_parameters()?;
@@ -598,7 +598,7 @@ impl Parser {
                         name, method_name, vis_str
                     ));
                 }
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
@@ -640,7 +640,7 @@ impl Parser {
     fn parse_enum(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'enum'
         let name = match self.advance() {
-            Token::Identifier(n) => n,
+            Token::Identifier(n, _) => n,
             other => return Err(format!("Expected enum name, got {:?}", other)),
         };
         // Optional backing type: enum Foo: string { ... }
@@ -663,7 +663,7 @@ impl Parser {
             if self.peek() == Token::Case {
                 self.advance(); // consume 'case'
                 let case_name = match self.advance() {
-                    Token::Identifier(n) => n,
+                    Token::Identifier(n, _) => n,
                     other => return Err(format!("Expected enum case name, got {:?}", other)),
                 };
                 let value = if self.peek() == Token::Assign {
@@ -690,7 +690,7 @@ impl Parser {
                     self.class_scope_active = true;
                     let generic_params = self.parse_generic_parameters()?;
                     self.push_generic_scope(&generic_params);
-                    self.expect(&Token::LParen)?;
+                    self.expect_lparen()?;
                     let params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
                     let return_type = self.parse_return_type()?;
@@ -760,7 +760,7 @@ impl Parser {
                     self.advance();
                     modifiers.is_abstract = true;
                 }
-                Token::Identifier(ref s) if s == "readonly" => {
+                Token::Identifier(ref s, _) if s == "readonly" => {
                     self.advance();
                     modifiers.is_readonly = true;
                 }
@@ -796,7 +796,7 @@ impl Parser {
         let mut constants = Vec::new();
         loop {
             let name = match self.advance() {
-                Token::Identifier(name) | Token::MagicConstant { name, .. } => name,
+                Token::Identifier(name, _) | Token::MagicConstant { name, .. } => name,
                 Token::Goto { name, .. } => name,
                 other => return Err(format!("Expected class constant name, got {:?}", other)),
             };
@@ -819,7 +819,7 @@ impl Parser {
     }
 
     fn try_parse_class_constant_type(&mut self) -> Result<Option<TypeHint>, String> {
-        if matches!(self.peek(), Token::Identifier(_) | Token::Goto { .. })
+        if matches!(self.peek(), Token::Identifier(_, _) | Token::Goto { .. })
             && self.peek_at(1) == Token::Assign
         {
             return Ok(None);
@@ -830,7 +830,7 @@ impl Parser {
             TypeHint::Nullable(Box::new(self.parse_base_type_hint()?))
         } else if matches!(
             self.peek(),
-            Token::Identifier(_)
+            Token::Identifier(_, _)
                 | Token::ArrayKw
                 | Token::Null
                 | Token::True
@@ -906,7 +906,7 @@ impl Parser {
     /// Parse match expression
     fn parse_match_expr(&mut self) -> Result<Expr, String> {
         self.advance(); // consume 'match'
-        self.expect(&Token::LParen)?;
+        self.expect_lparen()?;
         let expr = self.parse_expr()?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::LBrace)?;
@@ -965,7 +965,7 @@ impl Parser {
         };
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
-        self.expect(&Token::LParen)?;
+        self.expect_lparen()?;
         let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
         let return_type = self.parse_return_type()?;
@@ -1216,14 +1216,14 @@ impl Parser {
         };
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
-        self.expect(&Token::LParen)?;
+        self.expect_lparen()?;
         let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
 
         let mut use_vars = Vec::new();
         if self.peek() == Token::Use {
             self.advance();
-            self.expect(&Token::LParen)?;
+            self.expect_lparen()?;
             let is_ref = if self.peek() == Token::Ampersand {
                 self.advance();
                 true

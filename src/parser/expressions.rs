@@ -420,7 +420,7 @@ impl Parser {
             if self.peek() == Token::Instanceof {
                 self.advance();
                 left = if self.peek() == Token::Backslash
-                    || matches!(self.peek(), Token::Identifier(_))
+                    || matches!(self.peek(), Token::Identifier(_, _))
                 {
                     Expr::Instanceof {
                         expr: Box::new(left),
@@ -579,7 +579,7 @@ impl Parser {
                 if self.peek() == Token::Instanceof {
                     self.advance();
                     expr = if self.peek() == Token::Backslash
-                        || matches!(self.peek(), Token::Identifier(_))
+                        || matches!(self.peek(), Token::Identifier(_, _))
                     {
                         Expr::Instanceof {
                             expr: Box::new(expr),
@@ -638,11 +638,11 @@ impl Parser {
                 let expr = self.parse_unary()?;
                 Ok(Expr::Clone(Box::new(expr)))
             }
-            Token::LParen => {
+            Token::LParen(_) => {
                 // Check for type cast: (int), (string), (float), (bool), (array), (object)
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
                 let cast_type = match &next {
-                    Token::Identifier(name) => match name.as_str() {
+                    Token::Identifier(name, _) => match name.as_str() {
                         "int" | "integer" => Some(CastType::Int),
                         "float" | "double" | "real" => Some(CastType::Float),
                         "string" => Some(CastType::String),
@@ -799,7 +799,7 @@ impl Parser {
                     is_once,
                 })
             }
-            Token::LParen => {
+            Token::LParen(_) => {
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
@@ -807,7 +807,7 @@ impl Parser {
             }
             Token::Isset => {
                 self.advance();
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let mut args = Vec::new();
                 let arg = self.parse_expr()?;
                 if !Self::is_isset_target(&arg) {
@@ -827,7 +827,7 @@ impl Parser {
             }
             Token::Empty => {
                 self.advance();
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 Ok(Expr::Empty(Box::new(expr)))
@@ -835,9 +835,11 @@ impl Parser {
             Token::Backslash => {
                 // Fully qualified name: \App\Models\User() or \App\Models\User::method()
                 let name = self.parse_qualified_name()?;
+                let named_line = self.last_primary_line;
                 let generic_args = self.parse_optional_turbofish()?;
                 if !generic_args.is_empty() {
-                    self.expect(&Token::LParen)?;
+                    let paren_line = self.expect_lparen()?;
+                    let line = named_line.unwrap_or(paren_line);
                     if matches!(self.peek(), Token::DotDotDot(_))
                         && self.peek_at(1) == Token::RParen
                     {
@@ -849,13 +851,15 @@ impl Parser {
                         name,
                         args,
                         generic_args,
+                        line,
                     });
                 }
                 if self.peek() == Token::DoubleColon {
                     return self.parse_named_static_access(name);
                 }
-                if self.peek() == Token::LParen {
-                    self.advance();
+                if matches!(self.peek(), Token::LParen(_)) {
+                    let paren_line = self.expect_lparen()?;
+                    let line = named_line.unwrap_or(paren_line);
                     if matches!(self.peek(), Token::DotDotDot(_))
                         && self.peek_at(1) == Token::RParen
                     {
@@ -868,6 +872,7 @@ impl Parser {
                         name,
                         args,
                         generic_args: Vec::new(),
+                        line,
                     })
                 } else {
                     Ok(Expr::Constant(name))
@@ -877,19 +882,24 @@ impl Parser {
                 Token::MagicConstant { name, line } => Ok(Expr::MagicConstant { name, line }),
                 _ => unreachable!(),
             },
-            Token::Identifier(_) => {
+            Token::Identifier(_, _) => {
                 let name = if self.peek_at(1) == Token::Backslash {
                     // Qualified name: App\Models\User
                     self.parse_qualified_name()?
                 } else {
                     match self.advance() {
-                        Token::Identifier(n) => n,
+                        Token::Identifier(n, line) => {
+                            self.last_primary_line = Some(line);
+                            n
+                        }
                         _ => unreachable!(),
                     }
                 };
+                let named_line = self.last_primary_line;
                 let generic_args = self.parse_optional_turbofish()?;
                 if !generic_args.is_empty() {
-                    self.expect(&Token::LParen)?;
+                    let paren_line = self.expect_lparen()?;
+                    let line = named_line.unwrap_or(paren_line);
                     if matches!(self.peek(), Token::DotDotDot(_))
                         && self.peek_at(1) == Token::RParen
                     {
@@ -901,6 +911,7 @@ impl Parser {
                         name,
                         args,
                         generic_args,
+                        line,
                     });
                 }
                 // Static access: ClassName::method() or ClassName::$prop
@@ -908,8 +919,9 @@ impl Parser {
                     return self.parse_named_static_access(name);
                 }
                 // Check if this is a function call (followed by `(`)
-                if self.peek() == Token::LParen {
-                    self.advance(); // consume (
+                if matches!(self.peek(), Token::LParen(_)) {
+                    let paren_line = self.expect_lparen()?;
+                    let line = named_line.unwrap_or(paren_line);
                     if matches!(self.peek(), Token::DotDotDot(_))
                         && self.peek_at(1) == Token::RParen
                     {
@@ -922,6 +934,7 @@ impl Parser {
                         name,
                         args,
                         generic_args: Vec::new(),
+                        line,
                     })
                 } else {
                     // Bare identifier — constant reference (e.g., PHP_INT_MAX, FOO)
@@ -965,8 +978,8 @@ impl Parser {
                 self.advance(); // consume 'new'
                 if self.peek() == Token::Class {
                     self.advance();
-                    let args = if self.peek() == Token::LParen {
-                        self.advance();
+                    let args = if matches!(self.peek(), Token::LParen(_)) {
+                        self.expect_lparen()?;
                         self.parse_call_args()?
                     } else {
                         Vec::new()
@@ -1002,17 +1015,22 @@ impl Parser {
                         constants,
                         methods,
                         line,
+                        call_line: line,
                     });
                 }
                 if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
-                    let class = match self.advance() {
-                        Token::Variable(name, line) => Self::variable_expression(name, line),
-                        Token::This(_) => Expr::Variable("this".to_string()),
+                    let (class, call_line) = match self.advance() {
+                        Token::Variable(name, variable_line) => {
+                            (Self::variable_expression(name, variable_line), variable_line)
+                        }
+                        Token::This(this_line) => {
+                            (Expr::Variable("this".to_string()), this_line)
+                        }
                         _ => unreachable!(),
                     };
                     let class = self.parse_dynamic_new_class_expression(class)?;
-                    let args = if self.peek() == Token::LParen {
-                        self.advance();
+                    let args = if matches!(self.peek(), Token::LParen(_)) {
+                        self.expect_lparen()?;
                         self.parse_call_args()?
                     } else {
                         Vec::new()
@@ -1021,21 +1039,25 @@ impl Parser {
                         class: Box::new(class),
                         args,
                         line,
+                        call_line,
                     });
                 }
-                let class_name = match self.peek() {
-                    Token::Backslash | Token::Identifier(_) => self.parse_qualified_name()?,
+                let (class_name, call_line) = match self.peek() {
+                    Token::Backslash | Token::Identifier(_, _) => {
+                        let class_name = self.parse_qualified_name()?;
+                        (class_name, self.last_primary_line.unwrap_or(line))
+                    }
                     Token::Static if self.class_scope_active => {
                         self.advance();
-                        "static".to_string()
+                        ("static".to_string(), line)
                     }
                     token => {
                         return Err(format!("Expected class name after 'new', got {token:?}"));
                     }
                 };
                 let generic_args = self.parse_optional_turbofish()?;
-                let args = if self.peek() == Token::LParen {
-                    self.advance(); // consume (
+                let args = if matches!(self.peek(), Token::LParen(_)) {
+                    self.expect_lparen()?;
                     self.parse_call_args()?
                 } else {
                     Vec::new()
@@ -1045,6 +1067,7 @@ impl Parser {
                     args,
                     generic_args,
                     line,
+                    call_line,
                 })
             }
             Token::Throw(line) => {
@@ -1077,7 +1100,7 @@ impl Parser {
             Token::ArrayKw => {
                 // Long array syntax: array(1, 2, 'a' => 3)
                 self.advance(); // consume 'array'
-                self.expect(&Token::LParen)?;
+                self.expect_lparen()?;
                 let elements = self.parse_array_elements(Token::RParen)?;
                 self.expect(&Token::RParen)?;
                 Ok(Expr::ArrayLiteral(elements))

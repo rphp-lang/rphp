@@ -477,24 +477,24 @@ impl<'a> Lexer<'a> {
             match &parts[0] {
                 StringPart::Literal(value) => tokens.push(Token::StringLiteral(value.clone())),
                 StringPart::Variable(name) => {
-                    tokens.push(Token::LParen);
+                    tokens.push(Token::LParen(0));
                     tokens.push(Token::StringLiteral(String::new()));
                     tokens.push(Token::Dot);
                     tokens.push(Token::Variable(name.clone(), 0));
                     tokens.push(Token::RParen);
                 }
                 StringPart::ArrayAccess(name, index) => {
-                    tokens.push(Token::LParen);
+                    tokens.push(Token::LParen(0));
                     tokens.push(Token::StringLiteral(String::new()));
                     tokens.push(Token::Dot);
                     Self::emit_array_access_tokens(tokens, name, index);
                     tokens.push(Token::RParen);
                 }
                 StringPart::Expression(expression) => {
-                    tokens.push(Token::LParen);
+                    tokens.push(Token::LParen(0));
                     tokens.push(Token::StringLiteral(String::new()));
                     tokens.push(Token::Dot);
-                    tokens.push(Token::LParen);
+                    tokens.push(Token::LParen(0));
                     tokens.extend(expression.iter().cloned());
                     tokens.push(Token::RParen);
                     tokens.push(Token::RParen);
@@ -503,7 +503,7 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        tokens.push(Token::LParen);
+        tokens.push(Token::LParen(0));
         for (index, part) in parts.iter().enumerate() {
             if index != 0 {
                 tokens.push(Token::Dot);
@@ -515,7 +515,7 @@ impl<'a> Lexer<'a> {
                     Self::emit_array_access_tokens(tokens, name, index);
                 }
                 StringPart::Expression(expression) => {
-                    tokens.push(Token::LParen);
+                    tokens.push(Token::LParen(0));
                     tokens.extend(expression.iter().cloned());
                     tokens.push(Token::RParen);
                 }

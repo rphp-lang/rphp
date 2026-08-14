@@ -241,6 +241,69 @@ fn root_created_exception_keeps_its_creation_trace_when_thrown_from_a_function()
 }
 
 #[test]
+fn throwable_trace_snapshots_method_calls_and_arguments_at_creation() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nclass TraceProbe {\n    public function outer($value) {\n        return $this->inner($value);\n    }\n    public function inner($value) {\n        return new Exception('stored');\n    }\n}\n$stored = (new TraceProbe())->outer('abcdefghijklmnopqrst');\nforeach ($stored->getTrace() as $index => $frame) {\n    echo $index, ':', $frame['file'], ':', $frame['line'], ':', $frame['class'], $frame['type'], $frame['function'], ':', $frame['args'][0], \"\\n\";\n}\necho $stored->getTraceAsString(), \"\\n\";\ntry { throw $stored; } catch (Throwable $caught) {\n    echo $caught->getLine(), \"\\n\", $caught->getTraceAsString();\n}",
+            "/fixture/trace-snapshot.php",
+            "/fixture",
+        ),
+        "0:/fixture/trace-snapshot.php:4:TraceProbe->inner:abcdefghijklmnopqrst\n1:/fixture/trace-snapshot.php:10:TraceProbe->outer:abcdefghijklmnopqrst\n#0 /fixture/trace-snapshot.php(4): TraceProbe->inner('abcdefghijklmno...')\n#1 /fixture/trace-snapshot.php(10): TraceProbe->outer('abcdefghijklmno...')\n#2 {main}\n7\n#0 /fixture/trace-snapshot.php(4): TraceProbe->inner('abcdefghijklmno...')\n#1 /fixture/trace-snapshot.php(10): TraceProbe->outer('abcdefghijklmno...')\n#2 {main}"
+    );
+}
+
+#[test]
+fn nested_uncaught_trace_uses_each_callers_source_line() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\nfunction outer($value) {\n    inner($value);\n}\nfunction inner($value) {\n    throw new Exception('boom');\n}\nouter(42);",
+        "/fixture/nested-trace.php",
+        "/fixture",
+    );
+
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message)
+            if message == "Uncaught Exception: boom in /fixture/nested-trace.php:6\nStack trace:\n#0 /fixture/nested-trace.php(3): inner(42)\n#1 /fixture/nested-trace.php(8): outer(42)\n#2 {main}\n  thrown in /fixture/nested-trace.php on line 6"
+    ));
+}
+
+#[test]
+fn multiline_calls_use_the_named_callable_line_and_staticness() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nfunction captureNamed() {\n    return new Exception();\n}\n$named = captureNamed\n    (\n    );\nclass TraceFactory {\n    public $stored;\n    public static function captureStatic() {\n        return new Exception();\n    }\n    public function __construct() {\n        $this->stored = new Exception();\n    }\n}\n$static = TraceFactory\n    ::\n    captureStatic\n    ();\n$constructed = new\n    TraceFactory\n    ();\necho $named->getTraceAsString(), \"\\n--\\n\";\necho $static->getTraceAsString(), \"\\n--\\n\";\necho $constructed->stored->getTraceAsString();",
+            "/fixture/multiline-call-trace.php",
+            "/fixture",
+        ),
+        "#0 /fixture/multiline-call-trace.php(5): captureNamed()\n#1 {main}\n--\n#0 /fixture/multiline-call-trace.php(19): TraceFactory::captureStatic()\n#1 {main}\n--\n#0 /fixture/multiline-call-trace.php(22): TraceFactory->__construct()\n#1 {main}"
+    );
+}
+
+#[test]
+fn closure_creation_trace_uses_phps_public_closure_name() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\n$factory = function ($value) {\n    return new Exception('closure');\n};\n$stored = $factory(42);\necho $stored->getTraceAsString();",
+            "/fixture/closure-trace.php",
+            "/fixture",
+        ),
+        "#0 /fixture/closure-trace.php(5): {closure}(42)\n#1 {main}"
+    );
+}
+
+#[test]
+fn trace_arguments_hide_the_runtime_identity_suffix_of_anonymous_classes() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\n$factory = function ($value) {\n    return new Exception();\n};\n$stored = $factory(new class {});\necho $stored->getTraceAsString();",
+            "/fixture/anonymous-trace-argument.php",
+            "/fixture",
+        ),
+        "#0 /fixture/anonymous-trace-argument.php(5): {closure}(Object(class@anonymous))\n#1 {main}"
+    );
+}
+
+#[test]
 fn root_uncaught_throwable_rendering_omits_the_colon_for_an_empty_message() {
     let error = run_php_expect_error_with_source_context(
         "<?php\nthrow new Exception();",

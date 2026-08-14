@@ -61,7 +61,7 @@ impl Parser {
             self.advance();
             let constant = self.parse_expr()?;
             self.expect(&Token::RBrace)?;
-            if self.peek() == Token::LParen {
+            if matches!(self.peek(), Token::LParen(_)) {
                 return Err("Dynamic static method calls are not supported yet".into());
             }
             return Ok(Expr::DynamicNamedClassConstant {
@@ -80,13 +80,13 @@ impl Parser {
             });
         }
 
-        let member = match self.advance() {
-            Token::Identifier(name) => name,
-            Token::Class => "class".to_string(),
+        let (member, member_line) = match self.advance() {
+            Token::Identifier(name, line) => (name, Some(line)),
+            Token::Class => ("class".to_string(), None),
             other => return Err(format!("Expected member name after ::, got {:?}", other)),
         };
         let generic_args = self.parse_optional_turbofish()?;
-        if self.peek() != Token::LParen {
+        if !matches!(self.peek(), Token::LParen(_)) {
             if !generic_args.is_empty() {
                 return Err("Generic type arguments must be followed by a method call".into());
             }
@@ -96,7 +96,8 @@ impl Parser {
             });
         }
 
-        self.advance();
+        let paren_line = self.expect_lparen()?;
+        let line = member_line.unwrap_or(paren_line);
         if matches!(self.peek(), Token::DotDotDot(_)) && self.peek_at(1) == Token::RParen {
             if !generic_args.is_empty() {
                 return Err("Generic first-class static callables are not supported yet".into());
@@ -129,6 +130,7 @@ impl Parser {
             method: member,
             args,
             generic_args,
+            line,
         })
     }
 
@@ -166,7 +168,7 @@ impl Parser {
                         index: Box::new(index),
                     };
                 }
-                Token::LParen => {
+                Token::LParen(line) => {
                     self.advance();
                     if matches!(self.peek(), Token::DotDotDot(_))
                         && self.peek_at(1) == Token::RParen
@@ -180,17 +182,19 @@ impl Parser {
                             callable: Box::new(expr),
                             args,
                             generic_args: Vec::new(),
+                            line,
                         };
                     }
                 }
                 Token::DoubleColon if self.peek_at(1) == Token::Less => {
                     let generic_args = self.parse_optional_turbofish()?;
-                    self.expect(&Token::LParen)?;
+                    let line = self.expect_lparen()?;
                     let args = self.parse_call_args()?;
                     expr = Expr::DynamicCall {
                         callable: Box::new(expr),
                         args,
                         generic_args,
+                        line,
                     };
                 }
                 Token::DoubleColon => {
@@ -208,8 +212,8 @@ impl Parser {
                         })?;
                         Expr::StringLiteral(name)
                     };
-                    if self.peek() == Token::LParen {
-                        self.advance();
+                    if matches!(self.peek(), Token::LParen(_)) {
+                        let line = self.expect_lparen()?;
                         let args = self.parse_call_args()?;
                         expr = Expr::DynamicCall {
                             callable: Box::new(Expr::ArrayLiteral(vec![
@@ -230,6 +234,7 @@ impl Parser {
                             ])),
                             args,
                             generic_args: Vec::new(),
+                            line,
                         };
                         continue;
                     }
@@ -251,8 +256,8 @@ impl Parser {
                         self.advance();
                         let member = self.parse_expr()?;
                         self.expect(&Token::RBrace)?;
-                        if self.peek() == Token::LParen {
-                            self.advance();
+                        if matches!(self.peek(), Token::LParen(_)) {
+                            let line = self.expect_lparen()?;
                             let args = self.parse_call_args()?;
                             expr = Expr::DynamicCall {
                                 callable: Box::new(Expr::ArrayLiteral(vec![
@@ -273,6 +278,7 @@ impl Parser {
                                 ])),
                                 args,
                                 generic_args: Vec::new(),
+                                line,
                             };
                         } else {
                             expr = Expr::DynamicPropertyAccess {
@@ -286,13 +292,13 @@ impl Parser {
                     if let Token::Variable(member_name, _) = self.peek() {
                         self.advance();
                         let member = Expr::Variable(member_name);
-                        if self.peek() == Token::LParen {
+                        if matches!(self.peek(), Token::LParen(_)) {
                             if nullsafe {
                                 return Err(
                                     "Dynamic nullsafe method calls are not supported yet".into()
                                 );
                             }
-                            self.advance();
+                            let line = self.expect_lparen()?;
                             let args = self.parse_call_args()?;
                             expr = Expr::DynamicCall {
                                 callable: Box::new(Expr::ArrayLiteral(vec![
@@ -313,6 +319,7 @@ impl Parser {
                                 ])),
                                 args,
                                 generic_args: Vec::new(),
+                                line,
                             };
                         } else {
                             expr = Expr::DynamicPropertyAccess {
@@ -324,6 +331,14 @@ impl Parser {
                         continue;
                     }
                     let token = self.advance();
+                    let member_line = match &token {
+                        Token::Identifier(_, line) => Some(*line),
+                        Token::Goto { line, .. }
+                        | Token::Echo { line }
+                        | Token::MagicConstant { line, .. } => Some(*line),
+                        Token::New(line) | Token::Throw(line) => Some(*line as usize),
+                        _ => None,
+                    };
                     let member = Self::token_as_named_arg_label(&token).ok_or_else(|| {
                         format!(
                             "Expected property/method name after {}, got {:?}",
@@ -332,8 +347,9 @@ impl Parser {
                         )
                     })?;
                     let generic_args = self.parse_optional_turbofish()?;
-                    if self.peek() == Token::LParen {
-                        self.advance();
+                    if matches!(self.peek(), Token::LParen(_)) {
+                        let paren_line = self.expect_lparen()?;
+                        let line = member_line.unwrap_or(paren_line);
                         if matches!(self.peek(), Token::DotDotDot(_))
                             && self.peek_at(1) == Token::RParen
                         {
@@ -376,6 +392,7 @@ impl Parser {
                             args,
                             generic_args,
                             nullsafe,
+                            line,
                         };
                     } else {
                         expr = Expr::PropertyAccess {
