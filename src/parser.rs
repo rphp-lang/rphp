@@ -7,6 +7,9 @@ include!("parser/ast.rs");
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// Human-readable source identity used by parser diagnostics. Embedders
+    /// that do not have one keep the historical context-free errors.
+    source_name: Option<String>,
     in_class_body: bool,
     /// Whether relative return types such as `static` have an active PHP
     /// class scope. Closures inherit it; named functions do not.

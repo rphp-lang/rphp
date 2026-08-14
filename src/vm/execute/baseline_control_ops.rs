@@ -107,13 +107,21 @@ pub(crate) fn execute_included_file(
             ));
         }
     };
-    let stmts = match crate::parser::Parser::new(tokens).parse() {
+    let stmts = match crate::parser::Parser::new(tokens)
+        .with_source_name(canonical.clone())
+        .parse()
+    {
         Ok(statements) => statements,
         Err(error) => {
+            let error = if error.starts_with("memory exhausted in ") {
+                format!("Parse error: {error}")
+            } else {
+                format!("Parse error in {resolved_path}: {error}")
+            };
             return Ok(include_parse_error(
                 eg,
                 caller.is_some(),
-                format!("Parse error in {resolved_path}: {error}"),
+                error,
             ));
         }
     };

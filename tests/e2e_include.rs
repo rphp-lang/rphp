@@ -354,6 +354,35 @@ try {{
 }
 
 #[test]
+fn excessive_syntax_nesting_in_an_included_file_is_catchable() {
+    let nested = format!(
+        "<?php\nfunction shelter() {{ return {}0{}; }}",
+        "[".repeat(300),
+        "]".repeat(300),
+    );
+    let (_dir, path) = write_temp_php("nested.php", &nested);
+    let canonical = std::fs::canonicalize(&path)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let source = format!(
+        r#"<?php
+try {{
+    include '{}';
+}} catch (CompileError $error) {{
+    echo $error->getMessage();
+}}
+"#,
+        path
+    );
+
+    assert_eq!(
+        run_php(&source),
+        format!("Parse error: memory exhausted in {canonical} on line 2")
+    );
+}
+
+#[test]
 fn missing_require_throws_a_catchable_error() {
     let output = run_php(
         r#"<?php

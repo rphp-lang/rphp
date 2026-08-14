@@ -1,8 +1,17 @@
 impl Parser {
+    /// Keep recursively nested grammar below the native Rust stack limit.
+    /// PHP reports an ordinary parser memory-exhaustion diagnostic when its
+    /// generated parser cannot grow its stack; RPHP must likewise reject a
+    /// hostile source unit instead of aborting the process.
+    const MAX_SYNTAX_NESTING: usize = 256;
+    const DEDICATED_STACK_NESTING: usize = 16;
+    const DEDICATED_STACK_SIZE: usize = 64 * 1024 * 1024;
+
     pub fn new(tokens: Vec<Token>) -> Self {
         Self {
             tokens,
             pos: 0,
+            source_name: None,
             in_class_body: false,
             class_scope_active: false,
             generic_scopes: Vec::new(),
@@ -13,7 +22,32 @@ impl Parser {
         }
     }
 
+    pub fn with_source_name(mut self, source_name: impl Into<String>) -> Self {
+        self.source_name = Some(source_name.into());
+        self
+    }
+
     pub fn parse(&mut self) -> Result<Vec<Stmt>, String> {
+        let (max_depth, deepest_line) = self.check_syntax_nesting()?;
+        if max_depth > Self::DEDICATED_STACK_NESTING {
+            let spawn_error = self.memory_exhausted(deepest_line);
+            return std::thread::scope(|scope| {
+                let parser = std::thread::Builder::new()
+                    .name("rphp-parser".to_string())
+                    .stack_size(Self::DEDICATED_STACK_SIZE)
+                    .spawn_scoped(scope, || self.parse_inner())
+                    .map_err(|_| spawn_error)?;
+                match parser.join() {
+                    Ok(result) => result,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }
+            });
+        }
+
+        self.parse_inner()
+    }
+
+    fn parse_inner(&mut self) -> Result<Vec<Stmt>, String> {
         self.expect(&Token::OpenTag)?;
         let mut stmts = Vec::new();
 
@@ -26,6 +60,58 @@ impl Parser {
         }
 
         Ok(stmts)
+    }
+
+    fn check_syntax_nesting(&self) -> Result<(usize, usize), String> {
+        let mut depth = 0usize;
+        let mut max_depth = 0usize;
+        let mut line = 1usize;
+        let mut deepest_line = line;
+
+        for token in &self.tokens {
+            line = match token {
+                Token::This(token_line)
+                | Token::Variable(_, token_line)
+                | Token::LBracket(token_line)
+                | Token::MagicConstant {
+                    line: token_line, ..
+                }
+                | Token::Goto {
+                    line: token_line, ..
+                }
+                | Token::Echo { line: token_line } => *token_line,
+                _ => line,
+            };
+
+            match token {
+                Token::LParen | Token::LBrace | Token::LBracket(_) => {
+                    depth += 1;
+                    if depth > max_depth {
+                        max_depth = depth;
+                        deepest_line = line;
+                    }
+                    if depth > Self::MAX_SYNTAX_NESTING {
+                        return Err(self.memory_exhausted(line));
+                    }
+                }
+                Token::RParen | Token::RBrace | Token::RBracket => {
+                    depth = depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+
+        Ok((max_depth, deepest_line))
+    }
+
+    fn memory_exhausted(&self, line: usize) -> String {
+        let location = self
+            .source_name
+            .as_deref()
+            .filter(|source_name| !source_name.is_empty())
+            .map(|source_name| format!(" in {source_name}"))
+            .unwrap_or_default();
+        format!("memory exhausted{location} on line {line}")
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {

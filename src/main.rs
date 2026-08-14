@@ -133,10 +133,13 @@ fn main() {
         std::process::exit(1);
     });
 
-    let stmts = Parser::new(tokens).parse().unwrap_or_else(|e| {
-        eprintln!("Parse error: {}", e);
-        std::process::exit(1);
-    });
+    let stmts = Parser::new(tokens)
+        .with_source_name(source_file.clone())
+        .parse()
+        .unwrap_or_else(|e| {
+            eprintln!("Parse error: {}", e);
+            std::process::exit(1);
+        });
 
     let result = Compiler::new()
         .with_source_context(source_file, source_directory)

@@ -122,6 +122,36 @@ fn test_parse_nested_array_append() {
 }
 
 #[test]
+fn excessive_mixed_syntax_nesting_reports_memory_exhaustion() {
+    let pairs = 140;
+    let source = format!(
+        "<?php\nfunction shelter() {{\nreturn {}0{};\n}}",
+        "([".repeat(pairs),
+        "])".repeat(pairs),
+    );
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+    let error = Parser::new(tokens)
+        .with_source_name("/fixture/nesting.php")
+        .parse()
+        .unwrap_err();
+
+    assert_eq!(error, "memory exhausted in /fixture/nesting.php on line 3");
+}
+
+#[test]
+fn ordinary_mixed_syntax_nesting_remains_accepted() {
+    let pairs = 16;
+    let source = format!(
+        "<?php function shelter() {{ return {}0{}; }}",
+        "([".repeat(pairs),
+        "])".repeat(pairs),
+    );
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_bind_appended_array_element_reference() {
     let tokens = Lexer::new("<?php $slot = &$store->items['group'][];")
         .tokenize()
