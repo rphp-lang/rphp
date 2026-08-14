@@ -12,7 +12,7 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against default-release RPHP commit
-`7675f09d4038d4f404cd995abf4595aaf3245708`, using the same runner commit. The
+`6c1d43f2d6a53d333c649a49836b8abe5da287d0`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout; the complete
 ordinary default (`quick-loops+jit-prototype`), explicit typed-only
 (`--no-default-features --features quick-loops`), no-default-features and
@@ -20,15 +20,15 @@ all-features Cargo matrix passed separately. It discovered 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 1,083 | 2,681 | 65 | 1 | 221 | 0 | 0 | 28.773% |
+| `Zend/tests` | 1,088 | 2,676 | 65 | 1 | 221 | 0 | 0 | 28.905% |
 | `tests/lang` | 91 | 177 | 10 | 0 | 16 | 0 | 0 | 33.955% |
-| **Combined** | **1,174** | **2,858** | **75** | **1** | **237** | **0** | **0** | **29.117%** |
+| **Combined** | **1,179** | **2,853** | **75** | **1** | **237** | **0** | **0** | **29.241%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,174 / 4,345, or **27.020%**; including crashes and timeouts in the attempted
-denominator gives **29.117%**. These numbers are intentionally pre-alpha and do
+is 1,179 / 4,345, or **27.135%**; including crashes and timeouts in the attempted
+denominator gives **29.241%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -39,7 +39,7 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,145 runtime failures, 1,049 output mismatches,
+The largest failure groups are 1,145 runtime failures, 1,044 output mismatches,
 488 parse failures, 170 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
@@ -51,17 +51,39 @@ The complete official PHP 8.2.33 CLI oracle run produced 4,255 passes, zero
 ordinary failures, 86 skips, the one upstream `XFAIL`, three unsupported SAPI
 sections, zero timeouts and zero crashes. Five representative cases also pass
 through php-src's official `run-tests.php`. Two independent RPHP executions
-with a matching native PHP 8.2.33 runner produced byte-identical published
-manifests and summaries. Four already-failing raw executions retain known
+with a matching native PHP 8.2.33 runner produced byte-identical manifests and
+identical summary evidence after excluding the expected commit identity fields
+from the pre-commit run. Four already-failing raw executions retain known
 non-semantic output variation from unordered object-property state; run
 durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
-`2001fce6cc43da899da2c3ccf44d02f83161733fc12703401f7c41362d562d45` and
+`0cfa09f0989da3bf306a8d722ec15b0055da461d0f7a040ff29cb00685b4d13c` and
 its summary has SHA-256
-`865fafdf6f8c5ce2169c3a4e9514eed4b9bbbae3acfa804fbbe34ab8d3092456`.
+`3015c587363d74b97f646abe652cdb145802342f6f670bb4166dbde4a3208574`.
 
-Relative to the retained `f8fc462` baseline, this checkpoint adds 43 exact
-passes without losing a previous pass or adding a crash or timeout. PHP's
+Relative to the retained `7675f09` baseline, this checkpoint adds five exact
+passes without losing a previous pass or adding a crash or timeout. A static
+local assignment such as `$alias =& $value` now promotes the source to one
+stable PHP reference cell and binds both CV names to it. Ordinary writes
+through either name update that cell, while a later `=&` rebinds only the
+destination name; `unset()` detaches one name without destroying the value
+seen by remaining aliases. Undefined and self sources, `$this`, assignment as
+an l-value expression, array copy-on-write and destructuring from an aliased
+RHS retain PHP 8.2 behavior.
+
+Original clean-room regressions cover two-way writes, rebind, unset, missing
+and self sources, by-reference expression use, `$this`, array copy-on-write and
+retained destructuring input. The complete four-configuration Cargo matrix and
+unsafe-policy ratchet pass; the latter remains at 1,623 production blocks and
+289 unsafe functions. The exact additions are
+`Zend/tests/assign_to_var_001.phpt`, `assign_to_var_002.phpt`,
+`bug71030.phpt`, `dereference_003.phpt` and `try/bug72629.phpt`. This does not
+claim complete reference, array-element, foreach copy-on-write, PHP 8.2 or
+framework compatibility; the corpus-convergence goal remains active.
+
+The preceding `7675f09` checkpoint, relative to the retained `f8fc462`
+baseline, added 43 exact passes without losing a previous pass or adding a
+crash or timeout. PHP's
 `$$name` and `${expression}` forms now retain their right-associated syntax and
 resolve against the active frame symbol table. Reads, writes, `isset`, `unset`,
 `??=`, compound mutation, `global`, destructuring, callable postfixes and
