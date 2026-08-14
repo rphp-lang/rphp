@@ -19,8 +19,9 @@ functions and closures, arrays and copy-on-write behavior, classes,
 inheritance, interfaces, traits, exceptions, generators, type declarations,
 namespaces, selected reflection behavior, JSON, regular expressions, and a
 growing standard-library surface. Some streams, file operations, structured
-coroutines, experimental generic types, and the native JIT are opt-in Cargo
-features.
+coroutines and experimental generic types are opt-in Cargo features. The
+default build includes native execution for proven hot regions on the two
+primary targets below.
 
 RPHP is not yet a drop-in replacement for PHP. Major gaps include complete
 language and standard-library compatibility, most extensions, broad Composer
@@ -31,7 +32,7 @@ for the current support contract.
 
 CI tests the baseline runtime and native execution on these primary targets:
 
-| Target | Baseline runtime | Experimental JIT |
+| Target | Baseline runtime | Default native JIT |
 | --- | --- | --- |
 | macOS / AArch64 | Yes | Yes |
 | Linux / x86-64 | Yes | Yes |
@@ -66,9 +67,6 @@ Features are selected at compile time. The resulting binary automatically uses
 an enabled optimization when the current target and program region qualify.
 
 ```sh
-# Native JIT for supported hot regions (macOS/AArch64 or Linux/x86-64)
-cargo build --profile max-perf --features jit-prototype
-
 # Structured, cooperative coroutines and their PHP API
 cargo build --profile max-perf --features coroutines
 
@@ -78,6 +76,15 @@ cargo build --profile max-perf --features php-generics-erased
 # Reified experimental generic types
 cargo build --profile max-perf --features php-generics-reified
 ```
+
+The default binary automatically lowers qualifying hot regions to native code
+on macOS/AArch64 and Linux/x86-64. Set `RPHP_DISABLE_JIT=1` to retain the same
+binary but force the typed executor, or build an explicit typed-only binary
+with `--no-default-features --features quick-loops`. Live executable mappings
+are capped at 16 MiB by default; `RPHP_JIT_CODE_LIMIT_BYTES` may lower that
+budget or raise it up to the hard 1 GiB ceiling. The historical
+`jit-prototype` Cargo feature remains available for explicit no-default build
+matrices.
 
 The generic syntax is an RPHP experiment and is disabled in a default build.
 An all-features build contains both generic runtime capabilities for

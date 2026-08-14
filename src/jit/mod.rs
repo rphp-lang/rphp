@@ -1,11 +1,16 @@
-//! Experimental native-code backend.
+//! Native-code backend for proven hot regions.
 //!
-//! The first slice deliberately proves only the platform boundary: RPHP emits
-//! ARM64 instructions itself, seals the resulting memory as executable, and
-//! calls it through the platform ABI. It is feature-gated and is not connected
-//! to PHP execution until typed guards and exact side exits can be preserved.
+//! RPHP emits machine code itself, seals the resulting memory as executable,
+//! and calls it through the platform ABI. Native code is always guarded by the
+//! shared typed-region contract and retains an exact canonical fallback.
 
+mod runtime;
 mod straight;
+
+pub use runtime::{
+    DEFAULT_CODE_MAPPING_LIMIT_BYTES, MAX_CODE_MAPPING_LIMIT_BYTES, RuntimeTelemetry, enabled,
+    telemetry,
+};
 
 #[cfg(any(
     all(target_arch = "aarch64", target_os = "macos"),

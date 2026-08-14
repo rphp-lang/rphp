@@ -4,6 +4,7 @@
 //! it does not invoke an assembler, linker or external code-generation crate.
 
 use super::memory::ExecutableMemory;
+use super::runtime::ensure_compilation_enabled;
 use super::straight::{
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
@@ -2869,6 +2870,7 @@ impl CompiledX86StraightLongLoop {
         carried_mask: u64,
         defer_visible_phi: bool,
     ) -> Result<Self, X86StraightLongLoopError> {
+        ensure_compilation_enabled()?;
         if config.operation_count == 0
             || config.operation_count as usize > super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
         {
@@ -3505,6 +3507,7 @@ pub struct CompiledX86AddMultiply {
 
 impl CompiledX86AddMultiply {
     pub fn compile() -> io::Result<Self> {
+        ensure_compilation_enabled()?;
         let mut assembler = X86_64Assembler::new();
         // System V AMD64 passes the first three integer arguments in RDI, RSI,
         // and RDX. Integer return values use RAX.
@@ -3674,6 +3677,7 @@ pub struct CompiledScalarLongProgram {
 
 impl CompiledScalarLongProgram {
     pub fn compile(plan: &ScalarLongFunctionPlan) -> Result<Self, ScalarLongJitError> {
+        ensure_compilation_enabled()?;
         validate_x86_scalar_long_plan(plan)?;
         let mut assembler = X86_64Assembler::new();
         let temporaries = X86_64Register::R10;

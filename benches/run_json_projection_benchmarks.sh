@@ -13,9 +13,9 @@ NO_JIT_TARGET="target/json-projection-no-jit"
 JIT_TARGET="target/json-projection-jit"
 
 echo "=== Building max-perf RPHP without native JIT ==="
-RUSTFLAGS="-C target-cpu=native" cargo build --profile max-perf --target-dir "$NO_JIT_TARGET" 2>&1 | tail -1
+RUSTFLAGS="-C target-cpu=native" cargo build --profile max-perf --no-default-features --features quick-loops --target-dir "$NO_JIT_TARGET" 2>&1 | tail -1
 echo "=== Building max-perf RPHP with native JIT ==="
-RUSTFLAGS="-C target-cpu=native" cargo build --profile max-perf --features jit-prototype --target-dir "$JIT_TARGET" 2>&1 | tail -1
+RUSTFLAGS="-C target-cpu=native" cargo build --profile max-perf --target-dir "$JIT_TARGET" 2>&1 | tail -1
 
 RPHP_NO_JIT="./$NO_JIT_TARGET/max-perf/rphp"
 RPHP_JIT="./$JIT_TARGET/max-perf/rphp"

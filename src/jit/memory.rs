@@ -7,6 +7,8 @@ use std::ffi::{c_int, c_void};
 use std::io;
 use std::ptr::NonNull;
 
+use super::runtime::{MappingReservation, record_system_failure};
+
 const PROT_READ: c_int = 0x01;
 const PROT_WRITE: c_int = 0x02;
 const PROT_EXEC: c_int = 0x04;
@@ -39,6 +41,7 @@ unsafe extern "C" {
 pub(crate) struct ExecutableMemory {
     address: NonNull<u8>,
     mapped_length: usize,
+    _reservation: MappingReservation,
 }
 
 impl ExecutableMemory {
@@ -52,6 +55,7 @@ impl ExecutableMemory {
 
         let page_size = unsafe { getpagesize() };
         if page_size <= 0 {
+            record_system_failure();
             return Err(io::Error::last_os_error());
         }
         let page_size = page_size as usize;
@@ -61,6 +65,12 @@ impl ExecutableMemory {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "code buffer is too large")
             })?;
+        let reservation = MappingReservation::acquire(mapped_length).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "native JIT executable-memory budget is unavailable",
+            )
+        })?;
 
         // Maintain W^X: populate a writable mapping, flush instruction state
         // where the architecture requires it, then permanently seal it RX.
@@ -75,9 +85,11 @@ impl ExecutableMemory {
             )
         };
         if raw == (-1_isize) as *mut c_void {
+            record_system_failure();
             return Err(io::Error::last_os_error());
         }
         let Some(address) = NonNull::new(raw.cast::<u8>()) else {
+            record_system_failure();
             unsafe {
                 munmap(raw, mapped_length);
             }
@@ -91,15 +103,19 @@ impl ExecutableMemory {
 
         if unsafe { mprotect(raw, mapped_length, PROT_READ | PROT_EXEC) } != 0 {
             let error = io::Error::last_os_error();
+            record_system_failure();
             unsafe {
                 munmap(raw, mapped_length);
             }
             return Err(error);
         }
 
+        reservation.record_created();
+
         Ok(Self {
             address,
             mapped_length,
+            _reservation: reservation,
         })
     }
 

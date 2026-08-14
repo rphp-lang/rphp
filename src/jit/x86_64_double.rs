@@ -1,6 +1,7 @@
 //! Exact-Double scalar leaf lowering for Linux x86-64.
 
 use super::super::memory::ExecutableMemory;
+use super::super::runtime::ensure_compilation_enabled;
 use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register, X86DoubleInstructionSet};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSelect,
@@ -238,6 +239,7 @@ impl CompiledScalarDoubleProgram {
         plan: &ScalarDoubleFunctionPlan,
         instruction_set: X86DoubleInstructionSet,
     ) -> Result<Self, ScalarDoubleJitError> {
+        ensure_compilation_enabled()?;
         validate_scalar_double_plan(plan)?;
         let registers = X86ScalarDoubleRegisterMap::for_plan(plan);
         let mut assembler = X86_64Assembler::new();

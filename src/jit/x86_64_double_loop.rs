@@ -1,6 +1,7 @@
 //! Composed exact-Double call/accumulate loop lowering for Linux x86-64.
 
 use super::super::memory::ExecutableMemory;
+use super::super::runtime::ensure_compilation_enabled;
 use super::double::X86ScalarDoubleRegisterMap;
 use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register, X86DoubleInstructionSet};
 use crate::vm::function::{
@@ -95,6 +96,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         plan: &ScalarDoubleFunctionPlan,
         instruction_set: X86DoubleInstructionSet,
     ) -> Result<Self, QuickDoubleCallAccumulateJitError> {
+        ensure_compilation_enabled()?;
         validate_argument_plan(argument_plan, plan.public_args)?;
         validate(plan)?;
         let forwarded_argument_mask = argument_plan.register_forwardable_output_mask(plan);

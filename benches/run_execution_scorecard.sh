@@ -72,10 +72,10 @@ build() {
 }
 
 SECONDS=0
-build "$typed_target"
+build "$typed_target" --no-default-features --features quick-loops
 typed_build_seconds=$SECONDS
 SECONDS=0
-build "$jit_target" --features jit-prototype
+build "$jit_target"
 jit_build_seconds=$SECONDS
 
 typed_binary="$typed_target/max-perf/rphp"
@@ -216,7 +216,7 @@ emit_stats() {
         section == "coverage" && /^[a-z_]+=[0-9]+(,side_exits=[0-9]+)?$/ {
             print "stats\t" workload "\t" mode "\t" $0; next
         }
-        /^(push_call_frame|cleanup_frame|write_val|write_frame_slot|do_fcall|return|quick_loop|quick_packed_array_|array_owner_|closure_payload_|declared_object_|declared_property_|newobj_|resolved_virtual_aggregate_|jit_loop|jit_straight_)[a-z_]*=[0-9]+$/ {
+        /^(push_call_frame|cleanup_frame|write_val|write_frame_slot|do_fcall|return|quick_loop|quick_packed_array_|array_owner_|closure_payload_|declared_object_|declared_property_|newobj_|resolved_virtual_aggregate_|jit_runtime_|jit_code_mapping_|jit_loop|jit_straight_)[a-z_]*=[0-9]+$/ {
             print "stats\t" workload "\t" mode "\t" $0
         }
         END {
@@ -254,7 +254,7 @@ printf 'metadata\trustc\t%s\n' "$(rustc --version)"
 printf 'metadata\tphp\t%s\n' "$(php -r 'echo PHP_VERSION;')"
 printf 'metadata\tphp_jit\t%s\n' "$php_jit_status"
 printf 'metadata\tprofile\tmax-perf; target-cpu=native\n'
-printf 'metadata\tfeatures\tbaseline=quick-loops runtime-disabled; typed=quick-loops; jit=quick-loops,jit-prototype\n'
+printf 'metadata\tfeatures\tbaseline=quick-loops runtime-disabled; typed=quick-loops explicit; jit=default quick-loops,jit-prototype\n'
 printf 'metadata\ttyped_build_elapsed_s\t%s\n' "$typed_build_seconds"
 printf 'metadata\tjit_build_elapsed_s\t%s\n' "$jit_build_seconds"
 printf 'metadata\ttyped_binary_bytes\t%s\n' "$(wc -c <"$typed_binary" | tr -d ' ')"
@@ -366,8 +366,8 @@ for workload_index in "${!workloads[@]}"; do
     done
 done
 
-build "$typed_stats_target" --features vm-stats
-build "$jit_stats_target" --features jit-prototype,vm-stats
+build "$typed_stats_target" --no-default-features --features quick-loops,vm-stats
+build "$jit_stats_target" --features vm-stats
 
 for workload_index in "${!workloads[@]}"; do
     workload=${workloads[$workload_index]}

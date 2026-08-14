@@ -1,4 +1,5 @@
 use super::memory::ExecutableMemory;
+use super::runtime::ensure_compilation_enabled;
 use super::straight::{
     NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
     NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
@@ -652,6 +653,7 @@ pub struct CompiledAddMultiply {
 
 impl CompiledAddMultiply {
     pub fn compile() -> io::Result<Self> {
+        ensure_compilation_enabled()?;
         let mut assembler = Arm64Assembler::new();
         assembler.add_register(Arm64Register::X0, Arm64Register::X0, Arm64Register::X1);
         assembler.multiply_register(Arm64Register::X0, Arm64Register::X0, Arm64Register::X2);
@@ -866,6 +868,7 @@ impl CompiledQuickLongAccumulateLoop {
         addend: Option<i64>,
         safepoint_interval: u16,
     ) -> Result<Self, QuickLongAccumulateJitError> {
+        ensure_compilation_enabled()?;
         if safepoint_interval == 0 || safepoint_interval >= 4_096 {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
                 "native polling interval must fit a non-zero ARM64 immediate",
@@ -947,6 +950,7 @@ impl CompiledQuickLongAccumulateLoop {
         addend: Option<i64>,
         check_overflow: bool,
     ) -> Result<Self, QuickLongAccumulateJitError> {
+        ensure_compilation_enabled()?;
         let mut assembler = Arm64Assembler::new();
         let induction = Arm64Register::from_code(2);
         let bound = Arm64Register::from_code(3);
@@ -1748,6 +1752,7 @@ impl CompiledQuickLongConditionalAccumulateLoop {
     pub fn compile(
         config: NativeConditionalLongLoopConfig,
     ) -> Result<Self, QuickLongAccumulateJitError> {
+        ensure_compilation_enabled()?;
         validate_conditional_long_loop_config(config)?;
 
         let mut assembler = Arm64Assembler::new();
@@ -1935,6 +1940,7 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         config: NativeConditionalLongLoopConfig,
         safepoint_interval: u16,
     ) -> Result<Self, QuickLongAccumulateJitError> {
+        ensure_compilation_enabled()?;
         validate_conditional_long_loop_config(config)?;
         if safepoint_interval == 0 || safepoint_interval >= 4_096 {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
@@ -2464,6 +2470,7 @@ impl CompiledQuickLongStraightLoop {
         publication_mask: u64,
         carried_mask: u64,
     ) -> Result<Self, QuickLongAccumulateJitError> {
+        ensure_compilation_enabled()?;
         validate_straight_long_loop_config(&config)?;
         if carried_mask & !publication_mask != 0 || carried_mask.count_ones() > 3 {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
@@ -5147,6 +5154,7 @@ pub struct CompiledScalarLongProgram {
 
 impl CompiledScalarLongProgram {
     pub fn compile(plan: &ScalarLongFunctionPlan) -> Result<Self, ScalarLongJitError> {
+        ensure_compilation_enabled()?;
         validate_scalar_long_plan(plan)?;
 
         let mut assembler = Arm64Assembler::new();

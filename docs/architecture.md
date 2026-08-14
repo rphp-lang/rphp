@@ -31,8 +31,8 @@ around a single-threaded value/runtime contract.
 
 1. **Baseline VM.** General supported semantics and fallback behavior.
 2. **Quick regions.** Typed, predecoded plans for proven hot program shapes.
-3. **Native regions.** With `jit-prototype`, selected quick plans can lower to
-   machine code on macOS/AArch64 and Linux/x86-64.
+3. **Native regions.** On macOS/AArch64 and Linux/x86-64, the default build can
+   lower selected quick plans to machine code after their hotness threshold.
 
 Native code is never the only implementation of an operation. Type changes,
 overflow, references, copy-on-write, exceptions, dynamic dispatch, or another
@@ -41,9 +41,12 @@ failed assumption must side-exit before behavior diverges.
 ## Feature boundaries
 
 Non-default Cargo features keep experimental or incomplete surfaces explicit.
-The native JIT, coroutines, VM statistics, generic runtime modes, streams, file
-operations, and include-path support can be compiled separately. Default and
-no-default builds remain first-class CI configurations.
+Coroutines, VM statistics, generic runtime modes, streams, file operations, and
+include-path support can be compiled separately. The native JIT is part of the
+default build on supported targets, can be forced off at runtime with
+`RPHP_DISABLE_JIT`, and can be compiled out through the no-default feature
+matrix. Default, typed-only and no-default builds remain first-class CI
+configurations.
 
 Generic declarations share an interned metadata graph. Bound-erased and
 reified builds select different runtime capabilities without widening the
@@ -54,10 +57,12 @@ thread-safe.
 ## Memory and unsafe code
 
 The VM and JIT use raw pointers, tagged unions, manually managed frame storage,
-executable memory, and platform ABIs. Their safety depends on documented
-layout, ownership, lifetime, mutation, and side-exit invariants. See the
-[unsafe-code policy](unsafe-policy.md). Pre-alpha RPHP is not a security
-boundary and must not execute untrusted code.
+executable memory, and platform ABIs. Generated code is published through one
+W^X mapping boundary and live RX mappings have a process-wide bounded budget;
+allocation or budget failure keeps the typed executor authoritative. Safety
+depends on documented layout, ownership, lifetime, mutation, and side-exit
+invariants. See the [unsafe-code policy](unsafe-policy.md). Pre-alpha RPHP is
+not a security boundary and must not execute untrusted code.
 
 ## Detailed direction
 

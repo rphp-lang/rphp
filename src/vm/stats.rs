@@ -938,6 +938,62 @@ mod inner {
             "quick_packed_array_reserve_entries={}",
             QUICK_PACKED_ARRAY_RESERVE_ENTRIES.load(Ordering::Relaxed)
         );
+        #[cfg(all(
+            feature = "jit-prototype",
+            any(
+                all(target_arch = "aarch64", target_os = "macos"),
+                all(target_arch = "x86_64", target_os = "linux")
+            )
+        ))]
+        {
+            let telemetry = crate::jit::telemetry();
+            let _ = writeln!(err, "jit_runtime_enabled={}", u8::from(telemetry.enabled));
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_limit_bytes={}",
+                telemetry.mapping_limit_bytes
+            );
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_live_bytes={}",
+                telemetry.live_mapping_bytes
+            );
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_peak_bytes={}",
+                telemetry.peak_mapping_bytes
+            );
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_live_count={}",
+                telemetry.live_mappings
+            );
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_peak_count={}",
+                telemetry.peak_mappings
+            );
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_created_count={}",
+                telemetry.created_mappings
+            );
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_disabled_rejections={}",
+                telemetry.disabled_rejections
+            );
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_budget_rejections={}",
+                telemetry.budget_rejections
+            );
+            let _ = writeln!(
+                err,
+                "jit_code_mapping_system_failures={}",
+                telemetry.system_failures
+            );
+        }
         let _ = writeln!(err, "-- quick/JIT planner coverage --");
         let _ = writeln!(
             err,

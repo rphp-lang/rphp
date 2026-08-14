@@ -1,6 +1,7 @@
 //! Composed exact-Double call/accumulate loop lowering for macOS ARM64.
 
 use super::super::memory::ExecutableMemory;
+use super::super::runtime::ensure_compilation_enabled;
 use super::{Arm64Assembler, Arm64Condition, Arm64FloatRegister, Arm64Register};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
@@ -91,6 +92,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         argument_plan: &QuickDoubleArgumentProgram,
         plan: &ScalarDoubleFunctionPlan,
     ) -> Result<Self, QuickDoubleCallAccumulateJitError> {
+        ensure_compilation_enabled()?;
         validate_argument_plan(argument_plan, plan.public_args)?;
         validate(plan)?;
         let forwarded_argument_mask = argument_plan.register_forwardable_output_mask(plan);

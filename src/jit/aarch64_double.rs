@@ -1,6 +1,7 @@
 //! Exact-Double scalar leaf lowering for macOS ARM64.
 
 use super::super::memory::ExecutableMemory;
+use super::super::runtime::ensure_compilation_enabled;
 use super::{Arm64Assembler, Arm64Condition, Arm64FloatRegister, Arm64Register};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
@@ -158,6 +159,7 @@ pub struct CompiledScalarDoubleProgram {
 
 impl CompiledScalarDoubleProgram {
     pub fn compile(plan: &ScalarDoubleFunctionPlan) -> Result<Self, ScalarDoubleJitError> {
+        ensure_compilation_enabled()?;
         validate_scalar_double_plan(plan)?;
         let mut assembler = Arm64Assembler::new();
         let mut side_exit_branches = Vec::new();
