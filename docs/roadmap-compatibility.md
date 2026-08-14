@@ -47,14 +47,16 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `8bcc548` against
-php-src 8.2.33 `651db3e`: 1,060 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with 21 exact additions and no lost pass relative to
-`0afbae3`. The dedicated source-unpack protocol now preserves array aliases and
-copy-on-write, Traversable keys and exception order, named and variadic
-mapping, diagnostics, internal variadics and large detached call frames across
-functions, methods and constructors. All 14 `Zend/tests/arg_unpack` cases pass;
-seven adjacent tests also advance. The corpus retains zero crashes and zero
+The current pinned PHP 8.2 differential baseline is RPHP `a89e091` against
+php-src 8.2.33 `651db3e`: 1,074 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with 14 exact additions and no lost pass relative to
+`8bcc548`. Array literal unpacking now consumes arrays and `Traversable`
+objects through the shared iterator protocol, reindexes integer and canonical
+numeric-string keys, overwrites string keys in insertion order, dereferences
+source reference cells, reports invalid sources and keys as catchable PHP
+errors, and rejects append past `PHP_INT_MAX` instead of wrapping. Five of the
+12 `Zend/tests/array_unpack` cases pass and ten additional Zend cases advance
+through the same general semantics. The corpus retains zero crashes and zero
 timeouts. The Symfony S3 slice remains green against PHP 8.2.33 through cold,
 cached, deleted-cache, malformed-cache and concurrent publication transitions,
 including exact health and missing-route results.

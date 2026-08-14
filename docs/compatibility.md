@@ -12,33 +12,33 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`8bcc5480a89eaef667612e138d4450d6bc498cc5`, using the same runner commit. The
+`a89e091526ee7da97c10c67edb03d6ee2e6f6378`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 972 | 2,792 | 65 | 1 | 221 | 0 | 0 | 25.824% |
+| `Zend/tests` | 986 | 2,778 | 65 | 1 | 221 | 0 | 0 | 26.196% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,060** | **2,972** | **75** | **1** | **237** | **0** | **0** | **26.290%** |
+| **Combined** | **1,074** | **2,958** | **75** | **1** | **237** | **0** | **0** | **26.637%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,060 / 4,345, or **24.396%**; including crashes and timeouts in the attempted
-denominator gives **26.290%**. These numbers are intentionally pre-alpha and do
+is 1,074 / 4,345, or **24.718%**; including crashes and timeouts in the attempted
+denominator gives **26.637%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
 language coverage. Of 4,032 attempted cases, six fail during `SKIPIF` before
-the test body, 749 are rejected in the observed parse/compile stage, and 3,277
-(**81.275%**) execute the test's `FILE` section past that stage. This is not a
+the test body, 758 are rejected in the observed parse/compile stage, and 3,268
+(**81.052%**) execute the test's `FILE` section past that stage. This is not a
 second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,192 runtime failures, 1,056 output mismatches,
-567 parse failures, 151 compile failures and six failed `SKIPIF` evaluations.
+The largest failure groups are 1,173 runtime failures, 1,056 output mismatches,
+567 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
@@ -49,14 +49,47 @@ The complete official PHP 8.2.33 CLI oracle run produced 4,255 passes, zero
 ordinary failures, 86 skips, the one upstream `XFAIL`, three unsupported SAPI
 sections, zero timeouts and zero crashes. Five representative cases also pass
 through php-src's official `run-tests.php`. Two independent RPHP executions
-with a matching native PHP 8.2.33 runner produced byte-identical manifests with
-SHA-256
-`57959b27305707558a81d7e57e770b2b88255294195746d06d75f045851506d3`
-and byte-identical summaries with SHA-256
-`ad95a739ab281225a38808ef38929e85725f7fd85463016ac038b8f3d3930b7c`.
+with a matching native PHP 8.2.33 runner produced byte-identical published
+manifests and summaries. Four already-failing raw executions retain known
+non-semantic output variation from unordered object-property state; run
+durations also vary, but neither enters the compact published artifacts. The
+manifest has SHA-256
+`c30ea38636b8b705428a66e6126ccd046e6cc68841deb70acb441a08460b5fd2` and
+its summary has SHA-256
+`e5e3bcf3fc48890723157d5552c2a724da0fb44e0f8e2173a01a91dccdc2c355`.
 
-Relative to the retained `0afbae3` baseline, this checkpoint adds 21 exact
-passes without losing a previous pass or adding a crash or timeout. PHP source
+Relative to the retained `8bcc548` baseline, this checkpoint adds 14 exact
+passes without losing a previous pass or adding a crash or timeout. Array
+literal unpacking now consumes arrays and `Traversable` objects through the
+shared iterator protocol while retaining its own PHP value contract: integer
+keys and canonical numeric-string iterator keys are reindexed, string keys
+overwrite in insertion order, and source reference cells are copied by value.
+Invalid sources and iterator keys raise catchable `Error` objects with the
+array-unpack diagnostics. Exhausting the signed integer key space raises the
+PHP error instead of wrapping from `PHP_INT_MAX` into negative keys. Original
+clean-room regressions cover arrays, a user `IteratorAggregate`, key
+normalization and overwrite order, references, catchable failures and the
+integer boundary.
+
+The exact additions are `Zend/tests/array_unpack/already_occupied.phpt`,
+`array_unpack/basic.phpt`, `array_unpack/non_integer_keys.phpt`,
+`array_unpack/string_keys.phpt`, `Zend/tests/bug60573.phpt`,
+`bug60573_2.phpt`, `bug73987_1.phpt`, `bug73987_3.phpt`, `bug80126.phpt`,
+`bug80126_2.phpt`, `generators/gh11028_1.phpt`,
+`type_declarations/typed_properties_016.phpt`,
+`type_declarations/variance/object_variance.phpt` and
+`type_declarations/variance/parent_in_class_success.phpt`. The pinned Symfony
+FrameworkBundle 7.4.16 S3 gate remains green against PHP 8.2.33 across cold and
+cached loads, health and missing-route requests, deleted and malformed caches,
+and concurrent atomic publication. Constant-expression unpacking,
+destructuring-spread diagnostics, unsetting the last external reference and
+compile-time rejection of statically invalid sources remain separate visible
+boundaries; this checkpoint does not claim complete array, iterator or PHP 8.2
+compatibility.
+
+The preceding `8bcc548` checkpoint, relative to the retained `0afbae3`
+baseline, added 21 exact passes without losing a previous pass or adding a
+crash or timeout. PHP source
 argument unpacking now uses a dedicated compiler and baseline-VM protocol
 instead of treating `...` as `call_user_func_array()`. It preserves PHP array
 reference cells and copy-on-write separation, consumes arrays and
@@ -78,7 +111,7 @@ The exact additions are all 14 cases under `Zend/tests/arg_unpack`, plus
 `Zend/tests/vm_stack_with_arg_extend.phpt`. The pinned Symfony FrameworkBundle
 7.4.16 S3 gate remains green against PHP 8.2.33 across cold and cached loads,
 health and missing-route requests, deleted and malformed caches, and concurrent
-atomic publication. This checkpoint does not claim complete call, iterator,
+atomic publication. That checkpoint does not claim complete call, iterator,
 diagnostic-location or standard-library compatibility.
 
 The preceding `0afbae3` checkpoint, relative to the retained `1f4352b`
