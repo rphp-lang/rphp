@@ -36,11 +36,9 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Starting evidence
 
-The public platform identity is PHP 8.2.0. The repository has a reproducible,
-machine-readable php-src PHPT audit, but its currently pinned upstream corpus
-is PHP 8.4 and therefore measures progress rather than establishing PHP 8.4
-compatibility. Keep that trend line reproducible while establishing a pinned
-PHP 8.2 contract baseline.
+The public platform identity is PHP 8.2.0. The reproducible, machine-readable
+contract corpus is pinned to PHP 8.2.33. The older PHP 8.4 audit remains a
+separately labeled trend line and does not establish PHP 8.4 compatibility.
 
 Composer S0, the four bounded Symfony component S1 gates, the reference-warmed
 Symfony FrameworkBundle S2 diagnostic, and the pinned Symfony FrameworkBundle
@@ -49,21 +47,21 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `8aade89` against
-php-src 8.2.33 `651db3e`: 1,000 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with no lost pass relative to `86ac187`. The latest
-semantic slice handles an intermediate empty dimension in positional arguments
-to a statically resolved function. A known by-value parameter evaluates the
-base and key before raising the catchable read `Error` without appending; a
-known by-reference parameter binds direct or multidimensional appended paths,
-preserves key-before-append ordering, and publishes container writeback before
-callee entry. It adds the exact upstream pass
-`Zend/tests/func_arg_fetch_optimization.phpt`. Runtime-resolved
-method/static/dynamic calls, by-reference returns, indirect `ArrayAccess` and
-`WeakMap` appends, general uncaught stack-trace formatting, references inside
-destructuring, variable-variable syntax and generic undefined-variable warnings
-remain visible boundaries; the broader adoption goal remains active until the
-selected PHP 8.2 contract corpus converges.
+The current pinned PHP 8.2 differential baseline is RPHP `a30abdd` against
+php-src 8.2.33 `651db3e`: 1,007 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with no lost pass relative to `8aade89`. Seven exact
+passes cover non-local `goto`, `break` and `continue` through intervening
+`finally` blocks, including return/throw override, and the previous
+`try/finally_goto_005` timeout is now a pass. The Symfony S3 slice adds no
+separate PHPT transition but completes the cold kernel through general PHP
+contracts: destructuring into `$this` properties, reserved `false` literal
+types, assignment through existing references, per-element by-reference
+`foreach` rebinding, and local rebinding for appended array references.
+Runtime-resolved method/static/dynamic calls, by-reference returns, indirect
+`ArrayAccess` and `WeakMap` appends, general uncaught stack-trace formatting,
+variable-variable syntax and generic undefined-variable warnings remain visible
+boundaries; the broader adoption goal remains active until the selected PHP 8.2
+contract corpus converges.
 
 ## Measurement system
 
@@ -207,7 +205,13 @@ Current retained S3 evidence includes the general array form of
 path. Concurrent cold-publisher results are compared as an exact unordered
 multiset because publisher process numbering is scheduler-dependent; status,
 diagnostics, output, generated-file manifests and the fresh cache load remain
-mandatory.
+mandatory. The current cold build additionally proves that list destructuring
+can write ordinary, dynamic and nested `$this` properties, that namespaced
+`callable|false` retains its literal type, and that PHP reference assignment
+distinguishes writing through an existing alias from rebinding a CV. In
+particular, a by-reference `foreach` target is rebound for each listener, so
+Symfony EventDispatcher preserves every lazy listener and RouterListener
+publishes a valid compiled route cache.
 
 ### C5 — Request/response and repeated runtime (S4)
 
