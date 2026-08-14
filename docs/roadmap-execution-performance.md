@@ -282,5 +282,22 @@ percent. Detailed proof, counters, distributions and remaining materialization
 boundaries are in
 [`performance-virtual-call-aggregate.md`](performance-virtual-call-aggregate.md).
 
+Completion checkpoint (2026-08-14): the baseline dispatcher now resolves an
+already-proven virtual call/return aggregate once and retains its immutable
+descriptor in a four-entry, allocation-free request-local cache. Every hit
+still revalidates constructor, method and nested receiver/dispatch identities;
+argument, property and overflow guards remain staged before any visible write,
+and invalidation or guard failure returns to the exact canonical boundary. The
+500,000-row order target records one successful resolution and 499,998 guarded
+hits, improving by 22.17% on ARM64 and 19.65% on x86-64. A permanent nested
+receiver replacement test proves invalidation and re-resolution. Ledger,
+routing and peak-memory controls remain below the one-percent ceiling on both
+architectures, and both native-JIT matrices retain the shared aggregate
+operation. Detailed design, counters, distributions, rejected variants and
+limitations are in
+[`performance-resolved-virtual-aggregate-cache.md`](performance-resolved-virtual-aggregate-cache.md).
+The next goal returns to profile selection; broader caching must not retain
+mutable PHP state or replace the common typed/materialization contract.
+
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.
