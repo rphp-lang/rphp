@@ -47,20 +47,19 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `caf5590` against
-php-src 8.2.33 `651db3e`: 1,081 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with one exact addition and no lost pass relative to
-`f1990e4`. Constant array expressions now reindex integer keys, preserve PHP
-string-key overwrite order and resolve forward `self::` dependencies. Cyclic
-class constants link and raise their catchable self-reference error only when
-read, while deferred constant-expression materialization rejects Traversable
-objects in constants, parameter defaults and static-local initializers. The
-change advances `Zend/tests/array_unpack/classes.phpt`; the related `gh9769`
-case reaches the correct semantic error but still exposes the general uncaught
-stack-trace formatting boundary. The corpus retains zero crashes and zero
-timeouts. The Symfony S3 slice remains green against PHP 8.2.33 through cold,
-cached, deleted-cache, malformed-cache and concurrent publication transitions,
-including exact health and missing-route results.
+The current pinned PHP 8.2 differential baseline is RPHP `c92a29e` against
+php-src 8.2.33 `651db3e`: 1,083 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with two exact additions and no lost pass relative to
+`caf5590`. Unkeyed spread in short, `list()`, nested and `foreach`
+destructuring is preserved through parsing and rejected at compile time with
+PHP's located diagnostic, before the right-hand side can execute; keyed spread
+keeps its separate parse-error boundary. The change advances
+`Zend/tests/array_unpack/in_destructuring.phpt` and
+`array_unpack/in_destructuring_2.phpt`. The remaining three failures in that
+directory expose general diagnostic-formatting boundaries. The corpus retains
+zero crashes and zero timeouts. The Symfony S3 slice remains green against PHP
+8.2.33 through cold, cached, deleted-cache, malformed-cache and concurrent
+publication transitions, including exact health and missing-route results.
 Runtime-resolved method/static/dynamic calls, by-reference returns, indirect
 `ArrayAccess` and `WeakMap` appends, general uncaught stack-trace formatting,
 variable-variable syntax, generic undefined-variable warnings, delayed class

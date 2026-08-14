@@ -12,34 +12,34 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against default-release RPHP commit
-`caf5590d391b4e3d1236498e0178e71930cadbb4`, using the same runner commit. The
+`c92a29e3a0329d0b7569d463a2bd4f9d5401a23a`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout; the complete
 default, no-default-features, generics-erased, generics-reified and all-features
 Cargo matrix passed separately. It discovered 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 993 | 2,771 | 65 | 1 | 221 | 0 | 0 | 26.382% |
+| `Zend/tests` | 995 | 2,769 | 65 | 1 | 221 | 0 | 0 | 26.435% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,081** | **2,951** | **75** | **1** | **237** | **0** | **0** | **26.811%** |
+| **Combined** | **1,083** | **2,949** | **75** | **1** | **237** | **0** | **0** | **26.860%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,081 / 4,345, or **24.879%**; including crashes and timeouts in the attempted
-denominator gives **26.811%**. These numbers are intentionally pre-alpha and do
+is 1,083 / 4,345, or **24.925%**; including crashes and timeouts in the attempted
+denominator gives **26.860%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
 language coverage. Of 4,032 attempted cases, six fail during `SKIPIF` before
-the test body, 758 are rejected in the observed parse/compile stage, and 3,268
-(**81.052%**) execute the test's `FILE` section past that stage. This is not a
+the test body, 756 are rejected in the observed parse/compile stage, and 3,270
+(**81.101%**) execute the test's `FILE` section past that stage. This is not a
 second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
 The largest failure groups are 1,171 runtime failures, 1,051 output mismatches,
-567 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
+565 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
@@ -55,12 +55,34 @@ manifests and summaries. Four already-failing raw executions retain known
 non-semantic output variation from unordered object-property state; run
 durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
-`88a0bc5c1b13c262a1ca2c3496a7fd443d27afd285e0b07ef52f5d1fd95c31d6` and
+`4f847a58ca8f81f5d1131da987da416aca439d698817893154517fda1e1f4438` and
 its summary has SHA-256
-`94f03867ec743def52bc9c1793e7552d6e6d1add3e1161da61c346b062817dd1`.
+`3728d8347a5d1245bc8759803ab23517eb95cf0a2037ae32095dc84269a2c19c`.
 
-Relative to the retained `f1990e4` baseline, this checkpoint adds one exact
-pass without losing a previous pass or adding a crash or timeout. Constant
+Relative to the retained `caf5590` baseline, this checkpoint adds two exact
+passes without losing a previous pass or adding a crash or timeout. Unkeyed
+spread syntax in short and `list()` destructuring, including nested and
+`foreach` targets, is now preserved through parsing and rejected during
+compilation with PHP's source line and `Spread operator is not supported in
+assignments` diagnostic. The compiler error is staged before the right-hand
+side can execute; keyed spread retains its distinct parse-error boundary.
+Original clean-room regressions cover both destructuring spellings, nested and
+`foreach` forms, the deferred compile stage, source location and absence of
+right-hand-side execution.
+
+The exact additions are `Zend/tests/array_unpack/in_destructuring.phpt` and
+`Zend/tests/array_unpack/in_destructuring_2.phpt`. The remaining three exact
+failures in that directory expose general diagnostic formatting rather than
+the newly admitted destructuring-spread staging. The pinned Symfony
+FrameworkBundle 7.4.16 S3 gate remains green against PHP 8.2.33 across cold and
+cached loads, health and missing-route requests, deleted and malformed caches,
+and concurrent atomic publication. This checkpoint does not claim complete
+destructuring, diagnostic or PHP 8.2 compatibility, and the broader PHP 8.2
+corpus-convergence goal remains active.
+
+The preceding `caf5590` checkpoint, relative to the retained `f1990e4`
+baseline, added one exact pass without losing a previous pass or adding a crash
+or timeout. Constant
 array expressions now apply PHP unpack semantics while folding: integer keys
 are reindexed, string keys overwrite in insertion order and forward `self::`
 class-constant dependencies resolve before property defaults. Class-constant
@@ -79,7 +101,7 @@ message but remains an exact failure because general uncaught stack-trace and
 source-location formatting is still incomplete. The pinned Symfony
 FrameworkBundle 7.4.16 S3 gate remains green against PHP 8.2.33 across cold and
 cached loads, health and missing-route requests, deleted and malformed caches,
-and concurrent atomic publication. This checkpoint does not claim complete
+and concurrent atomic publication. That checkpoint did not claim complete
 constant-expression, class-constant, diagnostic or PHP 8.2 compatibility.
 
 The preceding `f1990e4` checkpoint, relative to the retained `a89e091`
