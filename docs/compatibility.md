@@ -12,21 +12,21 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`a89e091526ee7da97c10c67edb03d6ee2e6f6378`, using the same runner commit. The
+`f1990e49f791074cff3856eeb6a20aa4781ab79b`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 986 | 2,778 | 65 | 1 | 221 | 0 | 0 | 26.196% |
+| `Zend/tests` | 992 | 2,772 | 65 | 1 | 221 | 0 | 0 | 26.355% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,074** | **2,958** | **75** | **1** | **237** | **0** | **0** | **26.637%** |
+| **Combined** | **1,080** | **2,952** | **75** | **1** | **237** | **0** | **0** | **26.786%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,074 / 4,345, or **24.718%**; including crashes and timeouts in the attempted
-denominator gives **26.637%**. These numbers are intentionally pre-alpha and do
+is 1,080 / 4,345, or **24.856%**; including crashes and timeouts in the attempted
+denominator gives **26.786%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -37,7 +37,7 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,173 runtime failures, 1,056 output mismatches,
+The largest failure groups are 1,172 runtime failures, 1,051 output mismatches,
 567 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
@@ -54,14 +54,33 @@ manifests and summaries. Four already-failing raw executions retain known
 non-semantic output variation from unordered object-property state; run
 durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
-`c30ea38636b8b705428a66e6126ccd046e6cc68841deb70acb441a08460b5fd2` and
+`1a766da9dc11b9c2d3130a07c794be34c50e8602a64eafcdc44a6d56a257e785` and
 its summary has SHA-256
-`e5e3bcf3fc48890723157d5552c2a724da0fb44e0f8e2173a01a91dccdc2c355`.
+`67b9ac6cf5336bbf5141d083d2949fcbbdad6e07bcd6c85fea55611cebdeb0bd`.
 
-Relative to the retained `8bcc548` baseline, this checkpoint adds 14 exact
-passes without losing a previous pass or adding a crash or timeout. Array
-literal unpacking now consumes arrays and `Traversable` objects through the
-shared iterator protocol while retaining its own PHP value contract: integer
+Relative to the retained `a89e091` baseline, this checkpoint adds six exact
+passes without losing a previous pass or adding a crash or timeout. A local
+`unset($variable)` now replaces the compiled-variable binding itself rather
+than assigning `undef` through a reference target. Other local names, array
+elements and object properties that own the same reference cell retain both
+the cell and its value; assigning the detached name later creates an
+independent variable. Original clean-room regressions cover multiple local
+aliases, array and property owners, rebinding after unset and the last local
+alias disappearing while a container still owns the value.
+
+The exact additions are `Zend/tests/array_unpack/ref1.phpt`,
+`Zend/tests/bug68262.phpt` and `Zend/tests/bug72543_1.phpt` through
+`bug72543_4.phpt`. The pinned Symfony FrameworkBundle 7.4.16 S3 gate remains
+green against PHP 8.2.33 across cold and cached loads, health and missing-route
+requests, deleted and malformed caches, and concurrent atomic publication.
+This checkpoint does not claim complete reference, unset, copy-on-write or PHP
+8.2 compatibility.
+
+The preceding `a89e091` checkpoint, relative to the retained `8bcc548`
+baseline, added 14 exact passes without losing a previous pass or adding a
+crash or timeout. Array literal unpacking now consumes arrays and
+`Traversable` objects through the shared iterator protocol while retaining its
+own PHP value contract: integer
 keys and canonical numeric-string iterator keys are reindexed, string keys
 overwrite in insertion order, and source reference cells are copied by value.
 Invalid sources and iterator keys raise catchable `Error` objects with the
@@ -84,13 +103,13 @@ cached loads, health and missing-route requests, deleted and malformed caches,
 and concurrent atomic publication. Constant-expression unpacking,
 destructuring-spread diagnostics, unsetting the last external reference and
 compile-time rejection of statically invalid sources remain separate visible
-boundaries; this checkpoint does not claim complete array, iterator or PHP 8.2
+boundaries; that checkpoint did not claim complete array, iterator or PHP 8.2
 compatibility.
 
 The preceding `8bcc548` checkpoint, relative to the retained `0afbae3`
 baseline, added 21 exact passes without losing a previous pass or adding a
-crash or timeout. PHP source
-argument unpacking now uses a dedicated compiler and baseline-VM protocol
+crash or timeout. PHP source argument unpacking now uses a dedicated compiler
+and baseline-VM protocol
 instead of treating `...` as `call_user_func_array()`. It preserves PHP array
 reference cells and copy-on-write separation, consumes arrays and
 `Traversable` objects with their integer or string keys, retains evaluation and
