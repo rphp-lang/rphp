@@ -47,10 +47,12 @@ for ($i = 0; $i < 100; $i++) {{
 function affine($value, $scale, $bias) {
     return $value * $scale + $bias;
 }
+function runAffineLoop() {
 $scale = 2;
 $sum = 0;
 for ($i = 0; $i < 100; $i++) {
     $sum += affine($i, $scale, 1);
+}
 }
 ",
         );
@@ -77,9 +79,11 @@ for ($i = 0; $i < 100; $i++) {
 function combine($left, $right) {
     return $left + $right;
 }
+function runCombineLoop() {
 $sum = 0;
 for ($i = 0; $i < 100; $i++) {
     $sum += combine($i, $i + 1);
+}
 }
 ",
         );
@@ -104,9 +108,11 @@ for ($i = 0; $i < 100; $i++) {
 function combine($left, $right) {
     return $left + $right;
 }
+function compileCombineLoop() {
 $sum = 0;
 for ($i = 0; $i < 100; $i++) {
     $sum += combine($i, $i + 1);
+}
 }
 ",
         );
@@ -192,10 +198,12 @@ class Math {
     public function add($left, $right) { return $left + $right; }
     public function mul($left, $right) { return $left * $right; }
 }
+function runMathLoop() {
 $math = new Math();
 $sum = 0;
 for ($i = 0; $i < 100; $i++) {
-    $sum += $math->add($i, $math->mul($i, 2));
+    $sum += $math->add($i + 0, $math->mul($i + 0, 2));
+}
 }
 ",
         );
@@ -214,7 +222,7 @@ for ($i = 0; $i < 100; $i++) {
                     receiver_slot: 0,
                     ..
                 })
-                && do_fcall_ip == guard.cache_ip() + 7
+                && do_fcall_ip == guard.cache_ip() + 9
         ));
     }
 
@@ -224,9 +232,11 @@ for ($i = 0; $i < 100; $i++) {
             "<?php
 function addNative($left, $right) { return $left + $right; }
 function mulNative($left, $right) { return $left * $right; }
+function runNativeTreeLoop() {
 $sum = 0;
 for ($i = 0; $i < 100; $i++) {
     $sum += addNative($i + 1, mulNative($i, 2));
+}
 }
 ",
         );
@@ -250,12 +260,14 @@ for ($i = 0; $i < 100; $i++) {
         let plan = quick_plan(
             "<?php
 function routeStandalone(int $value): int { return ($value * 2) + 1; }
+function runRouteLoop() {
 $sum = 0;
 for ($i = 0; $i < 100; $i++) {
     $sum += routeStandalone($i);
     if ($i === -1) {
         echo 'never';
     }
+}
 }
 ",
         );

@@ -109,8 +109,9 @@ impl Compiler {
         &mut self,
         source: &Expr,
     ) -> Result<u16, String> {
-        if let Expr::Variable(name) = source {
-            return Ok(self.resolve_cv(name));
+        if let Expr::Variable { name, .. } = source {
+            let cv = self.resolve_cv(name);
+            return Ok(cv);
         }
 
         let destination = self.resolve_cv(&format!("\0array_reference_{}", self.next_cv));
@@ -184,7 +185,7 @@ impl Compiler {
                 "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
                 *line,
             )),
-            Expr::Variable(var) => {
+            Expr::Variable { name: var, .. } => {
                 let cv = self.resolve_cv(var);
                 Ok((cv, OpType::Cv, ForeachArrayWriteback::Variable(cv)))
             }
@@ -410,7 +411,7 @@ impl Compiler {
         expr: &Expr,
     ) -> Result<(u16, OpType), String> {
         let (current, current_type, write) = match target {
-            Expr::Variable(var) => {
+            Expr::Variable { name: var, .. } => {
                 let cv = self.resolve_cv(var);
                 (cv, OpType::Cv, CoalesceWrite::Variable(cv))
             }
@@ -555,6 +556,7 @@ impl Compiler {
         jump.op2 = 0;
         self.instructions.push(jump);
 
+        let conditional_entry = self.definitely_defined_cvs.clone();
         let (value, value_type) = self.compile_expr(expr);
         match write {
             CoalesceWrite::Variable(cv) => {
@@ -632,6 +634,13 @@ impl Compiler {
         self.instructions.push(set_result);
 
         self.instructions[skip_write].op2 = self.instructions.len() as u16;
+        self.definitely_defined_cvs = conditional_entry;
+        if let Expr::Variable { name, .. } = target {
+            // Either the existing non-null value survives or the RHS is
+            // assigned, so a direct CV is initialized on every continuation.
+            let cv = self.resolve_cv(name);
+            self.definitely_defined_cvs.insert(cv);
+        }
         Ok((current, current_type))
     }
 
@@ -797,7 +806,7 @@ impl Compiler {
         if let Expr::Globals { line } = source {
             return Err(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
         }
-        let Expr::Variable(source) = source else {
+        let Expr::Variable { name: source, .. } = source else {
             return Err("Reference assignment source must be a variable".into());
         };
         let source = self.resolve_cv(source);
@@ -915,7 +924,7 @@ impl Compiler {
             return Err("Array mutation requires at least one dimension".into());
         }
         let (root, writeback, path_indices) = match root {
-            Expr::Variable(var) => (
+            Expr::Variable { name: var, .. } => (
                 (self.resolve_cv(var), OpType::Cv),
                 ArrayRootWriteback::None,
                 indices,
@@ -1130,8 +1139,14 @@ impl Compiler {
         }
         match stmt {
             Stmt::Noop => {}
-            Stmt::Label(name) => self.define_label(name)?,
-            Stmt::Goto { name, line } => self.emit_goto(name, *line)?,
+            Stmt::Label(name) => {
+                self.definitely_defined_cvs.clear();
+                self.define_label(name)?;
+            }
+            Stmt::Goto { name, line } => {
+                self.emit_goto(name, *line)?;
+                self.definitely_defined_cvs.clear();
+            }
             Stmt::Echo { expressions, line } => {
                 for expr in expressions {
                     let (operand, op_type) = self.compile_expr(expr);
@@ -1145,46 +1160,26 @@ impl Compiler {
             }
             Stmt::Assign { var, expr } => {
                 // Detect $x .= expr pattern → emit AssignConcat (in-place string append)
-                if let Expr::BinaryOp {
-                    op: crate::parser::BinOp::Concat,
-                    left,
-                    right,
-                } = expr
-                {
-                    if let Expr::Variable(ref lhs_var) = **left {
-                        if lhs_var == var {
-                            let (rhs_op, rhs_type) = self.compile_expr(right);
-                            let cv_idx = self.resolve_cv(var);
-                            let mut instr = Instruction::new(OpCode::AssignConcat);
-                            instr.op1_type = OpType::Cv;
-                            instr.op1 = cv_idx;
-                            instr.op2_type = rhs_type;
-                            instr.op2 = rhs_op;
-                            self.instructions.push(instr);
-                            // Early return from this match arm
-                        } else {
-                            let (operand, op_type) = self.compile_expr(expr);
-                            let cv_idx = self.resolve_cv(var);
-                            let mut assign = Instruction::new(OpCode::AssignCv);
-                            assign.op1_type = OpType::Cv;
-                            assign.op1 = cv_idx;
-                            assign.op2_type = op_type;
-                            assign.op2 = operand;
-                            self.instructions.push(assign);
-                        }
-                    } else {
-                        let (operand, op_type) = self.compile_expr(expr);
-                        let cv_idx = self.resolve_cv(var);
-                        let mut assign = Instruction::new(OpCode::AssignCv);
-                        assign.op1_type = OpType::Cv;
-                        assign.op1 = cv_idx;
-                        assign.op2_type = op_type;
-                        assign.op2 = operand;
-                        self.instructions.push(assign);
-                    }
+                let cv_idx = self.resolve_cv(var);
+                let compact_concat_rhs = match expr {
+                    Expr::BinaryOp {
+                        op: crate::parser::BinOp::Concat,
+                        left,
+                        right,
+                    } if matches!(left.as_ref(), Expr::Variable { name, .. } if name == var)
+                        && self.definitely_defined_cvs.contains(&cv_idx) => Some(right.as_ref()),
+                    _ => None,
+                };
+                if let Some(right) = compact_concat_rhs {
+                    let (rhs_op, rhs_type) = self.compile_expr(right);
+                    let mut instr = Instruction::new(OpCode::AssignConcat);
+                    instr.op1_type = OpType::Cv;
+                    instr.op1 = cv_idx;
+                    instr.op2_type = rhs_type;
+                    instr.op2 = rhs_op;
+                    self.instructions.push(instr);
                 } else {
                     let (operand, op_type) = self.compile_expr(expr);
-                    let cv_idx = self.resolve_cv(var);
                     let mut assign = Instruction::new(OpCode::AssignCv);
                     assign.op1_type = OpType::Cv;
                     assign.op1 = cv_idx;
@@ -1192,6 +1187,7 @@ impl Compiler {
                     assign.op2 = operand;
                     self.instructions.push(assign);
                 }
+                self.definitely_defined_cvs.insert(cv_idx);
             }
             Stmt::CoalesceAssign { target, expr } => {
                 self.compile_coalesce_assign_expression(target, expr)?;
@@ -1199,9 +1195,46 @@ impl Compiler {
             Stmt::CompoundAssign { target, op, expr } => {
                 // Resolve the mutable target once so object/index side effects
                 // match PHP compound-assignment evaluation order.
-                let (left, left_type, writeback) =
-                    self.compile_foreach_reference_source(target)?;
-                let (right, right_type) = self.compile_expr(expr);
+                let direct_cv = if let Expr::Variable { name, .. } = target {
+                    Some(self.resolve_cv(name))
+                } else {
+                    None
+                };
+                let direct_rhs = direct_cv.map(|_| self.compile_expr(expr));
+                if let Some(cv) = direct_cv
+                    && *op == BinOp::Concat
+                    && self.definitely_defined_cvs.contains(&cv)
+                {
+                    let (right, right_type) = direct_rhs.expect("direct CV RHS was compiled");
+                    let mut append = Instruction::new(OpCode::AssignConcat);
+                    append.op1 = cv;
+                    append.op1_type = OpType::Cv;
+                    append.op2 = right;
+                    append.op2_type = right_type;
+                    self.instructions.push(append);
+                    self.definitely_defined_cvs.insert(cv);
+                    return Ok(());
+                }
+                let (left, left_type, writeback, right, right_type) = if let Some(cv) = direct_cv {
+                    // A simple CV's value is consumed after the RHS. Calls on
+                    // the RHS can therefore mutate or unset a main-scope
+                    // global before this read, while the destination CV itself
+                    // is still resolved only once.
+                    let (right, right_type) = direct_rhs.expect("direct CV RHS was compiled");
+                    let (left, left_type) = self.compile_expr(target);
+                    (
+                        left,
+                        left_type,
+                        ForeachArrayWriteback::Variable(cv),
+                        right,
+                        right_type,
+                    )
+                } else {
+                    let (left, left_type, writeback) =
+                        self.compile_foreach_reference_source(target)?;
+                    let (right, right_type) = self.compile_expr(expr);
+                    (left, left_type, writeback, right, right_type)
+                };
                 let result = self.alloc_tmp();
                 let opcode = match op {
                     BinOp::Add => OpCode::Add,
@@ -1227,6 +1260,9 @@ impl Compiler {
                 operation.result_type = OpType::Tmp;
                 self.instructions.push(operation);
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
+                if let Some(cv) = direct_cv {
+                    self.definitely_defined_cvs.insert(cv);
+                }
             }
             Stmt::If {
                 condition,
@@ -1257,6 +1293,7 @@ impl Compiler {
                 } else {
                     // Compile condition
                     let (cond_op, cond_type) = self.compile_expr(condition);
+                    let branch_entry = self.definitely_defined_cvs.clone();
 
                     // JmpZ condition, <then_end>
                     let jmpz_idx = self.instructions.len();
@@ -1270,11 +1307,13 @@ impl Compiler {
                     for s in then_body {
                         self.compile_stmt(s)?;
                     }
+                    let then_exit = self.definitely_defined_cvs.clone();
 
                     if else_body.is_empty() {
                         // Patch JmpZ to jump past then body
                         let after_then = self.instructions.len() as u16;
                         self.instructions[jmpz_idx].op2 = after_then;
+                        self.definitely_defined_cvs = branch_entry;
                     } else {
                         // Jmp <after_else> (skip else body when then completes)
                         let jmp_idx = self.instructions.len();
@@ -1287,13 +1326,18 @@ impl Compiler {
                         self.instructions[jmpz_idx].op2 = else_start;
 
                         // Compile else body
+                        self.definitely_defined_cvs = branch_entry;
                         for s in else_body {
                             self.compile_stmt(s)?;
                         }
+                        let else_exit = self.definitely_defined_cvs.clone();
 
                         // Patch Jmp to jump past else body
                         let after_else = self.instructions.len() as u16;
                         self.instructions[jmp_idx].op1 = after_else;
+                        self.definitely_defined_cvs = then_exit;
+                        self.definitely_defined_cvs
+                            .retain(|cv| else_exit.contains(cv));
                     }
                 }
             }
@@ -1322,6 +1366,7 @@ impl Compiler {
                     return_type.as_ref(),
                 );
                 func_compiler.current_function_name = resolved_name.clone();
+                func_compiler.returns_reference_context = *returns_by_ref;
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 for s in body {
@@ -1387,7 +1432,13 @@ impl Compiler {
             }
             Stmt::Return(expr) => {
                 let (op, op_type, has_explicit_value) = if let Some(e) = expr {
-                    let (o, t) = self.compile_expr(e);
+                    let (o, t) = if self.returns_reference_context
+                        && let Expr::Variable { name, .. } = e
+                    {
+                        (self.resolve_cv(name), OpType::Cv)
+                    } else {
+                        self.compile_expr(e)
+                    };
                     (o, t, true)
                 } else {
                     let idx = self.add_literal(Value::null());
@@ -1419,6 +1470,7 @@ impl Compiler {
                 // Loop start: compile condition
                 let loop_start = self.instructions.len();
                 let (cond_op, cond_type) = self.compile_expr(condition);
+                let loop_exit_definitions = self.definitely_defined_cvs.clone();
 
                 // JmpZ condition, <after_loop>
                 let jmpz_idx = self.instructions.len();
@@ -1456,8 +1508,10 @@ impl Compiler {
                     self.instructions[patch_idx].op1 = after_loop;
                 }
                 // continue_patches already resolved (target was known at compile time)
+                self.definitely_defined_cvs = loop_exit_definitions;
             }
             Stmt::DoWhile { condition, body } => {
+                let loop_entry_definitions = self.definitely_defined_cvs.clone();
                 let loop_start = self.instructions.len();
 
                 // Push loop context — continue target not yet known
@@ -1498,6 +1552,7 @@ impl Compiler {
                 for patch_idx in ctx.continue_patches {
                     self.instructions[patch_idx].op1 = cond_pos as u16;
                 }
+                self.definitely_defined_cvs = loop_entry_definitions;
             }
             Stmt::For {
                 init,
@@ -1529,6 +1584,7 @@ impl Compiler {
                 } else {
                     None
                 };
+                let loop_exit_definitions = self.definitely_defined_cvs.clone();
 
                 // Push loop context — continue target not yet known
                 self.loop_stack.push(LoopContext {
@@ -1574,6 +1630,7 @@ impl Compiler {
                 for patch_idx in ctx.continue_patches {
                     self.instructions[patch_idx].op1 = update_pos as u16;
                 }
+                self.definitely_defined_cvs = loop_exit_definitions;
             }
             Stmt::Break(level) => {
                 let depth = level.unwrap_or(1) as usize;
@@ -1622,6 +1679,7 @@ impl Compiler {
             Stmt::Switch { expr, cases } => {
                 // Compile the switch expression into a TMP
                 let (expr_op, expr_type) = self.compile_expr(expr);
+                let switch_exit_definitions = self.definitely_defined_cvs.clone();
                 let switch_tmp = self.alloc_tmp();
                 let mut assign = Instruction::new(OpCode::AssignCv);
                 assign.op1_type = OpType::Tmp;
@@ -1692,6 +1750,10 @@ impl Compiler {
                 let mut body_idx = 0;
                 let mut default_body_start: Option<u16> = None;
                 for case in cases.iter() {
+                    // Every case can be entered directly from the comparison
+                    // chain, so assignments in an earlier fall-through body
+                    // are not definite at this source position.
+                    self.definitely_defined_cvs = switch_exit_definitions.clone();
                     let body_start = self.instructions.len() as u16;
                     if case.value.is_some() {
                         // Patch the Jmp from phase 1 to point here
@@ -1721,6 +1783,7 @@ impl Compiler {
                 for patch_idx in ctx.break_patches {
                     self.instructions[patch_idx].op1 = after_switch;
                 }
+                self.definitely_defined_cvs = switch_exit_definitions;
             }
             Stmt::ArrayAssign { var, index, expr } => {
                 // $var[index] = expr
@@ -1745,6 +1808,10 @@ impl Compiler {
                     instr.result = val_op;
                 }
                 self.instructions.push(instr);
+                if var != "GLOBALS" {
+                    let cv = self.resolve_cv(var);
+                    self.definitely_defined_cvs.insert(cv);
+                }
             }
             Stmt::NestedArrayAssign {
                 root,
@@ -1767,6 +1834,10 @@ impl Compiler {
 
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
+                if let Expr::Variable { name, .. } = root {
+                    let cv = self.resolve_cv(name);
+                    self.definitely_defined_cvs.insert(cv);
+                }
             }
             Stmt::ArrayPush { var, expr } => {
                 // $var[] = expr
@@ -1778,6 +1849,7 @@ impl Compiler {
                 instr.op2_type = val_type;
                 instr.op2 = val_op;
                 self.instructions.push(instr);
+                self.definitely_defined_cvs.insert(cv_idx);
             }
             Stmt::ArrayAppend { target, expr } => {
                 let (array, array_type, writeback) =
@@ -1819,6 +1891,7 @@ impl Compiler {
                     let (op, op_type) = self.compile_expr(array);
                     (op, op_type, None)
                 };
+                let foreach_exit_definitions = self.definitely_defined_cvs.clone();
 
                 // ForeachInit: copy array to TMP, position counter TMP
                 let arr_copy_tmp = self.alloc_tmp();
@@ -1882,6 +1955,10 @@ impl Compiler {
                 };
                 next.extended_value = key_encoded | (val_cv as u32);
                 self.instructions.push(next);
+                self.definitely_defined_cvs.insert(val_cv);
+                if let Some(key_cv) = key_cv {
+                    self.definitely_defined_cvs.insert(key_cv);
+                }
 
                 // JmpZ done_tmp → after_loop
                 let jmpz_idx = self.instructions.len();
@@ -1897,13 +1974,19 @@ impl Compiler {
                 if let Some(target) = key_write {
                     self.compile_assignment_target_expression(
                         target,
-                        &Expr::Variable(key_target_name),
+                        &Expr::Variable {
+                            name: key_target_name,
+                            line: 0,
+                        },
                     )?;
                 }
                 if let Some(target) = value_write {
                     self.compile_assignment_target_expression(
                         target,
-                        &Expr::Variable(value_target_name),
+                        &Expr::Variable {
+                            name: value_target_name,
+                            line: 0,
+                        },
                     )?;
                 }
 
@@ -1955,6 +2038,7 @@ impl Compiler {
                     self.instructions[patch_idx].op1 = epilogue;
                 }
                 // continue_patches already resolved (target was known)
+                self.definitely_defined_cvs = foreach_exit_definitions;
             }
             Stmt::Unset(targets) => {
                 for target in targets {
@@ -1968,8 +2052,9 @@ impl Compiler {
                                 *line,
                             ));
                         }
-                        Expr::Variable(name) => {
+                        Expr::Variable { name, .. } => {
                             let cv_idx = self.resolve_cv(name);
+                            self.definitely_defined_cvs.remove(&cv_idx);
                             let undef_idx = self.add_literal(Value::undef());
                             let mut assign = Instruction::new(OpCode::AssignCv);
                             assign.op1_type = OpType::Cv;
@@ -2046,6 +2131,7 @@ impl Compiler {
                 catches,
                 finally_body,
             } => {
+                let try_exit_definitions = self.definitely_defined_cvs.clone();
                 if finally_body.is_some() {
                     self.enter_goto_region(GotoRegionKind::TryFinally);
                 }
@@ -2073,8 +2159,12 @@ impl Compiler {
                 let mut catch_entries = Vec::new();
                 let mut catch_end_jumps = Vec::new();
                 for catch in catches {
+                    self.definitely_defined_cvs = try_exit_definitions.clone();
                     let catch_start = self.instructions.len() as u32;
                     let catch_cv = catch.var.as_ref().map(|var| self.resolve_cv(var) as u32);
+                    if let Some(catch_cv) = catch_cv {
+                        self.definitely_defined_cvs.insert(catch_cv as u16);
+                    }
 
                     let resolved_types: Vec<String> =
                         catch.types.iter().map(|t| self.resolve_name(t)).collect();
@@ -2104,6 +2194,7 @@ impl Compiler {
                     self.resolve_finally_jump_cv();
                 }
                 let finally_start = if let Some(body) = finally_body {
+                    self.definitely_defined_cvs = try_exit_definitions.clone();
                     let start = self.instructions.len();
                     self.enter_goto_region(GotoRegionKind::Finally);
                     for s in body {
@@ -2157,6 +2248,7 @@ impl Compiler {
                     finally_start: entry_finally_start,
                     finally_end: entry_finally_end,
                 });
+                self.definitely_defined_cvs = try_exit_definitions;
             }
             Stmt::Throw { expr, line } => {
                 let (op, op_type) = self.compile_expr(expr);
@@ -2245,6 +2337,9 @@ impl Compiler {
                 }
                 instr.extended_value = flags;
                 self.instructions.push(instr);
+                // Included code shares the active symbol table and may assign
+                // or unset any local known to this op array.
+                self.definitely_defined_cvs.clear();
             }
             Stmt::Declare { directive, value } => {
                 match directive.as_str() {
@@ -2332,6 +2427,10 @@ impl Compiler {
                     instr.op2 = name_idx;
                     self.instructions.push(instr);
                     self.global_vars.push((cv_idx as u32, var_name.clone()));
+                    // `global $name` creates the symbol when it is absent. Its
+                    // local binding is therefore defined as null immediately
+                    // and subsequent reads are not undefined-variable reads.
+                    self.definitely_defined_cvs.insert(cv_idx);
                 }
             }
             Stmt::StaticVar { vars } => {
@@ -2358,6 +2457,7 @@ impl Compiler {
                     }
                     self.instructions.push(instr);
                     self.static_vars.push((cv_idx as u32, var_name.clone()));
+                    self.definitely_defined_cvs.insert(cv_idx);
                 }
             }
             Stmt::Class {
@@ -2436,9 +2536,11 @@ impl Compiler {
                     func_compiler.dynamic_static_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_class, method.name);
+                    func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     // $this is always CV 0 in methods
-                    func_compiler.resolve_cv("this");
+                    let this_cv = func_compiler.resolve_cv("this");
+                    func_compiler.definitely_defined_cvs.insert(this_cv);
                     let context = format!("method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
@@ -2760,8 +2862,10 @@ impl Compiler {
                     func_compiler.dynamic_static_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_iface, method.name);
+                    func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.known_ref_args = self.build_known_ref_args();
-                    func_compiler.resolve_cv("this");
+                    let this_cv = func_compiler.resolve_cv("this");
+                    func_compiler.definitely_defined_cvs.insert(this_cv);
                     let context = format!("interface method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
@@ -2898,8 +3002,10 @@ impl Compiler {
                     func_compiler.dynamic_static_scope = true;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_trait, method.name);
+                    func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.known_ref_args = self.build_known_ref_args();
-                    func_compiler.resolve_cv("this");
+                    let this_cv = func_compiler.resolve_cv("this");
+                    func_compiler.definitely_defined_cvs.insert(this_cv);
                     let context = format!("trait method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
@@ -3093,8 +3199,10 @@ impl Compiler {
                     func_compiler.dynamic_static_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_enum, method.name);
+                    func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.known_ref_args = self.build_known_ref_args();
-                    func_compiler.resolve_cv("this");
+                    let this_cv = func_compiler.resolve_cv("this");
+                    func_compiler.definitely_defined_cvs.insert(this_cv);
                     let context = format!("enum method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;

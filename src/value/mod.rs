@@ -4351,6 +4351,21 @@ impl Value {
         }
     }
 
+    /// Convert operands whose PHP numeric kind remains integer during
+    /// arithmetic. Unlike `to_double()`, this preserves the result kind for
+    /// null, booleans, resources, and integer numeric strings.
+    #[inline]
+    pub(crate) fn to_arithmetic_long(&self) -> Option<i64> {
+        match self.value_type() {
+            ValueType::Long => Some(unsafe { self.data.long }),
+            ValueType::True => Some(1),
+            ValueType::False | ValueType::Null | ValueType::Undef => Some(0),
+            ValueType::String => self.as_str()?.trim().parse::<i64>().ok(),
+            ValueType::Resource => self.as_resource_id(),
+            _ => None,
+        }
+    }
+
     /// Read the raw i64 without type check. SAFETY: caller must guarantee value is Long.
     #[inline(always)]
     pub unsafe fn raw_long(&self) -> i64 {

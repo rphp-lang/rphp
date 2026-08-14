@@ -368,7 +368,7 @@ impl Parser {
                         }
                         if !matches!(
                             &target,
-                            Expr::Variable(_)
+                            Expr::Variable { .. }
                                 | Expr::ArrayAccess { .. }
                                 | Expr::PropertyAccess {
                                     nullsafe: false,
@@ -396,7 +396,6 @@ impl Parser {
                         expr,
                     })
                 } else if let Some(bin_op) = Self::compound_assign_op(&next) {
-                    // Compound assignment: $x += expr  →  $x = $x + expr
                     let (var_name, line) = match self.advance() {
                         Token::Variable(name, line) => (name, line),
                         _ => unreachable!(),
@@ -407,13 +406,13 @@ impl Parser {
                     if var_name == "GLOBALS" {
                         return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
                     }
-                    Ok(Stmt::Assign {
-                        var: var_name.clone(),
-                        expr: Expr::BinaryOp {
-                            op: bin_op,
-                            left: Box::new(Expr::Variable(var_name)),
-                            right: Box::new(rhs),
+                    Ok(Stmt::CompoundAssign {
+                        target: Expr::Variable {
+                            name: var_name,
+                            line,
                         },
+                        op: bin_op,
+                        expr: rhs,
                     })
                 } else {
                     let expr = self.parse_expr()?;
@@ -464,7 +463,7 @@ impl Parser {
                             }
                             if matches!(
                                 root,
-                                Expr::Variable(_)
+                                Expr::Variable { .. }
                                     | Expr::PropertyAccess { .. }
                                     | Expr::StaticProperty { .. }
                             ) {
@@ -1009,7 +1008,7 @@ impl Parser {
     fn finish_array_append_statement(&mut self, target: Expr) -> Result<Stmt, String> {
         if !matches!(
             &target,
-            Expr::Variable(_)
+            Expr::Variable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -1040,7 +1039,7 @@ impl Parser {
     fn finish_coalesce_assign_statement(&mut self, target: Expr) -> Result<Stmt, String> {
         let valid_target = matches!(
             &target,
-            Expr::Variable(_)
+            Expr::Variable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -1068,7 +1067,7 @@ impl Parser {
     fn finish_compound_assign_statement(&mut self, target: Expr) -> Result<Stmt, String> {
         if !matches!(
             &target,
-            Expr::Variable(_)
+            Expr::Variable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -1137,19 +1136,19 @@ impl Parser {
                     expr,
                 });
             } else if let Some(bin_op) = Self::compound_assign_op(&next) {
-                let var_name = match self.advance() {
-                    Token::Variable(name, _) => name,
+                let (var_name, line) = match self.advance() {
+                    Token::Variable(name, line) => (name, line),
                     _ => unreachable!(),
                 };
                 self.advance(); // consume compound operator
                 let rhs = self.parse_expr()?;
-                return Ok(Stmt::Assign {
-                    var: var_name.clone(),
-                    expr: Expr::BinaryOp {
-                        op: bin_op,
-                        left: Box::new(Expr::Variable(var_name)),
-                        right: Box::new(rhs),
+                return Ok(Stmt::CompoundAssign {
+                    target: Expr::Variable {
+                        name: var_name,
+                        line,
                     },
+                    op: bin_op,
+                    expr: rhs,
                 });
             }
         }
@@ -1200,7 +1199,7 @@ impl Parser {
                 expr: *expr,
             }),
             Expr::ArrayAppendAssign { target, expr } => match *target {
-                target @ Expr::Variable(_) => Ok(Stmt::ExprStmt(Expr::ArrayAppendAssign {
+                target @ Expr::Variable { .. } => Ok(Stmt::ExprStmt(Expr::ArrayAppendAssign {
                     target: Box::new(target),
                     expr,
                 })),

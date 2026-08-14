@@ -246,6 +246,9 @@ pub struct ExecutorGlobals {
     pub(crate) error_handler: Option<crate::value::Value>,
     pub(crate) error_handler_levels: i64,
     pub(crate) error_handler_stack: Vec<(Option<crate::value::Value>, i64)>,
+    /// PHP never recursively invokes a user error handler for a diagnostic
+    /// raised while that handler is active.
+    pub(crate) handling_error: bool,
     pub(crate) exception_handler: Option<crate::value::Value>,
     pub(crate) exception_handler_stack: Vec<Option<crate::value::Value>>,
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
@@ -449,6 +452,7 @@ impl ExecutorGlobals {
             error_handler: None,
             error_handler_levels: 32767,
             error_handler_stack: Vec::new(),
+            handling_error: false,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             method_declaring_class: HashMap::new(),
@@ -523,6 +527,7 @@ impl ExecutorGlobals {
             error_handler: None,
             error_handler_levels: 32767,
             error_handler_stack: Vec::new(),
+            handling_error: false,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             method_declaring_class: HashMap::new(),

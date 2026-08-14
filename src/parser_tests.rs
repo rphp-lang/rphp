@@ -40,7 +40,10 @@ fn test_parse_assign_echo() {
                 var: "a".into(),
                 expr: Expr::Integer(42),
             },
-            echo(vec![Expr::Variable("a".into())]),
+            echo(vec![Expr::Variable {
+                name: "a".into(),
+                line: 1,
+            }]),
         ]
     );
 }
@@ -55,12 +58,18 @@ fn test_parse_null_coalescing_assignments() {
         stmts,
         vec![
             Stmt::CoalesceAssign {
-                target: Expr::Variable("value".into()),
+                target: Expr::Variable {
+                    name: "value".into(),
+                    line: 1,
+                },
                 expr: Expr::Integer(42),
             },
             Stmt::CoalesceAssign {
                 target: Expr::ArrayAccess {
-                    array: Box::new(Expr::Variable("items".into())),
+                    array: Box::new(Expr::Variable {
+                        name: "items".into(),
+                        line: 1,
+                    }),
                     index: Box::new(Expr::Integer(1)),
                 },
                 expr: Expr::StringLiteral("fallback".into()),
@@ -234,7 +243,10 @@ fn test_parse_closure_reference_captures() {
     };
     assert_eq!(
         use_vars,
-        &vec![("left".to_string(), true), ("right".to_string(), true)]
+        &vec![
+            ("left".to_string(), true, 1),
+            ("right".to_string(), true, 1),
+        ]
     );
 }
 
@@ -247,7 +259,7 @@ fn test_parse_first_class_callable_and_argument_unpack() {
     assert!(matches!(
         &stmts[0],
         Stmt::ExprStmt(Expr::DynamicCall { args, .. })
-            if matches!(args.as_slice(), [CallArg::Unpack(Expr::Variable(name))] if name == "args")
+            if matches!(args.as_slice(), [CallArg::Unpack(Expr::Variable { name, .. })] if name == "args")
     ));
 }
 
@@ -331,7 +343,7 @@ fn test_parse_reference_assignment_to_dynamic_property() {
         &statements[0],
         Stmt::ExprStmt(Expr::AssignTargetReference { target, source })
             if matches!(target.as_ref(), Expr::DynamicPropertyAccess { .. })
-                && matches!(source.as_ref(), Expr::Variable(name) if name == "value")
+                && matches!(source.as_ref(), Expr::Variable { name, .. } if name == "value")
     ));
 }
 
@@ -493,7 +505,10 @@ fn test_parse_assignment_on_logical_rhs() {
         stmts,
         vec![echo(vec![Expr::BinaryOp {
             op: BinOp::And,
-            left: Box::new(Expr::Variable("enabled".into())),
+            left: Box::new(Expr::Variable {
+                name: "enabled".into(),
+                line: 1,
+            }),
             right: Box::new(Expr::Assign {
                 var: "file".into(),
                 expr: Box::new(Expr::FunctionCall {
@@ -532,7 +547,10 @@ fn test_parse_comma_separated_echo() {
         stmts,
         vec![echo(vec![
             Expr::Integer(1),
-            Expr::Variable("value".into()),
+            Expr::Variable {
+                name: "value".into(),
+                line: 1,
+            },
             Expr::BinaryOp {
                 op: BinOp::Add,
                 left: Box::new(Expr::Integer(2)),
@@ -743,10 +761,16 @@ fn test_parse_while() {
         vec![Stmt::While {
             condition: Expr::BinaryOp {
                 op: BinOp::Less,
-                left: Box::new(Expr::Variable("x".into())),
+                left: Box::new(Expr::Variable {
+                    name: "x".into(),
+                    line: 1,
+                }),
                 right: Box::new(Expr::Integer(3)),
             },
-            body: vec![echo(vec![Expr::Variable("x".into())])],
+            body: vec![echo(vec![Expr::Variable {
+                name: "x".into(),
+                line: 1,
+            }])],
         }]
     );
 }

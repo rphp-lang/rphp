@@ -31,12 +31,12 @@ fn reserved_this_parameter_is_rejected_without_aliasing_receiver_storage() {
 }
 
 #[test]
-fn undefined_variables_are_passed_as_null_arguments() {
+fn undefined_variable_arguments_warn_and_pass_null_snapshots() {
     assert_eq!(
         run_php(
             "<?php function acceptsNull($value) { return is_null($value) ? 'null' : 'value'; } echo (is_null($missing) ? 'null' : 'value') . ':' . acceptsNull(value: $alsoMissing) . ':' . ($thirdMissing === null ? 'null' : 'value');"
         ),
-        "null:null:null"
+        "\nWarning: Undefined variable $missing in <main> on line 1\n\nWarning: Undefined variable $alsoMissing in <main> on line 1\n\nWarning: Undefined variable $thirdMissing in <main> on line 1\nnull:null:null"
     );
 }
 

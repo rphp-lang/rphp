@@ -62,16 +62,27 @@ fn op_send_named<'a>(
             }
         }
 
-        let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-        let cloned = if val.is_undef() {
-            Value::null()
+        let variadic_index = func_common.sig.param_names.len().saturating_sub(1) as u32;
+        let is_ref = func_common.sig.is_param_by_ref(variadic_index);
+        let value = if is_ref && opline.op1_type == OpType::Cv {
+            unsafe {
+                let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                let raw_ptr = base.add(opline.op1 as usize);
+                materialize_reference_alias(frame, raw_ptr)
+            }
         } else {
-            val.clone()
+            snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?
         };
+        if let Some(exception) = eg.exception.take() {
+            match unsafe { cleanup_call_and_throw(eg, frame, call, exception) } {
+                ThrowResult::Handled(nf, no) => return Ok(ColdResult::NewFrame(nf, no)),
+                ThrowResult::Unhandled(t) => return Ok(ColdResult::Unhandled(t)),
+            }
+        }
         eg.pending_named_variadic
             .entry(call_key)
             .or_insert_with(Vec::new)
-            .push((name.to_string(), cloned));
+            .push((name.to_string(), value));
         // This named arg doesn't occupy a CV slot, so decrement
         // num_args so DoFcall's positional variadic count is correct.
         unsafe {
@@ -110,12 +121,17 @@ fn op_send_named<'a>(
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, argument) };
                 } else {
                     // By-value: same logic as SendVal
-                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                    let cloned = if val.is_undef() {
-                        Value::null()
-                    } else {
-                        val.clone()
-                    };
+                    let cloned = snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?;
+                    if let Some(exception) = eg.exception.take() {
+                        match unsafe { cleanup_call_and_throw(eg, frame, call, exception) } {
+                            ThrowResult::Handled(nf, no) => {
+                                return Ok(ColdResult::NewFrame(nf, no));
+                            }
+                            ThrowResult::Unhandled(t) => {
+                                return Ok(ColdResult::Unhandled(t));
+                            }
+                        }
+                    }
                     let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
                 }

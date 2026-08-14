@@ -2,11 +2,35 @@
         let tokens = Lexer::new(source).tokenize().unwrap();
         let statements = Parser::new(tokens).parse().unwrap();
         let result = Compiler::new().compile(&statements).unwrap();
-        make_user_function(result.main)
+        let has_backward_edge = |op_array: &crate::compiler::OpArray| {
+            op_array
+                .instructions
+                .iter()
+                .enumerate()
+                .any(|(ip, instruction)| {
+                    matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+                        && (instruction.op1 as usize) < ip
+                })
+        };
+        if has_backward_edge(&result.main) {
+            return make_user_function(result.main);
+        }
+        let function_loop = result
+            .functions
+            .into_iter()
+            .map(|(_, function)| function)
+            .find(|function| has_backward_edge(&function.op_array));
+        function_loop.unwrap_or_else(|| make_user_function(result.main))
     }
 
     fn quick_plan(source: &str) -> QuickLongAccumulateLoop {
         let main = compile_main(source);
+        if let Some(plan) = main.op_array.block_plans.iter().find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan.clone()),
+            _ => None,
+        }) {
+            return plan;
+        }
         let selected_backedge = main
             .op_array
             .instructions
@@ -15,7 +39,8 @@
         #[cfg(feature = "quick-loops")]
         assert!(
             selected_backedge.is_some(),
-            "compiler should select a quick loop"
+            "compiler should select a quick loop; instructions: {:#?}",
+            main.op_array.instructions
         );
         let backedge = selected_backedge
             .or_else(|| {
@@ -29,7 +54,28 @@
             })
             .expect("source should contain a backward edge");
         let header = main.op_array.instructions[backedge].op1 as usize;
-        detect_long_accumulate_loop(&main.op_array, header, backedge).unwrap()
+        detect_long_accumulate_loop(&main.op_array, header, backedge).unwrap_or_else(|| {
+            let plan_kinds = main
+                .op_array
+                .block_plans
+                .iter()
+                .map(|plan| match plan {
+                    BlockPlan::Interpret => "interpret",
+                    BlockPlan::Macro(_) => "macro",
+                    BlockPlan::Deoptimized => "deoptimized",
+                    BlockPlan::QuickLongAccumulate(_) => "long-accumulate",
+                    BlockPlan::QuickDoubleCallAccumulate(_) => "double-call-accumulate",
+                    BlockPlan::QuickLongInduction(_) => "long-induction",
+                    BlockPlan::QuickForeachLongAccumulate(_) => "foreach-long",
+                    BlockPlan::QuickForeachObjectPropertyAccumulate(_) => "foreach-object",
+                    BlockPlan::QuickLongOps(_) => "long-ops",
+                })
+                .collect::<Vec<_>>();
+            panic!(
+                "selected quick loop must remain structurally detectable; plans: {plan_kinds:?}; instructions: {:#?}",
+                main.op_array.instructions
+            )
+        })
     }
 
     #[cfg(feature = "quick-loops")]
@@ -40,10 +86,12 @@
 function calculateFloat(float $a, float $b, float $c): float {
     return ($a + $b) * $c;
 }
+function runExactDoubleLoop() {
 $scale = 2.0;
 $total = 0.0;
 for ($i = 0; $i < 100; $i++) {
     $total += calculateFloat(1.5, 2.5, $scale);
+}
 }
 ",
         );
@@ -85,10 +133,12 @@ class FloatCalculator {
         return (($a + $b) * $c) - 2.0;
     }
 }
+function runDoubleMethodLoop() {
 $calculator = new FloatCalculator();
 $total = 0.0;
 for ($i = 0; $i < 100; $i++) {
     $total += $calculator->calculate(1.5, 2.5, 2.0);
+}
 }
 ",
         );
@@ -134,10 +184,12 @@ for ($i = 0; $i < 100; $i++) {
 function calculateFloat(float $a, float $b, float $c): float {
     return (($a + $b) * $c) - 2.0;
 }
+function runInvariantDoubleLoop() {
 $scale = 2.0;
 $total = 0.0;
 for ($i = 0; $i < 100; $i++) {
     $total += calculateFloat($i * 0.5, $scale + 1.0, 2.0);
+}
 }
 ",
         );
@@ -316,11 +368,13 @@ for ($i = 0; $i < 100; $i++) {
 function scaleJson(float $value): float {
     return $value * 1.5;
 }
+function runJsonDoubleLoop() {
 $json = '{\"value\":1.25}';
 $total = 0.0;
 for ($i = 0; $i < 100; $i++) {
     $row = json_decode($json, true);
     $total += scaleJson($row['value']);
+}
 }
 ",
         );
@@ -404,6 +458,7 @@ class Sink {
     public $value = 0;
     public function accept($value) { $this->value = $this->value + $value; }
 }
+function runGuardedPropertyLoop() {
 $tick = new Tick();
 $sink = new Sink();
 for ($i = 0; $i < 100; $i++) {
@@ -411,6 +466,7 @@ for ($i = 0; $i < 100; $i++) {
     if ($i % 3 == 0) {
         $sink->accept($tick->current());
     }
+}
 }
 ",
         );

@@ -587,6 +587,7 @@ mod tests {
     fn detects_exact_nested_callback_pipeline() {
         let op_array = compile(
             r#"<?php
+$values = [];
 $result = array_reduce(
     array_filter(array_map("mapValue", $values), "keepValue"),
     "sumValue",
@@ -668,6 +669,7 @@ function pipeline($values) {
     fn detects_nested_and_dead_staged_filter_map_pipeline() {
         let nested = compile(
             r#"<?php
+$values = [];
 $result = array_reduce(
     array_map("mapValue", array_filter($values, "keepValue")),
     "sumValue",

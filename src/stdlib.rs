@@ -5992,6 +5992,46 @@ const E_USER_WARNING: i64 = 512;
 const E_USER_NOTICE: i64 = 1024;
 const E_USER_DEPRECATED: i64 = 16_384;
 
+/// Route a recoverable PHP diagnostic through the request-local user handler.
+/// Only a strict `false` result declines the diagnostic; null and every other
+/// return value count as handled, matching PHP 8.2. A handler is never entered
+/// recursively, while its own diagnostics remain eligible for the standard
+/// reporting path.
+pub(crate) fn dispatch_php_error(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    level: i64,
+    message: &str,
+    file: &str,
+    line: usize,
+) -> Result<bool, VmError> {
+    if eg.handling_error || level & eg.error_handler_levels == 0 {
+        return Ok(false);
+    }
+    let Some(callback) = eg.error_handler.clone() else {
+        return Ok(false);
+    };
+    let Some(resolved) = resolve_callback_at_callsite(&callback, eg, ed) else {
+        return Ok(false);
+    };
+
+    eg.handling_error = true;
+    let result = call_resolved_with_values(
+        eg,
+        &resolved,
+        &[
+            Value::long(level),
+            Value::string(message.to_string()),
+            Value::string(file.to_string()),
+            Value::long(line as i64),
+        ],
+    );
+    eg.handling_error = false;
+    unsafe { crate::vm::execute::sync_dirty_globals_to_frame(eg, ed) };
+    let result = result?;
+    Ok(eg.exception.is_some() || result.value_type() != ValueType::False)
+}
+
 /// Raise one of PHP's user-generated diagnostics. Recoverable diagnostics are
 /// deliberately quiet when no handler claims them, matching RPHP's existing
 /// warning policy while still exposing the observable handler contract.
@@ -6013,28 +6053,8 @@ fn fn_trigger_error(
         return Ok(());
     }
 
-    let handled = if level & eg.error_handler_levels != 0 {
-        eg.error_handler.clone().and_then(|callback| {
-            let resolved = resolve_callback_at_callsite(&callback, eg, ed)?;
-            Some(call_resolved_with_values(
-                eg,
-                &resolved,
-                &[
-                    Value::long(level),
-                    Value::string(message.clone()),
-                    Value::string(""),
-                    Value::long(0),
-                ],
-            ))
-        })
-    } else {
-        None
-    };
-
-    if let Some(result) = handled {
-        if result?.is_truthy() || eg.exception.is_some() {
-            ret!(rv, Value::bool(true));
-        }
+    if dispatch_php_error(eg, ed, level, &message, "", 0)? {
+        ret!(rv, Value::bool(true));
     }
     if level == E_USER_ERROR {
         return Err(VmError::Fatal(message));

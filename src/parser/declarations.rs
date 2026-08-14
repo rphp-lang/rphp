@@ -984,7 +984,10 @@ impl Parser {
             is_static,
             returns_by_ref,
             params,
-            use_vars: free_vars.into_iter().map(|name| (name, false)).collect(),
+            use_vars: free_vars
+                .into_iter()
+                .map(|name| (name, false, 0))
+                .collect(),
             body,
             return_type,
             generic_params,
@@ -998,7 +1001,7 @@ impl Parser {
         out: &mut Vec<String>,
     ) {
         match expr {
-            Expr::Variable(name) => {
+            Expr::Variable { name, .. } => {
                 if !bound.contains(name.as_str()) && !out.contains(name) {
                     out.push(name.clone());
                 }
@@ -1062,7 +1065,10 @@ impl Parser {
                     Self::collect_free_vars(e, bound, out);
                 }
             }
-            Expr::PostInc(name) | Expr::PostDec(name) | Expr::PreInc(name) | Expr::PreDec(name) => {
+            Expr::PostInc { name, .. }
+            | Expr::PostDec { name, .. }
+            | Expr::PreInc { name, .. }
+            | Expr::PreDec { name, .. } => {
                 if !bound.contains(name.as_str()) && !out.contains(name) {
                     out.push(name.clone());
                 }
@@ -1113,7 +1119,7 @@ impl Parser {
             }
             Expr::Closure { use_vars, .. } => {
                 // Nested closure — only capture its explicit use vars
-                for (v, _) in use_vars {
+                for (v, _, _) in use_vars {
                     if !bound.contains(v.as_str()) && !out.contains(v) {
                         out.push(v.clone());
                     }
@@ -1237,7 +1243,7 @@ impl Parser {
             if v == "GLOBALS" {
                 self.compile_error("Cannot use auto-global as lexical variable", line);
             }
-            use_vars.push((v, is_ref));
+            use_vars.push((v, is_ref, line));
             while self.peek() == Token::Comma {
                 self.advance();
                 let is_ref = if self.peek() == Token::Ampersand {
@@ -1253,7 +1259,7 @@ impl Parser {
                 if v == "GLOBALS" {
                     self.compile_error("Cannot use auto-global as lexical variable", line);
                 }
-                use_vars.push((v, is_ref));
+                use_vars.push((v, is_ref, line));
             }
             self.expect(&Token::RParen)?;
         }

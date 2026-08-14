@@ -70,7 +70,12 @@ pub enum Expr {
     StringLiteral(String),
     Null,
     Bool(bool),
-    Variable(String),
+    Variable {
+        name: String,
+        /// Source line of the variable token. Synthetic compiler expressions
+        /// use zero so they never acquire user-visible diagnostics.
+        line: usize,
+    },
     /// The PHP 8.2 global symbol-table pseudo-variable. Keeping its source
     /// line distinguishes whole-table restrictions from ordinary CVs while
     /// direct dimensions retain their dedicated compiler lowering.
@@ -90,12 +95,12 @@ pub enum Expr {
         generic_args: Vec<TypeHint>,
         line: usize,
     },
-    PostInc(String),       // $i++
-    PostDec(String),       // $i--
+    PostInc { name: String, line: usize }, // $i++
+    PostDec { name: String, line: usize }, // $i--
     PostIncTarget(Box<Expr>), // self::$value++, $object->property++, $array[$key]++
     PostDecTarget(Box<Expr>), // self::$value--, $object->property--, $array[$key]--
-    PreInc(String),        // ++$i
-    PreDec(String),        // --$i
+    PreInc { name: String, line: usize }, // ++$i
+    PreDec { name: String, line: usize }, // --$i
     PreIncTarget(Box<Expr>), // ++self::$value, ++$object->property
     PreDecTarget(Box<Expr>), // --self::$value, --$object->property
     Not(Box<Expr>),        // !expr
@@ -157,7 +162,7 @@ pub enum Expr {
         is_static: bool,
         returns_by_ref: bool,
         params: Vec<Param>,
-        use_vars: Vec<(String, bool)>, // (name, captured by reference)
+        use_vars: Vec<(String, bool, usize)>, // (name, captured by reference, source line)
         body: Vec<Stmt>,
         return_type: Option<TypeHint>,
         generic_params: Vec<GenericParameter>,
@@ -416,13 +421,13 @@ impl Expr {
             | Expr::StringLiteral(_)
             | Expr::Null
             | Expr::Bool(_)
-            | Expr::Variable(_)
+            | Expr::Variable { .. }
             | Expr::Globals { .. }
             | Expr::CompileError { .. }
-            | Expr::PostInc(_)
-            | Expr::PostDec(_)
-            | Expr::PreInc(_)
-            | Expr::PreDec(_)
+            | Expr::PostInc { .. }
+            | Expr::PostDec { .. }
+            | Expr::PreInc { .. }
+            | Expr::PreDec { .. }
             | Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
             | Expr::FirstClassFunctionCallable(_)

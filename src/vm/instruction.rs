@@ -56,6 +56,20 @@ pub const CALL_FLAG_ERROR_SUPPRESS: u16 = 1 << 10;
 /// a reference parameter.
 pub const SEND_FLAG_GLOBALS: u16 = 1;
 
+/// SendVarEx/SendNamed flag: op1 is a source CV whose ordinary by-value read
+/// must report an undefined-variable warning. Runtime signature resolution may
+/// instead select a by-reference l-value context, in which case the read stays
+/// silent. `result` holds the source variable-name literal.
+pub const SEND_FLAG_FETCH_CV_R: u16 = 1 << 1;
+
+/// SendVarEx/SendNamed flag: an annotated by-value CV read is under PHP's `@`
+/// reporting mask. A custom handler still runs and observes that mask.
+pub const SEND_FLAG_ERROR_SUPPRESS: u16 = 1 << 2;
+
+/// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
+/// handlers still run and observe the suppressed mask.
+pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
+
 /// A source-level `goto` leaves a try/catch region with finally, while its
 /// zero-width target label shares the first executable offset of that region.
 pub const JMP_FLAG_TARGET_OUTSIDE_TRY: u16 = 1;

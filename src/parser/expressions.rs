@@ -36,7 +36,7 @@ impl Parser {
     ) -> Result<Expr, String> {
         if !matches!(
             &target,
-            Expr::Variable(_)
+            Expr::Variable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -70,7 +70,7 @@ impl Parser {
     fn finish_compound_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
         if !matches!(
             &target,
-            Expr::Variable(_)
+            Expr::Variable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -133,11 +133,11 @@ impl Parser {
             });
         }
         match target {
-            Expr::Variable(var) if by_reference => Ok(Expr::AssignReference {
+            Expr::Variable { name: var, .. } if by_reference => Ok(Expr::AssignReference {
                 var,
                 target: expr,
             }),
-            Expr::Variable(var) => Ok(Expr::Assign { var, expr }),
+            Expr::Variable { name: var, .. } => Ok(Expr::Assign { var, expr }),
             Expr::ArrayAccess { .. }
             | Expr::PropertyAccess {
                 nullsafe: false, ..
@@ -156,7 +156,7 @@ impl Parser {
     fn finish_coalesce_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
         if !matches!(
             &target,
-            Expr::Variable(_)
+            Expr::Variable { .. }
                 | Expr::Globals { .. }
                 | Expr::ArrayAccess { .. }
                 | Expr::PropertyAccess {
@@ -435,7 +435,10 @@ impl Parser {
                 } else if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
                     let class = match self.advance() {
                         Token::Variable(name, line) => Self::variable_expression(name, line),
-                        Token::This(_) => Expr::Variable("this".to_string()),
+                        Token::This(line) => Expr::Variable {
+                            name: "this".to_string(),
+                            line,
+                        },
                         _ => unreachable!(),
                     };
                     let class = self.parse_dynamic_new_class_expression(class)?;
@@ -594,7 +597,10 @@ impl Parser {
                     } else if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
                         let class = match self.advance() {
                             Token::Variable(name, line) => Self::variable_expression(name, line),
-                            Token::This(_) => Expr::Variable("this".to_string()),
+                            Token::This(line) => Expr::Variable {
+                                name: "this".to_string(),
+                                line,
+                            },
                             _ => unreachable!(),
                         };
                         let class = self.parse_dynamic_new_class_expression(class)?;
@@ -742,13 +748,16 @@ impl Parser {
             Token::This(line) => {
                 self.last_primary_line = Some(line);
                 self.advance();
-                Ok(Expr::Variable("this".to_string()))
+                Ok(Expr::Variable {
+                    name: "this".to_string(),
+                    line,
+                })
             }
             Token::PlusPlus => {
                 self.advance();
                 let target = self.parse_power()?;
                 match target {
-                    Expr::Variable(name) => Ok(Expr::PreInc(name)),
+                    Expr::Variable { name, line } => Ok(Expr::PreInc { name, line }),
                     Expr::Globals { line } => Ok(self.globals_modification_error(line)),
                     Expr::PropertyAccess {
                         nullsafe: false, ..
@@ -765,7 +774,7 @@ impl Parser {
                 self.advance();
                 let target = self.parse_power()?;
                 match target {
-                    Expr::Variable(name) => Ok(Expr::PreDec(name)),
+                    Expr::Variable { name, line } => Ok(Expr::PreDec { name, line }),
                     Expr::Globals { line } => Ok(self.globals_modification_error(line)),
                     Expr::PropertyAccess {
                         nullsafe: false, ..
@@ -1024,7 +1033,13 @@ impl Parser {
                             (Self::variable_expression(name, variable_line), variable_line)
                         }
                         Token::This(this_line) => {
-                            (Expr::Variable("this".to_string()), this_line)
+                            (
+                                Expr::Variable {
+                                    name: "this".to_string(),
+                                    line: this_line,
+                                },
+                                this_line,
+                            )
                         }
                         _ => unreachable!(),
                     };

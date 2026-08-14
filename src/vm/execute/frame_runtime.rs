@@ -10,6 +10,32 @@ fn globals_set(globals: &mut HashMap<String, Value>, key: &str, val: Value) {
     }
 }
 
+/// Perform an ordinary assignment through the global symbol table.
+///
+/// Reference-binding opcodes use `globals_set` because they intentionally
+/// replace the table entry. `$GLOBALS[$name] = $value`, however, must update
+/// the target of an existing PHP reference without separating its aliases.
+#[inline(always)]
+fn globals_assign(globals: &mut HashMap<String, Value>, key: &str, val: Value) {
+    if let Some(slot) = globals.get_mut(key) {
+        assignment_slot_set(slot, val);
+    } else {
+        globals.insert(key.to_string(), val);
+    }
+}
+
+/// PHP creates a missing variable as `null` when a reference is acquired.
+/// Keep that transition at the reference-materialization boundary so later
+/// ordinary reads neither warn nor retain the VM's internal Undef sentinel.
+#[inline(always)]
+fn reference_initial_value(value: Value) -> Value {
+    if value.is_undef() {
+        Value::null()
+    } else {
+        value
+    }
+}
+
 // ── Slot write API ──
 //
 // Per-slot bitmap tracking: each write helper maintains heap_bitmap (u64) alongside
@@ -398,7 +424,7 @@ unsafe fn materialize_reference_alias(frame: *mut ExecuteData, ptr: *mut Value) 
         }
     }
 
-    let current = std::mem::replace(&mut *ptr, Value::undef());
+    let current = reference_initial_value(std::mem::replace(&mut *ptr, Value::undef()));
     let binding = Value::owned_reference(current);
     frame_slot_set(frame, ptr, binding.clone_owned_reference_alias());
     binding

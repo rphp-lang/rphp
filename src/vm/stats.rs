@@ -659,6 +659,7 @@ mod inner {
             8 => Some("Concat"),
             9 => Some("AssignConcat"),
             10 => Some("AssignCv"),
+            11 => Some("FetchCvR"),
             13 => Some("BoolNot"),
             15 => Some("IsEqual"),
             16 => Some("IsNotEqual"),

@@ -1,6 +1,260 @@
 /// E2E tests: isset, empty, unset, type casting, type checks.
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
+use rphp::vm::opcode::OpCode;
+
+#[test]
+fn undefined_local_rvalues_warn_at_each_read_but_silent_and_reference_contexts_do_not() {
+    let file = "/virtual/undefined-rvalue-contract.php";
+    let source = r#"<?php
+function acceptSnapshot($value) { var_dump($value); }
+function fillReference(&$value) { $value = 'filled'; }
+var_dump($firstMissing);
+var_dump(isset($silentMissing), empty($silentMissing), $silentMissing ?? 'fallback');
+acceptSnapshot($argumentMissing);
+fillReference($referenceMissing);
+echo $referenceMissing, "\n";"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "\nWarning: Undefined variable $firstMissing in {file} on line 4\nNULL\nbool(false)\nbool(true)\nstring(8) \"fallback\"\n\nWarning: Undefined variable $argumentMissing in {file} on line 6\nNULL\nfilled\n"
+        )
+    );
+}
+
+#[test]
+fn runtime_resolved_calls_distinguish_reference_lvalues_from_value_reads() {
+    let file = "/virtual/undefined-runtime-reference.php";
+    let source = r#"<?php
+class Relay {
+    function bind(&$slot) { $slot = 'bound'; }
+    function inspect($slot) { var_dump($slot); }
+    static function bindStatic(&$slot) { $slot = 'static'; }
+}
+$relay = new Relay;
+$relay->bind($methodMissing);
+var_dump($methodMissing);
+$dynamic = 'bind';
+$relay->$dynamic($dynamicMissing);
+var_dump($dynamicMissing);
+$relay->bind(slot: $namedMissing);
+var_dump($namedMissing);
+Relay::bindStatic($staticMissing);
+var_dump($staticMissing);
+$relay->inspect(slot: $valueMissing);"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "string(5) \"bound\"\nstring(5) \"bound\"\nstring(5) \"bound\"\nstring(6) \"static\"\n\nWarning: Undefined variable $valueMissing in {file} on line 17\nNULL\n"
+        )
+    );
+}
+
+#[test]
+fn runtime_resolved_variadics_and_suppression_keep_the_same_read_context() {
+    let file = "/virtual/undefined-runtime-variadic.php";
+    let source = r#"<?php
+function bindAll(&...$slots) { foreach ($slots as &$slot) { $slot = 'set'; } }
+function inspectAll(...$slots) { var_dump($slots); }
+bindAll(first: $referenceMissing);
+var_dump($referenceMissing);
+function observeSuppressed($level, $message, $file, $line) { echo error_reporting(), ":$message:$line\n"; }
+set_error_handler('observeSuppressed');
+@inspectAll(first: $valueMissing);"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        "string(3) \"set\"\n4437:Undefined variable $valueMissing:8\narray(1) {\n  [\"first\"]=>\n  NULL\n}\n"
+    );
+}
+
+#[test]
+fn undefined_local_warning_uses_php_handler_return_reentrancy_and_suppression_rules() {
+    let file = "/virtual/undefined-handler-contract.php";
+    let source = r#"<?php
+set_error_handler(function ($level, $message, $file, $line) { echo "claimed:$level:$message:$line\n"; $GLOBALS['handlerAssigned'] = 41; });
+var_dump($handlerAssigned);
+var_dump($handlerAssigned);
+function declineMissing($level, $message, $file, $line) { echo "declined:$message\n"; return false; }
+set_error_handler('declineMissing');
+var_dump($declinedMissing);
+function nestMissing($level, $message, $file, $line) { echo "outer:$message\n"; var_dump($nestedMissing); }
+set_error_handler('nestMissing');
+var_dump($outerMissing);
+function inspectSuppression($level, $message, $file, $line) { echo 'suppressed:', error_reporting(), ":$message\n"; }
+set_error_handler('inspectSuppression');
+@var_dump($suppressedMissing);"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "claimed:2:Undefined variable $handlerAssigned:3\nNULL\nint(41)\ndeclined:Undefined variable $declinedMissing\n\nWarning: Undefined variable $declinedMissing in {file} on line 7\nNULL\nouter:Undefined variable $outerMissing\n\nWarning: Undefined variable $nestedMissing in {file} on line 8\nNULL\nNULL\nsuppressed:4437:Undefined variable $suppressedMissing\nNULL\n"
+        )
+    );
+}
+
+#[test]
+fn explicit_closure_capture_snapshots_an_undefined_value_but_reference_capture_is_silent() {
+    let file = "/virtual/undefined-capture-contract.php";
+    let source = r#"<?php
+$snapshot = function () use ($capturedMissing) { var_dump($capturedMissing); };
+$snapshot();
+$alias = function () use (&$referenceMissing) { $referenceMissing = 'bound'; };
+$alias();
+echo $referenceMissing;"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!("\nWarning: Undefined variable $capturedMissing in {file} on line 2\nNULL\nbound")
+    );
+}
+
+#[test]
+fn arrow_capture_keeps_an_undefined_snapshot_silent_until_the_body_reads_it() {
+    let file = "/virtual/undefined-arrow-capture.php";
+    let source = r#"<?php
+$readLater = fn() => $notCreatedYet;
+echo "closure-created\n";
+$notCreatedYet = 9;
+var_dump($readLater());
+$ready = 5;
+$readReady = fn() => $ready;
+var_dump($readReady());"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "closure-created\n\nWarning: Undefined variable $notCreatedYet in {file} on line 2\nNULL\nint(5)\n"
+        )
+    );
+}
+
+#[test]
+fn increment_initializes_an_undefined_local_after_reporting_the_read() {
+    let file = "/virtual/undefined-increment.php";
+    let source = r#"<?php
+function advanceMissing() {
+    var_dump($counter++);
+    var_dump($counter);
+    unset($counter);
+    var_dump(++$counter);
+}
+advanceMissing();"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "\nWarning: Undefined variable $counter in {file} on line 3\nNULL\nint(1)\n\nWarning: Undefined variable $counter in {file} on line 6\nint(1)\n"
+        )
+    );
+}
+
+#[test]
+fn increment_and_decrement_consume_the_pre_handler_undefined_snapshot() {
+    let source = r#"<?php
+set_error_handler(function ($level, $message, $file, $line) {
+    echo "handled\n";
+    $GLOBALS['step'] = 50;
+});
+var_dump($step++);
+var_dump($step);
+unset($step);
+var_dump($step--);
+var_dump($step);"#;
+
+    assert_eq!(
+        run_php(source),
+        "handled\nNULL\nint(1)\nhandled\nNULL\nNULL\n"
+    );
+}
+
+#[test]
+fn undefined_local_after_a_partial_branch_keeps_its_runtime_warning() {
+    let file = "/virtual/undefined-branch-contract.php";
+    let source = r#"<?php
+$takeBranch = false;
+if ($takeBranch) { $branchOnly = 7; }
+var_dump($branchOnly);
+$takeBranch = true;
+if ($takeBranch) { $both = 1; } else { $both = 2; }
+var_dump($both);"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!("\nWarning: Undefined variable $branchOnly in {file} on line 4\nNULL\nint(1)\n")
+    );
+}
+
+#[test]
+fn compound_assignment_reads_a_main_scope_cv_after_rhs_reentrancy() {
+    let file = "/virtual/compound-reentrant-read.php";
+    let source = r#"<?php
+function replaceTotal() { unset($GLOBALS['total']); return 2; }
+$total = 5;
+$total += replaceTotal();
+var_dump($total);"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!("\nWarning: Undefined variable $total in {file} on line 4\nint(2)\n")
+    );
+}
+
+#[test]
+fn null_and_boolean_integer_arithmetic_preserves_php_result_kind() {
+    assert_eq!(
+        run_php("<?php var_dump(null + 2, false + 2, true + 2, null + 1.5);"),
+        "int(2)\nint(2)\nint(3)\nfloat(1.5)\n"
+    );
+}
+
+#[test]
+fn global_reference_assignment_updates_a_reference_that_escaped_through_a_call() {
+    assert_eq!(
+        run_php(
+            "<?php $published = null; function publish(&$slot) { $GLOBALS['published'] =& $slot; } function overwrite() { $GLOBALS['published'] = 9; } function observe() { $local = 1; publish($local); overwrite(); var_dump($local, $GLOBALS['published']); } observe();"
+        ),
+        "int(9)\nint(9)\n"
+    );
+}
+
+#[test]
+fn acquiring_a_reference_materializes_an_undefined_variable_as_null() {
+    assert_eq!(
+        run_php(
+            "<?php function observeReference(&$slot) {} observeReference($callCreated); $closure = function () use (&$captureCreated) {}; $entries = [&$arrayCreated]; var_dump($callCreated, $captureCreated, $arrayCreated, $entries[0]);"
+        ),
+        "NULL\nNULL\nNULL\nNULL\n"
+    );
+}
+
+#[test]
+fn definitely_initialized_function_locals_keep_compact_cv_operands() {
+    let source = "<?php function accumulate($limit) { $sum = 0; for ($i = 0; $i < $limit; $i++) { $sum += $i; } if ($limit > 0) { $result = $sum; } else { $result = 0; } return $result; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compiled = Compiler::new().compile(&statements).unwrap();
+    let function = compiled
+        .functions
+        .iter()
+        .find(|(name, _)| name == "accumulate")
+        .map(|(_, function)| function)
+        .unwrap();
+
+    assert!(
+        function
+            .op_array
+            .instructions()
+            .iter()
+            .all(|instruction| instruction.opcode != OpCode::FetchCvR),
+        "proven initialized locals must not add diagnostic dispatch to the hot loop"
+    );
+}
 
 #[test]
 fn error_reporting_is_request_local_and_uses_namespaced_function_fallback() {
@@ -19,6 +273,38 @@ fn error_suppression_follows_a_called_frame_and_restores_the_request_mask() {
             "<?php error_reporting(E_ALL); function inspectMaskedWarning() { echo $forgotten; throw new RuntimeException('stop'); } try { @inspectMaskedWarning(); } catch (RuntimeException $error) {} echo 'mask=', error_reporting();"
         ),
         "mask=32767"
+    );
+}
+
+#[test]
+fn error_suppression_hides_builtin_undefined_variable_warnings_without_a_handler() {
+    assert_eq!(
+        run_php("<?php @$directMissing; @($groupedMissing + 1); echo 'ok';"),
+        "ok"
+    );
+}
+
+#[test]
+fn reference_read_contexts_materialize_null_without_ordinary_read_warnings() {
+    let source = r#"<?php
+static $topLevel = -1;
+global $topLevel;
+var_dump($topLevel, $GLOBALS['topLevel']);
+function publish() { global $freshGlobal; var_dump($freshGlobal); $freshGlobal += 2; }
+publish();
+var_dump($freshGlobal);
+function &missingAlias() { return $returnSlot; }
+var_dump(missingAlias());
+function recurseArg($value) { recurseArg($value[][$silentKey]); }
+try { recurseArg([]); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+function sink($first, &$alias) { $alias = 9; }
+$lead = 1;
+sink($lead, $missingRef, ...[]);
+var_dump($missingRef);"#;
+
+    assert_eq!(
+        run_php(source),
+        "int(-1)\nint(-1)\nNULL\nint(2)\nNULL\nCannot use [] for reading\nint(9)\n"
     );
 }
 

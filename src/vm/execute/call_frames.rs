@@ -355,7 +355,7 @@ fn prepare_named_call_frame(
         // its compiler-sized CV prefix contains every positional/source slot.
         unsafe {
             for index in (0..positional).rev() {
-                let value = (*call).cv(index).clone();
+                let value = (*call).cv(index).clone_closure_capture();
                 let destination = (*call).cv_mut(index + 1) as *mut Value;
                 frame_slot_set(call, destination, value);
             }

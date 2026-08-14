@@ -44,7 +44,7 @@ fn real_php_exact_float_calls_enter_double_jit_and_long_inputs_fallback() {
 
 #[test]
 fn real_php_typed_double_call_accumulation_enters_one_native_region() {
-    let source = "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateFloat(1.5, 2.5, $scale); } echo $i . ':' . $total;";
+    let source = "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } function runTypedDouble() { $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateFloat(1.5, 2.5, $scale); } echo $i . ':' . $total; } runTypedDouble();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -64,7 +64,11 @@ fn real_php_typed_double_call_accumulation_enters_one_native_region() {
         "100000:600000"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runTypedDouble"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -87,7 +91,7 @@ fn real_php_typed_double_call_accumulation_enters_one_native_region() {
 
 #[test]
 fn conditional_typed_double_call_accumulation_enters_one_native_region() {
-    let source = "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += conditionalFloat($i * 0.5, 25000.0); } echo $i . ':' . $total;";
+    let source = "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } function runConditionalDouble() { $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += conditionalFloat($i * 0.5, 25000.0); } echo $i . ':' . $total; } runConditionalDouble();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -107,7 +111,11 @@ fn conditional_typed_double_call_accumulation_enters_one_native_region() {
         "100000:1875025000"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runConditionalDouble"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -131,13 +139,19 @@ fn conditional_typed_double_call_accumulation_enters_one_native_region() {
 
 #[test]
 fn monomorphic_typed_double_method_enters_one_native_region() {
-    let source = "<?php class FloatCalculator { public function calculate(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } } $calculator = new FloatCalculator(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $calculator->calculate(1.5, 2.5, 2.0); } echo $i . ':' . $total;";
+    let source = "<?php class FloatCalculator { public function calculate(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } } function runDoubleMethod() { $calculator = new FloatCalculator(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $calculator->calculate(1.5, 2.5, 2.0); } echo $i . ':' . $total; } runDoubleMethod();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
@@ -148,7 +162,11 @@ fn monomorphic_typed_double_method_enters_one_native_region() {
         "100000:600000"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runDoubleMethod"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -186,13 +204,19 @@ fn monomorphic_typed_double_method_enters_one_native_region() {
 
 #[test]
 fn conditional_typed_double_method_enters_one_native_region() {
-    let source = "<?php class ConditionalFloat { public function apply(float $value, float $pivot): float { $scaled = $value * 1.0; if ($scaled < $pivot) { $result = ($scaled * 1.5) + 2.0; return $result; } $result = ($scaled * 0.5) - 1.0; return $result; } } $calculator = new ConditionalFloat(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $calculator->apply($i * 0.5, 25000.0); } echo $i . ':' . $total;";
+    let source = "<?php class ConditionalFloat { public function apply(float $value, float $pivot): float { $scaled = $value * 1.0; if ($scaled < $pivot) { $result = ($scaled * 1.5) + 2.0; return $result; } $result = ($scaled * 0.5) - 1.0; return $result; } } function runConditionalDoubleMethod() { $calculator = new ConditionalFloat(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $calculator->apply($i * 0.5, 25000.0); } echo $i . ':' . $total; } runConditionalDoubleMethod();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
@@ -203,7 +227,11 @@ fn conditional_typed_double_method_enters_one_native_region() {
         "100000:1875025000"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runConditionalDoubleMethod"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -241,7 +269,7 @@ fn conditional_typed_double_method_enters_one_native_region() {
 
 #[test]
 fn typed_double_argument_expressions_enter_one_native_region() {
-    let source = "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateFloat($i * 0.5, $scale + 1.0, 2.0); } echo $i . ':' . $total;";
+    let source = "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } function runDoubleExpressions() { $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateFloat($i * 0.5, $scale + 1.0, 2.0); } echo $i . ':' . $total; } runDoubleExpressions();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -261,7 +289,11 @@ fn typed_double_argument_expressions_enter_one_native_region() {
         "100000:5000350000"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runDoubleExpressions"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -285,7 +317,7 @@ fn typed_double_argument_expressions_enter_one_native_region() {
 
 #[test]
 fn nested_typed_double_leaf_is_flattened_into_one_native_region() {
-    let source = "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateNested($i * 0.5, $scale); } echo $i . ':' . $total;";
+    let source = "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } function runNestedDouble() { $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateNested($i * 0.5, $scale); } echo $i . ':' . $total; } runNestedDouble();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -305,7 +337,11 @@ fn nested_typed_double_leaf_is_flattened_into_one_native_region() {
         "100000:2500225000"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runNestedDouble"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -336,7 +372,7 @@ fn nested_typed_double_leaf_is_flattened_into_one_native_region() {
 
 #[test]
 fn composed_conditional_double_leaf_is_flattened_into_one_native_region() {
-    let source = "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } function composedFloat(float $value, float $pivot): float { return (conditionalFloat($value, $pivot) * 1.25) + 3.0; } $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += composedFloat($i * 0.5, 25000.0); } echo $i . ':' . $total;";
+    let source = "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } function composedFloat(float $value, float $pivot): float { return (conditionalFloat($value, $pivot) * 1.25) + 3.0; } function runComposedDouble() { $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += composedFloat($i * 0.5, 25000.0); } echo $i . ':' . $total; } runComposedDouble();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -356,7 +392,11 @@ fn composed_conditional_double_leaf_is_flattened_into_one_native_region() {
         "100000:2344081250"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runComposedDouble"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -386,13 +426,19 @@ fn composed_conditional_double_leaf_is_flattened_into_one_native_region() {
 
 #[test]
 fn same_receiver_conditional_double_method_is_flattened_into_one_native_region() {
-    let source = "<?php class FloatPipeline { public function conditional(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } public function composed(float $value, float $pivot): float { return ($this->conditional($value, $pivot) * 1.25) + 3.0; } } $pipeline = new FloatPipeline(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->composed($i * 0.5, 25000.0); } echo $i . ':' . $total;";
+    let source = "<?php class FloatPipeline { public function conditional(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } public function composed(float $value, float $pivot): float { return ($this->conditional($value, $pivot) * 1.25) + 3.0; } } function runConditionalPipeline() { $pipeline = new FloatPipeline(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->composed($i * 0.5, 25000.0); } echo $i . ':' . $total; } runConditionalPipeline();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
@@ -402,7 +448,11 @@ fn same_receiver_conditional_double_method_is_flattened_into_one_native_region()
         String::from_utf8(output.lock().unwrap().clone()).unwrap(),
         "100000:2344081250"
     );
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runConditionalPipeline"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -440,13 +490,19 @@ fn same_receiver_conditional_double_method_is_flattened_into_one_native_region()
 
 #[test]
 fn same_receiver_nested_double_method_is_flattened_into_one_native_region() {
-    let source = "<?php class FloatPipeline { public function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } public function calculate(float $value, float $scale): float { return ($this->scaleAndShift($value, $scale) * 0.5) + 2.0; } } $pipeline = new FloatPipeline(); $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->calculate($i * 0.5, $scale); } echo $i . ':' . $total;";
+    let source = "<?php class FloatPipeline { public function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } public function calculate(float $value, float $scale): float { return ($this->scaleAndShift($value, $scale) * 0.5) + 2.0; } } function runNestedPipeline() { $pipeline = new FloatPipeline(); $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->calculate($i * 0.5, $scale); } echo $i . ':' . $total; } runNestedPipeline();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
@@ -457,7 +513,11 @@ fn same_receiver_nested_double_method_is_flattened_into_one_native_region() {
         "100000:2500225000"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runNestedPipeline"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -503,7 +563,7 @@ fn same_receiver_nested_double_method_is_flattened_into_one_native_region() {
 
 #[test]
 fn recursive_composed_double_tree_is_flattened_into_one_native_region() {
-    let source = "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } function calculateOuter(float $value, float $scale): float { return calculateNested($value, $scale) + 3.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateOuter($i * 0.5, $scale); } echo $i . ':' . $total;";
+    let source = "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } function calculateOuter(float $value, float $scale): float { return calculateNested($value, $scale) + 3.0; } function runRecursiveDouble() { $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateOuter($i * 0.5, $scale); } echo $i . ':' . $total; } runRecursiveDouble();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -523,7 +583,11 @@ fn recursive_composed_double_tree_is_flattened_into_one_native_region() {
         "100000:2500525000"
     );
 
-    let loop_plan = main
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runRecursiveDouble"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()

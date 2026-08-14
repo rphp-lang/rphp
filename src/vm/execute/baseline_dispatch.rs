@@ -286,6 +286,44 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::FetchCvR => {
+                // Snapshot before invoking the handler: PHP consumes null for
+                // this read even when the handler assigns the same CV.
+                let source = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, OpType::Cv, op_array)
+                };
+                let result = unsafe {
+                    (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                };
+                if !source.is_undef() {
+                    unsafe { frame_tmp_set(frame, result, source.clone()) };
+                } else {
+                    unsafe { frame_tmp_set(frame, result, Value::null()) };
+                    report_undefined_variable_read(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        opline.op2,
+                        opline._pad & crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS != 0,
+                    )?;
+                    if let Some(exception) = eg.exception.take() {
+                        unsafe { cleanup_pending_calls(eg, frame) };
+                        match throw_in_frame(eg, frame, exception) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+
             OpCode::AssignConcat => {
                 // $x .= expr: in-place string append
                 // COW: if dest is sole owner, push_str in place (no allocation).
@@ -464,7 +502,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let base = frame as *const Value;
                 let op1 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
                     if let Some(sum) = l1.checked_add(l2) {
                         // Peek ahead: if next is Return consuming our result TMP,
                         // and frame is FastScalar with no heap — skip TMP write + Return dispatch.
@@ -521,7 +561,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = cv_ptr.dereferenced();
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
                     match l1.checked_add(l2) {
                         Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
                         None => unsafe {
@@ -541,7 +583,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
                 let op1 = op1_cv.dereferenced();
                 let op2 = &op_array.literals()[opline.op2 as usize];
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
                     // Peek ahead: if next instruction is SendVal consuming our TMP result,
                     // write directly to the call arg slot and skip the SendVal dispatch.
                     let next = unsafe { &*opline_ptr.add(1) };
@@ -581,7 +625,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
                     match l1.checked_sub(l2) {
                         Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
                         None => unsafe {
@@ -795,7 +841,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
                     match l1.checked_add(l2) {
                         Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
                         None => unsafe {
@@ -816,7 +864,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
                     match l1.checked_sub(l2) {
                         Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
                         None => unsafe {
@@ -835,7 +885,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
                     match l1.checked_mul(l2) {
                         Some(prod) => unsafe { frame_tmp_set_long(frame, result_ptr, prod) },
                         None => unsafe {
@@ -1928,7 +1980,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                     };
                     let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
-                    if !unsafe {
+                    if opline._pad & crate::vm::instruction::SEND_FLAG_FETCH_CV_R != 0
+                        && unsafe { (*source).is_undef() }
+                    {
+                        let snapshot = snapshot_runtime_send_rvalue(
+                            eg, frame, op_array, opline,
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            unsafe { cleanup_pending_calls(eg, frame) };
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        unsafe { frame_slot_init(call, arg_slot as *mut Value, snapshot) };
+                    } else if !unsafe {
                         try_init_borrowed_heap_arg(
                             call,
                             param_idx,
@@ -2431,9 +2504,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::PreInc => {
-                // ++$var: increment CV in place, result = new value
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
-                let old = unsafe { &*cv_ptr };
+                // ++$var: increment the already-evaluated read snapshot and
+                // publish it to the destination CV. Maybe-undefined reads use
+                // a TMP snapshot so a re-entrant handler cannot replace the
+                // value consumed by this operation.
+                let old = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let old = if old.is_undef() {
+                    Value::null()
+                } else {
+                    old.clone()
+                };
                 let new_val = if let Some(n) = old.as_long() {
                     match n.checked_add(1) {
                         Some(v) => Value::long(v),
@@ -2453,12 +2535,30 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                     unsafe { slot_set(result_ptr, new_val.clone()) };
                 }
+                let cv_ptr = if opline.op2_type == OpType::Cv {
+                    unsafe { (*frame).get_op_mut(opline.op2 as u32, OpType::Cv) }
+                } else {
+                    debug_assert_eq!(opline.op1_type, OpType::Cv);
+                    unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) }
+                };
                 unsafe { slot_set(cv_ptr, new_val) };
             }
 
             OpCode::PreDec => {
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
-                let old = unsafe { &*cv_ptr };
+                let old = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let old = if old.is_undef() {
+                    Value::null()
+                } else {
+                    old.clone()
+                };
+                let cv_ptr = if opline.op2_type == OpType::Cv {
+                    unsafe { (*frame).get_op_mut(opline.op2 as u32, OpType::Cv) }
+                } else {
+                    debug_assert_eq!(opline.op1_type, OpType::Cv);
+                    unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) }
+                };
                 if let Some(n) = old.as_long() {
                     let new_val = match n.checked_sub(1) {
                         Some(v) => Value::long(v),
@@ -2482,6 +2582,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         unsafe { slot_set(result_ptr, old.clone()) };
                     }
+                    unsafe { slot_set(cv_ptr, old) };
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
@@ -2500,8 +2601,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::PostInc => {
                 // $var++: increment CV in place, result = old value
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
-                let old = unsafe { &*cv_ptr };
+                let old = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let old = if old.is_undef() {
+                    Value::null()
+                } else {
+                    old.clone()
+                };
                 let new_val = if let Some(n) = old.as_long() {
                     match n.checked_add(1) {
                         Some(v) => Value::long(v),
@@ -2520,12 +2627,30 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                     unsafe { slot_set(result_ptr, old.clone()) };
                 }
+                let cv_ptr = if opline.op2_type == OpType::Cv {
+                    unsafe { (*frame).get_op_mut(opline.op2 as u32, OpType::Cv) }
+                } else {
+                    debug_assert_eq!(opline.op1_type, OpType::Cv);
+                    unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) }
+                };
                 unsafe { slot_set(cv_ptr, new_val) };
             }
 
             OpCode::PostDec => {
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
-                let old = unsafe { &*cv_ptr };
+                let old = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let old = if old.is_undef() {
+                    Value::null()
+                } else {
+                    old.clone()
+                };
+                let cv_ptr = if opline.op2_type == OpType::Cv {
+                    unsafe { (*frame).get_op_mut(opline.op2 as u32, OpType::Cv) }
+                } else {
+                    debug_assert_eq!(opline.op1_type, OpType::Cv);
+                    unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) }
+                };
                 if let Some(n) = old.as_long() {
                     let new_val = match n.checked_sub(1) {
                         Some(v) => Value::long(v),
@@ -2548,6 +2673,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         unsafe { slot_set(result_ptr, old.clone()) };
                     }
+                    unsafe { slot_set(cv_ptr, old) };
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
@@ -2597,7 +2723,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else if (*source).is_reference() {
                             Value::reference((*source).as_ref_ptr())
                         } else {
-                            let current = std::mem::replace(&mut *source, Value::undef());
+                            let current = reference_initial_value(std::mem::replace(
+                                &mut *source,
+                                Value::undef(),
+                            ));
                             let binding = Value::owned_reference(current);
                             frame_slot_set(
                                 frame,

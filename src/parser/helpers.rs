@@ -718,7 +718,7 @@ impl Parser {
         if name == "GLOBALS" {
             Expr::Globals { line }
         } else {
-            Expr::Variable(name)
+            Expr::Variable { name, line }
         }
     }
 
@@ -741,7 +741,7 @@ impl Parser {
     fn is_variable_like(expr: &Expr) -> bool {
         matches!(
             expr,
-            Expr::Variable(_)
+            Expr::Variable { .. }
                 | Expr::Globals { .. }
                 | Expr::CompileError { .. }
                 | Expr::ArrayAccess { .. }
@@ -753,7 +753,7 @@ impl Parser {
 
     fn into_foreach_target(&mut self, expr: Expr) -> Result<ForeachTarget, String> {
         match expr {
-            Expr::Variable(name) => Ok(ForeachTarget::Variable(name)),
+            Expr::Variable { name, .. } => Ok(ForeachTarget::Variable(name)),
             Expr::Globals { line } => Ok(ForeachTarget::Target(
                 self.globals_modification_error(line),
             )),
@@ -917,7 +917,7 @@ impl Parser {
                 {
                     if !matches!(
                         &target,
-                        Expr::Variable(_)
+                        Expr::Variable { .. }
                             | Expr::ArrayAccess { .. }
                             | Expr::PropertyAccess {
                                 nullsafe: false,
@@ -936,10 +936,12 @@ impl Parser {
                     targets.push(ListTarget::AppendTarget(target));
                 } else {
                     match target {
-                        Expr::Variable(var) if var == "this" => {
+                        Expr::Variable { name: var, .. } if var == "this" => {
                             return Err("Cannot re-assign $this".into());
                         }
-                        Expr::Variable(var) => targets.push(ListTarget::Variable(var)),
+                        Expr::Variable { name: var, .. } => {
+                            targets.push(ListTarget::Variable(var))
+                        }
                         Expr::Globals { line } => targets.push(ListTarget::Target(
                             self.globals_modification_error(line),
                         )),

@@ -32,7 +32,10 @@ impl Parser {
                         self.advance();
                         expr = Expr::DynamicPropertyAccess {
                             object: Box::new(expr),
-                            property: Box::new(Expr::Variable(property)),
+                            property: Box::new(Expr::Variable {
+                                name: property,
+                                line: 0,
+                            }),
                             nullsafe,
                         };
                         continue;
@@ -291,7 +294,10 @@ impl Parser {
                     }
                     if let Token::Variable(member_name, _) = self.peek() {
                         self.advance();
-                        let member = Expr::Variable(member_name);
+                        let member = Expr::Variable {
+                            name: member_name,
+                            line: 0,
+                        };
                         if matches!(self.peek(), Token::LParen(_)) {
                             if nullsafe {
                                 return Err(
@@ -406,8 +412,10 @@ impl Parser {
                     let increment = self.peek() == Token::PlusPlus;
                     self.advance();
                     expr = match expr {
-                        Expr::Variable(name) if increment => Expr::PostInc(name),
-                        Expr::Variable(name) => Expr::PostDec(name),
+                        Expr::Variable { name, line } if increment => {
+                            Expr::PostInc { name, line }
+                        }
+                        Expr::Variable { name, line } => Expr::PostDec { name, line },
                         Expr::Globals { line } => self.globals_modification_error(line),
                         Expr::PropertyAccess {
                             nullsafe: false, ..

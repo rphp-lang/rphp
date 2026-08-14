@@ -155,6 +155,7 @@ class Mixer {
         return 0;
     }
 }
+function runMixedMethodLoop() {
 $mixer = new Mixer();
 $values = ['left' => 0, 'right' => 0];
 $key = 'left';
@@ -162,11 +163,13 @@ $accepted = 0;
 $needle = -1;
 for ($i = 0; $i < 100; $i++) {
     if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; }
-    $score = $mixer->score($i, $key);
+    $score = $mixer->score(7, $key);
+    $key = 'left';
     $values[$key] = $values[$key] + $score;
-    $isAccepted = $mixer->accepted($score, $i);
+    $isAccepted = $mixer->accepted(11, 17);
     $accepted = $accepted + $isAccepted;
     if ($i === $needle) { echo 'never'; }
+}
 }
 ",
         );

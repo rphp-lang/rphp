@@ -1,6 +1,109 @@
 // Included in the execute module so cold opcode helpers keep private access to
 // the canonical frame machinery without adding abstractions to hot dispatch.
 
+/// Publish globals dirtied by a recursively invoked callback back into the
+/// suspended caller's tracked CVs. Ordinary VM calls do this while unwinding;
+/// callbacks entered directly from an opcode or stdlib handler return across
+/// an execution boundary and need the same synchronization explicitly.
+pub(crate) unsafe fn sync_dirty_globals_to_frame(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) {
+    if frame.is_null() || eg.dirty_globals.is_empty() {
+        return;
+    }
+    let op_array = unsafe { (*frame).op_array() };
+    let vars = if !op_array.main_scope_vars.is_empty() {
+        &op_array.main_scope_vars
+    } else {
+        &op_array.global_vars
+    };
+    for (cv, name) in vars {
+        if eg.dirty_globals.contains(name)
+            && let Some(value) = eg.globals.get(name).cloned()
+        {
+            let destination = unsafe { (*frame).get_op_mut(*cv, OpType::Cv) };
+            unsafe { frame_slot_set(frame, destination, value) };
+        }
+    }
+    if !vars.is_empty() {
+        eg.dirty_globals.clear();
+    }
+}
+
+/// Emit the PHP 8.2 undefined-local diagnostic for one already-snapshotted
+/// read. The caller owns control-flow handling when a user handler throws.
+fn report_undefined_variable_read(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    name_literal: u16,
+    suppressed: bool,
+) -> Result<(), VmError> {
+    let name = op_array.literals()[name_literal as usize]
+        .as_str()
+        .unwrap_or("");
+    let instruction_index = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let line = op_array.source_line(instruction_index).unwrap_or(0);
+    let file = if op_array.source_file.is_empty() {
+        op_array.name.as_str()
+    } else {
+        op_array.source_file.as_str()
+    };
+    let message = format!("Undefined variable ${name}");
+    if suppressed {
+        eg.begin_error_suppression(frame as usize);
+    }
+    let handled = crate::stdlib::dispatch_php_error(eg, frame, 2, &message, file, line);
+    // Decide whether the built-in diagnostic is visible while the suppression
+    // scope is still active. Restoring the caller's mask first would make an
+    // ordinary `@$missing` warn merely because the outer mask contains
+    // E_WARNING. A handler may explicitly re-enable E_WARNING inside `@`, in
+    // which case PHP does expose the declined built-in diagnostic.
+    let report_builtin = eg.error_reporting & 2 != 0;
+    if suppressed {
+        eg.end_error_suppression(frame as usize);
+    }
+    let handled = handled?;
+    if !handled && report_builtin {
+        eg.write_output(format!("\nWarning: {message} in {file} on line {line}\n").as_bytes());
+    }
+    Ok(())
+}
+
+/// Snapshot a runtime-resolved send operand. A by-reference caller bypasses
+/// this helper; every by-value path consumes null before invoking the handler,
+/// so a re-entrant assignment cannot change the current argument value.
+fn snapshot_runtime_send_rvalue(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<Value, VmError> {
+    let source = unsafe {
+        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    };
+    if !source.is_undef() {
+        return Ok(source.clone());
+    }
+
+    let snapshot = Value::null();
+    if opline._pad & crate::vm::instruction::SEND_FLAG_FETCH_CV_R != 0 {
+        report_undefined_variable_read(
+            eg,
+            frame,
+            op_array,
+            opline,
+            opline.result,
+            opline._pad & crate::vm::instruction::SEND_FLAG_ERROR_SUPPRESS != 0,
+        )?;
+    }
+    Ok(snapshot)
+}
+
 #[inline(never)]
 fn op_check_generic_args(
     eg: &mut ExecutorGlobals,
@@ -1880,10 +1983,17 @@ fn op_bind_global(
     // frame and its op array before dispatch reached this opcode.
     let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let name = name_val.as_str().unwrap_or("").to_string();
-    if let Some(val) = eg.globals.get(&name) {
-        let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
-        unsafe { slot_set(cv_ptr, val.clone()) };
+    let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
+    // At top level `global $name` binds the symbol table to the CV that is
+    // already the same global-scope variable. Do not replace an initialized
+    // value with null merely because the detached globals snapshot has not
+    // been populated yet. A function-local CV, by contrast, must discard its
+    // prior local value and acquire the global binding.
+    if !op_array.main_scope_vars.is_empty() && !unsafe { (*cv_ptr).is_undef() } {
+        return;
     }
+    let value = eg.globals.get(&name).cloned().unwrap_or_else(Value::null);
+    unsafe { slot_set(cv_ptr, value) };
 }
 
 #[inline(never)]
@@ -1969,7 +2079,7 @@ fn op_global_dimension(
             OpCode::AssignGlobal => {
                 let value =
                     (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone();
-                globals_set(&mut eg.globals, &name, value.clone());
+                globals_assign(&mut eg.globals, &name, value.clone());
                 eg.dirty_globals.insert(name.clone());
                 if let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name) {
                     let is_reference = (*frame).cv(*cv).is_reference();
@@ -1998,7 +2108,7 @@ fn op_global_dimension(
                     if slot.is_owned_reference() {
                         slot.clone_owned_reference_alias()
                     } else {
-                        let owned = Value::owned_reference(slot.clone());
+                        let owned = Value::owned_reference(reference_initial_value(slot.clone()));
                         let alias = owned.clone_owned_reference_alias();
                         frame_slot_set(frame, slot, owned);
                         alias
@@ -2007,7 +2117,7 @@ fn op_global_dimension(
                     if value.is_owned_reference() {
                         value.clone_owned_reference_alias()
                     } else {
-                        Value::owned_reference(value.clone())
+                        Value::owned_reference(reference_initial_value(value.clone()))
                     }
                 } else {
                     Value::owned_reference(Value::null())
@@ -2028,7 +2138,7 @@ fn op_global_dimension(
                 let binding = if source.is_owned_reference() {
                     source.clone_owned_reference_alias()
                 } else {
-                    let owned = Value::owned_reference(source.clone());
+                    let owned = Value::owned_reference(reference_initial_value(source.clone()));
                     let alias = owned.clone_owned_reference_alias();
                     frame_slot_set(frame, source, owned);
                     alias
@@ -2256,7 +2366,10 @@ fn op_closure_use_var(
             } else if (*source).is_reference() {
                 Value::reference((*source).as_ref_ptr())
             } else {
-                let current = std::mem::replace(&mut *source, Value::undef());
+                let current = reference_initial_value(std::mem::replace(
+                    &mut *source,
+                    Value::undef(),
+                ));
                 let binding = Value::owned_reference(current);
                 frame_slot_set(frame, source, binding.clone_owned_reference_alias());
                 binding

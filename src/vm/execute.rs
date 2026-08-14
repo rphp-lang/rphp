@@ -2105,7 +2105,7 @@ fn execute_full_call<'a>(
         } else {
             let num = unsafe { (*call).num_args };
             for i in (0..num).rev() {
-                let val = unsafe { (*call).cv(i).clone() };
+                let val = unsafe { (*call).cv(i).clone_closure_capture() };
                 let dst = unsafe { (*call).cv_mut(i + 1) };
                 unsafe { frame_slot_set(call, dst as *mut Value, val) };
             }

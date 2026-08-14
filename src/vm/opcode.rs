@@ -17,6 +17,9 @@ pub enum OpCode {
 
     // Variable access
     AssignCv = 10,
+    /// Snapshot an ordinary CV rvalue. Undef becomes null after routing one
+    /// PHP warning through the request error handler.
+    FetchCvR = 11,
 
     // Output
     Echo = 40,
