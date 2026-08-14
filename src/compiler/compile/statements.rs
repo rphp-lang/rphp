@@ -2294,7 +2294,7 @@ impl Compiler {
                     self.known_constants.insert(name.clone(), ct_val.clone());
                     (self.add_literal(ct_val), OpType::Const)
                 } else {
-                    self.compile_expr(value)
+                    self.compile_constant_expression(value)
                 };
                 let name_idx = self.add_literal(Value::string(name.clone()));
                 let mut instr = Instruction::new(OpCode::FetchConst);
@@ -2349,7 +2349,7 @@ impl Compiler {
                     instr.op2 = name_idx;
                     instr.extended_value = func_name_idx as u32;
                     if let Some(def_expr) = default {
-                        let (def_op, def_type) = self.compile_expr(def_expr);
+                        let (def_op, def_type) = self.compile_constant_expression(def_expr);
                         instr.result_type = def_type;
                         instr.result = def_op;
                     } else {
@@ -2562,10 +2562,12 @@ impl Compiler {
                     Value::string(resolved_class.clone()),
                 );
                 for constant in &compiled_constants {
-                    property_constants.insert(
-                        format!("self::{}", constant.name),
-                        constant.value.clone(),
-                    );
+                    if constant.evaluation_error.is_none() {
+                        property_constants.insert(
+                            format!("self::{}", constant.name),
+                            constant.value.clone(),
+                        );
+                    }
                 }
                 if let Some(parent) = &resolved_parent {
                     property_constants
@@ -3265,6 +3267,7 @@ impl Compiler {
         }
 
         let mut values = vec![None; constants.len()];
+        let mut evaluation_errors = vec![None; constants.len()];
         let mut remaining = constants.len();
         while remaining != 0 {
             let mut progressed = false;
@@ -3285,44 +3288,86 @@ impl Compiler {
                 progressed = true;
             }
             if !progressed {
-                let constant = constants
+                let unavailable_suffix =
+                    " is not available in this constant expression";
+                let unresolved_names = constants
                     .iter()
                     .enumerate()
-                    .find(|(index, _)| values[*index].is_none())
-                    .map(|(_, constant)| constant)
-                    .expect("remaining class constant");
-                let reason = self.eval_const_expr_in_source(&constant.value, &known)
-                    .expect_err("unresolved class constant expression");
-                return Err(format!(
-                    "Cannot use non-constant expression as value for class constant {}::{}: {}",
-                    owner, constant.name, reason
-                ));
+                    .filter(|(index, _)| values[*index].is_none())
+                    .map(|(_, constant)| constant.name.as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                let mut lazy_errors = Vec::new();
+                for (index, constant) in constants.iter().enumerate() {
+                    if values[index].is_some() {
+                        continue;
+                    }
+                    let reason = self
+                        .eval_const_expr_in_source(&constant.value, &known)
+                        .expect_err("unresolved class constant expression");
+                    let Some(reference) = reason
+                        .strip_prefix("class constant ")
+                        .and_then(|reason| reason.strip_suffix(unavailable_suffix))
+                    else {
+                        return Err(format!(
+                            "Cannot use non-constant expression as value for class constant {}::{}: {}",
+                            owner, constant.name, reason
+                        ));
+                    };
+                    let Some((scope, target)) = reference.split_once("::") else {
+                        return Err(format!(
+                            "Cannot use non-constant expression as value for class constant {}::{}: {}",
+                            owner, constant.name, reason
+                        ));
+                    };
+                    if !(scope.eq_ignore_ascii_case("self")
+                        || scope.eq_ignore_ascii_case(owner))
+                        || !unresolved_names.contains(target)
+                    {
+                        return Err(format!(
+                            "Cannot use non-constant expression as value for class constant {}::{}: {}",
+                            owner, constant.name, reason
+                        ));
+                    }
+                    lazy_errors.push((
+                        index,
+                        format!("Cannot declare self-referencing constant {reference}"),
+                    ));
+                }
+                for (index, error) in lazy_errors {
+                    evaluation_errors[index] = Some(error);
+                    remaining -= 1;
+                }
             }
         }
 
         constants
             .iter()
-            .zip(values)
-            .map(|(constant, value)| {
+            .zip(values.into_iter().zip(evaluation_errors))
+            .map(|(constant, (value, evaluation_error))| {
                 let type_hint = self.resolve_declared_property_type_hint(
                     self.convert_type_hint(&constant.type_hint),
                     owner,
                     parent,
                 );
-                let value = value.expect("resolved class constant");
-                let value_type = value.value_type();
-                let value = normalize_property_default(value, &type_hint).ok_or_else(|| {
-                    format!(
-                        "Cannot use value of type {:?} for class constant {}::{} of type {}",
-                        value_type,
-                        owner,
-                        constant.name,
-                        type_hint.display_name()
-                    )
-                })?;
+                let value = if evaluation_error.is_some() {
+                    Value::null()
+                } else {
+                    let value = value.expect("resolved class constant");
+                    let value_type = value.value_type();
+                    normalize_property_default(value, &type_hint).ok_or_else(|| {
+                        format!(
+                            "Cannot use value of type {:?} for class constant {}::{} of type {}",
+                            value_type,
+                            owner,
+                            constant.name,
+                            type_hint.display_name()
+                        )
+                    })?
+                };
                 Ok(ClassConstantDefinition {
                     name: constant.name.clone(),
                     value,
+                    evaluation_error,
                     visibility: constant.visibility,
                     declaring_class: owner.to_string(),
                     type_hint,

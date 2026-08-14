@@ -134,6 +134,13 @@ pub const NEW_FLAG_VIRTUAL_DECLARED_READS: u16 = 1 << 3;
 /// InitArray flag: at least one compile-time literal string key guarantees
 /// general hash storage rather than packed integer storage.
 pub const ARRAY_INIT_HASH_HINT: u16 = 1;
+
+/// AddArrayUnpack flag: the array literal is being materialized as a PHP
+/// constant expression (for example a constant, parameter default or static
+/// local initializer). PHP permits deferred `new` expressions in those
+/// contexts, but an object remains invalid as a constant-expression unpack
+/// source even when it implements Traversable.
+pub const ARRAY_UNPACK_CONSTANT_EXPRESSION: u16 = 1;
 /// AddArrayElement flag: preserve the source l-value's PHP reference identity.
 pub const ARRAY_ELEMENT_REFERENCE: u16 = 1 << 1;
 

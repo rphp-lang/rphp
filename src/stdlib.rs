@@ -2747,6 +2747,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     .map(|(name, value)| ClassConstantDefinition {
         name: name.to_string(),
         value: Value::long(value),
+        evaluation_error: None,
         visibility: Visibility::Public,
         declaring_class: "SplPriorityQueue".to_string(),
         type_hint: ParamTypeHint::Int,

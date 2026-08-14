@@ -25,13 +25,13 @@ use crate::value::{
     canonical_decimal_array_key as canonical_string_literal_array_key,
 };
 use crate::vm::instruction::{
-    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, ASSIGN_CV_REBIND,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_OBJ_SILENT,
-    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
-    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
-    OpType, SEND_FLAG_GLOBALS,
+    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION,
+    ASSIGN_CV_REBIND, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
+    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
+    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
+    FETCH_DIM_ISSET, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
+    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
+    NEW_FLAG_UNPACKED_ARGUMENTS, OpType, SEND_FLAG_GLOBALS,
 };
 use crate::vm::opcode::OpCode;
 
@@ -1275,6 +1275,10 @@ fn normalize_property_default(value: Value, hint: &ParamTypeHint) -> Option<Valu
 pub struct ClassConstantDefinition {
     pub name: String,
     pub value: Value,
+    /// PHP resolves class-constant dependency graphs lazily. A declaration
+    /// cycle therefore links successfully and raises Error only when the
+    /// affected constant is read.
+    pub evaluation_error: Option<String>,
     pub visibility: Visibility,
     pub declaring_class: String,
     pub type_hint: ParamTypeHint,
@@ -1449,6 +1453,10 @@ pub struct Compiler {
     /// Constants known at compile time (from `const FOO = 42;` in the same file).
     /// Used by eval_const_expr to resolve Expr::Constant in property defaults.
     known_constants: HashMap<String, Value>,
+    /// Runtime materialization still belongs to a PHP constant-expression
+    /// context. Nested compilers use this only while lowering a default or
+    /// initializer whose value could not be fully folded.
+    compiling_constant_expression: bool,
 }
 
 /// Get ref_args bitmask for built-in stdlib functions.
@@ -1563,6 +1571,7 @@ impl Compiler {
             source_directory: String::new(),
             implicit_return_value: Value::null(),
             known_constants: HashMap::new(),
+            compiling_constant_expression: false,
         }
     }
 
@@ -1613,6 +1622,14 @@ impl Compiler {
         child.source_directory = self.source_directory.clone();
         child.known_constants = self.known_constants.clone();
         child
+    }
+
+    fn compile_constant_expression(&mut self, expr: &Expr) -> (u16, OpType) {
+        let previous = self.compiling_constant_expression;
+        self.compiling_constant_expression = true;
+        let result = self.compile_expr(expr);
+        self.compiling_constant_expression = previous;
+        result
     }
 
     fn magic_constant_value(&self, name: &str, line: usize) -> Value {
@@ -2668,6 +2685,27 @@ impl Compiler {
                 let mut arr = crate::value::PhpArray::new();
                 for elem in elements {
                     let val = Self::eval_const_expr_with_context(&elem.value, known, file_context)?;
+                    if elem.unpack {
+                        let source = val.as_array().ok_or_else(|| {
+                            "Only arrays and Traversables can be unpacked".to_string()
+                        })?;
+                        for (key, value) in source.iter() {
+                            match key {
+                                crate::value::ArrayKey::Int(_) => {
+                                    if !arr.try_push(value.dereferenced().clone()) {
+                                        return Err(
+                                            "Cannot add element to the array as the next element is already occupied"
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                                crate::value::ArrayKey::String(key) => {
+                                    arr.set_str(&key, value.dereferenced().clone());
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     if let Some(key_expr) = &elem.key {
                         let key =
                             Self::eval_const_expr_with_context(key_expr, known, file_context)?;
@@ -3058,7 +3096,7 @@ impl Compiler {
         compiler.instructions.push(bind);
 
         // Compute default expression (only reached if arg was NOT passed)
-        let (val_op, val_type) = compiler.compile_expr(default_expr);
+        let (val_op, val_type) = compiler.compile_constant_expression(default_expr);
 
         // Assign computed default to CV
         let mut assign = Instruction::new(OpCode::AssignCv);
@@ -4145,6 +4183,9 @@ impl Compiler {
                     } else {
                         OpCode::AddArrayElement
                     });
+                    if elem.unpack && self.compiling_constant_expression {
+                        add._pad |= ARRAY_UNPACK_CONSTANT_EXPRESSION;
+                    }
                     if elem.by_reference {
                         add._pad |= ARRAY_ELEMENT_REFERENCE;
                     }

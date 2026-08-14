@@ -108,6 +108,7 @@ fn register_reflection_class_kind(
             .map(|(constant, value)| ClassConstantDefinition {
                 name: constant.to_string(),
                 value: Value::long(value),
+                evaluation_error: None,
                 visibility: Visibility::Public,
                 declaring_class: name.to_string(),
                 type_hint: ParamTypeHint::Int,
@@ -243,6 +244,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         constants: vec![ClassConstantDefinition {
             name: "IS_INSTANCEOF".to_string(),
             value: Value::long(2),
+            evaluation_error: None,
             visibility: Visibility::Public,
             declaring_class: "ReflectionAttribute".to_string(),
             type_hint: ParamTypeHint::Int,
@@ -309,6 +311,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .map(|(name, value)| ClassConstantDefinition {
             name: name.to_string(),
             value: Value::long(value),
+            evaluation_error: None,
             visibility: Visibility::Public,
             declaring_class: "ReflectionProperty".to_string(),
             type_hint: ParamTypeHint::Int,

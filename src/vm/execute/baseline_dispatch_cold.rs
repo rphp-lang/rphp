@@ -1366,6 +1366,14 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             ),
         ));
     }
+    if let Some(message) = &definition.evaluation_error {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            message.clone(),
+        ));
+    }
     let value = definition.value.clone();
     cache.set_property(class_id, constant_index, 1);
     set_result(value);

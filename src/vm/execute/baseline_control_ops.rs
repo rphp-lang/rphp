@@ -60,6 +60,9 @@ fn compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
     let mut known = eg.constant_table.borrow().clone();
     for (registered_name, class) in &eg.class_table {
         for constant in &class.constants {
+            if constant.evaluation_error.is_some() {
+                continue;
+            }
             known.insert(
                 format!("{}::{}", class.name, constant.name),
                 constant.value.clone(),

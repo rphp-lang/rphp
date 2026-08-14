@@ -342,6 +342,12 @@ fn op_add_array_unpack<'a>(
                 .map(|(key, value)| (key, value.dereferenced().clone()))
                 .collect::<Vec<_>>(),
         )
+    } else if opline._pad & ARRAY_UNPACK_CONSTANT_EXPRESSION != 0 {
+        return Ok(unpack_error(
+            eg,
+            frame,
+            "Only arrays can be unpacked in constant expression",
+        ));
     } else {
         collect_unpack_traversable(eg, source, TraversableUnpackKind::Array)?
     };

@@ -10,6 +10,7 @@ fn constant_definitions_compatible(
     left.visibility == right.visibility
         && left.type_hint == right.type_hint
         && left.is_final == right.is_final
+        && left.evaluation_error == right.evaluation_error
         && left.value.structurally_equal(&right.value)
 }
 

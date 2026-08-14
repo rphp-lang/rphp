@@ -29,6 +29,72 @@ echo Values::label() . ':' . Values::class . ':' . MissingClass::class;
 }
 
 #[test]
+fn constant_array_unpack_folds_forward_dependencies_with_php_key_rules() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+const SEED_VALUES = [91 => 'integer', 'mode' => 'seed'];
+const MERGED_VALUES = ['prefix', ...SEED_VALUES, 'mode' => 'override', ...['suffix']];
+
+class ConstantArrays {
+    public const COMBINED = ['class-prefix', ...self::SOURCE];
+    public const SOURCE = [73 => 'class-integer', 'label' => 'class-string'];
+    public static array $snapshot = [...self::SOURCE];
+}
+
+foreach (MERGED_VALUES as $key => $value) echo $key, '=', $value, ';';
+foreach (ConstantArrays::COMBINED as $key => $value) echo $key, '=', $value, ';';
+foreach (ConstantArrays::$snapshot as $key => $value) echo $key, '=', $value, ';';
+"#,
+        ),
+        "0=prefix;1=integer;mode=override;2=suffix;0=class-prefix;1=class-integer;label=class-string;0=class-integer;label=class-string;"
+    );
+}
+
+#[test]
+fn self_referencing_class_constant_arrays_throw_only_when_read() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RecursivePalette {
+    public const WARM = [...self::COOL];
+    public const COOL = [...self::WARM];
+}
+
+echo 'linked:';
+try {
+    var_dump(RecursivePalette::WARM);
+} catch (Error $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+        ),
+        "linked:Error:Cannot declare self-referencing constant self::COOL"
+    );
+}
+
+#[test]
+fn deferred_constant_expression_unpack_does_not_accept_traversable_objects() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function defaultPalette($values = [...new ArrayObject(['default'])]) {
+    return $values;
+}
+function staticPalette() {
+    static $values = [...new ArrayObject(['static'])];
+    return $values;
+}
+
+try { defaultPalette(); } catch (Error $error) { echo 'default:', $error->getMessage(), ';'; }
+try { staticPalette(); } catch (Error $error) { echo 'static:', $error->getMessage(); }
+"#,
+        ),
+        "default:Only arrays can be unpacked in constant expression;static:Only arrays can be unpacked in constant expression"
+    );
+}
+
+#[test]
 fn goto_keyword_spelling_is_preserved_for_class_constant_names() {
     assert_eq!(
         run_php(
