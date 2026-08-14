@@ -299,5 +299,19 @@ limitations are in
 The next goal returns to profile selection; broader caching must not retain
 mutable PHP state or replace the common typed/materialization contract.
 
+Completion checkpoint (2026-08-14): the existing dual-architecture native JIT
+is now part of the ordinary default build. Runtime opt-out rejects before code
+generation, a process-wide 16 MiB default/1 GiB hard-capped budget bounds live
+W^X executable mappings, and disabled, exhausted or failed compilation returns
+to the exact typed path. Against the old explicit-JIT build, order, ledger and
+routing controls stay below the one-percent ceiling on ARM64 and x86-64;
+fresh-process startup and peak RSS also pass. Five corpus/holdout outputs are
+identical in typed, explicit-JIT, default, disabled and zero-budget modes, and
+mapping telemetry reconciles on both backends. Detailed policy, distributions,
+rejected variants and limitations are in
+[`performance-default-native-jit.md`](performance-default-native-jit.md).
+Future compatibility gates must treat `quick-loops,jit-prototype` as the
+ordinary feature matrix and spell typed-only controls explicitly.
+
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.
