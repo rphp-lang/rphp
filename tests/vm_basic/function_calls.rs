@@ -52,6 +52,7 @@ fn test_internal_function_call() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 1,
+        source_lines: vec![],
         instructions: vec![init, send, do_fcall, echo, ret],
         literals: vec![Value::string("my_double"), Value::long(21), Value::null()],
         try_entries: vec![],
@@ -60,7 +61,7 @@ fn test_internal_function_call() {
         global_vars: vec![],
         static_vars: vec![],
         name: String::new(),
-        source_file: String::new(),
+        source_file: std::rc::Rc::new(String::new()),
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
@@ -102,6 +103,7 @@ fn test_user_function_call() {
     let fn_op_array = OpArray {
         num_cvs: 1, // $x
         num_temps: 1,
+        source_lines: vec![],
         instructions: vec![add, fn_ret],
         literals: vec![Value::long(1)],
         try_entries: vec![],
@@ -110,7 +112,7 @@ fn test_user_function_call() {
         global_vars: vec![],
         static_vars: vec![],
         name: String::new(),
-        source_file: String::new(),
+        source_file: std::rc::Rc::new(String::new()),
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
@@ -155,6 +157,7 @@ fn test_user_function_call() {
     let main_op_array = OpArray {
         num_cvs: 0,
         num_temps: 1,
+        source_lines: vec![],
         instructions: vec![init, send, do_fcall, echo, ret],
         literals: vec![Value::string("add_one"), Value::long(41), Value::null()],
         try_entries: vec![],
@@ -163,7 +166,7 @@ fn test_user_function_call() {
         global_vars: vec![],
         static_vars: vec![],
         name: String::new(),
-        source_file: String::new(),
+        source_file: std::rc::Rc::new(String::new()),
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
@@ -200,6 +203,7 @@ fn test_undefined_function_error() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 0,
+        source_lines: vec![],
         instructions: vec![init, do_fcall, ret],
         literals: vec![Value::string("nonexistent"), Value::null()],
         try_entries: vec![],
@@ -208,7 +212,7 @@ fn test_undefined_function_error() {
         global_vars: vec![],
         static_vars: vec![],
         name: String::new(),
-        source_file: String::new(),
+        source_file: std::rc::Rc::new(String::new()),
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
@@ -269,6 +273,7 @@ fn test_nested_calls() {
         OpArray {
             num_cvs: 1,
             num_temps: 1,
+            source_lines: vec![],
             instructions: vec![add, fn_ret],
             literals: vec![Value::long(1)],
             try_entries: vec![],
@@ -277,7 +282,7 @@ fn test_nested_calls() {
             global_vars: vec![],
             static_vars: vec![],
             name: String::new(),
-            source_file: String::new(),
+            source_file: std::rc::Rc::new(String::new()),
             main_scope_vars: vec![],
             all_cvs: vec![],
             cache: vec![],
@@ -346,6 +351,7 @@ fn test_nested_calls() {
     let main_func = make_user_function(OpArray {
         num_cvs: 1,
         num_temps: 2,
+        source_lines: vec![],
         instructions: vec![init1, send1, do1, init2, send2, do2, assign, echo, ret],
         literals: vec![
             Value::string("my_double"),
@@ -359,7 +365,7 @@ fn test_nested_calls() {
         global_vars: vec![],
         static_vars: vec![],
         name: String::new(),
-        source_file: String::new(),
+        source_file: std::rc::Rc::new(String::new()),
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],

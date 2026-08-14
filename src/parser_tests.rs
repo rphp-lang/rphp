@@ -143,6 +143,23 @@ fn array_unpack_preserves_the_spread_line_for_compile_validation() {
 }
 
 #[test]
+fn throwable_creation_and_throw_keep_distinct_source_lines_in_the_ast() {
+    let tokens = Lexer::new("<?php\n$stored = new Exception();\nthrow $stored;")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(matches!(
+        &statements[0],
+        Stmt::Assign {
+            expr: Expr::New { line: 2, .. },
+            ..
+        }
+    ));
+    assert!(matches!(&statements[1], Stmt::Throw { line: 3, .. }));
+}
+
+#[test]
 fn test_parse_nested_array_append() {
     let tokens = Lexer::new("<?php $store->listeners['event'][10][] = 'listener';")
         .tokenize()

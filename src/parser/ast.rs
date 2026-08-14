@@ -166,11 +166,13 @@ pub enum Expr {
         class_name: String,
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
+        line: usize,
     },
     DynamicNew {
         // new $class(args)
         class: Box<Expr>,
         args: Vec<CallArg>,
+        line: usize,
     },
     AnonymousNew {
         args: Vec<CallArg>,
@@ -179,6 +181,7 @@ pub enum Expr {
         properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
+        line: usize,
     },
     PropertyAccess {
         // $obj->prop or $obj?->prop
@@ -228,7 +231,10 @@ pub enum Expr {
         class_name: String,
         constant: Box<Expr>,
     },
-    Throw(Box<Expr>), // throw expr (PHP 8 expression)
+    Throw {
+        expr: Box<Expr>,
+        line: usize,
+    }, // throw expr (PHP 8 expression)
     Include {
         path: Box<Expr>,
         is_require: bool,
@@ -313,7 +319,7 @@ impl Expr {
             | Expr::UnaryMinus(inner)
             | Expr::ErrorSuppress(inner)
             | Expr::Empty(inner)
-            | Expr::Throw(inner)
+            | Expr::Throw { expr: inner, .. }
             | Expr::Include { path: inner, .. }
             | Expr::BitwiseNot(inner)
             | Expr::Clone(inner) => inner.contains_yield(),
@@ -382,7 +388,7 @@ impl Expr {
             Expr::FunctionCall { args, .. }
             | Expr::New { args, .. }
             | Expr::StaticCall { args, .. } => args.iter().any(CallArg::contains_yield),
-            Expr::DynamicNew { class, args } => {
+            Expr::DynamicNew { class, args, .. } => {
                 class.contains_yield() || args.iter().any(CallArg::contains_yield)
             }
             Expr::AnonymousNew { args, .. } => {
@@ -651,7 +657,10 @@ pub enum Stmt {
         catches: Vec<CatchClause>,
         finally_body: Option<Vec<Stmt>>,
     },
-    Throw(Expr),
+    Throw {
+        expr: Expr,
+        line: usize,
+    },
     Class {
         name: String,
         parent: Option<GenericAncestor>,
@@ -757,7 +766,7 @@ impl Stmt {
             }
             Stmt::Assign { expr, .. }
             | Stmt::ArrayPush { expr, .. }
-            | Stmt::Throw(expr)
+            | Stmt::Throw { expr, .. }
             | Stmt::ExprStmt(expr)
             | Stmt::Include { path: expr, .. }
             | Stmt::Const { value: expr, .. } => expr.contains_yield(),

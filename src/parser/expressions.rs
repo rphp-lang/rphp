@@ -960,7 +960,8 @@ impl Parser {
                 // Arrow function: fn($x) => expr
                 return self.parse_arrow_function(false);
             }
-            Token::New => {
+            Token::New(line) => {
+                let line = line as usize;
                 self.advance(); // consume 'new'
                 if self.peek() == Token::Class {
                     self.advance();
@@ -1000,6 +1001,7 @@ impl Parser {
                         properties,
                         constants,
                         methods,
+                        line,
                     });
                 }
                 if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
@@ -1018,6 +1020,7 @@ impl Parser {
                     return Ok(Expr::DynamicNew {
                         class: Box::new(class),
                         args,
+                        line,
                     });
                 }
                 let class_name = match self.peek() {
@@ -1041,12 +1044,17 @@ impl Parser {
                     class_name,
                     args,
                     generic_args,
+                    line,
                 })
             }
-            Token::Throw => {
+            Token::Throw(line) => {
+                let line = line as usize;
                 self.advance();
                 let expr = self.parse_expr()?;
-                return Ok(Expr::Throw(Box::new(expr)));
+                return Ok(Expr::Throw {
+                    expr: Box::new(expr),
+                    line,
+                });
             }
             Token::LBracket(_) => {
                 // Short array syntax: [1, 2, 'a' => 3]

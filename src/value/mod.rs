@@ -678,11 +678,11 @@ thread_local! {
     /// One bounded thread-local declared-property buffer per common width.
     /// PHP evaluates a replacement object before releasing the previous CV, so
     /// one slot per width still covers the steady state after two allocations.
-    static DECLARED_PROPERTY_STORAGE_POOL: RefCell<[Option<Vec<Value>>; 5]> =
+    static DECLARED_PROPERTY_STORAGE_POOL: RefCell<[Option<Vec<Value>>; 6]> =
         RefCell::new(std::array::from_fn(|_| None));
 }
 
-const MAX_POOLED_DECLARED_PROPERTIES: usize = 4;
+const MAX_POOLED_DECLARED_PROPERTIES: usize = 5;
 
 fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
     if defaults.is_empty() {
@@ -3861,6 +3861,13 @@ impl Value {
     #[inline]
     pub fn string(s: impl Into<String>) -> Self {
         let rc = Rc::new(s.into());
+        Self::shared_string(rc)
+    }
+
+    /// Create a string value from an existing owner. Used by immutable
+    /// compiled metadata whose PHP values can share the same bytes.
+    #[inline]
+    pub(crate) fn shared_string(rc: Rc<String>) -> Self {
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(rc) as *mut u8,

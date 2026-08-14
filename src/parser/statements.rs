@@ -789,11 +789,12 @@ impl Parser {
                 Ok(Stmt::Unset(targets))
             }
             Token::Try => self.parse_try_catch(),
-            Token::Throw => {
+            Token::Throw(line) => {
+                let line = line as usize;
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Throw(expr))
+                Ok(Stmt::Throw { expr, line })
             }
             Token::Class | Token::Abstract | Token::Final => self.parse_class(),
             Token::Identifier(ref name)
@@ -820,7 +821,7 @@ impl Parser {
             Token::Isset
             | Token::Empty
             | Token::Match
-            | Token::New
+            | Token::New(_)
             | Token::Yield
             | Token::Clone
             | Token::Print

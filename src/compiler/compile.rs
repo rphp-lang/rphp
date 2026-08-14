@@ -1388,6 +1388,7 @@ struct GotoPatch {
 
 pub struct Compiler {
     instructions: Vec<Instruction>,
+    instruction_source_lines: Vec<(u32, u32)>,
     literals: Vec<Value>,
     /// Variable name → CV index
     cv_table: HashMap<String, u32>,
@@ -1539,6 +1540,7 @@ impl Compiler {
     pub fn new() -> Self {
         Self {
             instructions: Vec::new(),
+            instruction_source_lines: Vec::new(),
             literals: Vec::new(),
             cv_table: HashMap::new(),
             next_cv: 0,
@@ -1603,6 +1605,29 @@ impl Compiler {
     pub fn with_known_constants(mut self, constants: HashMap<String, Value>) -> Self {
         self.known_constants = constants;
         self
+    }
+
+    /// Emit source provenance without widening the compact instruction. Only
+    /// opcodes whose location is already observable use this path; zero stays
+    /// the explicit marker for synthetic bytecode.
+    fn push_instruction_at_line(&mut self, instruction: Instruction, line: usize) {
+        let instruction_index = self.instructions.len();
+        self.instructions.push(instruction);
+        if line != 0 {
+            self.instruction_source_lines.push((
+                u32::try_from(instruction_index).unwrap_or(u32::MAX),
+                u32::try_from(line).unwrap_or(u32::MAX),
+            ));
+        }
+    }
+
+    fn materialize_source_lines(&self) -> Vec<(u32, u32)> {
+        debug_assert!(
+            self.instruction_source_lines
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+        );
+        self.instruction_source_lines.clone()
     }
 
     fn child_compiler(&self) -> Self {
@@ -2361,6 +2386,7 @@ impl Compiler {
             }
         }
 
+        let source_lines = self.materialize_source_lines();
         let generic_use_sites = self.generic_use_sites.borrow().clone();
         let generic_metadata = GenericMetadata::compile_with_inheritance(
             self.generic_declarations,
@@ -2373,6 +2399,7 @@ impl Compiler {
                 num_cvs: self.next_cv,
                 num_temps: self.next_tmp,
                 instructions: self.instructions,
+                source_lines,
                 literals: self.literals,
                 try_entries: self.try_entries,
                 strict_types: self.strict_types,
@@ -2384,7 +2411,7 @@ impl Compiler {
                 } else {
                     self.source_file.clone()
                 },
-                source_file: self.source_file.clone(),
+                source_file: std::rc::Rc::new(self.source_file.clone()),
                 main_scope_vars,
                 all_cvs,
                 cache,
@@ -2699,6 +2726,7 @@ impl Compiler {
                 class_name,
                 args,
                 generic_args,
+                ..
             } if class_name.eq_ignore_ascii_case("stdClass")
                 && args.is_empty()
                 && generic_args.is_empty() =>
@@ -4240,7 +4268,11 @@ impl Compiler {
                         add.result = key_op;
                     }
                     // result_type = Unused means auto-key
-                    self.instructions.push(add);
+                    if elem.unpack {
+                        self.push_instruction_at_line(add, elem.unpack_line.unwrap_or(0));
+                    } else {
+                        self.instructions.push(add);
+                    }
                 }
 
                 (arr_tmp, OpType::Tmp)
@@ -4669,6 +4701,7 @@ impl Compiler {
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
+                    source_lines: func_compiler.materialize_source_lines(),
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
@@ -4677,7 +4710,7 @@ impl Compiler {
                     global_vars: func_compiler.global_vars,
                     static_vars: func_compiler.static_vars,
                     name: func_compiler.current_function_name,
-                    source_file: func_compiler.source_file.clone(),
+                    source_file: std::rc::Rc::new(func_compiler.source_file.clone()),
                     main_scope_vars: vec![],
                     all_cvs: closure_all_cvs,
                     cache,
@@ -4753,6 +4786,7 @@ impl Compiler {
                 class_name,
                 args,
                 generic_args,
+                line,
             } => {
                 if generic_args.is_empty()
                     && args
@@ -4776,7 +4810,7 @@ impl Compiler {
                     if dynamic_static_scope {
                         new_obj._pad |= NEW_FLAG_DYNAMIC_STATIC_SCOPE;
                     }
-                    self.instructions.push(new_obj);
+                    self.push_instruction_at_line(new_obj, *line);
                     return (tmp, OpType::Tmp);
                 }
                 // Pre-compile arg expressions BEFORE NewObj so side effects
@@ -4824,7 +4858,7 @@ impl Compiler {
                 if dynamic_static_scope {
                     new_obj._pad |= NEW_FLAG_DYNAMIC_STATIC_SCOPE;
                 }
-                self.instructions.push(new_obj);
+                self.push_instruction_at_line(new_obj, *line);
 
                 // Send constructor args — offset by 1 because CV 0 is $this
                 self.emit_precompiled_call_args(&compiled_args, 1);
@@ -4840,7 +4874,7 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::DynamicNew { class, args } => {
+            Expr::DynamicNew { class, args, line } => {
                 if args
                     .iter()
                     .any(|argument| matches!(argument, CallArg::Unpack(_)))
@@ -4857,7 +4891,7 @@ impl Compiler {
                     new_obj.result = tmp;
                     new_obj.result_type = OpType::Tmp;
                     new_obj._pad |= NEW_FLAG_DYNAMIC_CLASS_NAME | NEW_FLAG_UNPACKED_ARGUMENTS;
-                    self.instructions.push(new_obj);
+                    self.push_instruction_at_line(new_obj, *line);
                     return (tmp, OpType::Tmp);
                 }
                 let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
@@ -4883,7 +4917,7 @@ impl Compiler {
                 new_obj.result_type = OpType::Tmp;
                 new_obj.extended_value = args.len() as u32;
                 new_obj._pad |= NEW_FLAG_DYNAMIC_CLASS_NAME;
-                self.instructions.push(new_obj);
+                self.push_instruction_at_line(new_obj, *line);
 
                 self.emit_precompiled_call_args(&compiled_args, 1);
                 let discard = self.alloc_tmp();
@@ -4901,6 +4935,7 @@ impl Compiler {
                 properties,
                 constants,
                 methods,
+                line,
             } => {
                 let unpacked_arguments = args
                     .iter()
@@ -4954,7 +4989,7 @@ impl Compiler {
                 new_obj.result = tmp;
                 new_obj.result_type = OpType::Tmp;
                 new_obj.extended_value = args.len() as u32;
-                self.instructions.push(new_obj);
+                self.push_instruction_at_line(new_obj, *line);
                 if unpacked_arguments.is_some() {
                     return (tmp, OpType::Tmp);
                 }
@@ -5386,12 +5421,12 @@ impl Compiler {
                 self.instructions.push(fetch);
                 (tmp, OpType::Tmp)
             }
-            Expr::Throw(inner) => {
-                let (op, op_type) = self.compile_expr(inner);
+            Expr::Throw { expr, line } => {
+                let (op, op_type) = self.compile_expr(expr);
                 let mut instr = Instruction::new(OpCode::Throw);
                 instr.op1 = op;
                 instr.op1_type = op_type;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 // Throw never returns, but we need to return something
                 let null_idx = self.add_literal(Value::null());
                 (null_idx, OpType::Const)

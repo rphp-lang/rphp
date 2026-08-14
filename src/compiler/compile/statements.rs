@@ -1346,6 +1346,7 @@ impl Compiler {
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
+                    source_lines: func_compiler.materialize_source_lines(),
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
@@ -1354,7 +1355,7 @@ impl Compiler {
                     global_vars: func_compiler.global_vars,
                     static_vars: func_compiler.static_vars,
                     name: func_name,
-                    source_file: func_compiler.source_file.clone(),
+                    source_file: std::rc::Rc::new(func_compiler.source_file.clone()),
                     main_scope_vars: vec![],
                     all_cvs: func_all_cvs,
                     cache,
@@ -2157,12 +2158,12 @@ impl Compiler {
                     finally_end: entry_finally_end,
                 });
             }
-            Stmt::Throw(expr) => {
+            Stmt::Throw { expr, line } => {
                 let (op, op_type) = self.compile_expr(expr);
                 let mut instr = Instruction::new(OpCode::Throw);
                 instr.op1 = op;
                 instr.op1_type = op_type;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
             }
             Stmt::AssignProp {
                 object,
@@ -2500,6 +2501,7 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
+                        source_lines: func_compiler.materialize_source_lines(),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
@@ -2508,7 +2510,7 @@ impl Compiler {
                         global_vars: func_compiler.global_vars,
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
-                        source_file: func_compiler.source_file.clone(),
+                        source_file: std::rc::Rc::new(func_compiler.source_file.clone()),
                         main_scope_vars: vec![],
                         all_cvs: include_scope_cvs,
                         cache,
@@ -2784,6 +2786,7 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
+                        source_lines: func_compiler.materialize_source_lines(),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
@@ -2792,7 +2795,7 @@ impl Compiler {
                         global_vars: func_compiler.global_vars,
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
-                        source_file: func_compiler.source_file.clone(),
+                        source_file: std::rc::Rc::new(func_compiler.source_file.clone()),
                         main_scope_vars: vec![],
                         all_cvs: include_scope_cvs,
                         cache,
@@ -2925,6 +2928,7 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
+                        source_lines: func_compiler.materialize_source_lines(),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
@@ -2933,7 +2937,7 @@ impl Compiler {
                         global_vars: func_compiler.global_vars,
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
-                        source_file: func_compiler.source_file.clone(),
+                        source_file: std::rc::Rc::new(func_compiler.source_file.clone()),
                         main_scope_vars: vec![],
                         all_cvs: include_scope_cvs,
                         cache,
@@ -3119,6 +3123,7 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
+                        source_lines: func_compiler.materialize_source_lines(),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
@@ -3127,7 +3132,7 @@ impl Compiler {
                         global_vars: func_compiler.global_vars,
                         static_vars: func_compiler.static_vars,
                         name: func_compiler.current_function_name,
-                        source_file: func_compiler.source_file.clone(),
+                        source_file: std::rc::Rc::new(func_compiler.source_file.clone()),
                         main_scope_vars: vec![],
                         all_cvs: include_scope_cvs,
                         cache,

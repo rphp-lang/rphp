@@ -18,10 +18,14 @@ fn assign_foreach_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
 fn unpack_throw<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    is_root_frame: bool,
     class: &str,
     message: &str,
 ) -> ColdResult<'a> {
     let error = make_error_value(class, message);
+    attach_throwable_origin(&error, op_array, instruction_index, is_root_frame);
     match throw_in_frame(eg, frame, error) {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
@@ -33,9 +37,20 @@ fn unpack_throw<'a>(
 fn unpack_error<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    is_root_frame: bool,
     message: &str,
 ) -> ColdResult<'a> {
-    unpack_throw(eg, frame, "Error", message)
+    unpack_throw(
+        eg,
+        frame,
+        op_array,
+        instruction_index,
+        is_root_frame,
+        "Error",
+        message,
+    )
 }
 
 fn append_call_unpack_entry(
@@ -329,12 +344,16 @@ fn op_add_array_unpack<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    // SAFETY: op2 is a compiler-allocated live operand. Array literal unpack
-    // reads it synchronously before mutating the separate op1 temporary.
-    let source = unsafe {
-        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
-    }
-    .dereferenced();
+    // SAFETY: `opline` and op2 belong to `op_array` and the active frame. Array
+    // literal unpack reads the operand before mutating the separate op1 TMP.
+    let (source, instruction_index, is_root_frame) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+            (*frame).prev_execute_data.is_null(),
+        )
+    };
+    let source = source.dereferenced();
     let entries = if let Some(source) = source.as_array() {
         Some(
             source
@@ -346,6 +365,9 @@ fn op_add_array_unpack<'a>(
         return Ok(unpack_error(
             eg,
             frame,
+            op_array,
+            instruction_index,
+            is_root_frame,
             "Only arrays can be unpacked in constant expression",
         ));
     } else {
@@ -355,6 +377,9 @@ fn op_add_array_unpack<'a>(
         return Ok(unpack_error(
             eg,
             frame,
+            op_array,
+            instruction_index,
+            is_root_frame,
             "Only arrays and Traversables can be unpacked",
         ));
     };
@@ -374,7 +399,14 @@ fn op_add_array_unpack<'a>(
         .ok_or_else(|| VmError::Fatal("AddArrayUnpack target is not an array".to_string()))?;
     for (key, value) in entries {
         if let Err(message) = append_array_unpack_entry(target, key, value) {
-            return Ok(unpack_error(eg, frame, message));
+            return Ok(unpack_error(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                is_root_frame,
+                message,
+            ));
         }
     }
     Ok(ColdResult::Done)
@@ -418,6 +450,9 @@ fn op_add_call_argument<'a>(
             return Ok(unpack_error(
                 eg,
                 frame,
+                op_array,
+                usize::MAX,
+                false,
                 &format!("Named parameter ${name} overwrites previous argument"),
             ));
         }
@@ -484,6 +519,9 @@ fn op_add_call_unpack<'a>(
             return Ok(unpack_throw(
                 eg,
                 frame,
+                op_array,
+                usize::MAX,
+                false,
                 "TypeError",
                 "Only arrays and Traversables can be unpacked",
             ));
@@ -506,7 +544,14 @@ fn op_add_call_unpack<'a>(
     let mut seen_named = false;
     for (key, value) in entries {
         if let Err(message) = append_call_unpack_entry(target, key, value, &mut seen_named) {
-            return Ok(unpack_error(eg, frame, &message));
+            return Ok(unpack_error(
+                eg,
+                frame,
+                op_array,
+                usize::MAX,
+                false,
+                &message,
+            ));
         }
     }
     Ok(ColdResult::Done)

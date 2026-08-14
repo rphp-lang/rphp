@@ -2225,6 +2225,18 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 "Exception".to_string(),
             ),
             PropertyDefinition::new(
+                "file".to_string(),
+                Some(Value::string("")),
+                Visibility::Protected,
+                "Exception".to_string(),
+            ),
+            PropertyDefinition::new(
+                "line".to_string(),
+                Some(Value::long(0)),
+                Visibility::Protected,
+                "Exception".to_string(),
+            ),
+            PropertyDefinition::new(
                 "previous".to_string(),
                 Some(Value::null()),
                 Visibility::Private,
@@ -2295,6 +2307,18 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             ),
             PropertyDefinition::new(
                 "code".to_string(),
+                Some(Value::long(0)),
+                Visibility::Protected,
+                "Error".to_string(),
+            ),
+            PropertyDefinition::new(
+                "file".to_string(),
+                Some(Value::string("")),
+                Visibility::Protected,
+                "Error".to_string(),
+            ),
+            PropertyDefinition::new(
+                "line".to_string(),
                 Some(Value::long(0)),
                 Visibility::Protected,
                 "Error".to_string(),

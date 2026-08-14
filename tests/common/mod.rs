@@ -154,6 +154,19 @@ impl PreparedPhp {
 /// Catches errors from any stage: lexing, parsing, compilation, class registration, or execution.
 #[allow(dead_code)]
 pub fn run_php_expect_error(source: &str) -> execute::VmError {
+    run_php_expect_error_with_compiler(source, Compiler::new())
+}
+
+#[allow(dead_code)]
+pub fn run_php_expect_error_with_source_context(
+    source: &str,
+    file: &str,
+    directory: &str,
+) -> execute::VmError {
+    run_php_expect_error_with_compiler(source, Compiler::new().with_source_context(file, directory))
+}
+
+fn run_php_expect_error_with_compiler(source: &str, compiler: Compiler) -> execute::VmError {
     let tokens = match Lexer::new(source).tokenize() {
         Ok(t) => t,
         Err(e) => return execute::VmError::Fatal(e),
@@ -162,7 +175,7 @@ pub fn run_php_expect_error(source: &str) -> execute::VmError {
         Ok(s) => s,
         Err(e) => return execute::VmError::Fatal(e),
     };
-    let result = match Compiler::new().compile(&stmts) {
+    let result = match compiler.compile(&stmts) {
         Ok(r) => r,
         Err(e) => return execute::VmError::Fatal(e),
     };

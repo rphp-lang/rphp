@@ -29,16 +29,44 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
 
     // Check for uncaught exception that propagated through execute_ex
     if let Some(exc) = eg.exception.take() {
-        let (class_name, message) = if let Some(obj) = exc.as_object() {
+        let (class_name, message, located_root_trace) = if let Some(obj) = exc.as_object() {
             let cls = obj.class_name.clone();
             let msg = obj.get_property("message")
                 .map(|v| v.echo_to_string())
                 .unwrap_or_default();
-            (cls, msg)
+            let located_root_trace = obj
+                .get_property("file")
+                .and_then(Value::as_str)
+                .filter(|file| !file.is_empty())
+                .zip(obj.get_property("line").and_then(Value::as_long))
+                .filter(|(_, line)| *line > 0)
+                .filter(|_| {
+                    obj.get_property("trace")
+                        .and_then(Value::as_array)
+                        .is_some_and(PhpArray::is_empty)
+                })
+                .map(|(file, line)| (file.to_string(), line));
+            (cls, msg, located_root_trace)
         } else {
-            (std::rc::Rc::from("Exception"), exc.echo_to_string())
+            (
+                std::rc::Rc::from("Exception"),
+                exc.echo_to_string(),
+                None,
+            )
         };
-        return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
+        let message_suffix = if message.is_empty() {
+            String::new()
+        } else {
+            format!(": {message}")
+        };
+        if let Some((file, line)) = located_root_trace {
+            return Err(VmError::Fatal(format!(
+                "Uncaught {class_name}{message_suffix} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}"
+            )));
+        }
+        return Err(VmError::Fatal(format!(
+            "Uncaught {class_name}{message_suffix}"
+        )));
     }
 
     Ok(return_value)

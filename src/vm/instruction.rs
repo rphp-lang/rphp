@@ -196,6 +196,9 @@ pub struct Instruction {
     pub extended_value: u32,
 }
 
+#[cfg(target_pointer_width = "64")]
+const _: [(); 16] = [(); std::mem::size_of::<Instruction>()];
+
 impl Instruction {
     pub fn new(opcode: OpCode) -> Self {
         Self {

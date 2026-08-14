@@ -34,9 +34,9 @@ pub enum Token {
     Try,         // try
     Catch,       // catch
     Finally,     // finally
-    Throw,       // throw
+    Throw(u32),  // throw with source line
     Class,       // class
-    New,         // new
+    New(u32),    // new with source line
     Public,      // public
     Protected,   // protected
     Private,     // private
@@ -579,9 +579,21 @@ impl<'a> Lexer<'a> {
                         "try" => tokens.push(Token::Try),
                         "catch" => tokens.push(Token::Catch),
                         "finally" => tokens.push(Token::Finally),
-                        "throw" => tokens.push(Token::Throw),
+                        "throw" => {
+                            let line = 1 + self.src[..identifier_start]
+                                .iter()
+                                .filter(|byte| **byte == b'\n')
+                                .count();
+                            tokens.push(Token::Throw(u32::try_from(line).unwrap_or(u32::MAX)));
+                        }
                         "class" => tokens.push(Token::Class),
-                        "new" => tokens.push(Token::New),
+                        "new" => {
+                            let line = 1 + self.src[..identifier_start]
+                                .iter()
+                                .filter(|byte| **byte == b'\n')
+                                .count();
+                            tokens.push(Token::New(u32::try_from(line).unwrap_or(u32::MAX)));
+                        }
                         "public" => tokens.push(Token::Public),
                         "protected" => tokens.push(Token::Protected),
                         "private" => tokens.push(Token::Private),
@@ -1045,6 +1057,23 @@ mod tests {
             .collect();
 
         assert_eq!(lines, vec![3, 5]);
+    }
+
+    #[test]
+    fn throwable_keywords_preserve_their_independent_source_lines() {
+        let tokens = Lexer::new("<?php\n$stored = new Exception();\nthrow $stored;")
+            .tokenize()
+            .unwrap();
+        let locations: Vec<_> = tokens
+            .iter()
+            .filter_map(|token| match token {
+                Token::New(line) => Some(("new", *line)),
+                Token::Throw(line) => Some(("throw", *line)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(locations, vec![("new", 2), ("throw", 3)]);
     }
 
     #[test]

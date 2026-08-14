@@ -194,7 +194,11 @@ fn main() {
             std::process::exit(code);
         }
         Err(e) => {
-            eprintln!("Fatal error: {e}");
+            // PHP's displayed runtime fatal begins on a fresh diagnostic line.
+            // The leading boundary is trimmed by PHPT when no program output
+            // precedes it and remains observable as the required blank line
+            // after output that was already emitted.
+            eprintln!("\nFatal error: {e}");
             std::process::exit(255);
         }
     }

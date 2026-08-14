@@ -200,3 +200,74 @@ try {
         "hello"
     );
 }
+
+#[test]
+fn throwable_origin_is_the_creation_site_and_survives_a_later_throw() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\n$stored = new Exception('made');\ntry {\n    throw $stored;\n} catch (Throwable $caught) {\n    echo $caught->getFile(), ':', $caught->getLine();\n}",
+            "/fixture/throwable-origin.php",
+            "/fixture",
+        ),
+        "/fixture/throwable-origin.php:2"
+    );
+}
+
+#[test]
+fn throwable_origin_exists_before_a_user_constructor_runs() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nclass WrappedOrigin extends Exception {\n    public function __construct() {\n        echo $this->getFile(), ':', $this->getLine();\n        parent::__construct('wrapped');\n    }\n}\nnew WrappedOrigin();",
+            "/fixture/wrapped-origin.php",
+            "/fixture",
+        ),
+        "/fixture/wrapped-origin.php:8"
+    );
+}
+
+#[test]
+fn root_created_exception_keeps_its_creation_trace_when_thrown_from_a_function() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\n$stored = new Exception('made');\nfunction release_it($value) {\n    throw $value;\n}\nrelease_it($stored);",
+        "/fixture/root-created.php",
+        "/fixture",
+    );
+
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message)
+            if message == "Uncaught Exception: made in /fixture/root-created.php:2\nStack trace:\n#0 {main}\n  thrown in /fixture/root-created.php on line 2"
+    ));
+}
+
+#[test]
+fn root_uncaught_throwable_rendering_omits_the_colon_for_an_empty_message() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\nthrow new Exception();",
+        "/fixture/empty-exception.php",
+        "/fixture",
+    );
+
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message)
+            if message == "Uncaught Exception in /fixture/empty-exception.php:2\nStack trace:\n#0 {main}\n  thrown in /fixture/empty-exception.php on line 2"
+    ));
+}
+
+#[test]
+fn runtime_constant_array_unpack_error_uses_the_spread_location() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\nconst NON_ARRAY_SOURCE = 17;\nconst ITEMS = [\n    ...NON_ARRAY_SOURCE,\n];",
+        "/fixture/unpack-origin.php",
+        "/fixture",
+    );
+
+    let rphp::vm::execute::VmError::Fatal(message) = error else {
+        panic!("expected a fatal error");
+    };
+    assert_eq!(
+        message,
+        "Uncaught Error: Only arrays can be unpacked in constant expression in /fixture/unpack-origin.php:4\nStack trace:\n#0 {main}\n  thrown in /fixture/unpack-origin.php on line 4"
+    );
+}

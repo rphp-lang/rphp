@@ -548,6 +548,57 @@ enum ThrowResult<'a> {
     Unhandled(Value),
 }
 
+/// Attach the immutable creation/raise origin that PHP exposes through
+/// Throwable::getFile()/getLine(). Existing metadata wins so rethrowing an
+/// object never moves its origin. An empty trace is recorded only for a root
+/// creation site; nested frame rendering stays disabled until call-site source
+/// locations can produce the complete PHP trace rather than a plausible fake.
+fn attach_throwable_origin(
+    throwable: &Value,
+    op_array: &crate::compiler::OpArray,
+    instruction_index: usize,
+    is_root_frame: bool,
+) {
+    let Some(line) = op_array.source_line(instruction_index) else {
+        return;
+    };
+    if op_array.source_file.is_empty() {
+        return;
+    }
+    if throwable.as_object().is_some_and(|object| {
+        object
+            .get_property("file")
+            .and_then(Value::as_str)
+            .is_some_and(|file| !file.is_empty())
+            && object
+                .get_property("line")
+                .and_then(Value::as_long)
+                .is_some_and(|line| line > 0)
+    }) {
+        return;
+    }
+    let Some(mut object) = throwable.as_object_mut() else {
+        return;
+    };
+    if object
+        .get_property("file")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        object.set_property("file", Value::shared_string(op_array.source_file.clone()));
+    }
+    if object
+        .get_property("line")
+        .and_then(Value::as_long)
+        .is_none_or(|line| line <= 0)
+    {
+        object.set_property("line", Value::long(line as i64));
+    }
+    if is_root_frame && !object.contains_property("trace") {
+        object.set_property("trace", Value::array(PhpArray::new()));
+    }
+}
+
 /// Walk frames starting from `frame` looking for a try/catch handler for `thrown`.
 /// On success: unwinds frames and returns the handler frame + op_array.
 /// On failure: returns Unhandled with the original exception value.

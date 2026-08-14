@@ -1010,7 +1010,7 @@ impl Parser {
             Expr::UnaryMinus(inner)
             | Expr::ErrorSuppress(inner)
             | Expr::Not(inner)
-            | Expr::Throw(inner)
+            | Expr::Throw { expr: inner, .. }
             | Expr::Empty(inner)
             | Expr::Print(inner)
             | Expr::Include { path: inner, .. }
@@ -1140,7 +1140,7 @@ impl Parser {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
-            Expr::DynamicNew { class, args } => {
+            Expr::DynamicNew { class, args, .. } => {
                 Self::collect_free_vars(class, bound, out);
                 for arg in args {
                     Self::collect_free_vars(arg.expr(), bound, out);

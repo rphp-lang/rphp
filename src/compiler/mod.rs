@@ -35,6 +35,10 @@ pub struct OpArray {
     pub num_cvs: u32,
     pub num_temps: u32,
     pub instructions: Vec<Instruction>,
+    /// Sorted sparse `(instruction index, source line)` metadata for opcodes
+    /// whose location is observable. Kept out of `Instruction` so ordinary
+    /// bytecode stays 16 B and unlocated instructions consume no side entry.
+    pub source_lines: Vec<(u32, u32)>,
     pub literals: Vec<Value>,
     pub try_entries: Vec<compile::TryEntry>,
     /// Per-file strict_types flag, set by `declare(strict_types=1);`
@@ -49,7 +53,9 @@ pub struct OpArray {
     pub name: String,
     /// Canonical source unit used by runtime diagnostics. Empty for synthetic
     /// bytecode assembled without source context.
-    pub source_file: String,
+    /// Shared source-unit name. Throwable origins clone this owner instead of
+    /// allocating the same filename for every created exception.
+    pub source_file: std::rc::Rc<String>,
     /// Main script scope CVs — all top-level variables synced to eg.globals before function calls.
     /// Empty for non-main-script op_arrays.
     pub main_scope_vars: Vec<(u32, String)>,
@@ -82,6 +88,14 @@ impl OpArray {
 
     pub fn literals(&self) -> &[Value] {
         &self.literals
+    }
+
+    #[inline]
+    pub fn source_line(&self, instruction_index: usize) -> Option<usize> {
+        self.source_lines
+            .binary_search_by_key(&(instruction_index as u32), |(index, _)| *index)
+            .ok()
+            .map(|position| self.source_lines[position].1 as usize)
     }
 
     /// Split by-value foreach writes after the complete function body is
