@@ -37,7 +37,8 @@ use crate::vm::instruction::{
 use crate::vm::opcode::OpCode;
 
 use super::{
-    finalize_user_method, make_user_function_full, make_user_function_typed,
+    finalize_user_method, make_user_function_full,
+    make_user_function_typed_with_return_mode as make_user_function_typed,
     make_user_function_with_args,
 };
 use crate::vm::function::{CallStrategy, ParamTypeHint, UserFunction};
@@ -5064,6 +5065,7 @@ impl Compiler {
                     cp.type_hints,
                     cp.param_names,
                     cp.return_type_hint,
+                    *returns_by_ref,
                 );
                 user_func.reference_cvs = closure_reference_cvs;
                 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
@@ -5073,8 +5075,6 @@ impl Compiler {
                     });
                     user_func.set_captured_typed_long_plan(captured_plan);
                 }
-                user_func.common.sig.returns_reference = *returns_by_ref;
-
                 self.functions.extend(func_compiler.functions);
                 self.class_defs.extend(func_compiler.class_defs);
                 self.generic_declarations

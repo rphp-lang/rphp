@@ -1310,6 +1310,9 @@ impl FunctionCommon {
     /// `void`; property mutator plans use it only at unused-result sites.
     #[inline(always)]
     pub fn supports_scalar_long_plan(&self) -> bool {
+        if self.sig.returns_reference {
+            return false;
+        }
         if self.plan.call.supports_scalar_long_plan() {
             return true;
         }
@@ -1335,7 +1338,8 @@ impl FunctionCommon {
     /// deliberately fail the runtime Double guard and retain normal coercion.
     #[inline(always)]
     pub fn supports_scalar_double_plan(&self) -> bool {
-        self.plan.call.is_compact_user_call()
+        !self.sig.returns_reference
+            && self.plan.call.is_compact_user_call()
             && self.sig.ref_args == 0
             && self.sig.param_type_hints.iter().all(|hint| {
                 matches!(

@@ -1668,7 +1668,7 @@ impl Compiler {
                     block_plans: Vec::new(),
                     ip_to_block: Vec::new(),
                 };
-                let mut user_func = make_user_function_typed(
+                let user_func = make_user_function_typed(
                     op_array,
                     cp.num_args,
                     cp.required_num_args,
@@ -1678,8 +1678,8 @@ impl Compiler {
                     cp.type_hints,
                     cp.param_names,
                     cp.return_type_hint,
+                    *returns_by_ref,
                 );
-                user_func.common.sig.returns_reference = *returns_by_ref;
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
@@ -2929,7 +2929,7 @@ impl Compiler {
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
-                    let mut user_func = finalize_user_method(
+                    let user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -2940,11 +2940,11 @@ impl Compiler {
                             cp.type_hints,
                             cp.param_names,
                             cp.return_type_hint,
+                            method.returns_by_ref,
                         ),
                         &method.name,
                         method.is_static,
                     );
-                    user_func.common.sig.returns_reference = method.returns_by_ref;
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -3214,7 +3214,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let mut user_func = make_user_function_typed(
+                    let user_func = make_user_function_typed(
                         op_array,
                         cp.num_args,
                         cp.required_num_args,
@@ -3224,8 +3224,8 @@ impl Compiler {
                         cp.type_hints,
                         cp.param_names,
                         cp.return_type_hint,
+                        method.returns_by_ref,
                     );
-                    user_func.common.sig.returns_reference = method.returns_by_ref;
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -3358,7 +3358,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let mut user_func = finalize_user_method(
+                    let user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -3369,11 +3369,11 @@ impl Compiler {
                             cp.type_hints,
                             cp.param_names,
                             cp.return_type_hint,
+                            method.returns_by_ref,
                         ),
                         &method.name,
                         method.is_static,
                     );
-                    user_func.common.sig.returns_reference = method.returns_by_ref;
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -3555,7 +3555,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let mut user_func = finalize_user_method(
+                    let user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -3566,11 +3566,11 @@ impl Compiler {
                             cp.type_hints,
                             cp.param_names,
                             cp.return_type_hint,
+                            method.returns_by_ref,
                         ),
                         &method.name,
                         method.is_static,
                     );
-                    user_func.common.sig.returns_reference = method.returns_by_ref;
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((

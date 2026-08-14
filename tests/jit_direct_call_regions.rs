@@ -121,6 +121,55 @@ echo runCapturedTransform($transform, 100000);
 }
 
 #[test]
+fn same_declaration_capture_change_never_reuses_stale_native_constants() {
+    let (functions, output) = compile_and_execute(
+        r#"<?php
+final class Transform {
+    public $callback;
+    public function __construct($callback) { $this->callback = $callback; }
+    public function apply(int $value): int {
+        $callback = $this->callback;
+        return $callback($value);
+    }
+}
+function makeTransform(int $offset, string $prefix): Transform {
+    return new Transform(static function (int $value) use ($offset, $prefix): int {
+        return $value + $offset + strlen($prefix);
+    });
+}
+function runCapturedTransform(Transform $transform, int $iterations): int {
+    $result = 0;
+    for ($index = 0; $index < $iterations; $index++) {
+        $result = $transform->apply($result);
+    }
+    return $result;
+}
+$first = makeTransform(2, 'a');
+$second = makeTransform(7, 'four');
+echo runCapturedTransform($first, 100000), ':', runCapturedTransform($second, 100000);
+"#,
+    );
+    assert_eq!(output, "300000:1100000");
+    assert_eq!(
+        functions
+            .iter()
+            .filter(|(name, _)| name.starts_with("__closure_"))
+            .count(),
+        1,
+        "both runtime Closure instances must share one compiled declaration"
+    );
+
+    let plan = closure_ops_plan(&functions, "runCapturedTransform");
+    assert_eq!(
+        plan.native_jit().native_entries(),
+        1,
+        "the first capture configuration should enter native code and the changed constants should use the canonical lane"
+    );
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn reference_captured_property_closure_stays_on_canonical_boundary() {
     let (functions, output) = compile_and_execute(
         r#"<?php
@@ -178,6 +227,72 @@ echo runCapturedArgument(100000);
     let plan = closure_ops_plan(&functions, "runCapturedArgument");
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn by_reference_closure_leaf_and_wrapper_stay_canonical() {
+    let (functions, output) = compile_and_execute(
+        r#"<?php
+function &invokeReference(Closure $callback, int $value): int {
+    return $callback($value);
+}
+function &incrementReference(int $value): int {
+    return $value + 1;
+}
+function runReferenceWrapper(Closure $callback, int $iterations): int {
+    $sum = 0;
+    for ($index = 0; $index < $iterations; $index++) {
+        $sum += invokeReference($callback, $index);
+    }
+    return $sum;
+}
+$seed = 5;
+$callback = static function &(int $ignored) use ($seed): int {
+    return $seed;
+};
+echo runReferenceWrapper($callback, 100000);
+"#,
+    );
+    assert_eq!(output, "500000");
+
+    let wrapper = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("invokeReference"))
+        .map(|(_, function)| function)
+        .expect("reference wrapper should be compiled");
+    assert!(wrapper.common.sig.returns_reference);
+    assert!(wrapper.scalar_long_plan.is_none());
+    assert!(wrapper.indirect_scalar_long_plan().is_none());
+
+    let no_capture_leaf = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("incrementReference"))
+        .map(|(_, function)| function)
+        .expect("no-capture reference leaf should be compiled");
+    assert!(no_capture_leaf.common.sig.returns_reference);
+    assert!(no_capture_leaf.scalar_long_plan.is_none());
+
+    let closure = functions
+        .iter()
+        .find(|(name, _)| name.starts_with("__closure_"))
+        .map(|(_, function)| function)
+        .expect("reference-returning closure should be compiled");
+    assert!(closure.common.sig.returns_reference);
+    assert!(closure.captured_typed_long_plan().is_none());
+
+    let outer = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runReferenceWrapper"))
+        .map(|(_, function)| function)
+        .expect("outer reference wrapper loop should be compiled");
+    assert!(
+        !outer
+            .op_array
+            .block_plans
+            .iter()
+            .any(|plan| matches!(plan, BlockPlan::QuickLongOps(_))),
+        "a by-reference leaf must prevent native outer-region planning"
+    );
 }
 
 #[test]

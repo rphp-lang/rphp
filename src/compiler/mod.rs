@@ -1023,6 +1023,34 @@ pub fn make_user_function_full(
 
 /// Extended full constructor with type hints and param names.
 pub fn make_user_function_typed(
+    op_array: OpArray,
+    num_args: u32,
+    required_num_args: u32,
+    is_variadic: bool,
+    variadic_cv_index: u32,
+    ref_args: u64,
+    param_type_hints: Vec<ParamTypeHint>,
+    param_names: Vec<String>,
+    return_type_hint: ParamTypeHint,
+) -> UserFunction {
+    make_user_function_typed_with_return_mode(
+        op_array,
+        num_args,
+        required_num_args,
+        is_variadic,
+        variadic_cv_index,
+        ref_args,
+        param_type_hints,
+        param_names,
+        return_type_hint,
+        false,
+    )
+}
+
+/// Parser-facing constructor which publishes the return mode before any
+/// frame-free call plan is derived. The public constructor retains its
+/// historical value-returning signature for embedders.
+pub(crate) fn make_user_function_typed_with_return_mode(
     mut op_array: OpArray,
     num_args: u32,
     required_num_args: u32,
@@ -1032,6 +1060,7 @@ pub fn make_user_function_typed(
     param_type_hints: Vec<ParamTypeHint>,
     param_names: Vec<String>,
     return_type_hint: ParamTypeHint,
+    returns_reference: bool,
 ) -> UserFunction {
     op_array.specialize_foreach_target_writes(ref_args, 0, &[]);
     op_array.resolve_tmp_offsets();
@@ -1126,7 +1155,7 @@ pub fn make_user_function_typed(
                 is_variadic,
                 variadic_cv_index,
                 ref_args,
-                returns_reference: false,
+                returns_reference,
                 this_offset: 0,
                 param_type_hints,
                 param_names,
@@ -3030,6 +3059,7 @@ fn build_object_long_function_plan(function: &UserFunction) -> Option<Box<Object
     let public_args = common.sig.public_arity();
     let slot_count = op_array.num_cvs.checked_add(op_array.num_temps)?;
     if common.sig.this_offset != 1
+        || common.sig.returns_reference
         || !common.plan.call.is_compact_user_call()
         || common.plan.ret != ReturnStrategy::Fast
         || common.sig.is_variadic
@@ -3489,6 +3519,7 @@ fn build_object_array_function_plan(
     let public_args = common.sig.public_arity();
     let slot_count = op_array.num_cvs.checked_add(op_array.num_temps)?;
     if common.sig.this_offset != 1
+        || common.sig.returns_reference
         || !common.plan.call.is_compact_user_call()
         || common.plan.ret != ReturnStrategy::Fast
         || common.sig.is_variadic
@@ -3808,6 +3839,7 @@ pub(crate) fn build_scalar_string_function_plan(
     let instructions = &function.op_array.instructions;
     let public_args = common.sig.public_arity();
     if common.sig.is_variadic
+        || common.sig.returns_reference
         || common.sig.ref_args != 0
         || public_args > SCALAR_LONG_PLAN_MAX_ARGS
         || common.plan.ret != ReturnStrategy::Fast
@@ -4216,7 +4248,10 @@ fn build_composed_scalar_long_function_plan(
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
     let (long_argument_mask, object_argument_mask) = composed_scalar_argument_masks(function)?;
-    if common.plan.ret != ReturnStrategy::Fast || op_array.instructions.len() > 32 {
+    if common.sig.returns_reference
+        || common.plan.ret != ReturnStrategy::Fast
+        || op_array.instructions.len() > 32
+    {
         return None;
     }
 
@@ -4383,6 +4418,7 @@ fn build_indirect_scalar_long_function_plan(
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
     if !common.plan.call.is_compact_user_call()
+        || common.sig.returns_reference
         || common.plan.ret != ReturnStrategy::Fast
         || common.sig.is_variadic
         || common.sig.ref_args != 0
@@ -4527,7 +4563,10 @@ pub(crate) fn build_composed_typed_long_function_plan(
     let public_args = common.sig.public_arity();
     let (long_argument_mask, object_argument_mask, string_argument_mask) =
         composed_typed_argument_masks(function)?;
-    if common.plan.ret != ReturnStrategy::Fast || op_array.instructions.len() > 32 {
+    if common.sig.returns_reference
+        || common.plan.ret != ReturnStrategy::Fast
+        || op_array.instructions.len() > 32
+    {
         return None;
     }
 
@@ -4840,6 +4879,7 @@ pub(super) fn build_captured_typed_long_function_plan(
     let capture_start = common.sig.parameter_cv_count();
     let capture_end = capture_start.checked_add(u32::from(capture_count))?;
     if capture_count == 0
+        || common.sig.returns_reference
         || input_count > SCALAR_LONG_PLAN_MAX_ARGS
         || common.sig.this_offset != 0
         || common.sig.is_variadic
@@ -5005,6 +5045,7 @@ fn build_binary_long_recursion_plan(
         .iter()
         .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
     if self_name.is_empty()
+        || common.sig.returns_reference
         || common.sig.public_arity() != 1
         || common.sig.required_num_args != 1
         || common.sig.is_variadic
@@ -5225,6 +5266,7 @@ fn build_property_init_method_plan(function: &UserFunction) -> Option<Box<Proper
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
     if common.sig.this_offset != 1
+        || common.sig.returns_reference
         || !common.plan.call.is_compact_user_call()
         || common.plan.ret != ReturnStrategy::Fast
         || common.sig.is_variadic

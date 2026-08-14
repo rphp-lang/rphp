@@ -83,3 +83,20 @@ echo runLiveAlias($reference), ':', $offset;
     );
     assert_eq!(output, "504000:1002:1001");
 }
+
+#[test]
+fn by_reference_closure_return_through_wrapper_reads_the_php_value() {
+    let output = common::run_php(
+        r#"<?php
+function &invokeReference(Closure $callback, int $value): int {
+    return $callback($value);
+}
+$seed = 5;
+$callback = static function &(int $ignored) use ($seed): int {
+    return $seed;
+};
+echo invokeReference($callback, 1);
+"#,
+    );
+    assert_eq!(output, "5");
+}
