@@ -14,7 +14,9 @@ allocating an owned class-name `String` and hashing it for every object.
 - **Integrated baseline:** clean `main` commit
   `90f77858169974a803350e2a8f0a5bf9f3c0595a`.
 - **Measured candidate:** clean implementation commit
-  `18b841bf8afe21ea52e89590a4881ac7c447b24c`.
+  `18b841bf8afe21ea52e89590a4881ac7c447b24c`; the integration-only code-section
+  annotation and rebased commit IDs do not change the measured resolution or
+  construction instructions.
 - **Scope:** literal-class admission, the existing per-opline inline cache,
   disabled-by-default telemetry, focused re-entry/alias/anonymous-class tests,
   and the existing million-object lifecycle workload.
@@ -58,6 +60,13 @@ leaving one general object-construction implementation. It is not keyed to a
 class, function, source file or benchmark. `InlineCache` remains 16 bytes and no
 unsafe block, unsafe function, allocation, dependency or persistent cache entry
 was added. Disabled telemetry compiles to inline no-ops.
+
+After rebasing over the subsequent compatibility checkpoints, that continuation
+was placed in a dedicated executable section on both supported platforms. This
+prevents unrelated translation-unit growth from moving the neighboring property
+handlers. A fresh 40-pair ARM64 integration check against the new `main`
+baseline retained the target win; the code-section variant's separate 40-pair
+order-corpus check measured -0.19%.
 
 ## Correctness and telemetry
 
