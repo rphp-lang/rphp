@@ -12,7 +12,7 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against default-release RPHP commit
-`c6ac2e469201f74c94f4426ecffe58779bcc0417`, using the same runner commit. The
+`b12526d3be9a7b571512cfba84d8caf6d98a5ac1`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout; the complete
 default, no-default-features, generics-erased, generics-reified and all-features
 Cargo matrix passed separately. It discovered 4,345 PHPT cases.
@@ -57,7 +57,7 @@ durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
 `d12475aa5297daa80d3611ca06a2a7ae0f732912c43d83efcb3d235e063cf2cd` and
 its summary has SHA-256
-`ba0525b0487599aab16977168b8ba7946537f93d566fad0f51680b9fceea3d55`.
+`1dd22609095241abefbabcf680144006f4d67de57ec20e6f1646b910e94c8c69`.
 
 Relative to the retained `e077e12` baseline, this checkpoint adds 13 exact
 passes without losing a previous pass or adding a crash or timeout. A
@@ -455,9 +455,9 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`c6ac2e4-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/c6ac2e4-arm64-manifest.jsonl),
+[`b12526d-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/b12526d-arm64-manifest.jsonl),
 with aggregate metadata in
-[`c6ac2e4-arm64-summary.json`](../tests/php-src/results/php-8.2.33/c6ac2e4-arm64-summary.json).
+[`b12526d-arm64-summary.json`](../tests/php-src/results/php-8.2.33/b12526d-arm64-summary.json).
 The retained directory/status navigation map is
 [`8bcc548-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-coverage-map.json),
 and the full reference aggregate is

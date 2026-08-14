@@ -1,7 +1,7 @@
 {
     "schema_version": 5,
-    "rphp_commit": "c6ac2e469201f74c94f4426ecffe58779bcc0417",
-    "runner_commit": "c6ac2e469201f74c94f4426ecffe58779bcc0417",
+    "rphp_commit": "b12526d3be9a7b571512cfba84d8caf6d98a5ac1",
+    "runner_commit": "b12526d3be9a7b571512cfba84d8caf6d98a5ac1",
     "php_src_commit": "651db3ebfa622cae0c4e6b39766812efbd274ced",
     "features": "default",
     "architecture": "arm64",

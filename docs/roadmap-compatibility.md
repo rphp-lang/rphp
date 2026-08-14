@@ -47,7 +47,7 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `c6ac2e4` against
+The current pinned PHP 8.2 differential baseline is RPHP `b12526d` against
 php-src 8.2.33 `651db3e`: 1,105 of 4,345 discovered `Zend/tests` and
 `tests/lang` cases pass, with 13 exact additions and no lost pass relative to
 `e077e12`. Throwable creation now snapshots the complete live PHP call chain,
