@@ -12,22 +12,22 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against default-release RPHP commit
-`e0d94aa026f36fbe59bca9144159d1468f12246f`, using the same runner commit. The
+`e077e12429f3ebfe12482ac2050a7185d74964d5`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout; the complete
 default, no-default-features, generics-erased, generics-reified and all-features
 Cargo matrix passed separately. It discovered 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 996 | 2,768 | 65 | 1 | 221 | 0 | 0 | 26.461% |
+| `Zend/tests` | 1,004 | 2,760 | 65 | 1 | 221 | 0 | 0 | 26.674% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,084** | **2,948** | **75** | **1** | **237** | **0** | **0** | **26.885%** |
+| **Combined** | **1,092** | **2,940** | **75** | **1** | **237** | **0** | **0** | **27.083%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,084 / 4,345, or **24.948%**; including crashes and timeouts in the attempted
-denominator gives **26.885%**. These numbers are intentionally pre-alpha and do
+is 1,092 / 4,345, or **25.132%**; including crashes and timeouts in the attempted
+denominator gives **27.083%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -38,7 +38,7 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,170 runtime failures, 1,051 output mismatches,
+The largest failure groups are 1,163 runtime failures, 1,050 output mismatches,
 565 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
@@ -55,12 +55,49 @@ manifests and summaries. Four already-failing raw executions retain known
 non-semantic output variation from unordered object-property state; run
 durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
-`ddbc230c3fe346dde381f375b75697b27b2c1e530db18ec51079a637666d7430` and
+`a5d04abeceacab7cdc241fb9df9a3b4167125b46eab156bbc768245840d72a4d` and
 its summary has SHA-256
-`d7f182aed0bf203f4288a9c4c2269ab40608347964aff9e0f6d02b96970c04ea`.
+`b1d50d608d3d832307d28c2bca70e698ae96c468c8d6d7720ec34d3d883ac5bb`.
 
-Relative to the retained `c92a29e` baseline, this checkpoint adds one exact
-pass without losing a previous pass or adding a crash or timeout. Array unpack
+Relative to the retained `e0d94aa` baseline, this checkpoint adds eight exact
+passes without losing a previous pass or adding a crash or timeout. `new` and
+`throw` retain independent source lines through the lexer, AST and compiler;
+the compiler publishes only the sparse locations needed by observable
+opcodes, while `Instruction` remains 16 bytes. Every newly constructed
+`Throwable` receives its file and line before a user constructor can run, and
+later throws preserve that creation origin. A root-created uncaught Throwable
+with a provably empty root trace now renders PHP's located message, the root
+`#0 {main}` frame and final thrown line. Runtime constant-expression array-unpack
+errors use the spread opcode's own location, and CLI runtime fatals begin on
+PHP's fresh diagnostic line after any prior output.
+
+Original clean-room regressions cover independent creation/throw locations,
+constructor-time observation, later throws, empty-message rendering and the
+runtime constant-unpack error. Source filenames share their compiled owner,
+and Exception/Error file and line state uses declared slots rather than
+allocating dynamic maps for every instance. An alternating release control of
+100 million ordinary object creations measured 0.55 s for the preceding
+candidate and 0.56 s for this candidate; a deliberately extreme 100,000-case
+construct/throw/catch loop measured 0.03 s versus 0.05 s after removing
+per-instance filename allocation. These local timings are a regression
+control, not a general performance claim.
+
+The exact additions are `Zend/tests/array_unpack/gh9769.phpt`,
+`exception_001.phpt`, `exception_003.phpt`, `exception_handler_007.phpt`,
+`flexible-heredoc-nowdoc-lineno.phpt`, `gh13097_b.phpt`,
+`throw_reference.phpt` and `try/try_finally_recursive_previous.phpt`. The array
+unpack directory now has eleven exact passes; only `undef_var.phpt` remains,
+on the separate undefined-variable warning boundary. Complete nested call
+traces, general call-site source locations and other warning/diagnostic
+families remain explicit non-claims. The pinned Symfony FrameworkBundle 7.4.16
+S3 gate remains green against PHP 8.2.33 across cold and cached loads, health
+and missing-route requests, deleted and malformed caches, and concurrent
+atomic publication. The broader PHP 8.2 corpus-convergence goal remains
+active.
+
+The preceding `e0d94aa` checkpoint, relative to the retained `c92a29e`
+baseline, added one exact pass without losing a previous pass or adding a crash
+or timeout. Array unpack
 now preserves the source line of its `...` token and rejects a statically known
 non-array operand during compilation with PHP's located fatal diagnostic.
 Literals, constant scalar expressions, magic and built-in constants, and known
@@ -381,12 +418,12 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`8bcc548-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-manifest.jsonl),
+[`e077e12-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/e077e12-arm64-manifest.jsonl),
 with aggregate metadata in
-[`8bcc548-arm64-summary.json`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-summary.json),
-a directory/status navigation map and exact hazard list in
+[`e077e12-arm64-summary.json`](../tests/php-src/results/php-8.2.33/e077e12-arm64-summary.json).
+The retained directory/status navigation map is
 [`8bcc548-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-coverage-map.json),
-and the full reference aggregate in
+and the full reference aggregate is
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in
 [`reference-validation.json`](../tests/php-src/results/php-8.2.33/reference-validation.json).
@@ -395,9 +432,10 @@ Every upstream path remains visible; the rollup never replaces the manifest.
 To reproduce the RPHP contract run from the exact external checkout:
 
 ```sh
-cargo build --locked --release --all-features
+cargo build --locked --release
 RPHP_PHPT_PHP_SRC_COMMIT=651db3ebfa622cae0c4e6b39766812efbd274ced \
 RPHP_PHPT_REFERENCE_PHP=/path/to/php-8.2.33 \
+RPHP_PHPT_FEATURES=default \
 RPHP_PHPT_TIMEOUT=3 scripts/run-php-src-phpt.sh \
   /path/to/php-src target/release/rphp /tmp/rphp-phpt-results 4
 ```
