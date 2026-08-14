@@ -82,6 +82,19 @@ pub struct QuickObjectArrayConsumer {
     pub accumulator: u16,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct QuickVirtualDeclaredPropertyRead {
+    pub property_literal: u16,
+    pub result: u16,
+}
+
+impl QuickVirtualDeclaredPropertyRead {
+    pub const EMPTY: Self = Self {
+        property_literal: 0,
+        result: 0,
+    };
+}
+
 impl QuickObjectArrayConsumer {
     pub const EMPTY: Self = Self {
         key_literal: 0,
@@ -974,6 +987,16 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    /// A compiler-proven literal zero-argument object whose dead local is used
+    /// only by the immediately following declared Long-property reads.
+    VirtualDeclaredObjectReads {
+        class_literal: u16,
+        reads: [QuickVirtualDeclaredPropertyRead; 8],
+        read_count: u8,
+        output_mask: u64,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     Assign {
         destination: u16,
         source: u16,
@@ -1072,6 +1095,7 @@ impl QuickLongOp {
             | Self::AddAddAssign { next_target, .. }
             | Self::ComposedPropertyCall { next_target, .. }
             | Self::VirtualObjectArrayPipeline { next_target, .. }
+            | Self::VirtualDeclaredObjectReads { next_target, .. }
             | Self::Assign { next_target, .. }
             | Self::AssignLongLiteral { next_target, .. }
             | Self::AssignStringLiteral { next_target, .. }

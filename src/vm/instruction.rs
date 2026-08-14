@@ -112,6 +112,12 @@ pub const NEW_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 1;
 /// NewObj class name is a runtime expression rather than a literal class name.
 pub const NEW_FLAG_DYNAMIC_CLASS_NAME: u16 = 1 << 2;
 
+/// NewObj flag: a literal zero-argument object is assigned to a dead local
+/// whose only uses are an immediate bounded span of declared-property reads.
+/// A warmed quick loop may project exact scalar defaults without allocating
+/// the otherwise-unobservable object owner.
+pub const NEW_FLAG_VIRTUAL_DECLARED_READS: u16 = 1 << 3;
+
 /// InitArray flag: at least one compile-time literal string key guarantees
 /// general hash storage rather than packed integer storage.
 pub const ARRAY_INIT_HASH_HINT: u16 = 1;

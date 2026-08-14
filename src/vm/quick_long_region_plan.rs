@@ -997,110 +997,145 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::NewObj => {
-                if instruction._pad & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE
-                    == 0
-                {
-                    return None;
-                }
-                let next_ip = detect_virtual_object_array_pipeline_span(op_array, ip)?;
-                if next_ip <= ip || next_ip > backedge_ip {
-                    return None;
-                }
-
-                let mut constructor_arguments =
-                    [QuickVirtualValueSource::Long(QuickLongOperand::Const(0)); 8];
-                for (index, argument) in constructor_arguments
-                    .iter_mut()
-                    .enumerate()
-                    .take(instruction.extended_value as usize)
-                {
-                    let send = *op_array.instructions.get(ip + 1 + index)?;
-                    *argument = match send.op1_type {
-                        OpType::Cv | OpType::Tmp => {
-                            let bit = 1u64.checked_shl(u32::from(send.op1))?;
-                            if string_key_assignment_mask & bit != 0 {
-                                add_mask_slot(&mut string_input_mask, send.op1, total_slots)?;
-                                QuickVirtualValueSource::StringSlot(send.op1)
-                            } else {
-                                add_mask_slot(&mut long_input_mask, send.op1, total_slots)?;
-                                QuickVirtualValueSource::Long(QuickLongOperand::Slot(send.op1))
-                            }
-                        }
-                        OpType::Const => {
-                            let value = op_array.literals.get(send.op1 as usize)?;
-                            if let Some(value) = value.as_long() {
-                                QuickVirtualValueSource::Long(QuickLongOperand::Const(value))
-                            } else if value.as_str().is_some() {
-                                QuickVirtualValueSource::StringLiteral(send.op1)
-                            } else {
-                                return None;
-                            }
-                        }
-                        _ => return None,
-                    };
-                }
-
-                let constructor_do_ip = ip + 1 + instruction.extended_value as usize;
-                let method_ip = constructor_do_ip + 2;
-                let method = *op_array.instructions.get(method_ip)?;
-                if method.opcode != OpCode::InitMethodCall
-                    || method.op1_type != OpType::Cv
-                    || method.extended_value != 1
-                {
-                    return None;
-                }
-                add_mask_slot(&mut object_input_mask, method.op1, total_slots)?;
-
-                let method_do_ip = method_ip + 1 + method.extended_value as usize;
-                let mut cursor = method_do_ip + 2;
-                let mut output_mask = 0u64;
-                let mut consumer_count = 0usize;
-                let mut consumers = [QuickObjectArrayConsumer::EMPTY; 4];
-                let mut trailing_key_literal = None;
-                let mut trailing_result = 0;
-                while cursor < next_ip {
-                    let fetch = *op_array.instructions.get(cursor)?;
-                    if fetch.opcode != OpCode::FetchDimR {
+                if instruction._pad & crate::vm::instruction::NEW_FLAG_VIRTUAL_DECLARED_READS != 0 {
+                    let next_ip = detect_virtual_declared_object_read_span(op_array, ip)?;
+                    if next_ip <= ip || next_ip > backedge_ip {
                         return None;
                     }
-                    let add = op_array.instructions.get(cursor + 1).copied();
-                    let assign = op_array.instructions.get(cursor + 2).copied();
-                    if let (Some(add), Some(assign)) = (add, assign)
-                        && let Some(accumulator) = object_array_add_consumer(fetch, add, assign)
-                    {
-                        add_mask_slot(&mut long_input_mask, accumulator, total_slots)?;
-                        add_mask_slot(&mut long_output_mask, accumulator, total_slots)?;
-                        output_mask |= 1u64 << accumulator;
-                        *consumers.get_mut(consumer_count)? = QuickObjectArrayConsumer {
-                            key_literal: fetch.op2,
-                            accumulator,
-                        };
-                        consumer_count += 1;
-                        cursor += 3;
-                    } else {
-                        add_mask_slot(&mut long_output_mask, fetch.result, total_slots)?;
-                        output_mask |= 1u64 << fetch.result;
-                        trailing_key_literal = Some(fetch.op2);
-                        trailing_result = fetch.result;
-                        cursor += 1;
+                    let first_read_ip = ip + 3;
+                    let read_count = next_ip.checked_sub(first_read_ip)?;
+                    if read_count == 0 || read_count > 8 {
+                        return None;
                     }
-                }
-                if cursor != next_ip || consumer_count == 0 {
-                    return None;
-                }
-                has_object_call = true;
-                let resume_ip = ip;
-                ip = next_ip;
-                QuickLongOp::VirtualObjectArrayPipeline {
-                    constructor_arguments,
-                    argument_count: instruction.extended_value as u8,
-                    consumers,
-                    consumer_count: consumer_count as u8,
-                    trailing_key_literal,
-                    trailing_result,
-                    output_mask,
-                    next_target: QuickLongTarget::unresolved(ip)?,
-                    resume_ip,
+                    let mut reads = [QuickVirtualDeclaredPropertyRead::EMPTY; 8];
+                    let mut output_mask = 0u64;
+                    for (index, read) in reads.iter_mut().enumerate().take(read_count) {
+                        let fetch = *op_array.instructions.get(first_read_ip + index)?;
+                        add_mask_slot(&mut long_output_mask, fetch.result, total_slots)?;
+                        output_mask |= 1u64.checked_shl(u32::from(fetch.result))?;
+                        *read = QuickVirtualDeclaredPropertyRead {
+                            property_literal: fetch.op2,
+                            result: fetch.result,
+                        };
+                    }
+                    has_object_call = true;
+                    let resume_ip = ip;
+                    ip = next_ip;
+                    QuickLongOp::VirtualDeclaredObjectReads {
+                        class_literal: instruction.op1,
+                        reads,
+                        read_count: read_count as u8,
+                        output_mask,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                } else {
+                    if instruction._pad
+                        & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE
+                        == 0
+                    {
+                        return None;
+                    }
+                    let next_ip = detect_virtual_object_array_pipeline_span(op_array, ip)?;
+                    if next_ip <= ip || next_ip > backedge_ip {
+                        return None;
+                    }
+
+                    let mut constructor_arguments =
+                        [QuickVirtualValueSource::Long(QuickLongOperand::Const(0)); 8];
+                    for (index, argument) in constructor_arguments
+                        .iter_mut()
+                        .enumerate()
+                        .take(instruction.extended_value as usize)
+                    {
+                        let send = *op_array.instructions.get(ip + 1 + index)?;
+                        *argument = match send.op1_type {
+                            OpType::Cv | OpType::Tmp => {
+                                let bit = 1u64.checked_shl(u32::from(send.op1))?;
+                                if string_key_assignment_mask & bit != 0 {
+                                    add_mask_slot(&mut string_input_mask, send.op1, total_slots)?;
+                                    QuickVirtualValueSource::StringSlot(send.op1)
+                                } else {
+                                    add_mask_slot(&mut long_input_mask, send.op1, total_slots)?;
+                                    QuickVirtualValueSource::Long(QuickLongOperand::Slot(send.op1))
+                                }
+                            }
+                            OpType::Const => {
+                                let value = op_array.literals.get(send.op1 as usize)?;
+                                if let Some(value) = value.as_long() {
+                                    QuickVirtualValueSource::Long(QuickLongOperand::Const(value))
+                                } else if value.as_str().is_some() {
+                                    QuickVirtualValueSource::StringLiteral(send.op1)
+                                } else {
+                                    return None;
+                                }
+                            }
+                            _ => return None,
+                        };
+                    }
+
+                    let constructor_do_ip = ip + 1 + instruction.extended_value as usize;
+                    let method_ip = constructor_do_ip + 2;
+                    let method = *op_array.instructions.get(method_ip)?;
+                    if method.opcode != OpCode::InitMethodCall
+                        || method.op1_type != OpType::Cv
+                        || method.extended_value != 1
+                    {
+                        return None;
+                    }
+                    add_mask_slot(&mut object_input_mask, method.op1, total_slots)?;
+
+                    let method_do_ip = method_ip + 1 + method.extended_value as usize;
+                    let mut cursor = method_do_ip + 2;
+                    let mut output_mask = 0u64;
+                    let mut consumer_count = 0usize;
+                    let mut consumers = [QuickObjectArrayConsumer::EMPTY; 4];
+                    let mut trailing_key_literal = None;
+                    let mut trailing_result = 0;
+                    while cursor < next_ip {
+                        let fetch = *op_array.instructions.get(cursor)?;
+                        if fetch.opcode != OpCode::FetchDimR {
+                            return None;
+                        }
+                        let add = op_array.instructions.get(cursor + 1).copied();
+                        let assign = op_array.instructions.get(cursor + 2).copied();
+                        if let (Some(add), Some(assign)) = (add, assign)
+                            && let Some(accumulator) = object_array_add_consumer(fetch, add, assign)
+                        {
+                            add_mask_slot(&mut long_input_mask, accumulator, total_slots)?;
+                            add_mask_slot(&mut long_output_mask, accumulator, total_slots)?;
+                            output_mask |= 1u64 << accumulator;
+                            *consumers.get_mut(consumer_count)? = QuickObjectArrayConsumer {
+                                key_literal: fetch.op2,
+                                accumulator,
+                            };
+                            consumer_count += 1;
+                            cursor += 3;
+                        } else {
+                            add_mask_slot(&mut long_output_mask, fetch.result, total_slots)?;
+                            output_mask |= 1u64 << fetch.result;
+                            trailing_key_literal = Some(fetch.op2);
+                            trailing_result = fetch.result;
+                            cursor += 1;
+                        }
+                    }
+                    if cursor != next_ip || consumer_count == 0 {
+                        return None;
+                    }
+                    has_object_call = true;
+                    let resume_ip = ip;
+                    ip = next_ip;
+                    QuickLongOp::VirtualObjectArrayPipeline {
+                        constructor_arguments,
+                        argument_count: instruction.extended_value as u8,
+                        consumers,
+                        consumer_count: consumer_count as u8,
+                        trailing_key_literal,
+                        trailing_result,
+                        output_mask,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
                 }
             }
             OpCode::FetchObjR => {
@@ -1390,13 +1425,15 @@ fn detect_long_ops_region_inner(
                     }
                 }
             }
-            OpCode::PostInc => {
+            OpCode::PostInc | OpCode::PreInc => {
                 if instruction.op1_type != OpType::Cv {
                     return None;
                 }
                 let result = match instruction.result_type {
                     OpType::Unused => None,
-                    OpType::Tmp => Some(instruction.result),
+                    OpType::Tmp if instruction.opcode == OpCode::PostInc => {
+                        Some(instruction.result)
+                    }
                     _ => return None,
                 };
                 add_mask_slot(&mut long_input_mask, instruction.op1, total_slots)?;
@@ -1467,6 +1504,7 @@ fn detect_long_ops_region_inner(
             | QuickLongOp::BinaryAssign { resume_ip, .. }
             | QuickLongOp::ComposedPropertyCall { resume_ip, .. }
             | QuickLongOp::VirtualObjectArrayPipeline { resume_ip, .. }
+            | QuickLongOp::VirtualDeclaredObjectReads { resume_ip, .. }
             | QuickLongOp::PostInc { resume_ip, .. }
             | QuickLongOp::PostIncJump { resume_ip, .. }
             | QuickLongOp::PostIncLoopLt { resume_ip, .. } => resume_ip,

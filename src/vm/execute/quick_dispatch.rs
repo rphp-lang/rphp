@@ -296,7 +296,12 @@ unsafe fn run_quick_long_ops_loop(
     }
 
     let mut string_state = QuickStringSlotState::new(slot_base, plan.string_input_mask);
-    let resolved_object_ops = if plan.object_input_mask == 0 {
+    let has_resolved_object_ops = plan.object_input_mask != 0
+        || plan
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, QuickLongOp::VirtualDeclaredObjectReads { .. }));
+    let resolved_object_ops = if !has_resolved_object_ops {
         Vec::new()
     } else {
         let Some(resolved) =
@@ -307,7 +312,7 @@ unsafe fn run_quick_long_ops_loop(
         };
         resolved
     };
-    let invariant_object_property_mask = if plan.object_input_mask == 0 {
+    let invariant_object_property_mask = if !has_resolved_object_ops {
         0
     } else {
         let Some(mask) =
@@ -1204,6 +1209,24 @@ unsafe fn run_quick_long_ops_loop(
                 };
                 evaluated.record_calls();
                 object_call_recorder.record(op_index);
+                dirty_long_mask |= output_mask;
+                next_target
+            }
+            QuickLongOp::VirtualDeclaredObjectReads {
+                reads,
+                read_count,
+                output_mask,
+                next_target,
+                ..
+            } => {
+                let QuickResolvedObjectOp::VirtualDeclaredReads { values } =
+                    *resolved_object_ops.get_unchecked(op_index)
+                else {
+                    unreachable!("resolved virtual declared-object reads")
+                };
+                for (index, read) in reads.iter().copied().enumerate().take(read_count as usize) {
+                    slots[read.result as usize] = values[index];
+                }
                 dirty_long_mask |= output_mask;
                 next_target
             }

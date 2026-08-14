@@ -344,6 +344,106 @@ pub fn detect_virtual_object_array_pipeline_span(
     detect_object_array_consumer_span(op_array, method_ip)
 }
 
+/// Prove `new LiteralClass() -> dead local -> declared read(s)` without using
+/// class metadata that is unavailable while the caller is compiled. Runtime
+/// still requires warmed negative-constructor and public-property caches, an
+/// exact declared class, scalar defaults and no destructor before eliding the
+/// canonical owner allocation.
+pub fn detect_virtual_declared_object_read_span(
+    op_array: &OpArray,
+    new_ip: usize,
+) -> Option<usize> {
+    let new_object = *op_array.instructions.get(new_ip)?;
+    if new_object.opcode != OpCode::NewObj
+        || new_object.op1_type != OpType::Const
+        || !matches!(new_object.result_type, OpType::Tmp | OpType::Var)
+        || new_object.extended_value != 0
+        || new_object._pad
+            & (crate::vm::instruction::NEW_FLAG_DYNAMIC_STATIC_SCOPE
+                | crate::vm::instruction::NEW_FLAG_DYNAMIC_CLASS_NAME)
+            != 0
+        || op_array
+            .literals
+            .get(new_object.op1 as usize)
+            .and_then(Value::as_str)
+            .is_none()
+    {
+        return None;
+    }
+
+    let constructor_do_ip = new_ip + 1;
+    let constructor_do = *op_array.instructions.get(constructor_do_ip)?;
+    let object_assign_ip = constructor_do_ip + 1;
+    let object_assign = *op_array.instructions.get(object_assign_ip)?;
+    if constructor_do.opcode != OpCode::DoFcall
+        || object_assign.opcode != OpCode::AssignCv
+        || object_assign.op1_type != OpType::Cv
+        || object_assign.op2_type != new_object.result_type
+        || object_assign.op2 != new_object.result
+        || object_assign.result_type != OpType::Unused
+    {
+        return None;
+    }
+
+    let mut cursor = object_assign_ip + 1;
+    let mut read_count = 0usize;
+    while read_count < 8 {
+        let Some(read) = op_array.instructions.get(cursor).copied() else {
+            break;
+        };
+        if read.opcode != OpCode::FetchObjR
+            || read.op1_type != OpType::Cv
+            || read.op1 != object_assign.op1
+            || read.op2_type != OpType::Const
+            || !matches!(read.result_type, OpType::Tmp | OpType::Var)
+            || read._pad & crate::vm::instruction::FETCH_OBJ_SILENT != 0
+            || op_array
+                .literals
+                .get(read.op2 as usize)
+                .and_then(Value::as_str)
+                .is_none()
+        {
+            break;
+        }
+        read_count += 1;
+        cursor += 1;
+    }
+    if read_count == 0 {
+        return None;
+    }
+
+    // The assigned CV is the identity/escape boundary. Requiring its complete
+    // OpArray use set to be exactly this span also excludes references,
+    // comparisons, post-loop observation, dynamic-property access and calls.
+    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        if ip != new_ip
+            && ip != object_assign_ip
+            && instruction_mentions_operand(instruction, new_object.result_type, new_object.result)
+        {
+            return None;
+        }
+        let is_admitted_read = (object_assign_ip + 1..cursor).contains(&ip);
+        if ip != object_assign_ip
+            && !is_admitted_read
+            && instruction_mentions_operand(instruction, OpType::Cv, object_assign.op1)
+        {
+            return None;
+        }
+        if matches!(constructor_do.result_type, OpType::Tmp | OpType::Var)
+            && ip != constructor_do_ip
+            && instruction_mentions_operand(
+                instruction,
+                constructor_do.result_type,
+                constructor_do.result,
+            )
+        {
+            return None;
+        }
+    }
+
+    Some(cursor)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct QuickStraightArrayFetchAdd {
     pub index: QuickArrayIndex,

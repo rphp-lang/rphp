@@ -12,7 +12,7 @@ use rphp::vm::function::{
 };
 use rphp::vm::instruction::{
     CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_OBJECT_ARRAY_CONSUMERS, KnownScalarType,
-    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
+    NEW_FLAG_VIRTUAL_DECLARED_READS, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
 };
 use rphp::vm::opcode::OpCode;
 #[cfg(feature = "quick-loops")]

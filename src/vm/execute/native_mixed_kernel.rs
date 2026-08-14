@@ -367,6 +367,32 @@ unsafe fn native_quick_long_mixed_kernel(
                 has_virtual_pipeline = true;
                 has_typed_method = true;
             }
+            QuickLongOp::VirtualDeclaredObjectReads {
+                reads,
+                read_count,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let QuickResolvedObjectOp::VirtualDeclaredReads { values } =
+                    *resolved_object_ops.get(plan_index)?
+                else {
+                    return None;
+                };
+                for (index, read) in reads.iter().copied().enumerate().take(read_count as usize) {
+                    builder.append(
+                        NativeStraightLongOperation::Move {
+                            source: QuickLongOperand::Const(values[index]),
+                            result: read.result,
+                        },
+                        resume_ip,
+                    )?;
+                }
+                has_property_read = true;
+            }
             QuickLongOp::PropertyMethodCall { call } => {
                 if call.next_target.op_index() != Some(plan_index + 1) {
                     return None;

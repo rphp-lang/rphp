@@ -447,6 +447,178 @@ function escaped($service) {
     }));
 }
 
+#[cfg(feature = "quick-loops")]
+#[test]
+fn test_dead_declared_object_reads_select_virtual_quick_loop() {
+    let source = r#"<?php
+class VirtualDeclaredRow {
+    public $first = 17;
+    public $second = 19;
+}
+function sumVirtualDeclaredRows(int $iterations): int {
+    $sum = 0;
+    for ($index = 0; $index < $iterations; ++$index) {
+        $row = new VirtualDeclaredRow();
+        $sum += $row->first + $row->second;
+    }
+    return $sum;
+}
+echo sumVirtualDeclaredRows(100);
+"#;
+    let compiled = compile_types(source);
+    let run = compiled
+        .functions
+        .iter()
+        .find(|(name, _)| name == "sumVirtualDeclaredRows")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(run.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::NewObj
+            && instruction._pad & NEW_FLAG_VIRTUAL_DECLARED_READS != 0
+    }));
+    assert!(run.op_array.block_plans.iter().any(|block| {
+        matches!(
+            block,
+            BlockPlan::QuickLongOps(plan)
+                if plan.ops.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        QuickLongOp::VirtualDeclaredObjectReads { read_count: 2, .. }
+                    )
+                })
+        )
+    }));
+    assert_eq!(run_php(source), "3600");
+}
+
+#[test]
+fn test_virtual_declared_object_escape_keeps_canonical_owner() {
+    let source = r#"<?php
+class RetainedVirtualDeclaredRow { public $value = 7; }
+function retainVirtualDeclaredRow(int $iterations): int {
+    $sum = 0;
+    for ($index = 0; $index < $iterations; ++$index) {
+        $row = new RetainedVirtualDeclaredRow();
+        $sum += $row->value;
+    }
+    return $sum + $row->value;
+}
+echo retainVirtualDeclaredRow(100);
+"#;
+    let compiled = compile_types(source);
+    let run = compiled
+        .functions
+        .iter()
+        .find(|(name, _)| name == "retainVirtualDeclaredRow")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(!run.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::NewObj
+            && instruction._pad & NEW_FLAG_VIRTUAL_DECLARED_READS != 0
+    }));
+    assert_eq!(run_php(source), "707");
+}
+
+#[test]
+fn test_virtual_declared_object_constructor_and_magic_reads_fall_back() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ConstructedVirtualDeclaredRow {
+    public $value = 1;
+    public function __construct() { $this->value = 7; }
+}
+class MagicVirtualDeclaredRow {
+    private $value = 3;
+    public function __get($name) { return 11; }
+}
+$sum = 0;
+for ($index = 0; $index < 100; ++$index) {
+    $constructed = new ConstructedVirtualDeclaredRow();
+    $sum += $constructed->value;
+    $magic = new MagicVirtualDeclaredRow();
+    $sum += $magic->value;
+}
+echo $sum;
+"#
+        ),
+        "1800"
+    );
+}
+
+#[test]
+fn test_virtual_declared_object_non_long_default_falls_back() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DoubleVirtualDeclaredRow {
+    public $value = 1.5;
+}
+function sumDoubleVirtualDeclaredRows(int $iterations) {
+    $sum = 0;
+    for ($index = 0; $index < $iterations; ++$index) {
+        $row = new DoubleVirtualDeclaredRow();
+        $sum += $row->value;
+    }
+    return $sum;
+}
+echo gettype(sumDoubleVirtualDeclaredRows(100));
+"#
+        ),
+        "double"
+    );
+}
+
+#[test]
+fn test_virtual_declared_object_overflow_publishes_read_before_side_exit() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class OverflowVirtualDeclaredRow { public $value = 17; }
+function overflowVirtualDeclaredRows(int $iterations) {
+    $sum = 9223372036854775000;
+    for ($index = 0; $index < $iterations; ++$index) {
+        $row = new OverflowVirtualDeclaredRow();
+        $sum += $row->value;
+    }
+    return $sum;
+}
+echo gettype(overflowVirtualDeclaredRows(100));
+"#
+        ),
+        "double"
+    );
+}
+
+#[test]
+fn test_virtual_declared_object_reference_use_disables_marker() {
+    let source = r#"<?php
+class ReferencedVirtualDeclaredRow { public $value = 7; }
+function referenceVirtualDeclaredRow(int $iterations): int {
+    $sum = 0;
+    for ($index = 0; $index < $iterations; ++$index) {
+        $row = new ReferencedVirtualDeclaredRow();
+        $value =& $row->value;
+        $sum += $value;
+    }
+    return $sum;
+}
+echo referenceVirtualDeclaredRow(100);
+"#;
+    let compiled = compile_types(source);
+    let run = compiled
+        .functions
+        .iter()
+        .find(|(name, _)| name == "referenceVirtualDeclaredRow")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(!run.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::NewObj
+            && instruction._pad & NEW_FLAG_VIRTUAL_DECLARED_READS != 0
+    }));
+    assert_eq!(run_php(source), "700");
+}
+
 #[test]
 fn test_monomorphic_class_guard_rechecks_a_different_runtime_class() {
     assert_eq!(

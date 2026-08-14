@@ -27,7 +27,7 @@ use super::instruction::{
     CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, CLASS_CONST_COMPILE_TIME_NAME,
     CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE,
-    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_VIRTUAL_DECLARED_READS,
     NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType, SEND_FLAG_GLOBALS,
 };
 use super::opcode::OpCode;
@@ -40,8 +40,8 @@ use super::quick::{
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
     QuickObjectArrayConsumer, QuickObjectLongArgument, QuickObjectLongMethodCall,
     QuickStringAppendSource, QuickTypedInvariantProducer, QuickTypedMethodCall,
-    QuickVirtualValueSource, ResolvedScalarDoubleProgram, compose_quick_scalar_leaf_program,
-    compose_scalar_double_program,
+    QuickVirtualDeclaredPropertyRead, QuickVirtualValueSource, ResolvedScalarDoubleProgram,
+    compose_quick_scalar_leaf_program, compose_scalar_double_program,
 };
 #[cfg(all(
     feature = "jit-prototype",

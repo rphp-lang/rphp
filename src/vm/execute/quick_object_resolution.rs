@@ -45,6 +45,9 @@ enum QuickResolvedObjectOp {
     VirtualPipeline {
         pipeline: QuickResolvedVirtualPipeline,
     },
+    VirtualDeclaredReads {
+        values: [i64; 8],
+    },
 }
 
 #[inline]
@@ -59,6 +62,7 @@ fn quick_object_property_reads_are_invariant(plan: &QuickLongOpsLoop) -> bool {
                 | QuickLongOp::ObjectLongMethodCall { .. }
                 | QuickLongOp::ComposedPropertyCall { .. }
                 | QuickLongOp::VirtualObjectArrayPipeline { .. }
+                | QuickLongOp::VirtualDeclaredObjectReads { .. }
         )
     })
 }
@@ -125,7 +129,9 @@ impl QuickObjectCallRecorder<'_> {
             }
             unsafe {
                 match *resolved {
-                    QuickResolvedObjectOp::None | QuickResolvedObjectOp::PropertyRead { .. } => {}
+                    QuickResolvedObjectOp::None
+                    | QuickResolvedObjectOp::PropertyRead { .. }
+                    | QuickResolvedObjectOp::VirtualDeclaredReads { .. } => {}
                     QuickResolvedObjectOp::PropertyMethod { target, .. }
                     | QuickResolvedObjectOp::PropertyGetter { target, .. }
                     | QuickResolvedObjectOp::ScalarMethod { target, .. }
@@ -150,6 +156,88 @@ impl QuickObjectCallRecorder<'_> {
             *count = 0;
         }
     }
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    not(any(feature = "php-generics-erased", feature = "php-generics-reified"))
+))]
+fn resolve_quick_virtual_declared_object_reads(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    resume_ip: usize,
+    class_literal: u16,
+    reads: &[QuickVirtualDeclaredPropertyRead; 8],
+    read_count: u8,
+) -> Option<[i64; 8]> {
+    let new_object = *op_array.instructions.get(resume_ip)?;
+    if new_object.opcode != OpCode::NewObj
+        || new_object._pad & NEW_FLAG_VIRTUAL_DECLARED_READS == 0
+        || new_object.op1_type != OpType::Const
+        || new_object.op1 != class_literal
+        || new_object.extended_value != 0
+        || read_count == 0
+        || read_count > 8
+    {
+        return None;
+    }
+    let new_cache = op_array.cache.get(resume_ip)?;
+    // A null function paired with a class ID is the warmed, stable negative
+    // constructor cache. Any constructor body remains canonical.
+    if new_cache.class_id == 0 || !new_cache.func.is_null() {
+        return None;
+    }
+    let class_def = eg.class_by_id(new_cache.class_id)?;
+    let class_name = op_array.literals.get(class_literal as usize)?.as_str()?;
+    if !class_def.name.eq_ignore_ascii_case(class_name)
+        || class_def.is_interface
+        || class_def.is_abstract
+        || class_def.is_enum
+        || eg
+            .find_method_info(&class_def.name, "__construct")
+            .is_some()
+        || eg.find_method_info(&class_def.name, "__destruct").is_some()
+    {
+        return None;
+    }
+
+    let mut values = [0i64; 8];
+    for (index, read) in reads.iter().copied().enumerate().take(read_count as usize) {
+        let fetch_ip = resume_ip + 3 + index;
+        let fetch = *op_array.instructions.get(fetch_ip)?;
+        if fetch.opcode != OpCode::FetchObjR
+            || fetch.op2_type != OpType::Const
+            || fetch.op2 != read.property_literal
+            || fetch.result != read.result
+        {
+            return None;
+        }
+        let cache = op_array.cache.get(fetch_ip)?;
+        if cache.class_id != new_cache.class_id || cache.property_flags() & 1 == 0 {
+            return None;
+        }
+        let value = class_def.property_defaults.get(cache.property_slot())?;
+        if value.value_type() != ValueType::Long || value.is_reference() {
+            return None;
+        }
+        values[index] = value.as_long()?;
+    }
+    Some(values)
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    any(feature = "php-generics-erased", feature = "php-generics-reified")
+))]
+fn resolve_quick_virtual_declared_object_reads(
+    _eg: &ExecutorGlobals,
+    _op_array: &crate::compiler::OpArray,
+    _resume_ip: usize,
+    _class_literal: u16,
+    _reads: &[QuickVirtualDeclaredPropertyRead; 8],
+    _read_count: u8,
+) -> Option<[i64; 8]> {
+    None
 }
 
 #[cfg(feature = "quick-loops")]
@@ -645,6 +733,22 @@ unsafe fn resolve_quick_object_ops(
                     &consumers,
                     consumer_count,
                     trailing_key_literal,
+                )?,
+            },
+            QuickLongOp::VirtualDeclaredObjectReads {
+                class_literal,
+                reads,
+                read_count,
+                resume_ip,
+                ..
+            } => QuickResolvedObjectOp::VirtualDeclaredReads {
+                values: resolve_quick_virtual_declared_object_reads(
+                    eg,
+                    op_array,
+                    resume_ip,
+                    class_literal,
+                    &reads,
+                    read_count,
                 )?,
             },
             _ => QuickResolvedObjectOp::None,

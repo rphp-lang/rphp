@@ -451,6 +451,10 @@ impl OpArray {
                 self.instructions[new_ip]._pad |=
                     crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE;
             }
+            if crate::vm::quick::detect_virtual_declared_object_read_span(self, new_ip).is_some() {
+                self.instructions[new_ip]._pad |=
+                    crate::vm::instruction::NEW_FLAG_VIRTUAL_DECLARED_READS;
+            }
         }
         for init_ip in 0..self.instructions.len() {
             if crate::vm::callback_pipeline::detect_callback_array_pipeline_span(self, init_ip)
