@@ -928,13 +928,30 @@ fn op_call_user_func_array<'a>(
         op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache
     };
     let caller_class = get_caller_class(frame, eg);
-    let result = crate::stdlib::invoke_call_user_func_array(
-        callback,
-        args,
-        eg,
-        caller_class.as_deref(),
-        Some(cache_slot),
-    )?;
+    let result = if opline._pad & CALL_USER_FUNC_ARRAY_SOURCE_UNPACK != 0 {
+        let source_file = if op_array.source_file.is_empty() {
+            op_array.name.as_str()
+        } else {
+            op_array.source_file.as_str()
+        };
+        crate::stdlib::invoke_source_unpacked_call(
+            callback,
+            args,
+            eg,
+            caller_class.as_deref(),
+            Some(cache_slot),
+            source_file,
+            op_array.strict_types,
+        )?
+    } else {
+        crate::stdlib::invoke_call_user_func_array(
+            callback,
+            args,
+            eg,
+            caller_class.as_deref(),
+            Some(cache_slot),
+        )?
+    };
 
     if let Some(exc) = eg.exception.take() {
         return Ok(match throw_in_frame(eg, frame, exc) {

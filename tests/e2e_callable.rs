@@ -28,4 +28,6 @@ include!("e2e_callable/callback_array_shapes.rs");
 
 include!("e2e_callable/callable_values_and_closures.rs");
 
+include!("e2e_callable/argument_unpack_semantics.rs");
+
 include!("e2e_callable/method_visibility_and_inheritance.rs");

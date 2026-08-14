@@ -27,10 +27,10 @@ use crate::value::{
 use crate::vm::instruction::{
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
-    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
-    FETCH_DIM_ISSET, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
-    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
-    SEND_FLAG_GLOBALS,
+    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
+    CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE,
+    InlineCache, Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
+    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, OpType, SEND_FLAG_GLOBALS,
 };
 use crate::vm::opcode::OpCode;
 
@@ -3754,37 +3754,6 @@ impl Compiler {
                 generic_args,
             } => {
                 if generic_args.is_empty()
-                    && let [CallArg::Unpack(array)] = args.as_slice()
-                {
-                    // A sole unpack has the same runtime argument protocol as
-                    // call_user_func_array(), including sparse positional and
-                    // string-keyed named arguments. Keep the ordinary
-                    // namespaced-function fallback in extended_value.
-                    let resolved = self.resolve_function_name(name);
-                    let name_idx = self.add_literal(Value::string(resolved));
-                    let fallback_idx = if self.current_namespace.is_some()
-                        && !name.contains('\\')
-                        && !self.has_function_import(name)
-                    {
-                        self.add_literal(Value::string(name.clone()))
-                    } else {
-                        0
-                    };
-                    let (array_op, array_type) = self.compile_expr(array);
-                    let tmp = self.alloc_tmp();
-                    let mut call = Instruction::new(OpCode::CallUserFuncArray);
-                    call.op1 = name_idx;
-                    call.op1_type = OpType::Const;
-                    call.op2 = array_op;
-                    call.op2_type = array_type;
-                    call.result = tmp;
-                    call.result_type = OpType::Tmp;
-                    call.extended_value = fallback_idx as u32;
-                    self.instructions.push(call);
-                    return (tmp, OpType::Tmp);
-                }
-
-                if generic_args.is_empty()
                     && args
                         .iter()
                         .any(|argument| matches!(argument, CallArg::Unpack(_)))
@@ -3814,6 +3783,7 @@ impl Compiler {
                     call.result = tmp;
                     call.result_type = OpType::Tmp;
                     call.extended_value = fallback_idx as u32;
+                    call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
                     self.instructions.push(call);
                     return (tmp, OpType::Tmp);
                 }
@@ -4701,6 +4671,31 @@ impl Compiler {
                 args,
                 generic_args,
             } => {
+                if generic_args.is_empty()
+                    && args
+                        .iter()
+                        .any(|argument| matches!(argument, CallArg::Unpack(_)))
+                {
+                    let (arguments, arguments_type) =
+                        self.compile_mixed_unpacked_call_arguments(args);
+                    let (resolved_class, dynamic_static_scope) =
+                        self.resolve_static_member_owner(class_name);
+                    let name_idx = self.add_literal(Value::string(resolved_class));
+                    let tmp = self.alloc_tmp();
+                    let mut new_obj = Instruction::new(OpCode::NewObj);
+                    new_obj.op1 = name_idx;
+                    new_obj.op1_type = OpType::Const;
+                    new_obj.op2 = arguments;
+                    new_obj.op2_type = arguments_type;
+                    new_obj.result = tmp;
+                    new_obj.result_type = OpType::Tmp;
+                    new_obj._pad |= NEW_FLAG_UNPACKED_ARGUMENTS;
+                    if dynamic_static_scope {
+                        new_obj._pad |= NEW_FLAG_DYNAMIC_STATIC_SCOPE;
+                    }
+                    self.instructions.push(new_obj);
+                    return (tmp, OpType::Tmp);
+                }
                 // Pre-compile arg expressions BEFORE NewObj so side effects
                 // always execute, even when the class has no __construct.
                 // Compile args, tracking which are named for SendNamed emission
@@ -4763,6 +4758,25 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::DynamicNew { class, args } => {
+                if args
+                    .iter()
+                    .any(|argument| matches!(argument, CallArg::Unpack(_)))
+                {
+                    let (arguments, arguments_type) =
+                        self.compile_mixed_unpacked_call_arguments(args);
+                    let (class, class_type) = self.compile_expr(class);
+                    let tmp = self.alloc_tmp();
+                    let mut new_obj = Instruction::new(OpCode::NewObj);
+                    new_obj.op1 = class;
+                    new_obj.op1_type = class_type;
+                    new_obj.op2 = arguments;
+                    new_obj.op2_type = arguments_type;
+                    new_obj.result = tmp;
+                    new_obj.result_type = OpType::Tmp;
+                    new_obj._pad |= NEW_FLAG_DYNAMIC_CLASS_NAME | NEW_FLAG_UNPACKED_ARGUMENTS;
+                    self.instructions.push(new_obj);
+                    return (tmp, OpType::Tmp);
+                }
                 let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
                     .iter()
                     .map(|arg| match arg {
@@ -4805,8 +4819,13 @@ impl Compiler {
                 constants,
                 methods,
             } => {
+                let unpacked_arguments = args
+                    .iter()
+                    .any(|argument| matches!(argument, CallArg::Unpack(_)))
+                    .then(|| self.compile_mixed_unpacked_call_arguments(args));
                 let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
                     .iter()
+                    .filter(|_| unpacked_arguments.is_none())
                     .map(|arg| match arg {
                         CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                             let (op, op_type) = self.compile_expr(expr);
@@ -4844,10 +4863,18 @@ impl Compiler {
                 let mut new_obj = Instruction::new(OpCode::NewObj);
                 new_obj.op1 = name_idx;
                 new_obj.op1_type = OpType::Const;
+                if let Some((arguments, arguments_type)) = unpacked_arguments {
+                    new_obj.op2 = arguments;
+                    new_obj.op2_type = arguments_type;
+                    new_obj._pad |= NEW_FLAG_UNPACKED_ARGUMENTS;
+                }
                 new_obj.result = tmp;
                 new_obj.result_type = OpType::Tmp;
                 new_obj.extended_value = args.len() as u32;
                 self.instructions.push(new_obj);
+                if unpacked_arguments.is_some() {
+                    return (tmp, OpType::Tmp);
+                }
                 self.emit_precompiled_call_args(&compiled_args, 1);
                 let discard = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
@@ -4937,6 +4964,63 @@ impl Compiler {
                 generic_args,
                 nullsafe,
             } => {
+                if generic_args.is_empty()
+                    && args
+                        .iter()
+                        .any(|argument| matches!(argument, CallArg::Unpack(_)))
+                {
+                    let (obj_op, obj_type) = self.compile_expr(object);
+                    let tmp = self.alloc_tmp();
+                    let nullsafe_patch = if *nullsafe {
+                        let mut check = Instruction::new(OpCode::NullSafeCheck);
+                        check.op1 = obj_op;
+                        check.op1_type = obj_type;
+                        check.op2 = 0;
+                        check.result = tmp;
+                        check.result_type = OpType::Tmp;
+                        check.extended_value = 1;
+                        let index = self.instructions.len();
+                        self.instructions.push(check);
+                        Some(index)
+                    } else {
+                        None
+                    };
+
+                    let callback = self.alloc_tmp();
+                    let mut init = Instruction::new(OpCode::InitArray);
+                    init.result = callback;
+                    init.result_type = OpType::Tmp;
+                    init.extended_value = 2;
+                    self.instructions.push(init);
+                    let mut receiver = Instruction::new(OpCode::AddArrayElement);
+                    receiver.op1 = callback;
+                    receiver.op1_type = OpType::Tmp;
+                    receiver.op2 = obj_op;
+                    receiver.op2_type = obj_type;
+                    self.instructions.push(receiver);
+                    let method = self.add_literal(Value::string(method.clone()));
+                    let mut method_element = Instruction::new(OpCode::AddArrayElement);
+                    method_element.op1 = callback;
+                    method_element.op1_type = OpType::Tmp;
+                    method_element.op2 = method;
+                    method_element.op2_type = OpType::Const;
+                    self.instructions.push(method_element);
+                    let (arguments, arguments_type) =
+                        self.compile_mixed_unpacked_call_arguments(args);
+                    let mut call = Instruction::new(OpCode::CallUserFuncArray);
+                    call.op1 = callback;
+                    call.op1_type = OpType::Tmp;
+                    call.op2 = arguments;
+                    call.op2_type = arguments_type;
+                    call.result = tmp;
+                    call.result_type = OpType::Tmp;
+                    call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
+                    self.instructions.push(call);
+                    if let Some(index) = nullsafe_patch {
+                        self.instructions[index].op2 = self.instructions.len() as u16;
+                    }
+                    return (tmp, OpType::Tmp);
+                }
                 if args.iter().any(CallArg::contains_yield) {
                     // InitMethodCall owns a pending VM call frame. A yield in
                     // an argument suspends before SendVal/DoFcall and cannot
@@ -5049,6 +5133,41 @@ impl Compiler {
                     } else {
                         self.resolve_name(class_name)
                     };
+                if generic_args.is_empty()
+                    && !matches!(pseudo_class.as_str(), "self" | "parent" | "static")
+                    && args
+                        .iter()
+                        .any(|argument| matches!(argument, CallArg::Unpack(_)))
+                {
+                    let callback = self.alloc_tmp();
+                    let mut init = Instruction::new(OpCode::InitArray);
+                    init.result = callback;
+                    init.result_type = OpType::Tmp;
+                    init.extended_value = 2;
+                    self.instructions.push(init);
+                    for value in [resolved_class.clone(), method.clone()] {
+                        let value = self.add_literal(Value::string(value));
+                        let mut add = Instruction::new(OpCode::AddArrayElement);
+                        add.op1 = callback;
+                        add.op1_type = OpType::Tmp;
+                        add.op2 = value;
+                        add.op2_type = OpType::Const;
+                        self.instructions.push(add);
+                    }
+                    let (arguments, arguments_type) =
+                        self.compile_mixed_unpacked_call_arguments(args);
+                    let tmp = self.alloc_tmp();
+                    let mut call = Instruction::new(OpCode::CallUserFuncArray);
+                    call.op1 = callback;
+                    call.op1_type = OpType::Tmp;
+                    call.op2 = arguments;
+                    call.op2_type = arguments_type;
+                    call.result = tmp;
+                    call.result_type = OpType::Tmp;
+                    call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
+                    self.instructions.push(call);
+                    return (tmp, OpType::Tmp);
+                }
                 let generic_class = match pseudo_class.as_str() {
                     "self" if !self.dynamic_static_scope => self
                         .lexical_static_class
@@ -5202,12 +5321,11 @@ impl Compiler {
                 // Compile the callable expression (e.g. $var, $arr[0])
                 let (callable_op, callable_type) = self.compile_expr(callable);
                 if generic_args.is_empty()
-                    && let [CallArg::Unpack(array)] = args.as_slice()
+                    && args
+                        .iter()
+                        .any(|argument| matches!(argument, CallArg::Unpack(_)))
                 {
-                    // A sole unpack is exactly call_user_func_array's runtime
-                    // protocol: the array determines positional/named arity,
-                    // so no undersized pending frame is created first.
-                    let (array_op, array_type) = self.compile_expr(array);
+                    let (array_op, array_type) = self.compile_mixed_unpacked_call_arguments(args);
                     let tmp = self.alloc_tmp();
                     let mut call = Instruction::new(OpCode::CallUserFuncArray);
                     call.op1 = callable_op;
@@ -5216,6 +5334,7 @@ impl Compiler {
                     call.op2_type = array_type;
                     call.result = tmp;
                     call.result_type = OpType::Tmp;
+                    call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
                     self.instructions.push(call);
                     return (tmp, OpType::Tmp);
                 }
@@ -5947,7 +6066,7 @@ impl Compiler {
             match argument {
                 CallArg::Unpack(expression) => {
                     let (value, value_type) = self.compile_expr(expression);
-                    let mut unpack = Instruction::new(OpCode::AddArrayUnpack);
+                    let mut unpack = Instruction::new(OpCode::AddCallUnpack);
                     unpack.op1 = arguments;
                     unpack.op1_type = OpType::Tmp;
                     unpack.op2 = value;
@@ -5956,7 +6075,7 @@ impl Compiler {
                 }
                 CallArg::Positional(expression) => {
                     let (value, value_type) = self.compile_expr(expression);
-                    let mut add = Instruction::new(OpCode::AddArrayElement);
+                    let mut add = Instruction::new(OpCode::AddCallArgument);
                     add.op1 = arguments;
                     add.op1_type = OpType::Tmp;
                     add.op2 = value;
@@ -5966,7 +6085,7 @@ impl Compiler {
                 CallArg::Named { name, value } => {
                     let (value, value_type) = self.compile_expr(value);
                     let key = self.add_literal(Value::string(name.clone()));
-                    let mut add = Instruction::new(OpCode::AddArrayElement);
+                    let mut add = Instruction::new(OpCode::AddCallArgument);
                     add.op1 = arguments;
                     add.op1_type = OpType::Tmp;
                     add.op2 = value;

@@ -133,6 +133,7 @@ impl Parser {
     fn parse_call_args(&mut self) -> Result<Vec<CallArg>, String> {
         let mut args: Vec<CallArg> = Vec::new();
         let mut seen_named = false;
+        let mut seen_unpack = false;
         if self.peek() != Token::RParen {
             loop {
                 // Check for named argument: identifier-like token followed by Colon
@@ -154,14 +155,18 @@ impl Parser {
                         }
                     }
                 }
-                // Positional argument
-                if seen_named {
-                    return Err("Cannot use positional argument after named argument".to_string());
-                }
+                // Argument unpacking has its own ordering rule. It must be
+                // checked before the generic positional-after-named branch.
                 if self.peek() == Token::DotDotDot {
+                    if seen_named {
+                        return Err(
+                            "Cannot use argument unpacking after named arguments".to_string()
+                        );
+                    }
                     self.advance();
                     let expr = self.parse_expr()?;
                     args.push(CallArg::Unpack(expr));
+                    seen_unpack = true;
                     if self.peek() == Token::Comma {
                         self.advance();
                         if self.peek() == Token::RParen {
@@ -170,6 +175,15 @@ impl Parser {
                         continue;
                     }
                     break;
+                }
+                // Positional argument
+                if seen_named {
+                    return Err("Cannot use positional argument after named argument".to_string());
+                }
+                if seen_unpack {
+                    return Err(
+                        "Cannot use positional argument after argument unpacking".to_string()
+                    );
                 }
                 let expr = self.parse_positional_call_argument()?;
                 args.push(CallArg::Positional(expr));

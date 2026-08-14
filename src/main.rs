@@ -137,6 +137,14 @@ fn main() {
         .with_source_name(source_file.clone())
         .parse()
         .unwrap_or_else(|e| {
+            if matches!(
+                e.as_str(),
+                "Cannot use positional argument after argument unpacking"
+                    | "Cannot use argument unpacking after named arguments"
+            ) {
+                eprintln!("Fatal error: {} in {} on line 1", e, source_file);
+                std::process::exit(255);
+            }
             eprintln!("Parse error: {}", e);
             std::process::exit(1);
         });

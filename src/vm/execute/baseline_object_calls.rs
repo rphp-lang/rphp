@@ -415,6 +415,47 @@ fn op_new_obj_resolved<'a>(
     };
     #[cfg(not(feature = "php-generics-reified"))]
     let reified_construction = false;
+    if opline._pad & NEW_FLAG_UNPACKED_ARGUMENTS != 0 {
+        if !func_ptr.is_null() {
+            // SAFETY: result_ptr is the just-initialized object result slot and
+            // op2 is the compiler-owned argument list consumed synchronously
+            // before either operand or the active frame can be released.
+            let (object, arguments) = unsafe {
+                (
+                    &*result_ptr,
+                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+                )
+            };
+            let resolved = crate::stdlib::ResolvedCallback {
+                func_ptr,
+                prepend_args: vec![object.clone()],
+                use_vars: Vec::new(),
+                called_scope_class_id: class_id,
+                bound_this: None,
+            };
+            let source_file = if op_array.source_file.is_empty() {
+                op_array.name.as_str()
+            } else {
+                op_array.source_file.as_str()
+            };
+            let _ = crate::stdlib::invoke_resolved_source_unpacked_call(
+                resolved,
+                arguments,
+                eg,
+                source_file,
+                op_array.strict_types,
+            )?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        }
+        return Ok(ColdResult::Done);
+    }
     if !func_ptr.is_null() {
         let common = unsafe { &*func_ptr };
         if common.fn_type == FunctionType::User {

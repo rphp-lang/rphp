@@ -73,6 +73,10 @@ pub enum OpCode {
     ArrayPushOp = 74,     // Append: op1[] = op2
     UnsetDim = 75,        // Remove key op2 from array op1
     AddArrayUnpack = 76,  // Merge op2 array into op1 literal, reindexing integer keys
+    /// Append one ordinary source argument to a compiler-owned unpack call list.
+    AddCallArgument = 77,
+    /// Expand one array or Traversable into a compiler-owned unpack call list.
+    AddCallUnpack = 78,
 
     // Foreach
     ForeachInit = 80, // Copy array op1 to result TMP, set position to 0; jump op2 if empty

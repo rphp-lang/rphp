@@ -89,6 +89,8 @@ pub(super) fn loop_miss_reason(
             OpCode::InitArray
             | OpCode::AddArrayElement
             | OpCode::AddArrayUnpack
+            | OpCode::AddCallArgument
+            | OpCode::AddCallUnpack
             | OpCode::FetchDimR
             | OpCode::AssignDim
             | OpCode::ArrayPushOp

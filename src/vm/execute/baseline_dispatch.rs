@@ -2654,6 +2654,36 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::AddCallArgument => {
+                match op_add_call_argument(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
+            OpCode::AddCallUnpack => {
+                match op_add_call_unpack(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             OpCode::FetchDimR => {
                 #[cfg(feature = "quick-loops")]
                 if opline._pad & FETCH_DIM_ISSET == 0

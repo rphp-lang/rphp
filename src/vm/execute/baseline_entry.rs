@@ -230,6 +230,8 @@ where
         args.cloned(),
         0,
         None,
+        0,
+        None,
     )?;
     Ok(return_value)
 }
@@ -244,6 +246,7 @@ pub(crate) fn call_function_iter_with_context<'a, I>(
     args: I,
     called_scope_class_id: u32,
     bound_this: Option<&Value>,
+    capture_count: usize,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = &'a Value>,
@@ -255,6 +258,8 @@ where
         args.cloned(),
         called_scope_class_id,
         bound_this.cloned(),
+        capture_count,
+        None,
     )?;
     Ok(return_value)
 }
@@ -272,7 +277,7 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, _) =
-        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args, 0, None)?;
+        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args, 0, None, 0, None)?;
     Ok(return_value)
 }
 
@@ -284,6 +289,7 @@ pub(crate) fn call_function_owned_iter_with_context<I>(
     args: I,
     called_scope_class_id: u32,
     bound_this: Option<Value>,
+    capture_count: usize,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = Value>,
@@ -295,6 +301,34 @@ where
         args,
         called_scope_class_id,
         bound_this,
+        capture_count,
+        None,
+    )?;
+    Ok(return_value)
+}
+
+pub(crate) fn call_function_owned_iter_with_context_and_named<I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    bound_this: Option<Value>,
+    capture_count: usize,
+    named_variadic: Vec<(String, Value)>,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        called_scope_class_id,
+        bound_this,
+        capture_count,
+        Some(named_variadic),
     )?;
     Ok(return_value)
 }
@@ -313,7 +347,7 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, arg0) =
-        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args, 0, None)?;
+        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args, 0, None, 0, None)?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
 
@@ -336,6 +370,8 @@ where
         args,
         called_scope_class_id,
         bound_this,
+        0,
+        None,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
@@ -349,15 +385,30 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     mut args: I,
     called_scope_class_id: u32,
     bound_this: Option<Value>,
+    capture_count: usize,
+    named_variadic: Option<Vec<(String, Value)>>,
 ) -> Result<(Value, Option<Value>), VmError>
 where
     I: Iterator<Item = Value>,
 {
     let saved_execute_data = eg.current_execute_data.get();
+    // SAFETY: every detached-call entry receives a resolved, live function
+    // descriptor which remains registered for the synchronous frame lifetime.
+    let signature = unsafe { &(*func_ptr).sig };
+    let this_offset = signature.this_offset as usize;
+    let positional_public_num_args = num_args.saturating_sub(this_offset + capture_count);
+    let public_num_args = positional_public_num_args
+        .saturating_add(named_variadic.as_ref().map_or(0, Vec::len));
+    let capture_destination = signature.parameter_cv_count() as usize;
+    let storage_num_args = if capture_count == 0 {
+        num_args
+    } else {
+        num_args.max(capture_destination + capture_count)
+    };
     let frame = eg.vm_stack.push_call_frame(
         func_ptr,
-        num_args as u32,
-        num_args as u32,
+        storage_num_args as u32,
+        public_num_args as u32,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
     );
@@ -390,15 +441,44 @@ where
         // materializes the variadic bucket. Internal handlers use the same ABI in
         // both entry modes, so pack their trailing public arguments here before
         // dispatching the handler.
-        if (*func_ptr).fn_type == FunctionType::Internal && (*func_ptr).sig.is_variadic {
+        let saved_captures = (capture_count != 0).then(|| {
+            let start = this_offset + positional_public_num_args;
+            (0..capture_count)
+                .map(|index| (*frame).cv((start + index) as u32).clone_closure_capture())
+                .collect::<Vec<_>>()
+        });
+
+        if (*func_ptr).sig.is_variadic {
             let sig = &(*func_ptr).sig;
             let fixed = sig.public_arity() as usize;
-            let mut variadic = PhpArray::with_packed_capacity(num_args.saturating_sub(fixed));
-            for index in fixed..num_args {
-                variadic.push((*frame).cv(index as u32).clone());
+            let extra_count = positional_public_num_args.saturating_sub(fixed);
+            let mut variadic = PhpArray::with_packed_capacity(extra_count);
+            let by_reference = sig.is_param_by_ref(fixed as u32);
+            for index in 0..extra_count {
+                let argument = (*frame).cv((this_offset + fixed + index) as u32);
+                let value = if by_reference && argument.is_owned_reference() {
+                    argument.clone_owned_reference_alias()
+                } else if by_reference && argument.is_reference() {
+                    Value::reference(argument.as_ref_ptr())
+                } else {
+                    argument.clone()
+                };
+                variadic.push(value);
+            }
+            if let Some(named) = named_variadic {
+                for (name, value) in named {
+                    variadic.set_str(&name, value);
+                }
             }
             let destination = (*frame).cv_mut(sig.variadic_cv_index) as *mut Value;
             frame_slot_set(frame, destination, Value::array(variadic));
+        }
+
+        if let Some(captures) = saved_captures {
+            for (index, capture) in captures.into_iter().enumerate() {
+                let destination = (*frame).cv_mut((capture_destination + index) as u32);
+                frame_slot_set(frame, destination as *mut Value, capture);
+            }
         }
 
         // Generator functions invoked through this detached callback entry do
@@ -534,6 +614,8 @@ where
         func_ptr,
         num_args,
         args.cloned(),
+        0,
+        None,
         0,
         None,
     )?;

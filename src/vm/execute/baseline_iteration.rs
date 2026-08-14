@@ -15,6 +15,392 @@ fn assign_foreach_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
     }
 }
 
+fn call_unpack_throw<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    class: &str,
+    message: &str,
+) -> ColdResult<'a> {
+    let error = make_error_value(class, message);
+    match throw_in_frame(eg, frame, error) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    }
+}
+
+fn call_unpack_error<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    message: &str,
+) -> ColdResult<'a> {
+    call_unpack_throw(eg, frame, "Error", message)
+}
+
+fn append_call_unpack_entry(
+    target: &mut PhpArray,
+    key: ArrayKey,
+    value: Value,
+    seen_named_in_source: &mut bool,
+) -> Result<(), String> {
+    match key {
+        ArrayKey::Int(_) => {
+            if *seen_named_in_source {
+                return Err(
+                    "Cannot use positional argument after named argument during unpacking"
+                        .to_string(),
+                );
+            }
+            target.push(value);
+        }
+        ArrayKey::String(name) => {
+            *seen_named_in_source = true;
+            if target.get_str(&name).is_some() {
+                return Err(format!(
+                    "Named parameter ${name} overwrites previous argument"
+                ));
+            }
+            target.set_str(&name, value);
+        }
+    }
+    Ok(())
+}
+
+fn traversable_unpack_key(value: &Value) -> Result<ArrayKey, String> {
+    let value = value.dereferenced();
+    if let Some(key) = value.as_long() {
+        Ok(ArrayKey::Int(key))
+    } else if let Some(key) = value.as_str() {
+        Ok(ArrayKey::String(key.to_string()))
+    } else {
+        Err("Keys must be of type int|string during argument unpacking".to_string())
+    }
+}
+
+fn collect_generator_call_unpack(
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Vec<(ArrayKey, Value)>, VmError> {
+    let generator = value
+        .as_object_rc()
+        .and_then(|object| object.borrow().generator.clone())
+        .ok_or_else(|| VmError::Fatal("Generator object has no generator state".to_string()))?;
+    let mut entries = Vec::new();
+
+    loop {
+        let state = generator.borrow().state;
+        if state == crate::vm::generator::GeneratorState::Created
+            || state == crate::vm::generator::GeneratorState::Suspended
+        {
+            match resume_generator(eg, &generator, Value::null())? {
+                GeneratorResumeOutcome::Advanced => {}
+                GeneratorResumeOutcome::Threw(exception) => {
+                    eg.exception = Some(exception);
+                    return Ok(entries);
+                }
+            }
+        }
+
+        let data = generator.borrow();
+        if data.state == crate::vm::generator::GeneratorState::Completed {
+            break;
+        }
+        let key = match traversable_unpack_key(&data.key) {
+            Ok(key) => key,
+            Err(message) => {
+                eg.exception = Some(make_error_value("Error", &message));
+                return Ok(entries);
+            }
+        };
+        entries.push((
+            key,
+            Value::traversable_unpack_value(data.value.dereferenced().clone()),
+        ));
+    }
+    Ok(entries)
+}
+
+fn collect_call_unpack_traversable(
+    eg: &mut ExecutorGlobals,
+    source: &Value,
+) -> Result<Option<Vec<(ArrayKey, Value)>>, VmError> {
+    let Some(object) = source.as_object() else {
+        return Ok(None);
+    };
+    let mut class_name = object.class_name.to_string();
+    drop(object);
+    if !eg.class_is_a(&class_name, "Traversable") {
+        return Ok(None);
+    }
+
+    let mut iterable = source.clone();
+    let mut aggregate_identities = Vec::new();
+    while eg.class_is_a(&class_name, "IteratorAggregate") {
+        let identity = iterable.object_identity().unwrap_or(0);
+        if aggregate_identities.contains(&identity) {
+            eg.exception = Some(make_error_value(
+                "Exception",
+                &format!(
+                    "Objects returned by {class_name}::getIterator() must be traversable or implement interface Iterator"
+                ),
+            ));
+            return Ok(Some(Vec::new()));
+        }
+        aggregate_identities.push(identity);
+        let Some(next) = crate::stdlib::call_object_protocol_method(
+            eg,
+            &iterable,
+            "IteratorAggregate",
+            "getIterator",
+            &[],
+        )? else {
+            return Err(VmError::Fatal(format!(
+                "Call to undefined method {class_name}::getIterator()"
+            )));
+        };
+        if eg.exception.is_some() {
+            return Ok(Some(Vec::new()));
+        }
+        iterable = next;
+        let Some(object) = iterable.as_object() else {
+            eg.exception = Some(make_error_value(
+                "Exception",
+                &format!(
+                    "Objects returned by {class_name}::getIterator() must be traversable or implement interface Iterator"
+                ),
+            ));
+            return Ok(Some(Vec::new()));
+        };
+        class_name = object.class_name.to_string();
+        drop(object);
+    }
+
+    if class_name == "Generator" {
+        return collect_generator_call_unpack(eg, &iterable).map(Some);
+    }
+
+    if let Some(values) = iterable.as_object().and_then(|object| {
+        matches!(
+            object.class_name.as_ref(),
+            "ArrayIterator" | "ArrayObject" | "SplObjectStorage" | "SplPriorityQueue"
+        )
+        .then(|| object.get_property("__rphp_iterator_values").cloned())
+        .flatten()
+    }) && let Some(values) = values.as_array()
+    {
+        return Ok(Some(
+            values
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key,
+                        Value::traversable_unpack_value(value.dereferenced().clone()),
+                    )
+                })
+                .collect(),
+        ));
+    }
+
+    if !eg.class_is_a(&class_name, "Iterator") {
+        return Ok(None);
+    }
+    let _ = crate::stdlib::call_object_protocol_method(
+        eg,
+        &iterable,
+        "Iterator",
+        "rewind",
+        &[],
+    )?;
+    if eg.exception.is_some() {
+        return Ok(Some(Vec::new()));
+    }
+    let mut entries = Vec::new();
+    loop {
+        let valid = crate::stdlib::call_object_protocol_method(
+            eg,
+            &iterable,
+            "Iterator",
+            "valid",
+            &[],
+        )?
+        .unwrap_or_else(|| Value::bool(false));
+        if eg.exception.is_some() || !valid.is_truthy() {
+            break;
+        }
+        let key = crate::stdlib::call_object_protocol_method(
+            eg,
+            &iterable,
+            "Iterator",
+            "key",
+            &[],
+        )?
+        .unwrap_or_else(Value::null);
+        let value = crate::stdlib::call_object_protocol_method(
+            eg,
+            &iterable,
+            "Iterator",
+            "current",
+            &[],
+        )?
+        .unwrap_or_else(Value::null);
+        if eg.exception.is_some() {
+            break;
+        }
+        let key = match traversable_unpack_key(&key) {
+            Ok(key) => key,
+            Err(message) => {
+                eg.exception = Some(make_error_value("Error", &message));
+                break;
+            }
+        };
+        entries.push((key, Value::traversable_unpack_value(value)));
+        let _ = crate::stdlib::call_object_protocol_method(
+            eg,
+            &iterable,
+            "Iterator",
+            "next",
+            &[],
+        )?;
+        if eg.exception.is_some() {
+            break;
+        }
+    }
+    Ok(Some(entries))
+}
+
+#[inline(never)]
+fn op_add_call_argument<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: every operand is compiler-allocated in this live frame. CV
+    // promotion writes through the same tracked slot, and the returned target
+    // borrow is consumed before the opcode advances the frame.
+    let (value, target) = unsafe {
+        let value = if opline.op2_type == OpType::Cv {
+            let source = (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize);
+            materialize_reference_alias(frame, source)
+        } else {
+            (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone()
+        };
+        let target = &mut *(*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+        (value, target)
+    };
+    let key = if opline.result_type == OpType::Const {
+        op_array
+            .literals
+            .get(opline.result as usize)
+            .and_then(Value::as_str)
+            .map(|key| ArrayKey::String(key.to_string()))
+            .unwrap_or(ArrayKey::Int(0))
+    } else {
+        ArrayKey::Int(0)
+    };
+    let target = target
+        .as_array_mut()
+        .ok_or_else(|| VmError::Fatal("AddCallArgument target is not an array".to_string()))?;
+    if let ArrayKey::String(name) = key {
+        if target.get_str(&name).is_some() {
+            return Ok(call_unpack_error(
+                eg,
+                frame,
+                &format!("Named parameter ${name} overwrites previous argument"),
+            ));
+        }
+        target.set_str(&name, value);
+    } else {
+        target.push(value);
+    }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_add_call_unpack<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let collect_source = |eg: &mut ExecutorGlobals,
+                          source: &mut Value|
+     -> Result<Option<Vec<(ArrayKey, Value)>>, VmError> {
+        if let Some(source) = source.as_array_mut() {
+            let keys: Vec<_> = source.iter().map(|(key, _)| key).collect();
+            return keys
+                .into_iter()
+                .enumerate()
+                .map(|(position, key)| {
+                    source
+                        .argument_unpack_reference_at(position)
+                        .map(|value| (key, value))
+                        .ok_or_else(|| {
+                            VmError::Fatal(
+                                "Argument unpack source changed during iteration".to_string(),
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some);
+        }
+        collect_call_unpack_traversable(eg, source)
+    };
+
+    // SAFETY: op2 is a compiler-allocated live operand. Non-constant operands
+    // are mutable for the duration of this opcode, and any followed reference
+    // target is owned by a still-live frame or reference cell.
+    let entries = unsafe {
+        if opline.op2_type == OpType::Const {
+            let mut source =
+                (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone();
+            collect_source(eg, &mut source)?
+        } else {
+            let source_ptr = (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
+            let source_ptr = if (*source_ptr).is_reference() {
+                (*source_ptr).as_ref_ptr()
+            } else {
+                source_ptr
+            };
+            collect_source(eg, &mut *source_ptr)?
+        }
+    };
+
+    let entries = match entries {
+        Some(entries) => entries,
+        None => {
+            return Ok(call_unpack_throw(
+                eg,
+                frame,
+                "TypeError",
+                "Only arrays and Traversables can be unpacked",
+            ));
+        }
+    };
+    if let Some(exception) = eg.exception.take() {
+        return Ok(match throw_in_frame(eg, frame, exception) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
+
+    // SAFETY: op1 is the compiler-owned mutable argument-list temporary and
+    // remains live until the later call opcode consumes it.
+    let target = unsafe { &mut *(*frame).get_op_mut(opline.op1 as u32, opline.op1_type) }
+    .as_array_mut()
+    .ok_or_else(|| VmError::Fatal("AddCallUnpack target is not an array".to_string()))?;
+    let mut seen_named = false;
+    for (key, value) in entries {
+        if let Err(message) = append_call_unpack_entry(target, key, value, &mut seen_named) {
+            return Ok(call_unpack_error(eg, frame, &message));
+        }
+    }
+    Ok(ColdResult::Done)
+}
+
 #[inline]
 fn bind_foreach_value_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
     // SAFETY: `cv` is compiler-allocated in the active frame. A by-reference
@@ -23,6 +409,19 @@ fn bind_foreach_value_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
     unsafe {
         let slot = (*frame).cv_mut(cv);
         frame_slot_set(frame, slot, value);
+    }
+}
+
+#[inline]
+fn clone_foreach_value<const BY_REFERENCE_LOOP: bool>(value: &Value) -> Value {
+    if BY_REFERENCE_LOOP && value.is_owned_reference() {
+        value.clone_owned_reference_alias()
+    } else if BY_REFERENCE_LOOP && value.is_reference() {
+        // SAFETY: the detached foreach array retains the borrowed target for
+        // the lifetime of the loop-bound alias.
+        Value::reference(unsafe { value.as_ref_ptr() })
+    } else {
+        value.clone()
     }
 }
 
@@ -255,7 +654,11 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         if gen_data.state != crate::vm::generator::GeneratorState::Completed {
             // Write current value to value_cv
             if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
-                bind_foreach_value_cv(frame, val_cv, gen_data.value.clone());
+                bind_foreach_value_cv(
+                    frame,
+                    val_cv,
+                    clone_foreach_value::<BY_REFERENCE_LOOP>(&gen_data.value),
+                );
             } else {
                 assign_foreach_cv(frame, val_cv, gen_data.value.clone());
             }
@@ -289,7 +692,11 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     // Need both key and value — use get_at()
                     let (val, key) = arr.get_at(pos).unwrap();
                     if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
-                        bind_foreach_value_cv(frame, val_cv, val.clone());
+                        bind_foreach_value_cv(
+                            frame,
+                            val_cv,
+                            clone_foreach_value::<BY_REFERENCE_LOOP>(val),
+                        );
                     } else {
                         assign_foreach_cv(frame, val_cv, val.clone());
                     }
@@ -303,7 +710,11 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     // Only value needed — use get_value_at() (avoids key clone)
                     let val = arr.get_value_at(pos).unwrap();
                     if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
-                        bind_foreach_value_cv(frame, val_cv, val.clone());
+                        bind_foreach_value_cv(
+                            frame,
+                            val_cv,
+                            clone_foreach_value::<BY_REFERENCE_LOOP>(val),
+                        );
                     } else {
                         assign_foreach_cv(frame, val_cv, val.clone());
                     }

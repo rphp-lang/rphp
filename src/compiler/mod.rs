@@ -1190,6 +1190,8 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             // observe the caller and detach according to PHP COW semantics.
             OpCode::AddArrayElement
             | OpCode::AddArrayUnpack
+            | OpCode::AddCallArgument
+            | OpCode::AddCallUnpack
             | OpCode::AssignDim
             | OpCode::ArrayPushOp
             | OpCode::UnsetDim

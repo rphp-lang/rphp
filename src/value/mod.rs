@@ -2984,6 +2984,39 @@ impl PhpArray {
         true
     }
 
+    /// Promote one array entry to a stable PHP reference cell and return a new
+    /// alias for a source-level argument-unpack call. Array copy-on-write is
+    /// resolved by `Value::as_array_mut()` before this method is entered.
+    pub(crate) fn argument_unpack_reference_at(&mut self, pos: usize) -> Option<Value> {
+        let slot = match &mut self.storage {
+            ArrayStorage::Packed(values) => values.get_mut(pos),
+            ArrayStorage::SmallHash(small) => small
+                .entries
+                .get_mut(pos)
+                .and_then(Option::as_mut)
+                .map(|entry| &mut entry.1),
+            ArrayStorage::LinearHash(linear) => {
+                linear.entries.get_mut(pos).map(|entry| &mut entry.1)
+            }
+            ArrayStorage::Hash { entries, .. } => entries.get_mut(pos).map(|entry| &mut entry.1),
+        }?;
+
+        if slot.is_owned_reference() {
+            return Some(slot.clone_owned_reference_alias());
+        }
+        if slot.is_reference() {
+            // SAFETY: the array retains the borrowed reference for at least as
+            // long as the returned alias is consumed by the synchronous call.
+            return Some(Value::reference(unsafe { slot.as_ref_ptr() }));
+        }
+
+        let value = std::mem::replace(slot, Value::undef());
+        let reference = Value::owned_reference(value);
+        let alias = reference.clone_owned_reference_alias();
+        *slot = reference;
+        Some(alias)
+    }
+
     /// Iterate over (key, &value) pairs — works for both packed and hash modes.
     /// No transition, no allocation for packed arrays.
     /// This is the preferred read-only iteration method.
@@ -4552,6 +4585,23 @@ impl Value {
             type_info: ValueType::Reference as u32 | Self::OWNED_REFERENCE_FLAG,
             _not_send: PhantomData,
         }
+    }
+
+    const TRAVERSABLE_UNPACK_VALUE_FLAG: u32 = 1 << 29;
+
+    /// Retain the origin of a Traversable-expanded value until call signature
+    /// resolution. By-value parameters dereference it like an ordinary PHP
+    /// reference; by-reference parameters use the marker for PHP's warning and
+    /// deliberately receive a detached value.
+    pub(crate) fn traversable_unpack_value(value: Value) -> Self {
+        let mut reference = Self::owned_reference(value);
+        reference.type_info |= Self::TRAVERSABLE_UNPACK_VALUE_FLAG;
+        reference
+    }
+
+    #[inline]
+    pub(crate) fn is_traversable_unpack_value(&self) -> bool {
+        self.is_owned_reference() && self.type_info & Self::TRAVERSABLE_UNPACK_VALUE_FLAG != 0
     }
 
     #[inline]

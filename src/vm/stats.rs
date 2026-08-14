@@ -640,6 +640,8 @@ mod inner {
             74 => Some("ArrayPushOp"),
             75 => Some("UnsetDim"),
             76 => Some("AddArrayUnpack"),
+            77 => Some("AddCallArgument"),
+            78 => Some("AddCallUnpack"),
             80 => Some("ForeachInit"),
             81 => Some("ForeachNext"),
             82 => Some("ForeachNextRef"),

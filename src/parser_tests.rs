@@ -199,6 +199,29 @@ fn test_parse_first_class_callable_and_argument_unpack() {
 }
 
 #[test]
+fn positional_source_argument_after_unpack_is_a_compile_time_error() {
+    let tokens = Lexer::new("<?php dispatch(...$batch, 7);")
+        .tokenize()
+        .unwrap();
+    let error = Parser::new(tokens).parse().unwrap_err();
+
+    assert_eq!(
+        error,
+        "Cannot use positional argument after argument unpacking"
+    );
+}
+
+#[test]
+fn source_unpack_after_named_argument_is_a_compile_time_error() {
+    let tokens = Lexer::new("<?php dispatch(mode: 'safe', ...$batch);")
+        .tokenize()
+        .unwrap();
+    let error = Parser::new(tokens).parse().unwrap_err();
+
+    assert_eq!(error, "Cannot use argument unpacking after named arguments");
+}
+
+#[test]
 fn test_parse_named_first_class_function_callable() {
     let tokens = Lexer::new("<?php namespace App; $check = is_int(...);")
         .tokenize()

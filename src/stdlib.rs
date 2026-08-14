@@ -24,7 +24,8 @@ use crate::vm::execute::{
     ScalarLongSortOrder, VmError, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
-    prepare_scalar_long_callback, try_execute_scalar_long_callback, values_identical,
+    call_function_owned_iter_with_context_and_named, check_type_hint, prepare_scalar_long_callback,
+    try_execute_scalar_long_callback, values_identical,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -479,7 +480,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("array_rand", fn_array_rand, 1, 1, "array");
     reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
-    reg!("array_map", fn_array_map, 2, 2, "callback", "array");
+    reg_var!("array_map", fn_array_map, 2, "callback", "array");
     reg!("array_filter", fn_array_filter, 2, 1, "array", "callback");
     // compact() requires caller scope access (not yet implemented) — intentionally not registered
 
@@ -3591,45 +3592,84 @@ fn fn_shuffle(
     }
 }
 
-/// array_map($callback, $array) — apply callback to each element, return new array
+/// array_map($callback, $array, ...$arrays) — map aligned array rows.
 fn fn_array_map(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
-    let arr_val = arg!(ed, 1);
-    let resolved = match resolve_callback_at_callsite(callback, eg, ed) {
-        Some(resolved) => resolved,
-        None => {
-            let description = callback.echo_to_string();
-            eg.exception = Some(crate::value::make_error_value(
-                "TypeError",
-                &format!(
-                    "array_map(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found",
-                    description
-                ),
-            ));
-            return Ok(());
-        }
+    let first = arg!(ed, 1);
+    let Some(first_array) = first.as_array() else {
+        ret!(rv, Value::null());
     };
-    if let Some(arr) = arr_val.as_array() {
-        let mut result = if arr.is_packed() {
-            PhpArray::with_packed_capacity(arr.len())
-        } else {
-            PhpArray::with_deferred_hash_capacity(arr.len())
-        };
-        for (key, val) in arr.iter() {
-            let mapped = call_resolved_with_values(eg, &resolved, std::slice::from_ref(val))?;
-            if eg.exception.is_some() {
+    let mut arrays = vec![first_array];
+    if let Some(extra) = arg_opt!(ed, 2).and_then(Value::as_array) {
+        for value in extra.values() {
+            let Some(array) = value.dereferenced().as_array() else {
+                ret!(rv, Value::null());
+            };
+            arrays.push(array);
+        }
+    }
+    let length = arrays.iter().map(|array| array.len()).max().unwrap_or(0);
+    let resolved = if callback.value_type() == ValueType::Null {
+        None
+    } else {
+        match resolve_callback_at_callsite(callback, eg, ed) {
+            Some(resolved) => Some(resolved),
+            None => {
+                let description = callback.echo_to_string();
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    &format!(
+                        "array_map(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found",
+                        description
+                    ),
+                ));
                 return Ok(());
             }
-            result.set(key, mapped);
         }
-        ret!(rv, Value::array(result));
+    };
+    let mut result = if arrays.len() == 1 && first_array.is_packed() {
+        PhpArray::with_packed_capacity(length)
+    } else if arrays.len() == 1 {
+        PhpArray::with_deferred_hash_capacity(length)
     } else {
-        ret!(rv, Value::null());
+        PhpArray::with_packed_capacity(length)
+    };
+    for position in 0..length {
+        let row = arrays
+            .iter()
+            .map(|array| {
+                array
+                    .get_value_at(position)
+                    .map(|value| value.dereferenced().clone())
+                    .unwrap_or_else(Value::null)
+            })
+            .collect::<Vec<_>>();
+        let mapped = if let Some(resolved) = resolved.as_ref() {
+            call_resolved_with_values(eg, resolved, &row)?
+        } else if arrays.len() == 1 {
+            row.into_iter().next().unwrap_or_else(Value::null)
+        } else {
+            let mut tuple = PhpArray::with_packed_capacity(row.len());
+            for value in row {
+                tuple.push(value);
+            }
+            Value::array(tuple)
+        };
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        if arrays.len() == 1 {
+            let (_, key) = first_array.get_at(position).unwrap();
+            result.set(key, mapped);
+        } else {
+            result.push(mapped);
+        }
     }
+    ret!(rv, Value::array(result));
 }
 
 /// array_filter($array [, $callback]) — filter elements by callback (or truthiness)
@@ -6394,6 +6434,9 @@ fn var_dump_value_inner(
     eg: &ExecutorGlobals,
     visited_objects: &mut std::collections::HashSet<usize>,
 ) -> String {
+    if val.is_reference() {
+        return var_dump_value_inner(val.dereferenced(), indent, eg, visited_objects);
+    }
     let prefix = "  ".repeat(indent);
     match val.value_type() {
         ValueType::Null => format!("{}NULL\n", prefix),
@@ -7647,7 +7690,7 @@ pub(super) fn call_resolved_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    if !resolved.has_context() {
+    if !resolved.has_context() && resolved.use_vars.is_empty() {
         call_function_iter(eg, resolved.func_ptr, num_args, args)
     } else {
         call_function_iter_with_context(
@@ -7657,6 +7700,7 @@ where
             args,
             resolved.called_scope_class_id,
             resolved.bound_this.as_ref(),
+            resolved.use_vars.len(),
         )
     }
 }
@@ -7671,7 +7715,7 @@ pub(super) fn call_resolved_owned_iter<I>(
 where
     I: Iterator<Item = Value>,
 {
-    if !resolved.has_context() {
+    if !resolved.has_context() && resolved.use_vars.is_empty() {
         call_function_owned_iter(eg, resolved.func_ptr, num_args, args)
     } else {
         call_function_owned_iter_with_context(
@@ -7681,8 +7725,31 @@ where
             args,
             resolved.called_scope_class_id,
             resolved.bound_this.clone(),
+            resolved.use_vars.len(),
         )
     }
+}
+
+fn call_resolved_owned_iter_with_named<I>(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    num_args: usize,
+    args: I,
+    named_variadic: Vec<(String, Value)>,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    call_function_owned_iter_with_context_and_named(
+        eg,
+        resolved.func_ptr,
+        num_args,
+        args,
+        resolved.called_scope_class_id,
+        resolved.bound_this.clone(),
+        resolved.use_vars.len(),
+        named_variadic,
+    )
 }
 
 #[inline]
@@ -7834,6 +7901,314 @@ fn call_resolved_with_php_array(
             .chain(normalized)
             .chain(resolved.use_vars.iter().cloned()),
     )
+}
+
+fn source_unpack_function_name<'a>(
+    eg: &'a ExecutorGlobals,
+    function: *const FunctionCommon,
+) -> &'a str {
+    eg.function_table
+        .iter()
+        .find_map(|(name, pointer)| std::ptr::eq(*pointer, function).then_some(name.as_str()))
+        .unwrap_or("internal function")
+}
+
+fn source_unpack_argument(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    function_name: &str,
+    public_index: usize,
+    value: &Value,
+    source_file: &str,
+    strict_types: bool,
+) -> Option<Value> {
+    let signature = resolved.signature();
+    let reference_index = if public_index < signature.public_arity() as usize {
+        public_index
+    } else if signature.is_variadic {
+        signature.public_arity() as usize
+    } else {
+        public_index
+    };
+    let prepared = if !signature.is_param_by_ref(reference_index as u32) {
+        value.clone()
+    } else if value.is_traversable_unpack_value() {
+        eg.write_output(
+            format!(
+                "\nWarning: Cannot pass by-reference argument {} of {}() by unpacking a Traversable, passing by-value instead in {} on line 0\n",
+                public_index + 1,
+                function_name,
+                source_file,
+            )
+            .as_bytes(),
+        );
+        value.dereferenced().clone()
+    } else if value.is_owned_reference() {
+        value.clone_owned_reference_alias()
+    } else if value.is_reference() {
+        // SAFETY: source argument lists remain alive through the synchronous
+        // detached call, so a borrowed alias cannot outlive its target.
+        Value::reference(unsafe { value.as_ref_ptr() })
+    } else {
+        let parameter_name = signature
+            .param_names
+            .get(reference_index)
+            .map(String::as_str)
+            .unwrap_or("unknown");
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!(
+                "{}(): Argument #{} (${}) cannot be passed by reference",
+                function_name,
+                public_index + 1,
+                parameter_name,
+            ),
+        ));
+        return None;
+    };
+
+    if let Some(hint) = signature.param_type_hints.get(reference_index)
+        && !matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed)
+        && !check_type_hint(
+            prepared.dereferenced(),
+            hint,
+            eg,
+            strict_types,
+            eg.declaring_class_of(resolved.func_ptr),
+        )
+    {
+        let parameter_name = signature
+            .param_names
+            .get(reference_index)
+            .map(String::as_str)
+            .unwrap_or("unknown");
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "{}(): Argument #{} (${}) must be of type {}, {} given, called in {} on line 0",
+                function_name,
+                public_index + 1,
+                parameter_name,
+                hint.display_name(),
+                prepared.dereferenced().type_name(),
+                source_file,
+            ),
+        ));
+        return None;
+    }
+    Some(prepared)
+}
+
+fn call_resolved_with_source_unpack(
+    eg: &mut ExecutorGlobals,
+    resolved: ResolvedCallback,
+    args: &PhpArray,
+    source_file: &str,
+    strict_types: bool,
+) -> Result<Value, VmError> {
+    let signature = resolved.signature();
+    let function_name = source_unpack_function_name(eg, resolved.func_ptr).to_string();
+    let fixed_count = signature.public_arity() as usize;
+    let required = signature.required_num_args as usize;
+    let is_variadic = signature.is_variadic;
+    let param_names = signature.param_names.clone();
+    let mut fixed = vec![Value::undef(); fixed_count];
+    let mut positional_extras = Vec::new();
+    let mut named_extras = Vec::new();
+    let mut positional_cursor = 0usize;
+    let mut highest_fixed = 0usize;
+
+    for (key, value) in args.iter() {
+        match key {
+            ArrayKey::Int(_) => {
+                let public_index = positional_cursor;
+                let Some(value) = source_unpack_argument(
+                    eg,
+                    &resolved,
+                    &function_name,
+                    public_index,
+                    value,
+                    source_file,
+                    strict_types,
+                ) else {
+                    return Ok(Value::null());
+                };
+                if public_index < fixed_count {
+                    if !fixed[public_index].is_undef() {
+                        eg.exception = Some(crate::value::make_error_value(
+                            "Error",
+                            &format!(
+                                "Named parameter ${} overwrites previous argument",
+                                param_names
+                                    .get(public_index)
+                                    .map(String::as_str)
+                                    .unwrap_or("unknown")
+                            ),
+                        ));
+                        return Ok(Value::null());
+                    }
+                    fixed[public_index] = value;
+                    highest_fixed = highest_fixed.max(public_index + 1);
+                } else {
+                    positional_extras.push(value);
+                }
+                positional_cursor += 1;
+            }
+            ArrayKey::String(name) => {
+                if let Some(index) = param_names.iter().position(|parameter| parameter == &name) {
+                    if index < fixed_count {
+                        if !fixed[index].is_undef() {
+                            eg.exception = Some(crate::value::make_error_value(
+                                "Error",
+                                &format!("Named parameter ${name} overwrites previous argument"),
+                            ));
+                            return Ok(Value::null());
+                        }
+                        let Some(value) = source_unpack_argument(
+                            eg,
+                            &resolved,
+                            &function_name,
+                            index,
+                            value,
+                            source_file,
+                            strict_types,
+                        ) else {
+                            return Ok(Value::null());
+                        };
+                        fixed[index] = value;
+                        highest_fixed = highest_fixed.max(index + 1);
+                        positional_cursor = positional_cursor.max(index + 1);
+                    } else if is_variadic {
+                        if named_extras.iter().any(|(existing, _)| existing == &name) {
+                            eg.exception = Some(crate::value::make_error_value(
+                                "Error",
+                                &format!("Named parameter ${name} overwrites previous argument"),
+                            ));
+                            return Ok(Value::null());
+                        }
+                        let public_index = fixed_count + positional_extras.len();
+                        let Some(value) = source_unpack_argument(
+                            eg,
+                            &resolved,
+                            &function_name,
+                            public_index,
+                            value,
+                            source_file,
+                            strict_types,
+                        ) else {
+                            return Ok(Value::null());
+                        };
+                        named_extras.push((name, value));
+                    }
+                } else if is_variadic {
+                    if named_extras.iter().any(|(existing, _)| existing == &name) {
+                        eg.exception = Some(crate::value::make_error_value(
+                            "Error",
+                            &format!("Named parameter ${name} overwrites previous argument"),
+                        ));
+                        return Ok(Value::null());
+                    }
+                    let public_index = fixed_count + positional_extras.len();
+                    let Some(value) = source_unpack_argument(
+                        eg,
+                        &resolved,
+                        &function_name,
+                        public_index,
+                        value,
+                        source_file,
+                        strict_types,
+                    ) else {
+                        return Ok(Value::null());
+                    };
+                    named_extras.push((name, value));
+                } else {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "Error",
+                        &format!("Unknown named parameter ${name}"),
+                    ));
+                    return Ok(Value::null());
+                }
+            }
+        }
+    }
+
+    for index in 0..required {
+        if fixed.get(index).is_none_or(Value::is_undef) {
+            let parameter = param_names
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("unknown");
+            eg.exception = Some(crate::value::make_error_value(
+                "ArgumentCountError",
+                &format!(
+                    "{}(): Argument #{} (${}): not passed",
+                    function_name,
+                    index + 1,
+                    parameter,
+                ),
+            ));
+            return Ok(Value::null());
+        }
+    }
+
+    let mut normalized = fixed;
+    normalized.truncate(highest_fixed.max(required));
+    normalized.extend(positional_extras);
+    let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
+    call_resolved_owned_iter_with_named(
+        eg,
+        &resolved,
+        num_args,
+        resolved
+            .prepend_args
+            .iter()
+            .cloned()
+            .chain(normalized)
+            .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+        named_extras,
+    )
+}
+
+/// VM entry for PHP source-level argument unpacking. Unlike
+/// call_user_func_array(), arrays retain element aliases and Traversables use
+/// their iterator keys plus the dedicated by-reference warning contract.
+pub(crate) fn invoke_source_unpacked_call(
+    callback: &Value,
+    args_value: &Value,
+    eg: &mut ExecutorGlobals,
+    caller_class: Option<&str>,
+    cache_slot: Option<*mut InlineCache>,
+    source_file: &str,
+    strict_types: bool,
+) -> Result<Value, VmError> {
+    let Some(args) = args_value.as_array() else {
+        return Err(VmError::Fatal(
+            "Compiler-owned unpack argument list is not an array".to_string(),
+        ));
+    };
+    let Some(resolved) = resolve_callback_with_cache(callback, eg, caller_class, cache_slot) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Call to undefined function {}()", callback.echo_to_string()),
+        ));
+        return Ok(Value::null());
+    };
+    call_resolved_with_source_unpack(eg, resolved, args, source_file, strict_types)
+}
+
+pub(crate) fn invoke_resolved_source_unpacked_call(
+    resolved: ResolvedCallback,
+    args_value: &Value,
+    eg: &mut ExecutorGlobals,
+    source_file: &str,
+    strict_types: bool,
+) -> Result<Value, VmError> {
+    let Some(args) = args_value.as_array() else {
+        return Err(VmError::Fatal(
+            "Compiler-owned unpack argument list is not an array".to_string(),
+        ));
+    };
+    call_resolved_with_source_unpack(eg, resolved, args, source_file, strict_types)
 }
 
 /// VM entry for compiler-lowered call_user_func_array. It shares all callback
