@@ -47,27 +47,29 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `f8fc462` against
-php-src 8.2.33 `651db3e`: 1,131 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with 26 exact additions and no lost pass relative to
-`b12526d`. Ordinary undefined CV reads now report PHP 8.2 warnings at their
-source location and snapshot null before handler reentrancy; silent, suppressed
-and reference-acquisition contexts retain their distinct contracts. Conservative
-definite-initialization joins avoid diagnostic dispatch for proven function
-locals, while global and runtime-resolved call paths preserve aliases and
-evaluation order. The corpus retains zero crashes and zero timeouts. The final
-Cargo gate covers ordinary default `quick-loops+jit-prototype`, explicit
-typed-only `quick-loops`, no-default-features and all-features builds.
+The current pinned PHP 8.2 differential baseline is RPHP `7675f09` against
+php-src 8.2.33 `651db3e`: 1,174 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with 43 exact additions and no lost pass relative to
+`f8fc462`. Variable variables and runtime-named symbol-table operations now
+cover reads, writes, silent probes, unset, coalesce/mutation writeback,
+references, dynamic globals, destructuring, callable postfixes and dynamic
+object/static members. All 57 paths selected for the former leading-dollar
+lexer rejection now execute past that boundary; 31 pass exactly and 26 expose
+separate visible clusters. The corpus retains zero crashes and zero timeouts,
+and the unsafe inventory stays within its existing ceilings. The final Cargo
+gate covers ordinary default `quick-loops+jit-prototype`, explicit typed-only
+`quick-loops`, no-default-features and all-features builds.
 Internal callback frames, suspended generator/coroutine histories,
 exception-chain rendering and per-request Throwable INI controls remain
 explicit boundaries. The Symfony S3 slice remains green against PHP 8.2.33
 through cold, cached, deleted-cache, malformed-cache and concurrent publication
 transitions, including exact health and missing-route results.
 Constructor/precompiled/generator call edges, complete by-reference returns,
-indirect `ArrayAccess` and `WeakMap` appends, variable-variable syntax, delayed
-class linking/autoload validation and other visible failure clusters remain
-boundaries; the broader adoption goal remains active until the selected PHP 8.2
-contract corpus converges.
+indirect `ArrayAccess` and `WeakMap` appends, symbol-table introspection,
+reference/COW l-value writeback, complex interpolation, delayed class
+linking/autoload validation and other visible failure clusters remain
+boundaries; the broader adoption goal remains active until the selected PHP
+8.2 contract corpus converges.
 
 ## Measurement system
 

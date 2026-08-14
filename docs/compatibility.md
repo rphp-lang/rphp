@@ -12,7 +12,7 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against default-release RPHP commit
-`f8fc4624f7f4a482b7f6b1aacb0c6b678ed7ae69`, using the same runner commit. The
+`7675f09d4038d4f404cd995abf4595aaf3245708`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout; the complete
 ordinary default (`quick-loops+jit-prototype`), explicit typed-only
 (`--no-default-features --features quick-loops`), no-default-features and
@@ -20,27 +20,27 @@ all-features Cargo matrix passed separately. It discovered 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 1,042 | 2,722 | 65 | 1 | 221 | 0 | 0 | 27.683% |
-| `tests/lang` | 89 | 179 | 10 | 0 | 16 | 0 | 0 | 33.209% |
-| **Combined** | **1,131** | **2,901** | **75** | **1** | **237** | **0** | **0** | **28.051%** |
+| `Zend/tests` | 1,083 | 2,681 | 65 | 1 | 221 | 0 | 0 | 28.773% |
+| `tests/lang` | 91 | 177 | 10 | 0 | 16 | 0 | 0 | 33.955% |
+| **Combined** | **1,174** | **2,858** | **75** | **1** | **237** | **0** | **0** | **29.117%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,131 / 4,345, or **26.030%**; including crashes and timeouts in the attempted
-denominator gives **28.051%**. These numbers are intentionally pre-alpha and do
+is 1,174 / 4,345, or **27.020%**; including crashes and timeouts in the attempted
+denominator gives **29.117%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
 language coverage. Of 4,032 attempted cases, six fail during `SKIPIF` before
-the test body, 757 are rejected in the observed parse/compile stage, and 3,269
-(**81.076%**) execute the test's `FILE` section past that stage. This is not a
+the test body, 694 are rejected in the observed parse/compile stage, and 3,332
+(**82.639%**) execute the test's `FILE` section past that stage. This is not a
 second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,146 runtime failures, 1,028 output mismatches,
-565 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
+The largest failure groups are 1,145 runtime failures, 1,049 output mismatches,
+488 parse failures, 170 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
@@ -56,12 +56,67 @@ manifests and summaries. Four already-failing raw executions retain known
 non-semantic output variation from unordered object-property state; run
 durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
-`eee7662c9951bceb5ae971ebecc9168691a7414cc8bed13aa4b2baa6449a560d` and
+`2001fce6cc43da899da2c3ccf44d02f83161733fc12703401f7c41362d562d45` and
 its summary has SHA-256
-`e2c4f8549c75e0c0d1421af6ffc4fa523e8600f7b38f2697af90d26d8d6e96b9`.
+`865fafdf6f8c5ce2169c3a4e9514eed4b9bbbae3acfa804fbbe34ab8d3092456`.
 
-Relative to the retained `b12526d` baseline, this checkpoint adds 26 exact
-passes without losing a previous pass or adding a crash or timeout. Ordinary
+Relative to the retained `f8fc462` baseline, this checkpoint adds 43 exact
+passes without losing a previous pass or adding a crash or timeout. PHP's
+`$$name` and `${expression}` forms now retain their right-associated syntax and
+resolve against the active frame symbol table. Reads, writes, `isset`, `unset`,
+`??=`, compound mutation, `global`, destructuring, callable postfixes and
+reference binding share one runtime-name rule, including scalar coercion,
+`__toString()` and exception propagation. Runtime-only locals remain
+frame-scoped, indirect `$this` is readable but cannot be rebound, and dynamic
+object/static property selection preserves PHP's indirection depth and error
+staging.
+
+Original clean-room regressions cover global and local symbol tables, runtime-
+created names, references, self-referential array appends, dynamic globals,
+coalesce/writeback, object/static members, destructuring, nested name
+evaluation, object conversion and the `$this` boundary. Serialization and
+`var_dump()` now terminate repeated array-reference identities consistently,
+and string increment implements PHP's alphanumeric carry needed by nested
+runtime names. The complete four-configuration Cargo matrix and unsafe-policy
+ratchet pass; the latter remains at 1,623 production blocks and 289 unsafe
+functions rather than raising either ceiling.
+
+All 57 PHPT paths previously selected for the leading-dollar lexer rejection
+now execute their `FILE` section past that front-end boundary. Thirty-one pass
+exactly; the other 26 remain visible failures in separate callable binding,
+copy-on-write, string interpolation/offset, Fiber/Closure, library or negative-
+diagnostic clusters. Across the complete manifest, 39 still-failing paths move
+from parse rejection to runtime/output comparison. Fifteen already-failing
+diagnostic tests are classified as compile failures by the runner even though
+their `FILE` sections execute and reach a runtime `TypeError`; this is a known
+stage-classification artifact, not a newly rejected front end.
+
+The exact additions are `Zend/tests/023.phpt`, `025.phpt`, `027.phpt`,
+`anon/008.phpt`, `arrow_functions/003.phpt`, `bug26802.phpt`,
+`bug27669.phpt`, `bug35163_2.phpt`, `bug35470.phpt`, `bug38211.phpt`,
+`bug52001.phpt`, `bug53347.phpt`, `bug62653.phpt`, `bug68162.phpt`,
+`bug69989_3.phpt`, `bug78151.phpt`, `exception_before_fatal.phpt`,
+`generators/generator_symtable_leak.phpt`, `generators/gh11028_2.phpt`,
+`global_to_string_exception.phpt`, `global_with_side_effect_name.phpt`,
+`grammar/regression_013.phpt`, `indirect_reference_this.phpt`,
+`int_static_prop_name.phpt`, `isset_001.phpt`, `isset_002.phpt`,
+`nullsafe_operator/026.phpt`, `restrict_globals/key_canonicalization.phpt`,
+`self_method_or_prop_outside_class.phpt`,
+`static_method_non_existing_class.phpt`,
+`symtable_cache_recursive_dtor.phpt`, `temporary_cleaning_012.phpt`,
+`this_reassign.phpt`, `traits/bug75607a.phpt`,
+`varSyntax/class_constant_static_deref.phpt`, `varSyntax/staticMember.phpt`,
+`varSyntax/static_prop_on_expr_class.phpt`,
+`varSyntax/static_prop_on_expr_class_with_backslash.phpt`,
+`variable_with_boolean_name.phpt`, `variable_with_integer_name.phpt`,
+`varvars_by_ref.phpt`, `tests/lang/bug24396.phpt` and
+`tests/lang/engine_assignExecutionOrder_003.phpt`. This does not claim complete
+variable syntax, references, symbol-table introspection, PHP 8.2 or framework
+compatibility; the corpus-convergence goal remains active.
+
+The preceding `f8fc462` checkpoint, relative to the retained `b12526d`
+baseline, added 26 exact passes without losing a previous pass or adding a
+crash or timeout. Ordinary
 undefined-variable rvalues now snapshot null and report PHP 8.2's `E_WARNING`
 with the original file and line, including runtime-resolved positional, named
 and variadic sends. `@` applies its active reporting mask before a declined
