@@ -107,6 +107,24 @@ fn test_parse_foreach_destructuring_target() {
 }
 
 #[test]
+fn destructuring_spread_is_preserved_as_a_deferred_compile_error() {
+    for source in [
+        "<?php\n[$first, ...$remaining] = $row;",
+        "<?php\nlist(...$remaining) = $row;",
+        "<?php\nforeach ($rows as [$first, ...$remaining]) {}",
+        "<?php\n[[$first, ...$remaining]] = $rows;",
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                if message == "Spread operator is not supported in assignments" && *line == 2
+        ));
+    }
+}
+
+#[test]
 fn test_parse_nested_array_append() {
     let tokens = Lexer::new("<?php $store->listeners['event'][10][] = 'listener';")
         .tokenize()

@@ -864,8 +864,34 @@ impl Parser {
                 self.advance(); // consume ','
                 continue;
             }
+            if self.peek() == Token::DotDotDot {
+                self.advance(); // consume the unsupported spread marker
+                let line = match self.peek() {
+                    Token::Variable(_, line) | Token::This(line) | Token::LBracket(line) => line,
+                    _ => {
+                        return Err(
+                            "Expected assignment target after spread operator in destructuring"
+                                .into(),
+                        );
+                    }
+                };
+                if !matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+                    return Err(
+                        "Expected assignment target after spread operator in destructuring".into(),
+                    );
+                }
+                // Consume the complete l-value so the parser can finish the
+                // source unit. PHP accepts this grammar shape and rejects it
+                // during compilation, before any right-hand side can run.
+                let _ = self.parse_empty_dimension_target_prefix()?;
+                let error = self.compile_error(
+                    "Spread operator is not supported in assignments",
+                    line,
+                );
+                targets.push(ListTarget::Target(error));
+            }
             // Check for nested: list(...) or [...]
-            if matches!(self.peek(), Token::LBracket(_)) {
+            else if matches!(self.peek(), Token::LBracket(_)) {
                 self.advance(); // consume '['
                 let nested = self.parse_list_targets(&Token::RBracket)?;
                 self.expect(&Token::RBracket)?;

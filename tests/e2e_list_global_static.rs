@@ -33,6 +33,31 @@ echo "$a $b";
 }
 
 #[test]
+fn destructuring_spread_is_a_located_compile_error() {
+    let source = r#"<?php
+$marker = 'must-not-run';
+[$primary, ...$overflow] = makeValues();
+"#;
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens)
+        .with_source_name("/fixture/destructuring-spread.php")
+        .parse()
+        .unwrap();
+    let error = match Compiler::new()
+        .with_source_context("/fixture/destructuring-spread.php", "/fixture")
+        .compile(&statements)
+    {
+        Ok(_) => panic!("destructuring spread must fail during compilation"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error,
+        "Spread operator is not supported in assignments in /fixture/destructuring-spread.php on line 3"
+    );
+}
+
+#[test]
 fn test_list_skip_elements() {
     assert_eq!(
         run_php(
