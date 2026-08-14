@@ -6,12 +6,12 @@ impl NativeMixedBuildState {
     fn property_binding_slot(
         &mut self,
         op_index: usize,
-        object_identity: usize,
+        receiver: *const Value,
         object_slot: usize,
         property_index: usize,
     ) -> Option<u16> {
         for index in 0..self.property_binding_count {
-            if self.property_binding_object_identities[index] == object_identity
+            if self.property_binding_receivers[index] == receiver
                 && self.property_binding_object_slots[index] == object_slot
             {
                 return Some(u16::from(self.property_binding_slots[index]));
@@ -25,7 +25,7 @@ impl NativeMixedBuildState {
         self.property_binding_op_indices[index] = u8::try_from(op_index).ok()?;
         self.property_binding_property_indices[index] = u8::try_from(property_index).ok()?;
         self.property_binding_slots[index] = u8::try_from(shadow_slot).ok()?;
-        self.property_binding_object_identities[index] = object_identity;
+        self.property_binding_receivers[index] = receiver;
         self.property_binding_object_slots[index] = object_slot;
         self.property_binding_count += 1;
         Some(shadow_slot)
@@ -47,7 +47,7 @@ impl NativeMixedBuildState {
     fn lower_property_getter(
         &mut self,
         op_index: usize,
-        object_identity: usize,
+        receiver: *const Value,
         target: *const FunctionCommon,
         property_slot: usize,
         call: &QuickTypedMethodCall,
@@ -56,8 +56,7 @@ impl NativeMixedBuildState {
         if call.argument_count != 0 {
             return None;
         }
-        let shadow_slot =
-            self.property_binding_slot(op_index, object_identity, property_slot, 0)?;
+        let shadow_slot = self.property_binding_slot(op_index, receiver, property_slot, 0)?;
         let completion = self.append(
             NativeStraightLongOperation::Move {
                 source: QuickLongOperand::Slot(shadow_slot),
@@ -71,7 +70,7 @@ impl NativeMixedBuildState {
     fn lower_property_method(
         &mut self,
         op_index: usize,
-        object_identity: usize,
+        receiver: *const Value,
         plan: &LongPropertyMethodPlan,
         property_slots: &[usize; 8],
         property_count: u8,
@@ -90,7 +89,7 @@ impl NativeMixedBuildState {
         for index in 0..property_count as usize {
             let slot = self.property_binding_slot(
                 op_index,
-                object_identity,
+                receiver,
                 property_slots[index],
                 index,
             )?;
@@ -192,12 +191,12 @@ impl NativeMixedBuildState {
         &mut self,
         op_index: usize,
         outer_guard: ScalarLongCallGuard,
-        outer_object_identity: usize,
+        outer_receiver: *const Value,
         outer_target: *const FunctionCommon,
         outer_plan: &LongPropertyMethodPlan,
         outer_property_slots: &[usize; 8],
         outer_property_count: u8,
-        inner_object_identity: usize,
+        inner_receiver: *const Value,
         inner_target: *const FunctionCommon,
         inner_property_slot: usize,
         next_target: QuickLongTarget,
@@ -213,7 +212,7 @@ impl NativeMixedBuildState {
         // consumes its argument.
         let inner_shadow = self.property_binding_slot(
             op_index,
-            inner_object_identity,
+            inner_receiver,
             inner_property_slot,
             NATIVE_COMPOSED_PROPERTY_INNER_INDEX,
         )?;
@@ -237,7 +236,7 @@ impl NativeMixedBuildState {
         };
         let completion = self.lower_property_method(
             op_index,
-            outer_object_identity,
+            outer_receiver,
             outer_plan,
             outer_property_slots,
             outer_property_count,

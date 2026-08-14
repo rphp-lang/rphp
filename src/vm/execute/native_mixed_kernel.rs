@@ -104,7 +104,8 @@ unsafe fn native_quick_long_mixed_kernel(
         property_binding_op_indices: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         property_binding_property_indices: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         property_binding_slots: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
-        property_binding_object_identities: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        property_binding_receivers: [std::ptr::null();
+            NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         property_binding_object_slots: [usize::MAX;
             NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         property_binding_count: 0,
@@ -402,14 +403,13 @@ unsafe fn native_quick_long_mixed_kernel(
                     plan: property_plan,
                     property_slots,
                     property_count,
-                    ..
                 } = *resolved_object_ops.get(plan_index)?
                 else {
                     return None;
                 };
                 builder.lower_property_method(
                     plan_index,
-                    (*receiver).object_identity_unchecked(),
+                    receiver,
                     &*property_plan,
                     &property_slots,
                     property_count,
@@ -433,7 +433,7 @@ unsafe fn native_quick_long_mixed_kernel(
                 };
                 builder.lower_property_getter(
                     plan_index,
-                    (*receiver).object_identity_unchecked(),
+                    receiver,
                     target,
                     property_slot,
                     &call,
@@ -476,12 +476,12 @@ unsafe fn native_quick_long_mixed_kernel(
                 builder.lower_composed_property_method(
                     plan_index,
                     outer_guard,
-                    (*outer_receiver).object_identity_unchecked(),
+                    outer_receiver,
                     outer_target,
                     &*outer_plan,
                     &outer_property_slots,
                     outer_property_count,
-                    (*inner_receiver).object_identity_unchecked(),
+                    inner_receiver,
                     inner_target,
                     inner_property_slot,
                     next_target,

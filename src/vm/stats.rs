@@ -140,11 +140,6 @@ mod inner {
     static QUICK_PACKED_ARRAY_RESERVE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
     static QUICK_PACKED_ARRAY_RESERVE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
     static QUICK_PACKED_ARRAY_RESERVE_ENTRIES: AtomicU64 = AtomicU64::new(0);
-    static QUICK_PROPERTY_SHADOW_ENTRIES: AtomicU64 = AtomicU64::new(0);
-    static QUICK_PROPERTY_SHADOW_BINDINGS: AtomicU64 = AtomicU64::new(0);
-    static QUICK_PROPERTY_SHADOW_UPDATES: AtomicU64 = AtomicU64::new(0);
-    static QUICK_PROPERTY_SHADOW_COMMITS: AtomicU64 = AtomicU64::new(0);
-    static QUICK_PROPERTY_SHADOW_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 
     static JIT_LOOP_CANDIDATES: AtomicU64 = AtomicU64::new(0);
     static JIT_LOOP_ADMISSIONS: [AtomicU64; JitRegionKind::COUNT] =
@@ -225,11 +220,6 @@ mod inner {
         QUICK_PACKED_ARRAY_RESERVE_ATTEMPTS.store(0, Ordering::Relaxed);
         QUICK_PACKED_ARRAY_RESERVE_SUCCESSES.store(0, Ordering::Relaxed);
         QUICK_PACKED_ARRAY_RESERVE_ENTRIES.store(0, Ordering::Relaxed);
-        QUICK_PROPERTY_SHADOW_ENTRIES.store(0, Ordering::Relaxed);
-        QUICK_PROPERTY_SHADOW_BINDINGS.store(0, Ordering::Relaxed);
-        QUICK_PROPERTY_SHADOW_UPDATES.store(0, Ordering::Relaxed);
-        QUICK_PROPERTY_SHADOW_COMMITS.store(0, Ordering::Relaxed);
-        QUICK_PROPERTY_SHADOW_FALLBACKS.store(0, Ordering::Relaxed);
         JIT_LOOP_CANDIDATES.store(0, Ordering::Relaxed);
         JIT_STRAIGHT_CANDIDATES.store(0, Ordering::Relaxed);
         JIT_STRAIGHT_ADMISSIONS.store(0, Ordering::Relaxed);
@@ -405,36 +395,6 @@ mod inner {
         QUICK_PACKED_ARRAY_RESERVE_ENTRIES.fetch_add(entries as u64, Ordering::Relaxed);
         if succeeded {
             QUICK_PACKED_ARRAY_RESERVE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    #[inline]
-    pub fn record_quick_property_shadow_entry(bindings: u8) {
-        if !enabled() {
-            return;
-        }
-        QUICK_PROPERTY_SHADOW_ENTRIES.fetch_add(1, Ordering::Relaxed);
-        QUICK_PROPERTY_SHADOW_BINDINGS.fetch_add(u64::from(bindings), Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub fn record_quick_property_shadow_updates(updates: u32) {
-        if enabled() {
-            QUICK_PROPERTY_SHADOW_UPDATES.fetch_add(u64::from(updates), Ordering::Relaxed);
-        }
-    }
-
-    #[inline]
-    pub fn record_quick_property_shadow_commits(commits: u32) {
-        if enabled() {
-            QUICK_PROPERTY_SHADOW_COMMITS.fetch_add(u64::from(commits), Ordering::Relaxed);
-        }
-    }
-
-    #[inline]
-    pub fn inc_quick_property_shadow_fallback() {
-        if enabled() {
-            QUICK_PROPERTY_SHADOW_FALLBACKS.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -978,31 +938,6 @@ mod inner {
             "quick_packed_array_reserve_entries={}",
             QUICK_PACKED_ARRAY_RESERVE_ENTRIES.load(Ordering::Relaxed)
         );
-        let _ = writeln!(
-            err,
-            "quick_property_shadow_entries={}",
-            QUICK_PROPERTY_SHADOW_ENTRIES.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            err,
-            "quick_property_shadow_bindings={}",
-            QUICK_PROPERTY_SHADOW_BINDINGS.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            err,
-            "quick_property_shadow_updates={}",
-            QUICK_PROPERTY_SHADOW_UPDATES.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            err,
-            "quick_property_shadow_commits={}",
-            QUICK_PROPERTY_SHADOW_COMMITS.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(
-            err,
-            "quick_property_shadow_fallbacks={}",
-            QUICK_PROPERTY_SHADOW_FALLBACKS.load(Ordering::Relaxed)
-        );
         let _ = writeln!(err, "-- quick/JIT planner coverage --");
         let _ = writeln!(
             err,
@@ -1378,42 +1313,6 @@ pub fn record_quick_packed_array_reserve(entries: usize, succeeded: bool) {
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn record_quick_packed_array_reserve(_entries: usize, _succeeded: bool) {}
-
-#[cfg(feature = "vm-stats")]
-#[inline(always)]
-pub fn record_quick_property_shadow_entry(bindings: u8) {
-    inner::record_quick_property_shadow_entry(bindings);
-}
-#[cfg(not(feature = "vm-stats"))]
-#[inline(always)]
-pub fn record_quick_property_shadow_entry(_bindings: u8) {}
-
-#[cfg(feature = "vm-stats")]
-#[inline(always)]
-pub fn record_quick_property_shadow_updates(updates: u32) {
-    inner::record_quick_property_shadow_updates(updates);
-}
-#[cfg(not(feature = "vm-stats"))]
-#[inline(always)]
-pub fn record_quick_property_shadow_updates(_updates: u32) {}
-
-#[cfg(feature = "vm-stats")]
-#[inline(always)]
-pub fn record_quick_property_shadow_commits(commits: u32) {
-    inner::record_quick_property_shadow_commits(commits);
-}
-#[cfg(not(feature = "vm-stats"))]
-#[inline(always)]
-pub fn record_quick_property_shadow_commits(_commits: u32) {}
-
-#[cfg(feature = "vm-stats")]
-#[inline(always)]
-pub fn inc_quick_property_shadow_fallback() {
-    inner::inc_quick_property_shadow_fallback();
-}
-#[cfg(not(feature = "vm-stats"))]
-#[inline(always)]
-pub fn inc_quick_property_shadow_fallback() {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

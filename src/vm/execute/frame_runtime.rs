@@ -810,62 +810,27 @@ unsafe fn try_execute_resolved_long_property_plan(
         property_values[index] = value.raw_long();
     }
 
-    let Some(written) = apply_resolved_long_property_plan_values(
-        arguments,
-        plan,
-        &mut property_values,
-        property_count,
-    ) else {
-        return false;
-    };
-
-    for index in 0..property_count as usize {
-        if written & (1 << index) != 0 {
-            Value::write_long(
-                receiver.object_property_slot_unchecked(property_slots[index]) as *mut Value,
-                property_values[index],
-            );
-        }
-    }
-    true
-}
-
-/// Apply one already-resolved property transaction to caller-owned Long
-/// storage. The helper does not publish any partial result: callers may keep
-/// the values as region-local shadows or commit them to declared properties
-/// only after every checked operation succeeds.
-#[inline(always)]
-#[cfg(feature = "quick-loops")]
-fn apply_resolved_long_property_plan_values(
-    arguments: &[i64; 8],
-    plan: &LongPropertyMethodPlan,
-    property_values: &mut [i64; 8],
-    property_count: u8,
-) -> Option<u8> {
-    if property_count as usize != plan.properties.len() || property_count > 8 {
-        return None;
-    }
     let mut written = 0u8;
     for operation in plan.operations.iter().copied() {
         match operation {
             LongPropertyOp::Add { property, rhs } => {
                 let Some(target) = property_values.get_mut(property as usize) else {
-                    return None;
+                    return false;
                 };
                 let Some(value) = target.checked_add(resolve_long_plan_source(rhs, arguments))
                 else {
-                    return None;
+                    return false;
                 };
                 *target = value;
                 written |= 1 << property;
             }
             LongPropertyOp::Sub { property, rhs } => {
                 let Some(target) = property_values.get_mut(property as usize) else {
-                    return None;
+                    return false;
                 };
                 let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, arguments))
                 else {
-                    return None;
+                    return false;
                 };
                 *target = value;
                 written |= 1 << property;
@@ -875,7 +840,7 @@ fn apply_resolved_long_property_plan_values(
                 candidate,
             } => {
                 let Some(target) = property_values.get_mut(property as usize) else {
-                    return None;
+                    return false;
                 };
                 let candidate = resolve_long_plan_source(candidate, arguments);
                 if candidate < *target {
@@ -888,7 +853,7 @@ fn apply_resolved_long_property_plan_values(
                 candidate,
             } => {
                 let Some(target) = property_values.get_mut(property as usize) else {
-                    return None;
+                    return false;
                 };
                 let candidate = resolve_long_plan_source(candidate, arguments);
                 if candidate > *target {
@@ -898,14 +863,23 @@ fn apply_resolved_long_property_plan_values(
             }
             LongPropertyOp::Set { property, value } => {
                 let Some(target) = property_values.get_mut(property as usize) else {
-                    return None;
+                    return false;
                 };
                 *target = resolve_long_plan_source(value, arguments);
                 written |= 1 << property;
             }
         }
     }
-    Some(written)
+
+    for index in 0..property_count as usize {
+        if written & (1 << index) != 0 {
+            Value::write_long(
+                receiver.object_property_slot_unchecked(property_slots[index]) as *mut Value,
+                property_values[index],
+            );
+        }
+    }
+    true
 }
 
 /// Materialize a compiler-proven `return $this->property` call directly into
