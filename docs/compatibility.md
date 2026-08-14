@@ -12,22 +12,23 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against default-release RPHP commit
-`b12526d3be9a7b571512cfba84d8caf6d98a5ac1`, using the same runner commit. The
+`f8fc4624f7f4a482b7f6b1aacb0c6b678ed7ae69`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout; the complete
-default, no-default-features, generics-erased, generics-reified and all-features
-Cargo matrix passed separately. It discovered 4,345 PHPT cases.
+ordinary default (`quick-loops+jit-prototype`), explicit typed-only
+(`--no-default-features --features quick-loops`), no-default-features and
+all-features Cargo matrix passed separately. It discovered 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 1,017 | 2,747 | 65 | 1 | 221 | 0 | 0 | 27.019% |
-| `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,105** | **2,927** | **75** | **1** | **237** | **0** | **0** | **27.406%** |
+| `Zend/tests` | 1,042 | 2,722 | 65 | 1 | 221 | 0 | 0 | 27.683% |
+| `tests/lang` | 89 | 179 | 10 | 0 | 16 | 0 | 0 | 33.209% |
+| **Combined** | **1,131** | **2,901** | **75** | **1** | **237** | **0** | **0** | **28.051%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,105 / 4,345, or **25.432%**; including crashes and timeouts in the attempted
-denominator gives **27.406%**. These numbers are intentionally pre-alpha and do
+is 1,131 / 4,345, or **26.030%**; including crashes and timeouts in the attempted
+denominator gives **28.051%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -38,7 +39,7 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,151 runtime failures, 1,049 output mismatches,
+The largest failure groups are 1,146 runtime failures, 1,028 output mismatches,
 565 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
@@ -55,12 +56,50 @@ manifests and summaries. Four already-failing raw executions retain known
 non-semantic output variation from unordered object-property state; run
 durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
-`d12475aa5297daa80d3611ca06a2a7ae0f732912c43d83efcb3d235e063cf2cd` and
+`eee7662c9951bceb5ae971ebecc9168691a7414cc8bed13aa4b2baa6449a560d` and
 its summary has SHA-256
-`1dd22609095241abefbabcf680144006f4d67de57ec20e6f1646b910e94c8c69`.
+`e2c4f8549c75e0c0d1421af6ffc4fa523e8600f7b38f2697af90d26d8d6e96b9`.
 
-Relative to the retained `e077e12` baseline, this checkpoint adds 13 exact
-passes without losing a previous pass or adding a crash or timeout. A
+Relative to the retained `b12526d` baseline, this checkpoint adds 26 exact
+passes without losing a previous pass or adding a crash or timeout. Ordinary
+undefined-variable rvalues now snapshot null and report PHP 8.2's `E_WARNING`
+with the original file and line, including runtime-resolved positional, named
+and variadic sends. `@` applies its active reporting mask before a declined
+built-in diagnostic is emitted, while user handlers still observe the PHP 8.2
+suppressed mask and may explicitly re-enable reporting. Handler reentrancy
+publishes global mutations without changing the already-snapshotted value.
+
+Reference acquisition remains a distinct silent context: missing CVs become
+null for direct and unpacked by-reference arguments, closure captures, array
+elements, `$GLOBALS` aliases and by-reference returns. Global ordinary
+assignment writes through an existing alias, `global` creates a missing null
+binding without replacing an initialized top-level CV, and runtime argument
+layout shifts preserve closure-capture reference identity. Increment/decrement
+and compound assignment retain PHP evaluation order and result kinds when a
+handler mutates or unsets the operand; conservative definite-initialization
+joins keep proven function-local hot loops on compact CV operands.
+
+The exact additions are `Zend/tests/array_unpack/undef_var.phpt`,
+`arrow_functions/002.phpt`, `assign_coalesce_007.phpt`, `bug30162.phpt`,
+`bug35017.phpt`, `bug63206_1.phpt`, `bug67314.phpt`, `bug70785.phpt`,
+`bug79599.phpt`, `bug79791.phpt`, `closure_012.phpt`,
+`code_before_loop_var_free.phpt`, `entry_block_with_predecessors.phpt`,
+`error_reporting09.phpt`, `incdec_undef.phpt`,
+`inference_infinite_loop.phpt`, `match/042.phpt`,
+`named_params/undef_var.phpt`, `named_params/variadic.phpt`,
+`nullsafe_operator/018.phpt`, `nullsafe_operator/039.phpt`,
+`remove_predecessor_of_pi_node.phpt`,
+`type_declarations/typed_properties_056.phpt`,
+`type_declarations/typed_properties_057.phpt`,
+`unreachable_phi_cycle.phpt` and
+`tests/lang/operators/overloaded_property_ref.phpt`. This does not claim
+complete undefined-variable, call/reference, PHP 8.2 or framework
+compatibility; constructor/precompiled/generator argument edges and other
+visible failure clusters remain separate work.
+
+The preceding `b12526d` checkpoint, relative to the retained `e077e12`
+baseline, added 13 exact passes without losing a previous pass or adding a
+crash or timeout. A
 `Throwable` now snapshots its complete live PHP call chain when it is created,
 not when it is later thrown. Named functions, instance and static methods,
 constructors, dynamic calls and closures retain PHP's call-site line rule;
@@ -455,9 +494,9 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`b12526d-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/b12526d-arm64-manifest.jsonl),
+[`f8fc462-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/f8fc462-arm64-manifest.jsonl),
 with aggregate metadata in
-[`b12526d-arm64-summary.json`](../tests/php-src/results/php-8.2.33/b12526d-arm64-summary.json).
+[`f8fc462-arm64-summary.json`](../tests/php-src/results/php-8.2.33/f8fc462-arm64-summary.json).
 The retained directory/status navigation map is
 [`8bcc548-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-coverage-map.json),
 and the full reference aggregate is
