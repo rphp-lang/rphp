@@ -673,6 +673,18 @@ fn propagate_declared_scalar_types(
                     *reference = true;
                 }
             }
+            OpCode::BindCvRef => {
+                for cv in [instruction.op1, instruction.result] {
+                    mark_param(&mut directly_mutated_params, cv);
+                    mark_param(&mut maybe_aliased_params, cv);
+                    if let Some(aliased) = aliased_cvs.get_mut(cv as usize) {
+                        *aliased = true;
+                    }
+                    if let Some(reference) = reference_wrapped_cvs.get_mut(cv as usize) {
+                        *reference = true;
+                    }
+                }
+            }
             OpCode::SendRef if instruction.op1_type == OpType::Cv => {
                 mark_param(&mut maybe_aliased_params, instruction.op1);
                 if let Some(aliased) = aliased_cvs.get_mut(instruction.op1 as usize) {
@@ -740,6 +752,16 @@ fn propagate_declared_scalar_types(
                 }
                 if let Some(slot) = receiver_classes.get_mut(instruction.op1 as usize) {
                     *slot = None;
+                }
+            }
+            OpCode::BindCvRef => {
+                for cv in [instruction.op1, instruction.result] {
+                    if let Some(slot) = slots.get_mut(cv as usize) {
+                        *slot = KnownScalarType::Unknown;
+                    }
+                    if let Some(slot) = receiver_classes.get_mut(cv as usize) {
+                        *slot = None;
+                    }
                 }
             }
             OpCode::ForeachNext | OpCode::ForeachNextPlain => {
@@ -5911,6 +5933,16 @@ impl Compiler {
                 let destination = self.resolve_cv(var);
                 self.definitely_defined_cvs.insert(destination);
                 match target.as_ref() {
+                    Expr::Variable { name, .. } => {
+                        let source = self.resolve_cv(name);
+                        let mut bind = Instruction::new(OpCode::BindCvRef);
+                        bind.op1 = source;
+                        bind.op1_type = OpType::Cv;
+                        bind.result = destination;
+                        bind.result_type = OpType::Cv;
+                        self.instructions.push(bind);
+                        (destination, OpType::Cv)
+                    }
                     Expr::DynamicVariable { name, line } => {
                         let (key, key_type) = self.compile_expr(name);
                         let mut bind = Instruction::new(OpCode::BindDynamicVarRef);

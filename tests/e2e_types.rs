@@ -234,6 +234,85 @@ fn acquiring_a_reference_materializes_an_undefined_variable_as_null() {
 }
 
 #[test]
+fn local_reference_aliases_share_one_cell_until_the_name_is_unset() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$left = "alpha";
+$right =& $left;
+$right = "beta";
+var_dump($left, $right);
+$left = "gamma";
+var_dump($left, $right);
+unset($right);
+var_dump($left, isset($right));"#
+        ),
+        "string(4) \"beta\"\nstring(4) \"beta\"\nstring(5) \"gamma\"\nstring(5) \"gamma\"\nstring(5) \"gamma\"\nbool(false)\n"
+    );
+}
+
+#[test]
+fn local_reference_assignment_rebinds_an_existing_alias() {
+    assert_eq!(
+        run_php(
+            "<?php $first = 1; $second = 2; $alias =& $first; $alias =& $second; $alias = 3; var_dump($first, $second, $alias);"
+        ),
+        "int(1)\nint(3)\nint(3)\n"
+    );
+}
+
+#[test]
+fn local_reference_binding_materializes_missing_and_self_sources() {
+    assert_eq!(
+        run_php(
+            "<?php $missingAlias =& $missing; var_dump($missingAlias, $missing); $missingAlias = 7; var_dump($missing); $value = 1; $value =& $value; $value = 2; var_dump($value);"
+        ),
+        "NULL\nNULL\nint(7)\nint(2)\n"
+    );
+}
+
+#[test]
+fn local_reference_binding_is_an_lvalue_expression_and_accepts_this_as_a_source() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function mutate(&$slot) { $slot = 9; }
+$value = 1;
+mutate($alias =& $value);
+var_dump($value, $alias);
+class AliasThis {
+    function inspect() {
+        $alias =& $this;
+        var_dump($alias === $this);
+    }
+}
+(new AliasThis)->inspect();"#
+        ),
+        "int(9)\nint(9)\nbool(true)\n"
+    );
+}
+
+#[test]
+fn local_array_reference_mutation_preserves_an_ordinary_cow_copy() {
+    assert_eq!(
+        run_php(
+            "<?php $original = [1]; $copy = $original; $alias =& $original; $alias[] = 2; var_dump($copy, $original, $alias);"
+        ),
+        "array(1) {\n  [0]=>\n  int(1)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n"
+    );
+}
+
+#[test]
+fn destructuring_reads_a_retained_rhs_while_writing_through_an_alias() {
+    assert_eq!(
+        run_php(
+            "<?php $source = [11, 22]; $mirror =& $source; [$mirror, $tail] = $source; var_dump($source, $tail);"
+        ),
+        "int(11)\nint(22)\n"
+    );
+}
+
+#[test]
 fn definitely_initialized_function_locals_keep_compact_cv_operands() {
     let source = "<?php function accumulate($limit) { $sum = 0; for ($i = 0; $i < $limit; $i++) { $sum += $i; } if ($limit > 0) { $result = $sum; } else { $result = 0; } return $result; }";
     let tokens = Lexer::new(source).tokenize().unwrap();

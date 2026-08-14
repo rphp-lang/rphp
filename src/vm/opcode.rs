@@ -223,6 +223,10 @@ pub enum OpCode {
     /// Resolve a static-property owner/name and raise PHP's runtime Error;
     /// static properties cannot be unset even when selected dynamically.
     UnsetStaticProp = 164,
+    /// Rebind result(CV) to the same stable PHP reference cell as op1(CV).
+    /// Both variable names remain aliases until one is explicitly rebound or
+    /// unset; ordinary assignments through either CV update the shared cell.
+    BindCvRef = 165,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

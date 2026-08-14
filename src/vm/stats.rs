@@ -768,6 +768,7 @@ mod inner {
             162 => Some("AssignDynamicVarRef"),
             163 => Some("BindDynamicGlobal"),
             164 => Some("UnsetStaticProp"),
+            165 => Some("BindCvRef"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),

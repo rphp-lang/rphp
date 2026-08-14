@@ -154,7 +154,8 @@ pub(super) fn loop_miss_reason(
             | OpCode::UnsetDynamicVar
             | OpCode::BindDynamicVarRef
             | OpCode::AssignDynamicVarRef
-            | OpCode::BindDynamicGlobal => has_semantic_boundary = true,
+            | OpCode::BindDynamicGlobal
+            | OpCode::BindCvRef => has_semantic_boundary = true,
 
             OpCode::JmpZ
             | OpCode::JmpNZ

@@ -152,6 +152,10 @@ impl OpArray {
                 OpCode::AssignGlobalRef if instruction.op2_type == OpType::Cv => {
                     mark(instruction.op2)
                 }
+                OpCode::BindCvRef => {
+                    mark(instruction.op1);
+                    mark(instruction.result);
+                }
                 OpCode::BindDynamicVarRef
                 | OpCode::AssignDynamicVarRef
                 | OpCode::BindDynamicGlobal => may_reference.fill(true),
@@ -1208,6 +1212,9 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             | OpCode::BindDefaultParam
             | OpCode::BindGlobal
             | OpCode::BindStatic => clear_cv(&mut mask, instruction.op1),
+            // A local `=&` may expose either participating parameter through
+            // the other CV for the rest of this frame.
+            OpCode::BindCvRef => return 0,
             // In-place array operations require an owned Rc so make_mut can
             // observe the caller and detach according to PHP COW semantics.
             OpCode::AddArrayElement

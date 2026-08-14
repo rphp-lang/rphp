@@ -301,55 +301,67 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         }
 
         match opline.opcode {
-            OpCode::AssignCv => {
-                // ASSIGN_CV op1=CV(dest), op2=value, result=optional copy
+            OpCode::AssignCv | OpCode::BindCvRef => {
                 // SAFETY: `frame` is the active VM frame and every operand was
-                // allocated by this op-array. The slot helpers preserve the
-                // frame cleanup metadata for TMP/VAR destinations.
+                // allocated by this op-array. Reference binding promotes only
+                // a live source CV and rebinds only a live destination CV. The
+                // slot helpers preserve the frame cleanup metadata.
                 unsafe {
-                    let val = &*(*frame).get_op_ptr(
-                        opline.op2 as u32,
-                        opline.op2_type,
-                        op_array,
-                    );
-                    let cloned = val.clone();
-                    let rebind_destination = opline._pad & ASSIGN_CV_REBIND != 0;
-                    let destination_is_reference = !rebind_destination
-                        && opline.op1_type == OpType::Cv
-                        && (*frame).cv(opline.op1 as u32).is_reference();
-                    let dest = if rebind_destination {
-                        (*frame).cv_mut(opline.op1 as u32) as *mut Value
+                    if opline.opcode == OpCode::BindCvRef {
+                        // `=&` rebinds the destination variable itself, even
+                        // when it previously pointed at another reference
+                        // cell. The source is promoted once and both CVs retain
+                        // aliases to that stable request-owned cell.
+                        let source = (*frame).cv_mut(opline.op1 as u32) as *mut Value;
+                        let binding = materialize_reference_alias(frame, source);
+                        let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+                        frame_slot_set(frame, destination, binding);
                     } else {
-                        (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
-                    };
-                    if opline.result_type != OpType::Unused {
-                        // Need two copies: one for dest, one for result
-                        if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
-                            frame_tmp_set(frame, dest, cloned.clone());
-                        } else if opline.op1_type == OpType::Cv
-                            && (!destination_is_reference || rebind_destination)
-                        {
-                            frame_slot_set(frame, dest, cloned.clone());
+                        // ASSIGN_CV op1=CV(dest), op2=value, result=optional copy
+                        let val = &*(*frame).get_op_ptr(
+                            opline.op2 as u32,
+                            opline.op2_type,
+                            op_array,
+                        );
+                        let cloned = val.clone();
+                        let rebind_destination = opline._pad & ASSIGN_CV_REBIND != 0;
+                        let destination_is_reference = !rebind_destination
+                            && opline.op1_type == OpType::Cv
+                            && (*frame).cv(opline.op1 as u32).is_reference();
+                        let dest = if rebind_destination {
+                            (*frame).cv_mut(opline.op1 as u32) as *mut Value
                         } else {
-                            slot_set(dest, cloned.clone());
-                        }
-                        let result_ptr =
-                            (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
-                            frame_tmp_set(frame, result_ptr, cloned);
+                            (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
+                        };
+                        if opline.result_type != OpType::Unused {
+                            // Need two copies: one for dest, one for result
+                            if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+                                frame_tmp_set(frame, dest, cloned.clone());
+                            } else if opline.op1_type == OpType::Cv
+                                && (!destination_is_reference || rebind_destination)
+                            {
+                                frame_slot_set(frame, dest, cloned.clone());
+                            } else {
+                                slot_set(dest, cloned.clone());
+                            }
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                                frame_tmp_set(frame, result_ptr, cloned);
+                            } else {
+                                slot_set(result_ptr, cloned);
+                            }
                         } else {
-                            slot_set(result_ptr, cloned);
-                        }
-                    } else {
-                        // Common path: just move the single clone into dest
-                        if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
-                            frame_tmp_set(frame, dest, cloned);
-                        } else if opline.op1_type == OpType::Cv
-                            && (!destination_is_reference || rebind_destination)
-                        {
-                            frame_slot_set(frame, dest, cloned);
-                        } else {
-                            slot_set(dest, cloned);
+                            // Common path: just move the single clone into dest
+                            if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+                                frame_tmp_set(frame, dest, cloned);
+                            } else if opline.op1_type == OpType::Cv
+                                && (!destination_is_reference || rebind_destination)
+                            {
+                                frame_slot_set(frame, dest, cloned);
+                            } else {
+                                slot_set(dest, cloned);
+                            }
                         }
                     }
                 }
