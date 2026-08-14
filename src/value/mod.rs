@@ -1725,7 +1725,7 @@ fn set_indexed_int(
         entries.push((ArrayEntryKey::Int(key), val));
         *verified_int_prefix += 1;
         if key >= *next_int_key {
-            *next_int_key = key + 1;
+            *next_int_key = key.saturating_add(1);
         }
         return;
     }
@@ -1745,7 +1745,7 @@ fn set_indexed_int(
             entries.push((ArrayEntryKey::Int(key), val));
             entry.insert(IntIndexValue::new(position, &entries[position].1));
             if key >= *next_int_key {
-                *next_int_key = key + 1;
+                *next_int_key = key.saturating_add(1);
             }
         }
     }
@@ -2019,14 +2019,19 @@ impl PhpArray {
         };
     }
 
-    /// Append with auto-incrementing key ($a[] = val)
+    /// Append with PHP's next available integer key. Once `i64::MAX` is
+    /// occupied, PHP cannot represent another key and the append must fail
+    /// rather than wrapping into the negative range.
     #[inline]
-    pub fn push(&mut self, val: Value) {
+    pub(crate) fn try_push(&mut self, val: Value) -> bool {
         let key = self.next_int_key;
-        self.next_int_key = key + 1;
+        if key == i64::MAX && self.get_int(key).is_some() {
+            return false;
+        }
+        self.next_int_key = key.saturating_add(1);
         if let ArrayStorage::Packed(values) = &mut self.storage {
             values.push(val);
-            return;
+            return true;
         }
 
         match &self.storage {
@@ -2064,6 +2069,15 @@ impl PhpArray {
                 );
             }
         }
+        true
+    }
+
+    /// Append with auto-incrementing key (`$a[] = $value`). Callers whose PHP
+    /// surface can report overflow use `try_push`; legacy infallible internal
+    /// materializers retain a no-op once the key space is exhausted.
+    #[inline]
+    pub fn push(&mut self, val: Value) {
+        let _ = self.try_push(val);
     }
 
     /// Append one already validated dense Long batch without redispatching the
@@ -2181,7 +2195,7 @@ impl PhpArray {
         if let ArrayStorage::Packed(values) = storage {
             // Can stay packed if key == next sequential
             if key == self.next_int_key {
-                self.next_int_key = key + 1;
+                self.next_int_key = key.saturating_add(1);
                 values.push(val);
                 return;
             }
@@ -2202,7 +2216,7 @@ impl PhpArray {
                 let inserted = small.push(ArrayEntryKey::Int(key), val);
                 debug_assert!(inserted);
                 if key >= self.next_int_key {
-                    self.next_int_key = key + 1;
+                    self.next_int_key = key.saturating_add(1);
                 }
                 return;
             }
@@ -2217,7 +2231,7 @@ impl PhpArray {
                 linear.invalidate_index();
                 linear.entries.push((ArrayEntryKey::Int(key), val));
                 if key >= self.next_int_key {
-                    self.next_int_key = key + 1;
+                    self.next_int_key = key.saturating_add(1);
                 }
                 return;
             }

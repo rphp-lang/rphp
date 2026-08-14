@@ -2629,28 +2629,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::AddArrayUnpack => {
-                let source = unsafe {
-                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
-                }
-                .as_array()
-                .ok_or_else(|| {
-                    VmError::Fatal("Only arrays can be unpacked in array literals".into())
-                })?;
-                let entries: Vec<_> = source
-                    .iter()
-                    .map(|(key, value)| (key, value.clone()))
-                    .collect();
-                let target = unsafe {
-                    &mut *(*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
-                };
-                let target = target.as_array_mut().ok_or_else(|| {
-                    VmError::Fatal("AddArrayUnpack: operand is not an array".into())
-                })?;
-                for (key, value) in entries {
-                    match key {
-                        crate::value::ArrayKey::Int(_) => target.push(value),
-                        crate::value::ArrayKey::String(key) => target.set_str(&key, value),
+                match op_add_array_unpack(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
                     }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    _ => {}
                 }
             }
 

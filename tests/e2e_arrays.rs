@@ -8,6 +8,8 @@ include!("e2e_arrays/copy_on_write.rs");
 
 include!("e2e_arrays/mutation_and_hot_paths.rs");
 
+include!("e2e_arrays/unpack_semantics.rs");
+
 #[test]
 fn list_assignment_supports_array_append_targets() {
     assert_eq!(

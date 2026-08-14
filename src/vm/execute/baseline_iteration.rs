@@ -15,7 +15,7 @@ fn assign_foreach_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
     }
 }
 
-fn call_unpack_throw<'a>(
+fn unpack_throw<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     class: &str,
@@ -30,12 +30,12 @@ fn call_unpack_throw<'a>(
     }
 }
 
-fn call_unpack_error<'a>(
+fn unpack_error<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     message: &str,
 ) -> ColdResult<'a> {
-    call_unpack_throw(eg, frame, "Error", message)
+    unpack_throw(eg, frame, "Error", message)
 }
 
 fn append_call_unpack_entry(
@@ -67,20 +67,46 @@ fn append_call_unpack_entry(
     Ok(())
 }
 
-fn traversable_unpack_key(value: &Value) -> Result<ArrayKey, String> {
+#[derive(Clone, Copy)]
+enum TraversableUnpackKind {
+    Arguments,
+    Array,
+}
+
+impl TraversableUnpackKind {
+    fn value(self, value: Value) -> Value {
+        match self {
+            Self::Arguments => Value::traversable_unpack_value(value),
+            Self::Array => value,
+        }
+    }
+
+    fn key_error(self) -> &'static str {
+        match self {
+            Self::Arguments => "Keys must be of type int|string during argument unpacking",
+            Self::Array => "Keys must be of type int|string during array unpacking",
+        }
+    }
+}
+
+fn traversable_unpack_key(
+    value: &Value,
+    kind: TraversableUnpackKind,
+) -> Result<ArrayKey, String> {
     let value = value.dereferenced();
     if let Some(key) = value.as_long() {
         Ok(ArrayKey::Int(key))
     } else if let Some(key) = value.as_str() {
         Ok(ArrayKey::String(key.to_string()))
     } else {
-        Err("Keys must be of type int|string during argument unpacking".to_string())
+        Err(kind.key_error().to_string())
     }
 }
 
-fn collect_generator_call_unpack(
+fn collect_generator_unpack(
     eg: &mut ExecutorGlobals,
     value: &Value,
+    kind: TraversableUnpackKind,
 ) -> Result<Vec<(ArrayKey, Value)>, VmError> {
     let generator = value
         .as_object_rc()
@@ -106,7 +132,7 @@ fn collect_generator_call_unpack(
         if data.state == crate::vm::generator::GeneratorState::Completed {
             break;
         }
-        let key = match traversable_unpack_key(&data.key) {
+        let key = match traversable_unpack_key(&data.key, kind) {
             Ok(key) => key,
             Err(message) => {
                 eg.exception = Some(make_error_value("Error", &message));
@@ -115,15 +141,16 @@ fn collect_generator_call_unpack(
         };
         entries.push((
             key,
-            Value::traversable_unpack_value(data.value.dereferenced().clone()),
+            kind.value(data.value.dereferenced().clone()),
         ));
     }
     Ok(entries)
 }
 
-fn collect_call_unpack_traversable(
+fn collect_unpack_traversable(
     eg: &mut ExecutorGlobals,
     source: &Value,
+    kind: TraversableUnpackKind,
 ) -> Result<Option<Vec<(ArrayKey, Value)>>, VmError> {
     let Some(object) = source.as_object() else {
         return Ok(None);
@@ -177,7 +204,7 @@ fn collect_call_unpack_traversable(
     }
 
     if class_name == "Generator" {
-        return collect_generator_call_unpack(eg, &iterable).map(Some);
+        return collect_generator_unpack(eg, &iterable, kind).map(Some);
     }
 
     if let Some(values) = iterable.as_object().and_then(|object| {
@@ -195,7 +222,7 @@ fn collect_call_unpack_traversable(
                 .map(|(key, value)| {
                     (
                         key,
-                        Value::traversable_unpack_value(value.dereferenced().clone()),
+                        kind.value(value.dereferenced().clone()),
                     )
                 })
                 .collect(),
@@ -247,14 +274,14 @@ fn collect_call_unpack_traversable(
         if eg.exception.is_some() {
             break;
         }
-        let key = match traversable_unpack_key(&key) {
+        let key = match traversable_unpack_key(&key, kind) {
             Ok(key) => key,
             Err(message) => {
                 eg.exception = Some(make_error_value("Error", &message));
                 break;
             }
         };
-        entries.push((key, Value::traversable_unpack_value(value)));
+        entries.push((key, kind.value(value.dereferenced().clone())));
         let _ = crate::stdlib::call_object_protocol_method(
             eg,
             &iterable,
@@ -267,6 +294,84 @@ fn collect_call_unpack_traversable(
         }
     }
     Ok(Some(entries))
+}
+
+fn append_array_unpack_entry(
+    target: &mut PhpArray,
+    key: ArrayKey,
+    value: Value,
+) -> Result<(), &'static str> {
+    match key {
+        ArrayKey::Int(_) => {
+            if !target.try_push(value) {
+                return Err("Cannot add element to the array as the next element is already occupied");
+            }
+        }
+        ArrayKey::String(key) => {
+            if canonical_decimal_array_key(&key).is_some() {
+                if !target.try_push(value) {
+                    return Err(
+                        "Cannot add element to the array as the next element is already occupied",
+                    );
+                }
+            } else {
+                target.set_owned_str(key, value);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn op_add_array_unpack<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: op2 is a compiler-allocated live operand. Array literal unpack
+    // reads it synchronously before mutating the separate op1 temporary.
+    let source = unsafe {
+        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+    }
+    .dereferenced();
+    let entries = if let Some(source) = source.as_array() {
+        Some(
+            source
+                .iter()
+                .map(|(key, value)| (key, value.dereferenced().clone()))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        collect_unpack_traversable(eg, source, TraversableUnpackKind::Array)?
+    };
+    let Some(entries) = entries else {
+        return Ok(unpack_error(
+            eg,
+            frame,
+            "Only arrays and Traversables can be unpacked",
+        ));
+    };
+    if let Some(exception) = eg.exception.take() {
+        return Ok(match throw_in_frame(eg, frame, exception) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
+
+    // SAFETY: op1 is the compiler-owned array-literal temporary and remains
+    // live for the rest of the expression.
+    let target = unsafe { &mut *(*frame).get_op_mut(opline.op1 as u32, opline.op1_type) }
+        .as_array_mut()
+        .ok_or_else(|| VmError::Fatal("AddArrayUnpack target is not an array".to_string()))?;
+    for (key, value) in entries {
+        if let Err(message) = append_array_unpack_entry(target, key, value) {
+            return Ok(unpack_error(eg, frame, message));
+        }
+    }
+    Ok(ColdResult::Done)
 }
 
 #[inline(never)]
@@ -304,7 +409,7 @@ fn op_add_call_argument<'a>(
         .ok_or_else(|| VmError::Fatal("AddCallArgument target is not an array".to_string()))?;
     if let ArrayKey::String(name) = key {
         if target.get_str(&name).is_some() {
-            return Ok(call_unpack_error(
+            return Ok(unpack_error(
                 eg,
                 frame,
                 &format!("Named parameter ${name} overwrites previous argument"),
@@ -345,7 +450,7 @@ fn op_add_call_unpack<'a>(
                 .collect::<Result<Vec<_>, _>>()
                 .map(Some);
         }
-        collect_call_unpack_traversable(eg, source)
+        collect_unpack_traversable(eg, source, TraversableUnpackKind::Arguments)
     };
 
     // SAFETY: op2 is a compiler-allocated live operand. Non-constant operands
@@ -370,7 +475,7 @@ fn op_add_call_unpack<'a>(
     let entries = match entries {
         Some(entries) => entries,
         None => {
-            return Ok(call_unpack_throw(
+            return Ok(unpack_throw(
                 eg,
                 frame,
                 "TypeError",
@@ -395,7 +500,7 @@ fn op_add_call_unpack<'a>(
     let mut seen_named = false;
     for (key, value) in entries {
         if let Err(message) = append_call_unpack_entry(target, key, value, &mut seen_named) {
-            return Ok(call_unpack_error(eg, frame, &message));
+            return Ok(unpack_error(eg, frame, &message));
         }
     }
     Ok(ColdResult::Done)
