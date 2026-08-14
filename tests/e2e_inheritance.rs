@@ -451,6 +451,151 @@ echo $b->value() . " " . $c->value();
 }
 
 #[test]
+fn concrete_parent_methods_enforce_variance_without_recursive_linking() {
+    let incompatible = run_php_expect_error(
+        r#"<?php
+interface PublishedResult {}
+class UnrelatedResult {}
+class PublishedFactory {
+    public function create(): PublishedResult {}
+}
+class BrokenFactory extends PublishedFactory {
+    public function create(): UnrelatedResult {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{incompatible:?}"),
+        "Fatal(\"Declaration of BrokenFactory::create(): UnrelatedResult must be compatible with PublishedFactory::create(): PublishedResult\")"
+    );
+
+    let recursive = run_php_expect_error(
+        r#"<?php
+interface StableResult {}
+spl_autoload_register(function (string $requested): void {
+    class DeferredFactory {
+        public function make(): StableResult {}
+    }
+    class DeferredOverride extends DeferredFactory {
+        public function make(): RecursiveResult {}
+    }
+});
+class RecursiveResult extends MissingDependency implements RecursiveResult {}
+"#,
+    );
+    assert_eq!(
+        format!("{recursive:?}"),
+        "Fatal(\"Declaration of DeferredOverride::make(): RecursiveResult must be compatible with DeferredFactory::make(): StableResult\")"
+    );
+}
+
+#[test]
+fn concrete_parent_variance_allows_covariance_contravariance_and_private_reuse() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class InputBase {}
+class InputSpecific extends InputBase {}
+class ResultBase {}
+class ResultSpecific extends ResultBase {}
+
+class ParentProcessor {
+    public function process(InputSpecific $input): ResultBase { return new ResultBase(); }
+    private function local(int $value): int { return $value; }
+}
+class ChildProcessor extends ParentProcessor {
+    public function process(InputBase $input): ResultSpecific { return new ResultSpecific(); }
+    public function local(string $value): string { return $value; }
+}
+
+$processor = new ChildProcessor();
+echo get_class($processor->process(new InputSpecific())), '|', $processor->local('private');
+"#,
+        ),
+        "ResultSpecific|private"
+    );
+}
+
+#[test]
+fn inherited_variance_resolves_iterable_trait_self_and_pending_parent_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait RequiresReplica {
+    abstract public function replica(): self;
+}
+trait SuppliesReplica {
+    public function replica(): self { return $this; }
+}
+class ReplicaHost {
+    use RequiresReplica;
+    use SuppliesReplica;
+}
+
+class IterableContract {
+    public function source(): array|object {}
+    public function consume(iterable $values) {}
+}
+class IterableImplementation extends IterableContract {
+    public function source(): iterable {}
+    public function consume(array|object $values) {}
+}
+
+class LexicalRoot {
+    public function copy(): self { return new self(); }
+}
+class LexicalMiddle extends LexicalRoot {}
+class LexicalLeaf extends LexicalMiddle {
+    public function copy(): parent { return new LexicalMiddle(); }
+}
+
+echo get_class((new ReplicaHost())->replica()), '|', get_class((new LexicalLeaf())->copy());
+"#
+        ),
+        "ReplicaHost|LexicalMiddle"
+    );
+}
+
+#[test]
+fn a_variadic_override_subsumes_fixed_typed_and_reference_parameters() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FixedCollector {
+    public function collect(int $number, string $label) {}
+    public function update(&$left, &$right) {}
+}
+class FlexibleCollector extends FixedCollector {
+    public function collect(int|string ...$items) { return count($items); }
+    public function update(&...$items) { return count($items); }
+}
+
+$collector = new FlexibleCollector();
+$left = 'original';
+$right = 'kept';
+echo $collector->collect(7, 'seven'), '|', $collector->update($left, $right);
+"#
+        ),
+        "2|2"
+    );
+
+    let narrowed_tail = run_php_expect_error(
+        r#"<?php
+class OpenInputContract {
+    public function ingest(int|string ...$items) {}
+}
+class NarrowFirstInput extends OpenInputContract {
+    public function ingest(int $first = 0, int|string ...$rest) {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{narrowed_tail:?}"),
+        "Fatal(\"Declaration of NarrowFirstInput::ingest(int $first, int|string ...$rest) must be compatible with OpenInputContract::ingest(int|string ...$items)\")"
+    );
+}
+
+#[test]
 fn test_extends_child_adds_property() {
     assert_eq!(
         run_php(

@@ -884,6 +884,7 @@ impl ExecutorGlobals {
         &self,
         required: MethodDeclaration<'_>,
         implementation: MethodDeclaration<'_>,
+        linking_class: Option<&ClassDef>,
     ) -> Vec<String> {
         use crate::vm::function::ParamTypeHint;
 
@@ -933,10 +934,14 @@ impl ExecutorGlobals {
             // PHP permits an implementation to add optional parameters. They
             // are outside the declaration's callable contract, so variance
             // checks apply only to parameters present in the requirement.
-            let check_count = required_signature.param_type_hints.len();
+            let check_count = Self::variance_contract_parameter_count(
+                required_signature,
+                implementation_signature,
+            );
             for index in 0..check_count {
-                let required_parameter = required_signature.param_type_hints.get(index);
-                let implementation_parameter = implementation_signature.param_type_hints.get(index);
+                let required_parameter = Self::variance_parameter_hint(required_signature, index);
+                let implementation_parameter =
+                    Self::variance_parameter_hint(implementation_signature, index);
                 match (implementation_parameter, required_parameter) {
                     (None | Some(ParamTypeHint::None), None | Some(ParamTypeHint::None)) => {}
                     (None | Some(ParamTypeHint::None) | Some(ParamTypeHint::Mixed), Some(_)) => {}
@@ -950,7 +955,23 @@ impl ExecutorGlobals {
                         }
                     }
                     (Some(implementation_hint), Some(required_hint)) => {
-                        if !self.is_param_type_compatible(implementation_hint, required_hint) {
+                        let implementation_hint = self.resolve_variance_type_hint(
+                            implementation_hint,
+                            implementation.owner,
+                            linking_class,
+                        );
+                        let required_hint = self.resolve_variance_type_hint(
+                            required_hint,
+                            required.owner,
+                            linking_class,
+                        );
+                        if !self.is_param_type_compatible(
+                            &implementation_hint,
+                            &required_hint,
+                            implementation.owner,
+                            required.owner,
+                            linking_class,
+                        ) {
                             errors.push(format!(
                                 "parameter {} type must be compatible with {}, got {}",
                                 index + 1,
@@ -963,24 +984,36 @@ impl ExecutorGlobals {
             }
 
             let required_return = &required_signature.return_type_hint;
-            if !matches!(required_return, ParamTypeHint::None)
-                && !self.is_return_type_compatible(
+            if !matches!(required_return, ParamTypeHint::None) {
+                let implementation_return = self.resolve_variance_type_hint(
                     &implementation_signature.return_type_hint,
-                    required_return,
-                )
-            {
-                errors.push(format!(
-                    "return type must be compatible with {}, got {}",
-                    required_return.display_name(),
-                    implementation_signature.return_type_hint.display_name()
-                ));
+                    implementation.owner,
+                    linking_class,
+                );
+                let required_return =
+                    self.resolve_variance_type_hint(required_return, required.owner, linking_class);
+                if !self.is_return_type_compatible(
+                    &implementation_return,
+                    &required_return,
+                    implementation.owner,
+                    required.owner,
+                    linking_class,
+                ) {
+                    errors.push(format!(
+                        "return type must be compatible with {}, got {}",
+                        required_return.display_name(),
+                        implementation_return.display_name()
+                    ));
+                }
             }
         }
 
-        let reference_count = required_public.min(64);
+        let reference_count =
+            Self::variance_contract_parameter_count(required_signature, implementation_signature)
+                .min(64);
         for index in 0..reference_count {
-            if required_signature.is_param_by_ref(index)
-                != implementation_signature.is_param_by_ref(index)
+            if Self::variance_parameter_is_by_ref(required_signature, index)
+                != Self::variance_parameter_is_by_ref(implementation_signature, index)
             {
                 errors.push(format!(
                     "parameter {} reference mode must match the declaration",
@@ -989,6 +1022,236 @@ impl ExecutorGlobals {
             }
         }
         errors
+    }
+
+    #[inline]
+    fn variance_parameter_count(signature: &crate::vm::function::SignatureInfo) -> u32 {
+        signature.public_arity() + u32::from(signature.is_variadic)
+    }
+
+    #[inline]
+    fn variance_contract_parameter_count(
+        required: &crate::vm::function::SignatureInfo,
+        implementation: &crate::vm::function::SignatureInfo,
+    ) -> u32 {
+        if required.is_variadic {
+            // Every explicit implementation parameter after the declaration's
+            // variadic position may receive a value admitted by that variadic
+            // contract, including optional fixed parameters before the new
+            // variadic tail.
+            Self::variance_parameter_count(required)
+                .max(Self::variance_parameter_count(implementation))
+        } else {
+            Self::variance_parameter_count(required)
+        }
+    }
+
+    #[inline]
+    fn variance_parameter_index(
+        signature: &crate::vm::function::SignatureInfo,
+        contract_index: u32,
+    ) -> Option<u32> {
+        if contract_index < signature.public_arity() {
+            Some(contract_index)
+        } else if signature.is_variadic {
+            // A variadic parameter subsumes every remaining position in an
+            // inherited callable contract.
+            Some(signature.public_arity())
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn variance_parameter_hint(
+        signature: &crate::vm::function::SignatureInfo,
+        contract_index: u32,
+    ) -> Option<&crate::vm::function::ParamTypeHint> {
+        Self::variance_parameter_index(signature, contract_index)
+            .and_then(|index| signature.param_type_hints.get(index as usize))
+    }
+
+    #[inline]
+    fn variance_parameter_is_by_ref(
+        signature: &crate::vm::function::SignatureInfo,
+        contract_index: u32,
+    ) -> bool {
+        Self::variance_parameter_index(signature, contract_index)
+            .is_some_and(|index| signature.is_param_by_ref(index))
+    }
+
+    fn variance_scope_owner<'a>(
+        &'a self,
+        owner: &'a str,
+        linking_class: Option<&'a ClassDef>,
+    ) -> &'a str {
+        if let Some(linking_class) = linking_class
+            && self
+                .find_class(owner)
+                .is_some_and(|definition| definition.is_trait)
+        {
+            return linking_class.name.as_str();
+        }
+        owner
+    }
+
+    fn resolve_variance_type_hint(
+        &self,
+        hint: &crate::vm::function::ParamTypeHint,
+        owner: &str,
+        linking_class: Option<&ClassDef>,
+    ) -> crate::vm::function::ParamTypeHint {
+        use crate::vm::function::ParamTypeHint;
+
+        let scope_owner = self.variance_scope_owner(owner, linking_class);
+
+        match hint {
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
+                ParamTypeHint::ClassName(scope_owner.to_string())
+            }
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
+                ParamTypeHint::ClassName(
+                    linking_class
+                        .filter(|definition| definition.name.eq_ignore_ascii_case(scope_owner))
+                        .and_then(|definition| definition.parent.clone())
+                        .or_else(|| {
+                            self.find_class(scope_owner)
+                                .and_then(|class| class.parent.clone())
+                        })
+                        .unwrap_or_else(|| name.clone()),
+                )
+            }
+            ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
+                self.resolve_variance_type_hint(inner, owner, linking_class),
+            )),
+            ParamTypeHint::Union(parts) => ParamTypeHint::Union(
+                parts
+                    .iter()
+                    .map(|part| self.resolve_variance_type_hint(part, owner, linking_class))
+                    .collect(),
+            ),
+            ParamTypeHint::Intersection(parts) => ParamTypeHint::Intersection(
+                parts
+                    .iter()
+                    .map(|part| self.resolve_variance_type_hint(part, owner, linking_class))
+                    .collect(),
+            ),
+            _ => hint.clone(),
+        }
+    }
+
+    fn format_method_signature(
+        &self,
+        declaration: MethodDeclaration<'_>,
+        linking_class: Option<&ClassDef>,
+    ) -> String {
+        use crate::vm::function::ParamTypeHint;
+
+        let signature = &declaration.function.sig;
+        let parameter_count = Self::variance_parameter_count(signature) as usize;
+        let mut parameters = Vec::with_capacity(parameter_count);
+        for index in 0..parameter_count {
+            let mut parameter = String::new();
+            if let Some(hint) = signature.param_type_hints.get(index)
+                && !matches!(hint, ParamTypeHint::None)
+            {
+                parameter.push_str(
+                    &self
+                        .resolve_variance_type_hint(hint, declaration.owner, linking_class)
+                        .display_name(),
+                );
+                parameter.push(' ');
+            }
+            if signature.is_param_by_ref(index as u32) {
+                parameter.push('&');
+            }
+            if signature.is_variadic && index as u32 == signature.public_arity() {
+                parameter.push_str("...");
+            }
+            parameter.push('$');
+            parameter.push_str(
+                signature
+                    .param_names
+                    .get(index)
+                    .map(String::as_str)
+                    .unwrap_or("arg"),
+            );
+            parameters.push(parameter);
+        }
+
+        let mut rendered = format!(
+            "{}::{}({})",
+            declaration.owner,
+            declaration.name,
+            parameters.join(", ")
+        );
+        if !matches!(signature.return_type_hint, ParamTypeHint::None) {
+            rendered.push_str(": ");
+            rendered.push_str(
+                &self
+                    .resolve_variance_type_hint(
+                        &signature.return_type_hint,
+                        declaration.owner,
+                        linking_class,
+                    )
+                    .display_name(),
+            );
+        }
+        rendered
+    }
+
+    /// Concrete parent methods carry the same parameter contravariance and
+    /// return covariance contract as interfaces and abstract declarations.
+    /// Constructors retain PHP's historical exemption unless the inherited
+    /// declaration is itself abstract; private methods do not participate in
+    /// an overriding contract.
+    fn validate_parent_method_contracts(&self, class_def: &ClassDef) -> Result<(), String> {
+        if class_def.is_interface || class_def.is_trait {
+            return Ok(());
+        }
+        let Some(parent) = class_def
+            .parent
+            .as_deref()
+            .and_then(|name| self.class_table.get(name))
+        else {
+            return Ok(());
+        };
+
+        for method in &class_def.methods {
+            let implementation = Self::method_declaration(class_def, method);
+            let Some(required) = self.find_effective_method(parent, implementation.name) else {
+                continue;
+            };
+            if required.visibility == Visibility::Private
+                || (required.name.eq_ignore_ascii_case("__construct") && !required.is_abstract)
+            {
+                continue;
+            }
+            if self
+                .method_contract_errors(required, implementation, Some(class_def))
+                .is_empty()
+            {
+                continue;
+            }
+
+            let location = class_def
+                .source_file
+                .as_ref()
+                .map_or_else(String::new, |file| {
+                    // Method line metadata is not yet retained by ClassDef. Keep
+                    // the canonical source unit and a numeric placeholder so the
+                    // diagnostic has PHP's stable location shape without guessing
+                    // a source line.
+                    format!(" in {file} on line 0")
+                });
+            return Err(format!(
+                "Declaration of {} must be compatible with {}{}",
+                self.format_method_signature(implementation, Some(class_def)),
+                self.format_method_signature(required, Some(class_def)),
+                location
+            ));
+        }
+        Ok(())
     }
 
     fn validate_abstract_method_contracts(&self, class_def: &ClassDef) -> Result<(), String> {
@@ -1013,7 +1276,7 @@ impl ExecutorGlobals {
                 ));
             }
             if let Some(reason) = self
-                .method_contract_errors(requirement, implementation)
+                .method_contract_errors(requirement, implementation, Some(class_def))
                 .into_iter()
                 .next()
             {
@@ -1129,6 +1392,7 @@ impl ExecutorGlobals {
             }
         }
 
+        self.validate_parent_method_contracts(&class_def)?;
         self.validate_abstract_method_contracts(&class_def)?;
 
         // Resolve inheritance — merge parent's properties and methods
@@ -1602,6 +1866,17 @@ impl ExecutorGlobals {
             return true;
         }
         if let Some(class_def) = self.find_class(class_name) {
+            // PHP implicitly makes every class with an effective __toString()
+            // implementation satisfy the built-in Stringable interface. The
+            // relation participates in declaration variance as well as
+            // instanceof/is_a checks; it is not copied into source metadata.
+            if canonical_target.eq_ignore_ascii_case("Stringable")
+                && self
+                    .find_effective_method(class_def, "__toString")
+                    .is_some()
+            {
+                return true;
+            }
             // Check parent class
             if let Some(parent) = &class_def.parent {
                 if self.class_is_a(parent, canonical_target) {
@@ -1984,7 +2259,7 @@ impl ExecutorGlobals {
                     continue;
                 }
                 errors.extend(
-                    self.method_contract_errors(requirement, implementation)
+                    self.method_contract_errors(requirement, implementation, None)
                         .into_iter()
                         .map(|reason| {
                             (
@@ -2215,10 +2490,71 @@ impl ExecutorGlobals {
     /// - None (no type declared) when interface declares one → incompatible
     /// - Nullable: ?T is compatible with ?T, T is compatible with ?T (narrowing is fine)
     /// - Mixed accepts anything
+    fn class_is_a_while_linking(
+        &self,
+        class_name: &str,
+        target: &str,
+        linking_class: Option<&ClassDef>,
+    ) -> bool {
+        let Some(linking_class) =
+            linking_class.filter(|definition| definition.name.eq_ignore_ascii_case(class_name))
+        else {
+            return self.class_is_a(class_name, target);
+        };
+        if linking_class.name.eq_ignore_ascii_case(target) {
+            return true;
+        }
+        if target.eq_ignore_ascii_case("Stringable")
+            && (linking_class
+                .methods
+                .iter()
+                .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__toString"))
+                || linking_class
+                    .parent
+                    .as_deref()
+                    .is_some_and(|parent| self.class_is_a(parent, target)))
+        {
+            return true;
+        }
+        linking_class
+            .parent
+            .as_deref()
+            .is_some_and(|parent| self.class_is_a(parent, target))
+            || linking_class
+                .implements
+                .iter()
+                .any(|interface| self.class_is_a(interface, target))
+    }
+
+    fn variance_class_is_known(&self, class_name: &str, linking_class: Option<&ClassDef>) -> bool {
+        linking_class.is_some_and(|definition| definition.name.eq_ignore_ascii_case(class_name))
+            || self.find_class(class_name).is_some()
+    }
+
+    /// Class aliases and autoloaded declarations may not exist yet while an
+    /// enclosing source unit is registering its classes. A known-negative
+    /// relationship is an incompatibility; two unresolved names are
+    /// inconclusive and must not produce a premature fatal before runtime code
+    /// can publish their alias identity. Full delayed class linking remains a
+    /// separate contract.
+    fn variance_class_is_a(
+        &self,
+        class_name: &str,
+        target: &str,
+        linking_class: Option<&ClassDef>,
+    ) -> bool {
+        self.class_is_a_while_linking(class_name, target, linking_class)
+            || (!self.variance_class_is_known(class_name, linking_class)
+                && !self.variance_class_is_known(target, linking_class))
+    }
+
     fn is_return_type_compatible(
         &self,
         impl_hint: &crate::vm::function::ParamTypeHint,
         iface_hint: &crate::vm::function::ParamTypeHint,
+        impl_owner: &str,
+        iface_owner: &str,
+        linking_class: Option<&ClassDef>,
     ) -> bool {
         use crate::vm::function::ParamTypeHint;
 
@@ -2249,7 +2585,13 @@ impl ExecutorGlobals {
             (_, ParamTypeHint::Nullable(inner_iface)) => {
                 // impl_hint (non-nullable or differently nullable) vs ?T
                 // Check if impl is compatible with the inner type
-                return self.is_return_type_compatible(impl_hint, inner_iface);
+                return self.is_return_type_compatible(
+                    impl_hint,
+                    inner_iface,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                );
             }
             (ParamTypeHint::Nullable(_), _) => {
                 // impl ?T vs iface T (widening) — incompatible
@@ -2258,27 +2600,90 @@ impl ExecutorGlobals {
             _ => {}
         }
 
+        // For declaration variance, iterable is precisely the built-in union
+        // array|Traversable. Expanding it on both sides is important for
+        // compound types such as iterable <: array|object and
+        // X&Traversable <: iterable.
+        if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
+        {
+            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            return self.is_return_type_compatible(
+                &ParamTypeHint::Array,
+                iface_hint,
+                impl_owner,
+                iface_owner,
+                linking_class,
+            ) && self.is_return_type_compatible(
+                &traversable,
+                iface_hint,
+                impl_owner,
+                iface_owner,
+                linking_class,
+            );
+        }
+        if matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
+        {
+            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            return self.is_return_type_compatible(
+                impl_hint,
+                &ParamTypeHint::Array,
+                impl_owner,
+                iface_owner,
+                linking_class,
+            ) || self.is_return_type_compatible(
+                impl_hint,
+                &traversable,
+                impl_owner,
+                iface_owner,
+                linking_class,
+            );
+        }
+
         // Covariant return compatibility is ordinary subtype checking over
         // union/intersection nodes.
         if let ParamTypeHint::Intersection(iface_parts) = iface_hint {
-            return iface_parts
-                .iter()
-                .all(|part| self.is_return_type_compatible(impl_hint, part));
+            return iface_parts.iter().all(|part| {
+                self.is_return_type_compatible(
+                    impl_hint,
+                    part,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                )
+            });
         }
         if let ParamTypeHint::Union(impl_parts) = impl_hint {
-            return impl_parts
-                .iter()
-                .all(|part| self.is_return_type_compatible(part, iface_hint));
+            return impl_parts.iter().all(|part| {
+                self.is_return_type_compatible(
+                    part,
+                    iface_hint,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                )
+            });
         }
         if let ParamTypeHint::Union(iface_parts) = iface_hint {
-            return iface_parts
-                .iter()
-                .any(|part| self.is_return_type_compatible(impl_hint, part));
+            return iface_parts.iter().any(|part| {
+                self.is_return_type_compatible(
+                    impl_hint,
+                    part,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                )
+            });
         }
         if let ParamTypeHint::Intersection(impl_parts) = impl_hint {
-            return impl_parts
-                .iter()
-                .any(|part| self.is_return_type_compatible(part, iface_hint));
+            return impl_parts.iter().any(|part| {
+                self.is_return_type_compatible(
+                    part,
+                    iface_hint,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                )
+            });
         }
 
         // PHP's `iterable` is the built-in union `array|Traversable` for
@@ -2301,7 +2706,17 @@ impl ExecutorGlobals {
             if iface_class.eq_ignore_ascii_case("object") {
                 return true;
             }
-            return self.class_is_a(impl_class, iface_class);
+            // `static` remains late-bound in a return declaration. It may
+            // narrow `self` or an ordinary ancestor contract, but replacing a
+            // required `static` with `self` would widen the result for further
+            // descendants and is therefore invalid.
+            if iface_class.eq_ignore_ascii_case("static") {
+                return impl_class.eq_ignore_ascii_case("static");
+            }
+            if impl_class.eq_ignore_ascii_case("static") {
+                return self.variance_class_is_a(impl_owner, iface_class, linking_class);
+            }
+            return self.variance_class_is_a(impl_class, iface_class, linking_class);
         }
 
         // Everything else: incompatible
@@ -2320,6 +2735,9 @@ impl ExecutorGlobals {
         &self,
         impl_hint: &crate::vm::function::ParamTypeHint,
         iface_hint: &crate::vm::function::ParamTypeHint,
+        impl_owner: &str,
+        iface_owner: &str,
+        linking_class: Option<&ClassDef>,
     ) -> bool {
         use crate::vm::function::ParamTypeHint;
 
@@ -2340,7 +2758,13 @@ impl ExecutorGlobals {
         match (impl_hint, iface_hint) {
             (ParamTypeHint::Nullable(inner_impl), _) => {
                 // ?T in impl vs T in iface — impl accepts more, check inner
-                return self.is_param_type_compatible(inner_impl, iface_hint);
+                return self.is_param_type_compatible(
+                    inner_impl,
+                    iface_hint,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                );
             }
             (_, ParamTypeHint::Nullable(_)) => {
                 // T in impl vs ?T in iface — impl rejects null, incompatible
@@ -2349,27 +2773,86 @@ impl ExecutorGlobals {
             _ => {}
         }
 
+        if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
+        {
+            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            return self.is_param_type_compatible(
+                &ParamTypeHint::Array,
+                iface_hint,
+                impl_owner,
+                iface_owner,
+                linking_class,
+            ) || self.is_param_type_compatible(
+                &traversable,
+                iface_hint,
+                impl_owner,
+                iface_owner,
+                linking_class,
+            );
+        }
+        if matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
+        {
+            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            return self.is_param_type_compatible(
+                impl_hint,
+                &ParamTypeHint::Array,
+                impl_owner,
+                iface_owner,
+                linking_class,
+            ) && self.is_param_type_compatible(
+                impl_hint,
+                &traversable,
+                impl_owner,
+                iface_owner,
+                linking_class,
+            );
+        }
+
         // Parameter compatibility reverses the subtype relation: the
         // implementation must accept every value admitted by the interface.
         if let ParamTypeHint::Intersection(impl_parts) = impl_hint {
-            return impl_parts
-                .iter()
-                .all(|part| self.is_param_type_compatible(part, iface_hint));
+            return impl_parts.iter().all(|part| {
+                self.is_param_type_compatible(
+                    part,
+                    iface_hint,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                )
+            });
         }
         if let ParamTypeHint::Union(iface_parts) = iface_hint {
-            return iface_parts
-                .iter()
-                .all(|part| self.is_param_type_compatible(impl_hint, part));
+            return iface_parts.iter().all(|part| {
+                self.is_param_type_compatible(
+                    impl_hint,
+                    part,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                )
+            });
         }
         if let ParamTypeHint::Union(impl_parts) = impl_hint {
-            return impl_parts
-                .iter()
-                .any(|part| self.is_param_type_compatible(part, iface_hint));
+            return impl_parts.iter().any(|part| {
+                self.is_param_type_compatible(
+                    part,
+                    iface_hint,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                )
+            });
         }
         if let ParamTypeHint::Intersection(iface_parts) = iface_hint {
-            return iface_parts
-                .iter()
-                .any(|part| self.is_param_type_compatible(impl_hint, part));
+            return iface_parts.iter().any(|part| {
+                self.is_param_type_compatible(
+                    impl_hint,
+                    part,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                )
+            });
         }
 
         if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
@@ -2382,7 +2865,10 @@ impl ExecutorGlobals {
         // Compatible if A is_a B (A is a subtype of B, so impl accepts wider)
         match (impl_hint, iface_hint) {
             (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
-                return self.class_is_a(iface_class, impl_class);
+                if impl_class.eq_ignore_ascii_case("object") {
+                    return true;
+                }
+                return self.variance_class_is_a(iface_class, impl_class, linking_class);
             }
             _ => {}
         }

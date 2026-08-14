@@ -530,6 +530,29 @@ var_dump(class_alias('OriginalClass', 'aliasclass'));
 }
 
 #[test]
+fn an_included_alias_can_participate_in_a_later_override_contract() {
+    let dir = TempPhpDir::new();
+    let aliases = dir.write(
+        "payload_alias.php",
+        "<?php class CanonicalPayload {} class_alias('CanonicalPayload', 'ProjectedPayload');",
+    );
+    let source = format!(
+        r#"<?php
+require '{aliases}';
+class CanonicalSink {{
+    public function store(CanonicalPayload $payload): void {{}}
+}}
+class ProjectedSink extends CanonicalSink {{
+    public function store(ProjectedPayload $payload): void {{ echo get_class($payload); }}
+}}
+(new ProjectedSink())->store(new CanonicalPayload());
+"#
+    );
+
+    assert_eq!(run_php(&source), "CanonicalPayload");
+}
+
+#[test]
 fn class_alias_exposes_trait_static_methods_with_late_static_returns() {
     assert_eq!(
         run_php(
