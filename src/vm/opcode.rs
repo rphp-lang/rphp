@@ -4,6 +4,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum OpCode {
+    JmpFinally = 0,
     // Arithmetic
     Add = 1,
     Sub = 2,

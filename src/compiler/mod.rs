@@ -270,6 +270,18 @@ impl OpArray {
                         is_leader[i + 1] = true;
                     }
                 }
+                OpCode::JmpFinally
+                    if instr._pad & crate::vm::instruction::JMP_FLAG_FINALLY_END == 0 =>
+                {
+                    let target = instr.op1 as usize;
+                    if target < n {
+                        is_leader[target] = true;
+                    }
+                    if i + 1 < n {
+                        is_leader[i + 1] = true;
+                    }
+                }
+                OpCode::JmpFinally => {}
                 OpCode::JmpZ | OpCode::JmpNZ => {
                     // JmpZ/JmpNZ store target in op2
                     let target = instr.op2 as usize;

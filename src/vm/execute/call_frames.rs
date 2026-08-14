@@ -559,6 +559,9 @@ fn throw_in_frame<'a>(
     let mut search_frame = frame;
     loop {
         let sf_op_array = unsafe { (*search_frame).op_array() };
+        // An exception raised while a finally block is completing replaces a
+        // pending goto/break continuation in that frame.
+        finally_jump_state(search_frame, sf_op_array, FINALLY_JUMP_CLEAR, 0, false);
         let current_ip = unsafe {
             (*search_frame)
                 .opline

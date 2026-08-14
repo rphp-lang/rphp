@@ -484,3 +484,204 @@ try {
         "ab"
     );
 }
+
+#[test]
+fn goto_leaving_try_runs_intervening_finally_blocks_in_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function backward() {
+    $round = 0;
+again:
+    echo "L", $round;
+    try {
+        echo "T", $round;
+        if ($round++ === 0) {
+            goto again;
+        }
+    } finally {
+        echo "F", $round;
+    }
+}
+backward();
+echo "|";
+
+try {
+    echo "A";
+    goto forwardDone;
+} finally {
+    echo "B";
+}
+echo "bad";
+forwardDone:
+echo "C|";
+
+try {
+    try {
+        echo "D";
+        goto nestedDone;
+    } finally {
+        echo "E";
+    }
+} finally {
+    echo "F";
+}
+nestedDone:
+echo "G|";
+
+try {
+    try {
+        throw new Exception("enter");
+    } catch (Exception $error) {
+        echo "H";
+        goto catchDone;
+    } finally {
+        echo "I";
+    }
+    echo "bad";
+} catch (Exception $error) {
+    echo "bad";
+}
+catchDone:
+echo "J|";
+
+$iteration = 0;
+try {
+localLabel:
+    echo $iteration++;
+    if ($iteration < 2) {
+        goto localLabel;
+    }
+} finally {
+    echo "K";
+}
+"#,
+        ),
+        "L0T0F1L1T1F2|ABC|DEFG|HIJ|01K"
+    );
+}
+
+#[test]
+fn return_or_throw_in_finally_replaces_a_pending_goto() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function returnWins() {
+    try {
+        goto jumpTarget;
+    } finally {
+        echo "R";
+        return "S";
+    }
+jumpTarget:
+    return "bad";
+}
+echo returnWins(), "|";
+
+try {
+    try {
+        goto throwTarget;
+    } finally {
+        echo "T";
+        throw new Exception("U");
+    }
+throwTarget:
+    echo "bad";
+} catch (Exception $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "RS|TU"
+    );
+}
+
+#[test]
+fn break_and_continue_leaving_try_run_finally_before_loop_transfer() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+while (true) {
+    try {
+        echo "A";
+        break;
+    } finally {
+        echo "B";
+    }
+}
+echo "C|";
+
+for ($index = 0; $index < 2; $index++) {
+    try {
+        echo $index;
+        continue;
+    } finally {
+        echo "D";
+    }
+    echo "bad";
+}
+echo "|";
+
+while (true) {
+    try {
+        try {
+            echo "E";
+            break;
+        } finally {
+            echo "F";
+        }
+    } finally {
+        echo "G";
+    }
+}
+"#,
+        ),
+        "ABC|0D1D|EFG"
+    );
+}
+
+#[test]
+fn finally_jump_continuation_does_not_leak_into_a_reused_call_frame() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function visit(bool $jump) {
+    try {
+        echo "A";
+        if ($jump) {
+            goto finished;
+        }
+        echo "B";
+    } finally {
+        echo "C";
+    }
+finished:
+    echo "D";
+}
+visit(true);
+echo "|";
+visit(false);
+"#,
+        ),
+        "ACD|ABCD"
+    );
+}
+
+#[test]
+fn finally_jump_continuation_is_not_published_as_a_global() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+try {
+    echo "A";
+    goto finished;
+} finally {
+    echo "B";
+}
+finished:
+echo isset($GLOBALS["\0finally_jump"]) ? "bad" : "C";
+"#,
+        ),
+        "ABC"
+    );
+}

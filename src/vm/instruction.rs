@@ -56,6 +56,12 @@ pub const CALL_FLAG_ERROR_SUPPRESS: u16 = 1 << 10;
 /// a reference parameter.
 pub const SEND_FLAG_GLOBALS: u16 = 1;
 
+/// A source-level `goto` leaves a try/catch region with finally, while its
+/// zero-width target label shares the first executable offset of that region.
+pub const JMP_FLAG_TARGET_OUTSIDE_TRY: u16 = 1;
+/// The finally-control opcode marks the end of a finally body, not its entry.
+pub const JMP_FLAG_FINALLY_END: u16 = 1 << 1;
+
 /// Late-static property flag: the called class lives in the compact frame's
 /// embedded scope slot. Wide frames and instance methods use the resolver.
 pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;

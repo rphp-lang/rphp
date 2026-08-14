@@ -1101,7 +1101,7 @@ pub struct TryEntry {
     pub try_end: u32,
     pub catches: Vec<CatchEntry>, // ordered list of catch clauses
     pub finally_start: u32,       // 0xFFFFFFFF if no finally
-    pub finally_end: u32,         // instruction after finally block
+    pub finally_end: u32,         // end marker instruction after finally body
 }
 
 /// Compiled parameter metadata from compile_params.
@@ -1358,6 +1358,7 @@ struct LoopContext {
 enum GotoRegionKind {
     LoopOrSwitch,
     Finally,
+    TryFinally,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1393,6 +1394,9 @@ pub struct Compiler {
     goto_patches: Vec<GotoPatch>,
     goto_regions: Vec<GotoRegion>,
     next_goto_region_id: u32,
+    /// One function-local hidden continuation slot shared by all finally
+    /// blocks. Functions without finally keep their existing frame shape.
+    finally_jump_cv: Option<u32>,
     /// Try/catch entries
     try_entries: Vec<TryEntry>,
     /// Class definitions
@@ -1534,6 +1538,7 @@ impl Compiler {
             goto_patches: Vec::new(),
             goto_regions: Vec::new(),
             next_goto_region_id: 0,
+            finally_jump_cv: None,
             try_entries: Vec::new(),
             class_defs: Vec::new(),
             generic_declarations: Vec::new(),
@@ -2255,7 +2260,9 @@ impl Compiler {
         // These go into main_scope_vars (separate from explicit `global` bindings).
         let mut main_scope_vars: Vec<(u32, String)> = Vec::new();
         for (name, &cv_idx) in &self.cv_table {
-            main_scope_vars.push((cv_idx, name.clone()));
+            if !name.starts_with('\0') {
+                main_scope_vars.push((cv_idx, name.clone()));
+            }
         }
         let all_cvs = self.all_cvs();
 
@@ -5637,6 +5644,15 @@ impl Compiler {
         }
     }
 
+    fn resolve_finally_jump_cv(&mut self) -> u32 {
+        if let Some(cv) = self.finally_jump_cv {
+            return cv;
+        }
+        let cv = self.resolve_cv("\0finally_jump") as u32;
+        self.finally_jump_cv = Some(cv);
+        cv
+    }
+
     fn enter_goto_region(&mut self, kind: GotoRegionKind) {
         let region = GotoRegion {
             id: self.next_goto_region_id,
@@ -5690,11 +5706,17 @@ impl Compiler {
         Ok(())
     }
 
+    fn goto_leaves_finally_region(source: &[GotoRegion], target: &[GotoRegion]) -> bool {
+        source
+            .iter()
+            .any(|region| region.kind == GotoRegionKind::TryFinally && !target.contains(region))
+    }
+
     fn define_label(&mut self, name: &str) -> Result<(), String> {
-        let target = self.instructions.len() as u16;
         if self.labels.contains_key(name) {
             return Err(format!("Label '{name}' already defined"));
         }
+        let target = self.instructions.len() as u16;
         let target_regions = self.goto_regions.clone();
         let mut index = 0;
         while index < self.goto_patches.len() {
@@ -5702,6 +5724,10 @@ impl Compiler {
                 let patch = self.goto_patches.swap_remove(index);
                 self.validate_goto_regions(&patch.regions, &target_regions, patch.line)?;
                 self.instructions[patch.instruction].op1 = target;
+                if Self::goto_leaves_finally_region(&patch.regions, &target_regions) {
+                    self.instructions[patch.instruction]._pad |=
+                        crate::vm::instruction::JMP_FLAG_TARGET_OUTSIDE_TRY;
+                }
             } else {
                 index += 1;
             }
@@ -5721,6 +5747,9 @@ impl Compiler {
         if let Some(target) = self.labels.get(name) {
             self.validate_goto_regions(&self.goto_regions, &target.regions, line)?;
             instruction.op1 = target.instruction;
+            if Self::goto_leaves_finally_region(&self.goto_regions, &target.regions) {
+                instruction._pad |= crate::vm::instruction::JMP_FLAG_TARGET_OUTSIDE_TRY;
+            }
         } else {
             self.goto_patches.push(GotoPatch {
                 instruction: self.instructions.len(),
@@ -5733,12 +5762,34 @@ impl Compiler {
         Ok(())
     }
 
-    fn finalize_gotos(&self) -> Result<(), String> {
+    fn finalize_gotos(&mut self) -> Result<(), String> {
         if let Some(patch) = self.goto_patches.first() {
-            Err(format!("'goto' to undefined label '{}'", patch.label))
-        } else {
-            Ok(())
+            return Err(format!("'goto' to undefined label '{}'", patch.label));
         }
+        // Resolve non-local transfers once, after forward labels and every
+        // try/finally range are known. Ordinary loop backedges retain Jmp's
+        // original hot path; only an actual crossing creates a continuation.
+        for instruction_index in 0..self.instructions.len() {
+            let instruction = self.instructions[instruction_index];
+            if instruction.opcode != OpCode::Jmp {
+                continue;
+            }
+            let target = u32::from(instruction.op1);
+            let target_outside_try =
+                instruction._pad & crate::vm::instruction::JMP_FLAG_TARGET_OUTSIDE_TRY != 0;
+            let source = instruction_index as u32;
+            if self.try_entries.iter().any(|entry| {
+                entry.finally_start != u32::MAX
+                    && source >= entry.try_start
+                    && source < entry.finally_start
+                    && !(target >= entry.try_start
+                        && target < entry.finally_end
+                        && !(target_outside_try && target == entry.try_start))
+            }) {
+                self.instructions[instruction_index].opcode = OpCode::JmpFinally;
+            }
+        }
+        Ok(())
     }
 
     /// Build list of all CVs from cv_table.

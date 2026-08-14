@@ -619,6 +619,7 @@ mod inner {
             36 => Some("PostInc"),
             37 => Some("PostDec"),
             40 => Some("Echo"),
+            0 => Some("JmpFinally"),
             42 => Some("Jmp"),
             43 => Some("JmpZ"),
             44 => Some("JmpNZ"),

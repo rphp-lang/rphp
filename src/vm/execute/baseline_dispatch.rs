@@ -1,5 +1,124 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+/// Return the innermost finally block crossed by a non-local jump. The whole
+/// try/catch/finally instruction span counts as local: compiler-generated jumps
+/// into the block's own finally must not create a continuation.
+fn crossed_finally_for_jump(
+    op_array: &crate::compiler::OpArray,
+    source: u32,
+    target: u32,
+    target_outside_try: bool,
+) -> Option<&crate::compiler::compile::TryEntry> {
+    op_array
+        .try_entries
+        .iter()
+        .filter(|entry| {
+            entry.finally_start != u32::MAX
+                && source >= entry.try_start
+                && source < entry.finally_start
+                && !(target >= entry.try_start
+                    && target < entry.finally_end
+                    && !(target_outside_try && target == entry.try_start))
+        })
+        .min_by_key(|entry| entry.finally_end - entry.try_start)
+}
+
+fn finally_jump_cv(op_array: &crate::compiler::OpArray) -> Option<u32> {
+    op_array
+        .all_cvs
+        .iter()
+        .find_map(|(cv, name)| (name == "\0finally_jump").then_some(*cv))
+}
+
+const FINALLY_JUMP_TARGET_OUTSIDE_TRY: u32 = 1 << 31;
+
+fn finally_jump_target(encoded: u32) -> (u32, bool) {
+    (
+        encoded & !FINALLY_JUMP_TARGET_OUTSIDE_TRY,
+        encoded & FINALLY_JUMP_TARGET_OUTSIDE_TRY != 0,
+    )
+}
+
+const FINALLY_JUMP_CLEAR: u8 = 0;
+const FINALLY_JUMP_RESUME: u8 = 1;
+const FINALLY_JUMP_START: u8 = 2;
+
+#[cold]
+#[inline(never)]
+fn finally_jump_state(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    action: u8,
+    target: u32,
+    target_outside_try: bool,
+) -> Option<u32> {
+    // SAFETY: the compiler allocated the hidden CV in this op array's live
+    // frame, and every redirect is an instruction offset produced by that same
+    // compiler. The continuation is always a scalar Long/Undef;
+    // frame_slot_set preserves ordinary slot ownership while replacing it.
+    unsafe {
+        match action {
+            FINALLY_JUMP_START => {
+                let current_ip = (*frame)
+                    .opline
+                    .offset_from(op_array.instructions.as_ptr())
+                    as u32;
+                let entry = crossed_finally_for_jump(
+                    op_array,
+                    current_ip,
+                    target,
+                    target_outside_try,
+                )
+                .expect("JmpFinally must cross a compiled finally range");
+                let encoded = target
+                    | if target_outside_try {
+                        FINALLY_JUMP_TARGET_OUTSIDE_TRY
+                    } else {
+                        0
+                    };
+                let cv = finally_jump_cv(op_array)
+                    .expect("JmpFinally requires the compiler-owned continuation CV");
+                let destination = (*frame).get_op_mut(cv, OpType::Cv);
+                frame_slot_set(frame, destination, Value::long(encoded as i64));
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(entry.finally_start as usize);
+                None
+            }
+            FINALLY_JUMP_CLEAR => {
+                let cv = finally_jump_cv(op_array)?;
+                let destination = (*frame).get_op_mut(cv, OpType::Cv);
+                frame_slot_set(frame, destination, Value::undef());
+                None
+            }
+            FINALLY_JUMP_RESUME => {
+                let cv = finally_jump_cv(op_array)?;
+                let encoded = u32::try_from((*frame).cv(cv).as_long()?).ok()?;
+                let current_ip = (*frame)
+                    .opline
+                    .offset_from(op_array.instructions.as_ptr())
+                    as u32;
+                let (target, target_outside_try) = finally_jump_target(encoded);
+                let next = crossed_finally_for_jump(
+                    op_array,
+                    current_ip,
+                    target,
+                    target_outside_try,
+                )
+                    .map_or(target, |entry| entry.finally_start);
+                if next == target {
+                    let destination = (*frame).get_op_mut(cv, OpType::Cv);
+                    frame_slot_set(frame, destination, Value::undef());
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(next as usize);
+                Some(target)
+            }
+            _ => unreachable!("unknown finally jump action"),
+        }
+    }
+}
+
 /// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -15,8 +134,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
         }
 
-        let mut opline_ptr: *const Instruction = unsafe { (*frame).opline };
-        let opline = unsafe { &*opline_ptr };
+        // SAFETY: the active frame's opline points into its live op array.
+        let (mut opline_ptr, opline) = unsafe {
+            let opline_ptr: *const Instruction = (*frame).opline;
+            (opline_ptr, &*opline_ptr)
+        };
         stats::inc_opcode(opline.opcode as usize);
 
         // Check for pending return or exception after finally block ends
@@ -1033,6 +1155,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 continue; // skip normal advance
+            }
+
+            OpCode::JmpFinally => {
+                if opline._pad & crate::vm::instruction::JMP_FLAG_FINALLY_END != 0 {
+                    if finally_jump_state(
+                        frame,
+                        op_array,
+                        FINALLY_JUMP_RESUME,
+                        0,
+                        false,
+                    )
+                    .is_some()
+                    {
+                        continue;
+                    }
+                } else {
+                    finally_jump_state(
+                        frame,
+                        op_array,
+                        FINALLY_JUMP_START,
+                        u32::from(opline.op1),
+                        opline._pad & crate::vm::instruction::JMP_FLAG_TARGET_OUTSIDE_TRY != 0,
+                    );
+                    continue;
+                }
             }
 
             #[cfg(feature = "quick-loops")]
@@ -4188,6 +4335,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                 }
+
+                // A return replaces any earlier non-local jump before it
+                // enters another intervening finally block.
+                finally_jump_state(frame, op_array, FINALLY_JUMP_CLEAR, 0, false);
 
                 // Check if we're inside a try region with a finally block
                 let current_ip = unsafe {

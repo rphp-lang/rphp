@@ -2044,6 +2044,9 @@ impl Compiler {
                 catches,
                 finally_body,
             } => {
+                if finally_body.is_some() {
+                    self.enter_goto_region(GotoRegionKind::TryFinally);
+                }
                 // Simple implementation: compile try body, if throw happens, jump to catch
                 // For now: mark try region start/end for runtime, emit catch handlers
                 // We use a "try table" approach: store try/catch info as metadata
@@ -2090,7 +2093,14 @@ impl Compiler {
                     catch_end_jumps.push(jmp_idx);
                 }
 
+                if finally_body.is_some() {
+                    self.leave_goto_region();
+                }
+
                 // Finally block (if any)
+                if finally_body.is_some() {
+                    self.resolve_finally_jump_cv();
+                }
                 let finally_start = if let Some(body) = finally_body {
                     let start = self.instructions.len();
                     self.enter_goto_region(GotoRegionKind::Finally);
@@ -2102,6 +2112,14 @@ impl Compiler {
                 } else {
                     None
                 };
+
+                let finally_end = finally_start.map(|_| {
+                    let end = self.instructions.len();
+                    let mut marker = Instruction::new(OpCode::JmpFinally);
+                    marker._pad |= crate::vm::instruction::JMP_FLAG_FINALLY_END;
+                    self.instructions.push(marker);
+                    end
+                });
 
                 let after_all = self.instructions.len();
 
@@ -2123,7 +2141,10 @@ impl Compiler {
 
                 // Build TryEntry with catch entries and finally info
                 let (entry_finally_start, entry_finally_end) = if let Some(fs) = finally_start {
-                    (fs as u32, after_all as u32)
+                    (
+                        fs as u32,
+                        finally_end.expect("finally start and end are paired") as u32,
+                    )
                 } else {
                     (0xFFFFFFFF, 0)
                 };
