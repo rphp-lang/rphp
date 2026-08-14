@@ -141,6 +141,7 @@ mod array_literal_hint_tests {
             key,
             value: Expr::Integer(1),
             unpack: false,
+            unpack_line: None,
             by_reference: false,
         }
     }
@@ -2447,6 +2448,33 @@ impl Compiler {
         )
     }
 
+    /// PHP rejects an array-unpack operand during compilation only when its
+    /// value is already fixed by the source expression. Ordinary user
+    /// constants and runtime expressions remain catchable at execution time;
+    /// class constants and built-in constants participate in compile-time
+    /// evaluation. A literal array has a known array type even when its own
+    /// element values are dynamic.
+    fn statically_known_array_unpack_type(&self, expr: &Expr) -> Option<ValueType> {
+        if matches!(expr, Expr::ArrayLiteral(_)) {
+            return Some(ValueType::Array);
+        }
+
+        let class_constants = self
+            .known_constants
+            .iter()
+            .filter(|(name, _)| name.contains("::"))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        let value = self
+            .eval_const_expr_in_source(expr, &class_constants)
+            .ok()?;
+
+        // `new` is evaluated at runtime in an ordinary array expression. The
+        // constant evaluator's narrow stdClass support exists for property and
+        // parameter defaults and must not move this error into compilation.
+        (value.value_type() != ValueType::Object).then(|| value.value_type())
+    }
+
     fn collect_class_name_literals(&self, expr: &Expr, known: &mut HashMap<String, Value>) {
         match expr {
             Expr::ClassConstant {
@@ -4145,6 +4173,19 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::ArrayLiteral(elements) => {
+                if self.deferred_error.is_none()
+                    && let Some(element) = elements.iter().find(|element| {
+                        element.unpack
+                            && self
+                                .statically_known_array_unpack_type(&element.value)
+                                .is_some_and(|value_type| value_type != ValueType::Array)
+                    })
+                    && let Some(line) = element.unpack_line
+                {
+                    self.deferred_error =
+                        Some(self.goto_error("Only arrays and Traversables can be unpacked", line));
+                }
+
                 // The literal size and an unavoidable hash transition are
                 // compile-time facts. Pass them to InitArray so runtime can
                 // allocate the final representation once.

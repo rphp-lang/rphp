@@ -440,6 +440,8 @@ pub struct ArrayElement {
     pub key: Option<Expr>,
     pub value: Expr,
     pub unpack: bool,
+    /// Source line of `...` for compile-stage operand validation.
+    pub unpack_line: Option<usize>,
     pub by_reference: bool,
 }
 

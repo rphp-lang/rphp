@@ -838,7 +838,9 @@ impl Parser {
                 let generic_args = self.parse_optional_turbofish()?;
                 if !generic_args.is_empty() {
                     self.expect(&Token::LParen)?;
-                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                    if matches!(self.peek(), Token::DotDotDot(_))
+                        && self.peek_at(1) == Token::RParen
+                    {
                         return Err("Generic first-class function callables are not supported yet"
                             .into());
                     }
@@ -854,7 +856,9 @@ impl Parser {
                 }
                 if self.peek() == Token::LParen {
                     self.advance();
-                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                    if matches!(self.peek(), Token::DotDotDot(_))
+                        && self.peek_at(1) == Token::RParen
+                    {
                         self.advance();
                         self.advance();
                         return Ok(Expr::FirstClassFunctionCallable(name));
@@ -886,7 +890,9 @@ impl Parser {
                 let generic_args = self.parse_optional_turbofish()?;
                 if !generic_args.is_empty() {
                     self.expect(&Token::LParen)?;
-                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                    if matches!(self.peek(), Token::DotDotDot(_))
+                        && self.peek_at(1) == Token::RParen
+                    {
                         return Err("Generic first-class function callables are not supported yet"
                             .into());
                     }
@@ -904,7 +910,9 @@ impl Parser {
                 // Check if this is a function call (followed by `(`)
                 if self.peek() == Token::LParen {
                     self.advance(); // consume (
-                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                    if matches!(self.peek(), Token::DotDotDot(_))
+                        && self.peek_at(1) == Token::RParen
+                    {
                         self.advance();
                         self.advance();
                         return Ok(Expr::FirstClassFunctionCallable(name));
@@ -1077,12 +1085,13 @@ impl Parser {
             return Ok(elements);
         }
         loop {
-            if self.peek() == Token::DotDotDot {
+            if let Token::DotDotDot(unpack_line) = self.peek() {
                 self.advance();
                 elements.push(ArrayElement {
                     key: None,
                     value: self.parse_expr()?,
                     unpack: true,
+                    unpack_line: Some(unpack_line),
                     by_reference: false,
                 });
             } else {
@@ -1109,6 +1118,7 @@ impl Parser {
                         key: Some(value),
                         value: actual_value,
                         unpack: false,
+                        unpack_line: None,
                         by_reference,
                     });
                 } else {
@@ -1116,6 +1126,7 @@ impl Parser {
                         key: None,
                         value,
                         unpack: false,
+                        unpack_line: None,
                         by_reference: leading_reference,
                     });
                 }

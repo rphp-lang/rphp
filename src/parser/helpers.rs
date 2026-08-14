@@ -157,7 +157,7 @@ impl Parser {
                 }
                 // Argument unpacking has its own ordering rule. It must be
                 // checked before the generic positional-after-named branch.
-                if self.peek() == Token::DotDotDot {
+                if matches!(self.peek(), Token::DotDotDot(_)) {
                     if seen_named {
                         return Err(
                             "Cannot use argument unpacking after named arguments".to_string()
@@ -245,7 +245,7 @@ impl Parser {
             self.peek(),
             Token::Variable(_, _)
                 | Token::This(_)
-                | Token::DotDotDot
+                | Token::DotDotDot(_)
                 | Token::Ampersand
                 | Token::Question
                 | Token::Backslash
@@ -445,7 +445,7 @@ impl Parser {
                     next,
                     Some(Token::Variable(_, _))
                         | Some(Token::Ampersand)
-                        | Some(Token::DotDotDot)
+                        | Some(Token::DotDotDot(_))
                         | Some(Token::Pipe)
                         | Some(Token::Backslash)
                 );
@@ -471,7 +471,7 @@ impl Parser {
                     next,
                     Some(Token::Variable(_, _))
                         | Some(Token::Ampersand)
-                        | Some(Token::DotDotDot)
+                        | Some(Token::DotDotDot(_))
                         | Some(Token::Pipe)
                 );
                 if is_type_context {
@@ -670,7 +670,7 @@ impl Parser {
         } else {
             false
         };
-        let is_variadic = if self.peek() == Token::DotDotDot {
+        let is_variadic = if matches!(self.peek(), Token::DotDotDot(_)) {
             self.advance(); // consume '...'
             true
         } else {
@@ -864,17 +864,8 @@ impl Parser {
                 self.advance(); // consume ','
                 continue;
             }
-            if self.peek() == Token::DotDotDot {
+            if let Token::DotDotDot(line) = self.peek() {
                 self.advance(); // consume the unsupported spread marker
-                let line = match self.peek() {
-                    Token::Variable(_, line) | Token::This(line) | Token::LBracket(line) => line,
-                    _ => {
-                        return Err(
-                            "Expected assignment target after spread operator in destructuring"
-                                .into(),
-                        );
-                    }
-                };
                 if !matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
                     return Err(
                         "Expected assignment target after spread operator in destructuring".into(),

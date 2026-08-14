@@ -97,7 +97,7 @@ impl Parser {
         }
 
         self.advance();
-        if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+        if matches!(self.peek(), Token::DotDotDot(_)) && self.peek_at(1) == Token::RParen {
             if !generic_args.is_empty() {
                 return Err("Generic first-class static callables are not supported yet".into());
             }
@@ -111,12 +111,14 @@ impl Parser {
                         constant: "class".to_string(),
                     },
                     unpack: false,
+                    unpack_line: None,
                     by_reference: false,
                 },
                 ArrayElement {
                     key: None,
                     value: Expr::StringLiteral(member),
                     unpack: false,
+                    unpack_line: None,
                     by_reference: false,
                 },
             ]))));
@@ -166,7 +168,9 @@ impl Parser {
                 }
                 Token::LParen => {
                     self.advance();
-                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                    if matches!(self.peek(), Token::DotDotDot(_))
+                        && self.peek_at(1) == Token::RParen
+                    {
                         self.advance();
                         self.advance();
                         expr = Expr::FirstClassCallable(Box::new(expr));
@@ -213,12 +217,14 @@ impl Parser {
                                     key: None,
                                     value: expr,
                                     unpack: false,
+                                    unpack_line: None,
                                     by_reference: false,
                                 },
                                 ArrayElement {
                                     key: None,
                                     value: constant,
                                     unpack: false,
+                                    unpack_line: None,
                                     by_reference: false,
                                 },
                             ])),
@@ -254,12 +260,14 @@ impl Parser {
                                         key: None,
                                         value: expr,
                                         unpack: false,
+                                        unpack_line: None,
                                         by_reference: false,
                                     },
                                     ArrayElement {
                                         key: None,
                                         value: member,
                                         unpack: false,
+                                        unpack_line: None,
                                         by_reference: false,
                                     },
                                 ])),
@@ -292,12 +300,14 @@ impl Parser {
                                         key: None,
                                         value: expr,
                                         unpack: false,
+                                        unpack_line: None,
                                         by_reference: false,
                                     },
                                     ArrayElement {
                                         key: None,
                                         value: member,
                                         unpack: false,
+                                        unpack_line: None,
                                         by_reference: false,
                                     },
                                 ])),
@@ -324,7 +334,9 @@ impl Parser {
                     let generic_args = self.parse_optional_turbofish()?;
                     if self.peek() == Token::LParen {
                         self.advance();
-                        if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                        if matches!(self.peek(), Token::DotDotDot(_))
+                            && self.peek_at(1) == Token::RParen
+                        {
                             if nullsafe {
                                 return Err(
                                     "Cannot create a first-class callable from nullsafe method syntax"
@@ -344,12 +356,14 @@ impl Parser {
                                     key: None,
                                     value: expr,
                                     unpack: false,
+                                    unpack_line: None,
                                     by_reference: false,
                                 },
                                 ArrayElement {
                                     key: None,
                                     value: Expr::StringLiteral(member),
                                     unpack: false,
+                                    unpack_line: None,
                                     by_reference: false,
                                 },
                             ])));

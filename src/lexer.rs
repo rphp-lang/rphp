@@ -119,29 +119,29 @@ pub enum Token {
     At,                     // @ (error-control operator)
     Colon,                  // :
     // Punctuation
-    Semicolon,       // ;
-    LParen,          // (
-    RParen,          // )
-    LBrace,          // {
-    RBrace,          // }
-    Comma,           // ,
-    LBracket(usize), // [ with source line
-    RBracket,        // ]
-    DoubleArrow,     // =>
-    Arrow,           // ->
-    NullSafe,        // ?->
-    DoubleColon,     // ::
-    Fn,              // fn (arrow functions)
-    Use,             // use (closure use)
-    Pipe,            // | (bitwise or, multi-catch separator)
-    Ampersand,       // & (bitwise and, reference)
-    Caret,           // ^ (bitwise xor)
-    Tilde,           // ~ (bitwise not)
-    StarStar,        // ** (power)
-    Spaceship,       // <=> (spaceship)
-    ShiftLeft,       // <<
-    ShiftRight,      // >>
-    DotDotDot,       // ... (variadic / spread)
+    Semicolon,        // ;
+    LParen,           // (
+    RParen,           // )
+    LBrace,           // {
+    RBrace,           // }
+    Comma,            // ,
+    LBracket(usize),  // [ with source line
+    RBracket,         // ]
+    DoubleArrow,      // =>
+    Arrow,            // ->
+    NullSafe,         // ?->
+    DoubleColon,      // ::
+    Fn,               // fn (arrow functions)
+    Use,              // use (closure use)
+    Pipe,             // | (bitwise or, multi-catch separator)
+    Ampersand,        // & (bitwise and, reference)
+    Caret,            // ^ (bitwise xor)
+    Tilde,            // ~ (bitwise not)
+    StarStar,         // ** (power)
+    Spaceship,        // <=> (spaceship)
+    ShiftLeft,        // <<
+    ShiftRight,       // >>
+    DotDotDot(usize), // ... (variadic / spread) with source line
     Eof,
 }
 
@@ -345,7 +345,11 @@ impl<'a> Lexer<'a> {
                 }
                 b'.' => {
                     if self.peek_next() == Some(b'.') && self.src.get(self.pos + 2) == Some(&b'.') {
-                        tokens.push(Token::DotDotDot);
+                        let line = 1 + self.src[..self.pos]
+                            .iter()
+                            .filter(|&&byte| byte == b'\n')
+                            .count();
+                        tokens.push(Token::DotDotDot(line));
                         self.pos += 3;
                     } else if self.peek_next() == Some(b'=') {
                         tokens.push(Token::DotAssign);
@@ -1024,6 +1028,23 @@ mod tests {
             .unwrap();
         assert_eq!(tokens[1], Token::At);
         assert_eq!(tokens[2], Token::Identifier("trigger_error".into()));
+    }
+
+    #[test]
+    fn spread_operator_preserves_its_own_source_line() {
+        let tokens =
+            Lexer::new("<?php\n$items = [\n    ...[1],\n];\nfunction collect(...$values) {}")
+                .tokenize()
+                .unwrap();
+        let lines: Vec<_> = tokens
+            .iter()
+            .filter_map(|token| match token {
+                Token::DotDotDot(line) => Some(*line),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(lines, vec![3, 5]);
     }
 
     #[test]

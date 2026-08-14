@@ -125,6 +125,24 @@ fn destructuring_spread_is_preserved_as_a_deferred_compile_error() {
 }
 
 #[test]
+fn array_unpack_preserves_the_spread_line_for_compile_validation() {
+    let tokens = Lexer::new("<?php\n$result = [\n    ...42,\n];")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(matches!(
+        &statements[0],
+        Stmt::Assign {
+            expr: Expr::ArrayLiteral(elements),
+            ..
+        } if elements.len() == 1
+            && elements[0].unpack
+            && elements[0].unpack_line == Some(3)
+    ));
+}
+
+#[test]
 fn test_parse_nested_array_append() {
     let tokens = Lexer::new("<?php $store->listeners['event'][10][] = 'listener';")
         .tokenize()
