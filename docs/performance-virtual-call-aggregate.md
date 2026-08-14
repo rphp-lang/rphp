@@ -18,9 +18,13 @@ selection.
   regression ceiling.
 - **Baseline:** clean commit
   `2457cea20843034ebf9fe970d5df0c8a052d9049`.
-- **Candidate:** clean implementation commit
-  `7eb4384adcfb68599dc4e090abebbb1c81f5823d`; the later documentation commit
-  does not change production code.
+- **Benchmarked candidate:** clean implementation commit
+  `7eb4384adcfb68599dc4e090abebbb1c81f5823d`, based directly on the baseline.
+  Rebased integration commit `8a8c9b0ac44f78ceef6cac6451a4907b51fe8cbb`
+  carries the identical stable patch ID
+  `13d5dddcce123c34e303c47d1a4f8e95046fb3a8` above the source-unpack
+  compatibility checkpoint; the combined four-configuration matrix passed.
+  Later documentation commits do not change production code.
 - **Scope:** a literal constructor-initialized declared object, one exact
   method call through a compiler-proven read-only Long call graph, a result of
   one to four literal-key Long entries, and immediate dead-result scalar
