@@ -1,7 +1,7 @@
 # Layered execution optimization plan
 
-Status: validated planning snapshot at `e78342bdb12e04e124c16a0e4ae2687b95007172`,
-2026-08-14
+Status: Layer 1 dual-host candidate verified over `c646f3b`, 2026-08-14;
+integration handoff pending
 
 This document orders execution work as one cumulative optimization stack. It
 exists to prevent an empty coverage cell or an old benchmark from being
@@ -65,14 +65,18 @@ bounded profiling/holdout goal whose valid result is rejection.
 
 ## Validated baseline snapshot
 
-The source baseline is clean commit `e78342b`. The ordinary build includes the
-bounded native JIT and retains explicit typed-only and runtime-disabled lanes.
-A fresh 15-run ARM64 scorecard at this commit validated output across canonical,
-typed, default-JIT, PHP no-JIT and PHP tracing-JIT modes. A fresh x86-64 cycle
-was not started because the exclusive benchmark lock was occupied. Current
-x86-64 planning evidence therefore comes from the accepted dual-host
-checkpoints already contained in this exact commit; any new implementation
-still needs a fresh locked x86-64 gate.
+Layer 1 was selected from clean commit `e78342b`. The ordinary build includes
+the bounded native JIT and retains explicit typed-only and runtime-disabled
+lanes. The table below preserves that selection snapshot so its decision can
+be audited rather than silently replacing historical evidence.
+
+The implementation was finally rebased over clean `main` commit `c646f3b` and
+verified as candidate `501892c` on physical ARM64 and x86-64. Both hosts used
+101 alternating observations for the direct-call target, independent holdout,
+typed control and order/ledger/routing controls. The full result is recorded in
+[the direct-call checkpoint](performance-direct-call-regions.md). A fresh full
+scorecard is the first prerequisite before selecting a Layer 2 implementation
+slice; old selection rows are not treated as current post-Layer-1 costs.
 
 The current ARM64 selection rows are median in-workload milliseconds:
 
@@ -150,8 +154,7 @@ Exit gate:
 
 ### Layer 1 — general direct-call regions, starting with immutable closures
 
-Status: **next admission checkpoint; Grade C until a holdout and fresh x86-64
-profile exist**
+Status: **dual-host candidate verified for integration; Grade A evidence**
 
 Extend the existing typed call vocabulary so a stable direct user-function or
 closure target can participate in a region without constructing a canonical
@@ -166,9 +169,11 @@ call IR. It must not recognize `bench_closure_copy.php`, assume a copied local,
 or introduce a closure-only second call engine. Named functions, compatible
 closures and later callback consumers should share one direct-call contract.
 
-Before implementation, add or identify an independent closure-heavy
-application holdout and reproduce the `direct_call_shape` cost on physical
-x86-64. Reject or defer the layer if the gap remains microbenchmark-only.
+The completed candidate admits immutable closure properties and an exact
+public-argument wrapper with a whole-function dead-alias proof. Immutable
+by-value Long captures and String captures consumed by `strlen` bind into the
+ordinary scalar leaf plan at region entry. References, live aliases, binding,
+scope changes and unsupported bodies remain canonical.
 
 Semantic envelope and gates include references, by-reference captures,
 `Closure::bind`, `$this` and lexical scope, exceptions, named/variadic
@@ -177,15 +182,22 @@ cases must reject before mutation. Acceptance requires a target win on both
 architectures, reduced frame/slot counts, exact forced exits and neutral
 order/ledger/routing controls.
 
-Expected leverage: high. It removes the measured boundary in the closure
-target and becomes the call substrate for Layers 2 and 3. Implementation cost
-and semantic risk are medium to high; the evidence checkpoint is intentionally
-cheap and may reject it.
+On ARM64 the target improves by 99.31% and the independent property holdout by
+99.11%; on x86-64 they improve by 99.31% and 99.60%. Frame pushes on the target
+fall from 500,004 to 70 on both hosts, one native region completes with zero
+side exits, and every typed/order/ledger/routing control remains within the
+one-percent regression ceiling. Detailed semantics, distributions, code-size
+cost and limitations are in
+[the direct-call checkpoint](performance-direct-call-regions.md).
+
+The integration gate must merge this shared compiler/runtime checkpoint before
+Layer 2 implementation begins. Layer 2 may consume its call ABI; it must not
+copy the closure recognizer or add another call engine.
 
 ### Layer 2 — general virtual heap values and materialization across calls
 
-Status: **second implementation layer after the direct-call/liveness contract;
-Grade B architectural evidence**
+Status: **next post-integration admission layer; Grade B architectural evidence,
+fresh execution-weighted target still required**
 
 Replace the current collection of narrow object/array proofs with one typed
 virtual-value vocabulary describing small declared objects, packed/associative
@@ -399,23 +411,27 @@ the existing one-percent acyclic controls.
 
 ## Next decision checkpoint
 
-The next bounded goal should validate **Layer 1 direct-call regions** rather
-than implement another loop kernel:
+After the integrating agent accepts Layer 1, the next bounded goal is a cheap
+Layer 0/2 evidence checkpoint rather than another implementation guess:
 
-1. add or identify an independent closure-heavy application holdout;
-2. reproduce the current ARM64 `direct_call_shape`, frame and slot traffic on a
-   clean locked x86-64 run;
-3. sample the exact current build and attribute time between call setup,
-   capture publication, closure-body execution and cleanup;
-4. define one shared function/closure typed call ABI and exact exit envelope;
-5. proceed to a small dual-backend implementation only if the holdout and both
-   hosts retain material removable cost; otherwise record the rejection and
-   select the next Layer 2 corpus graph.
+1. regenerate the full execution scorecard from the newly integrated main on
+   ARM64 and locked physical x86-64;
+2. find a representative graph not already owned by the order aggregate proof,
+   where a small DTO or array is created in one function, consumed across a
+   second call and then discarded;
+3. count owners, allocations, frame traffic and materialization/escape sites,
+   and add an independent branch that forces late materialization;
+4. define one virtual-value vocabulary and exact materialization boundary that
+   can represent both the new graph and the existing order proof;
+5. implement a small dual-backend vertical slice only if both hosts retain a
+   material execution-weighted allocation cost; otherwise record the rejection
+   and select the next measured graph.
 
-This admission checkpoint has the best current price-to-information ratio. It
-tests the largest visible gap, protects the project from a microbenchmark-only
-call special case and, if accepted, supplies the foundation required by the
-next two performance layers.
+This sequence layers virtual heap values on the now-verified direct-call ABI.
+Layers 7a/7b remain the process-resident and cross-process program caches for
+long-lived workers, and Layer 8 remains the non-moving candidate-driven cycle
+collector required for a stable-RSS production server. Neither is replaced or
+implicitly completed by call or virtual-value work.
 
 ## Maintenance
 
