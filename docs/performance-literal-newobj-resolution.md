@@ -64,9 +64,9 @@ was added. Disabled telemetry compiles to inline no-ops.
 After rebasing over the subsequent compatibility checkpoints, that continuation
 was placed in a dedicated executable section on both supported platforms. This
 prevents unrelated translation-unit growth from moving the neighboring property
-handlers. A fresh 40-pair ARM64 integration check against the new `main`
-baseline retained the target win; the code-section variant's separate 40-pair
-order-corpus check measured -0.19%.
+handlers. A fresh 100-pair integration check against the new `main` baseline
+retained the target win on both architectures and kept every control within the
+one-percent regression gate.
 
 ## Correctness and telemetry
 
@@ -130,6 +130,14 @@ candidate.
 | Order corpus | 70.746 (68.936-73.235) | 70.764 (69.212-73.843) | -0.010% |
 | Ledger corpus | 55.059 (54.450-61.145) | 54.279 (53.650-56.873) | -1.360% |
 | Routing holdout | 68.943 (68.480-70.349) | 67.958 (67.314-69.488) | -1.534% |
+
+The final post-rebase integration rerun compared merged candidate `ddaddd1`
+against its exact new `main` parent `ee8cc59`, using the same 100-pair method.
+ARM64 deltas were -30.705% target, -0.358% order, +0.131% ledger and -0.567%
+holdout. X86-64 deltas were -24.504% target, -2.564% order, -0.123% ledger and
++0.366% holdout. These integration values confirm the acceptance decision; the
+tables retain the original isolated checkpoint distributions for full
+baseline-to-candidate reproducibility.
 
 One x86-64 observation measured 6,564 and 6,584 KiB peak RSS for baseline and
 candidate. The 20 KiB process-level difference is too coarse for a change that
