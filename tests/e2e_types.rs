@@ -438,6 +438,36 @@ fn test_unset_then_reassign() {
 }
 
 #[test]
+fn unset_detaches_one_local_name_without_mutating_shared_reference_value() {
+    assert_eq!(
+        run_php(
+            "<?php $value = 'kept'; $first =& $value; $second =& $value; unset($first); echo $value, ':', $second, ':', isset($first) ? 'set' : 'gone', '|'; $first = 'fresh'; echo $value, ':', $second, ':', $first;"
+        ),
+        "kept:kept:gone|kept:kept:fresh"
+    );
+}
+
+#[test]
+fn unset_local_alias_preserves_array_and_property_reference_owners() {
+    assert_eq!(
+        run_php(
+            "<?php $array = ['score' => 7]; $arrayAlias =& $array['score']; unset($arrayAlias); $array['score'] = 9; $object = (object) ['score' => 4]; $propertyAlias =& $object->score; unset($propertyAlias); $object->score = 6; echo $array['score'], ':', isset($arrayAlias) ? 'set' : 'gone', '|', $object->score, ':', isset($propertyAlias) ? 'set' : 'gone';"
+        ),
+        "9:gone|6:gone"
+    );
+}
+
+#[test]
+fn unset_last_local_alias_leaves_the_container_reference_value_materialized() {
+    assert_eq!(
+        run_php(
+            "<?php $score = 12; $container = ['score' => &$score]; unset($score); $copy = [...$container]; echo $copy['score'], ':', $container['score'];"
+        ),
+        "12:12"
+    );
+}
+
+#[test]
 fn test_unset_array_element() {
     assert_eq!(
         run_php("<?php $a = [10, 20, 30]; unset($a[1]); echo count($a);"),

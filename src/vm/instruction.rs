@@ -120,6 +120,11 @@ pub const NEW_FLAG_UNPACKED_ARGUMENTS: u16 = 1 << 4;
 /// require source-unpack normalization rather than call_user_func_array rules.
 pub const CALL_USER_FUNC_ARRAY_SOURCE_UNPACK: u16 = 1;
 
+/// AssignCv replaces the destination CV binding instead of assigning through
+/// an existing reference cell. PHP `unset($variable)` uses this to detach the
+/// local name while leaving every other alias and the referenced value intact.
+pub const ASSIGN_CV_REBIND: u16 = 1;
+
 /// NewObj flag: a literal zero-argument object is assigned to a dead local
 /// whose only uses are an immediate bounded span of declared-property reads.
 /// A warmed quick loop may project exact scalar defaults without allocating

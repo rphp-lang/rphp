@@ -1975,6 +1975,7 @@ impl Compiler {
                             assign.op1 = cv_idx;
                             assign.op2_type = OpType::Const;
                             assign.op2 = undef_idx;
+                            assign._pad |= ASSIGN_CV_REBIND;
                             self.instructions.push(assign);
                         }
                         Expr::ArrayAccess { .. } => {
