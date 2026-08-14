@@ -266,5 +266,21 @@ The next goal returns to scorecard/profile selection; broader object
 virtualization still requires an identity, write, constructor and destructor
 materialization design rather than widening this read-only shape.
 
+Completion checkpoint (2026-08-14): the existing pure call/return aggregate
+proof is now independent of quick-loop selection and available to the baseline
+dispatcher. For the structurally proven order shape, a constructor-created
+request DTO and the method's small associative Long result stay virtual until
+their immediate dead-result consumers. Any escape, reference, identity,
+destructor, magic/dynamic property, unsupported value or failed runtime guard
+keeps canonical materialization before the boundary. On the 500,000-row order
+corpus, declared-object owners fall from 500,003 to 4 and array owners from a
+source-accounted 500,008 to 9. Baseline-lane order improves by 33.62% on ARM64
+and 31.70% on x86-64; typed order improves by 26.27% and 25.64%. Default typed
+and native JIT paths already used the same aggregate operation and remain
+controls, with every corpus, holdout and peak-memory regression below one
+percent. Detailed proof, counters, distributions and remaining materialization
+boundaries are in
+[`performance-virtual-call-aggregate.md`](performance-virtual-call-aggregate.md).
+
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.
