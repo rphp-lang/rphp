@@ -595,6 +595,55 @@ echo $counter->current() . '|' . $sum . '|' . $i;
 }
 
 #[test]
+fn quick_object_loop_preserves_getter_observation_through_receiver_alias() {
+    assert_eq!(
+        run_php(
+            "<?php
+class AliasedCounter {
+    public $value = 0;
+    public function add($amount) { $this->value = $this->value + $amount; }
+    public function current() { return $this->value; }
+}
+$counter = new AliasedCounter();
+$observer = $counter;
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $counter->add(2);
+    $sum += $observer->current();
+}
+echo $counter->current() . '|' . $sum . '|' . $i;
+"
+        ),
+        "2000|1001000|1000"
+    );
+}
+
+#[test]
+fn quick_object_loop_commits_multi_property_shadows_before_later_side_exit() {
+    assert_eq!(
+        run_php(
+            "<?php
+class ShadowedPair {
+    public $left = 0;
+    public $right = 0;
+    public function add($left, $right) {
+        $this->left = $this->left + $left;
+        $this->right = $this->right + $right;
+    }
+}
+$pair = new ShadowedPair();
+for ($i = 0; $i < 100; $i++) {
+    $pair->add(1, 2);
+    $overflow = 9223372036854775800 + $i;
+}
+echo $pair->left . '|' . $pair->right . '|' . gettype($overflow) . '|' . $i;
+"
+        ),
+        "100|200|double|100"
+    );
+}
+
+#[test]
 fn quick_object_loop_rejects_impure_property_method_before_side_effects() {
     assert_eq!(
         run_php(

@@ -301,7 +301,7 @@ unsafe fn run_quick_long_ops_loop(
             .ops
             .iter()
             .any(|operation| matches!(operation, QuickLongOp::VirtualDeclaredObjectReads { .. }));
-    let resolved_object_ops = if !has_resolved_object_ops {
+    let mut resolved_object_ops = if !has_resolved_object_ops {
         Vec::new()
     } else {
         let Some(resolved) =
@@ -355,6 +355,135 @@ unsafe fn run_quick_long_ops_loop(
             eg, frame, op_array, plan, slot_base, slots, kernel,
         );
     }
+
+    // The native mixed kernel already retains declared-property bindings in
+    // scalar slots for the whole region. Give the allocation-free typed
+    // interpreter the same ownership model after native admission declines:
+    // load each exact Long property once, transact on its shadow, and publish
+    // only at an interrupt, side exit, or normal completion.
+    let mut property_shadows = QuickPropertyShadowState::new();
+    let mut property_shadows_valid = true;
+    let mut shadowed_object_identities = [0usize; QUICK_PROPERTY_SHADOW_CAPACITY];
+    let mut shadowed_object_count = 0usize;
+    for resolved in &resolved_object_ops {
+        let QuickResolvedObjectOp::PropertyMethod {
+            receiver,
+            property_slots,
+            property_count,
+            ..
+        } = *resolved
+        else {
+            continue;
+        };
+        let object_identity = (*receiver).object_identity_unchecked();
+        if !shadowed_object_identities[..shadowed_object_count].contains(&object_identity) {
+            if shadowed_object_count == QUICK_PROPERTY_SHADOW_CAPACITY {
+                property_shadows_valid = false;
+                break;
+            }
+            shadowed_object_identities[shadowed_object_count] = object_identity;
+            shadowed_object_count += 1;
+        }
+        for property_slot in property_slots.iter().copied().take(property_count as usize) {
+            let property = (*receiver).object_property_slot_unchecked(property_slot) as *mut Value;
+            if (*property).value_type() != ValueType::Long
+                || (*property).is_reference()
+                || property_shadows
+                    .insert(property, (*property).raw_long())
+                    .is_none()
+            {
+                property_shadows_valid = false;
+                break;
+            }
+        }
+        if !property_shadows_valid {
+            break;
+        }
+    }
+
+    // A typed operation that can observe the same object outside the proven
+    // property transaction would see stale storage. Keep that alias topology
+    // on the canonical per-call evaluator until the common shadow vocabulary
+    // also covers the observing operation.
+    if property_shadows.count != 0 {
+        for resolved in &resolved_object_ops {
+            let observes_shadowed_object = match *resolved {
+                QuickResolvedObjectOp::PropertyRead { .. }
+                | QuickResolvedObjectOp::VirtualPipeline { .. } => true,
+                QuickResolvedObjectOp::PropertyGetter { receiver, .. }
+                | QuickResolvedObjectOp::ObjectLongMethod { receiver, .. } => {
+                    shadowed_object_identities[..shadowed_object_count]
+                        .contains(&(*receiver).object_identity_unchecked())
+                }
+                QuickResolvedObjectOp::ComposedProperty {
+                    outer_receiver,
+                    inner_receiver,
+                    ..
+                } => {
+                    shadowed_object_identities[..shadowed_object_count]
+                        .contains(&(*outer_receiver).object_identity_unchecked())
+                        || shadowed_object_identities[..shadowed_object_count]
+                            .contains(&(*inner_receiver).object_identity_unchecked())
+                }
+                QuickResolvedObjectOp::None
+                | QuickResolvedObjectOp::PropertyMethod { .. }
+                | QuickResolvedObjectOp::ScalarMethod { .. }
+                | QuickResolvedObjectOp::ComposedTypedMethod { .. }
+                | QuickResolvedObjectOp::VirtualDeclaredReads { .. } => false,
+            };
+            if observes_shadowed_object {
+                property_shadows_valid = false;
+                break;
+            }
+        }
+    }
+
+    if property_shadows_valid && property_shadows.count != 0 {
+        for resolved in &mut resolved_object_ops {
+            let QuickResolvedObjectOp::PropertyMethod {
+                receiver,
+                property_slots,
+                property_count,
+                shadow_bindings,
+                ..
+            } = resolved
+            else {
+                continue;
+            };
+            for index in 0..*property_count as usize {
+                let property = (**receiver).object_property_slot_unchecked(property_slots[index])
+                    as *mut Value;
+                let Some(binding) = property_shadows.binding_index(property) else {
+                    property_shadows_valid = false;
+                    break;
+                };
+                shadow_bindings[index] = binding;
+            }
+            if !property_shadows_valid {
+                break;
+            }
+        }
+    }
+    if !property_shadows_valid {
+        if property_shadows.count != 0 {
+            stats::inc_quick_property_shadow_fallback();
+        }
+        property_shadows.clear();
+    } else if property_shadows.count != 0 {
+        stats::record_quick_property_shadow_entry(property_shadows.count);
+    }
+    macro_rules! commit_property_shadows {
+        () => {
+            stats::record_quick_property_shadow_commits(property_shadows.dirty_mask.count_ones());
+            while property_shadows.dirty_mask != 0 {
+                let index = property_shadows.dirty_mask.trailing_zeros() as usize;
+                property_shadows.dirty_mask &= property_shadows.dirty_mask - 1;
+                let binding = property_shadows.bindings[index];
+                Value::write_long(binding.property, binding.value);
+            }
+        };
+    }
+
     let mut object_call_recorder = QuickObjectCallRecorder {
         counts: vec![0; resolved_object_ops.len()],
         resolved: &resolved_object_ops,
@@ -366,7 +495,7 @@ unsafe fn run_quick_long_ops_loop(
     let mut iterations = 0u64;
     let mut op_index = plan.entry_op as usize;
 
-    loop {
+    let outcome = 'quick_execution: loop {
         let mut completed_backedge = false;
         let next_target = match *plan.ops.get_unchecked(op_index) {
             QuickLongOp::BranchUnlessLt {
@@ -438,7 +567,7 @@ unsafe fn run_quick_long_ops_loop(
                 );
                 if condition != expected {
                     string_state.commit();
-                    return Ok(deopt_quick_long_kernel(
+                    break 'quick_execution Ok(deopt_quick_long_kernel(
                         frame,
                         op_array,
                         slot_base,
@@ -476,7 +605,7 @@ unsafe fn run_quick_long_ops_loop(
                     );
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
             QuickLongOp::JsonProjectionStep { next_target, .. } => next_target,
@@ -514,7 +643,7 @@ unsafe fn run_quick_long_ops_loop(
                         );
                         (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                         stats::inc_quick_loop_deoptimized(iterations);
-                        return Ok(QuickLoopOutcome::Deoptimized);
+                        break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                     };
                     debug_assert!(!value_ptr.is_null());
                     slots[result as usize] = fetched;
@@ -540,7 +669,7 @@ unsafe fn run_quick_long_ops_loop(
                             .as_ptr()
                             .add(fusion.arithmetic_resume_ip);
                         stats::inc_quick_loop_deoptimized(iterations);
-                        return Ok(QuickLoopOutcome::Deoptimized);
+                        break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                     };
                     slots[fusion.result as usize] = stored;
                     dirty_long_mask |= 1u64 << fusion.result;
@@ -567,7 +696,7 @@ unsafe fn run_quick_long_ops_loop(
                         );
                         (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                         stats::inc_quick_loop_deoptimized(iterations);
-                        return Ok(QuickLoopOutcome::Deoptimized);
+                        break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                     };
                     slots[result as usize] = fetched;
                     dirty_long_mask |= 1u64 << result;
@@ -689,7 +818,7 @@ unsafe fn run_quick_long_ops_loop(
                     );
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
             QuickLongOp::Binary {
@@ -719,7 +848,7 @@ unsafe fn run_quick_long_ops_loop(
                     string_state.commit();
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
             QuickLongOp::Shift {
@@ -769,7 +898,7 @@ unsafe fn run_quick_long_ops_loop(
                     string_state.commit();
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
             QuickLongOp::AddAssign {
@@ -795,7 +924,7 @@ unsafe fn run_quick_long_ops_loop(
                     );
                     (*frame).opline = op_array.instructions.as_ptr().add(add_resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
             QuickLongOp::ConditionalAddAssign {
@@ -848,7 +977,7 @@ unsafe fn run_quick_long_ops_loop(
                             );
                             (*frame).opline = op_array.instructions.as_ptr().add(add_resume_ip);
                             stats::inc_quick_loop_deoptimized(iterations);
-                            return Ok(QuickLoopOutcome::Deoptimized);
+                            break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                         }
                     }
                 }
@@ -876,7 +1005,7 @@ unsafe fn run_quick_long_ops_loop(
                         );
                         (*frame).opline = op_array.instructions.as_ptr().add(first_resume_ip);
                         stats::inc_quick_loop_deoptimized(iterations);
-                        return Ok(QuickLoopOutcome::Deoptimized);
+                        break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                     }
                 };
                 slots[first_result as usize] = first;
@@ -894,7 +1023,7 @@ unsafe fn run_quick_long_ops_loop(
                             );
                             (*frame).opline = op_array.instructions.as_ptr().add(second_resume_ip);
                             stats::inc_quick_loop_deoptimized(iterations);
-                            return Ok(QuickLoopOutcome::Deoptimized);
+                            break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                         }
                     };
                 slots[second_result as usize] = second;
@@ -916,7 +1045,7 @@ unsafe fn run_quick_long_ops_loop(
                     };
                     if (*property).value_type() != ValueType::Long || (*property).is_reference() {
                         string_state.commit();
-                        return Ok(deopt_quick_long_kernel(
+                        break 'quick_execution Ok(deopt_quick_long_kernel(
                             frame,
                             op_array,
                             slot_base,
@@ -946,7 +1075,7 @@ unsafe fn run_quick_long_ops_loop(
                     };
                     let Some(value) = (*property).as_str() else {
                         string_state.commit();
-                        return Ok(deopt_quick_long_kernel(
+                        break 'quick_execution Ok(deopt_quick_long_kernel(
                             frame,
                             op_array,
                             slot_base,
@@ -968,23 +1097,29 @@ unsafe fn run_quick_long_ops_loop(
                     plan,
                     property_slots,
                     property_count,
+                    shadow_bindings,
                     ..
                 } = *resolved_object_ops.get_unchecked(op_index)
                 else {
                     unreachable!("resolved property method operation")
                 };
                 let arguments = quick_typed_method_arguments(&slots, &call);
-                if try_execute_resolved_long_property_plan(
-                    &*receiver,
-                    &arguments,
-                    &*plan,
-                    &property_slots,
-                    property_count,
-                ) {
+                let completed = if property_shadows.count != 0 && shadow_bindings[0] != u8::MAX {
+                    property_shadows.apply(&arguments, &*plan, property_count, &shadow_bindings)
+                } else {
+                    try_execute_resolved_long_property_plan(
+                        &*receiver,
+                        &arguments,
+                        &*plan,
+                        &property_slots,
+                        property_count,
+                    )
+                };
+                if completed {
                     object_call_recorder.record(op_index);
                     call.next_target
                 } else {
-                    return Ok(deopt_quick_typed_method_call(
+                    break 'quick_execution Ok(deopt_quick_typed_method_call(
                         frame,
                         op_array,
                         slot_base,
@@ -1013,7 +1148,7 @@ unsafe fn run_quick_long_ops_loop(
                     object_call_recorder.record(op_index);
                     call.next_target
                 } else {
-                    return Ok(deopt_quick_typed_method_call(
+                    break 'quick_execution Ok(deopt_quick_typed_method_call(
                         frame,
                         op_array,
                         slot_base,
@@ -1057,7 +1192,7 @@ unsafe fn run_quick_long_ops_loop(
                     object_call_recorder.record(op_index);
                     call.next_target
                 } else {
-                    return Ok(deopt_quick_typed_method_call(
+                    break 'quick_execution Ok(deopt_quick_typed_method_call(
                         frame,
                         op_array,
                         slot_base,
@@ -1104,7 +1239,7 @@ unsafe fn run_quick_long_ops_loop(
                     call.next_target
                 } else {
                     string_state.commit();
-                    return Ok(deopt_quick_long_kernel(
+                    break 'quick_execution Ok(deopt_quick_long_kernel(
                         frame,
                         op_array,
                         slot_base,
@@ -1146,7 +1281,7 @@ unsafe fn run_quick_long_ops_loop(
                     );
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
                 if try_execute_long_property_plan(
                     &*outer_receiver,
@@ -1165,7 +1300,7 @@ unsafe fn run_quick_long_ops_loop(
                     );
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
             }
             QuickLongOp::VirtualObjectArrayPipeline {
@@ -1205,7 +1340,7 @@ unsafe fn run_quick_long_ops_loop(
                     string_state.commit();
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 };
                 record_object_array_calls!(evaluated);
                 object_call_recorder.record(op_index);
@@ -1296,7 +1431,7 @@ unsafe fn run_quick_long_ops_loop(
                     );
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
             QuickLongOp::PostIncLoopLt {
@@ -1338,7 +1473,7 @@ unsafe fn run_quick_long_ops_loop(
                     );
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                    break 'quick_execution Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
             QuickLongOp::Jump { target } => target,
@@ -1348,11 +1483,14 @@ unsafe fn run_quick_long_ops_loop(
             iterations += 1;
             if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
                 commit_quick_long_ops_slots(slot_base, &slots, dirty_long_mask, dirty_bool_mask);
+                commit_property_shadows!();
                 string_state.commit();
                 let next_ip = plan.target_ip(next_target).unwrap_unchecked();
                 (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
                 object_call_recorder.flush();
-                handle_interrupt(eg)?;
+                if let Err(error) = handle_interrupt(eg) {
+                    break 'quick_execution Err(error);
+                }
             }
         }
 
@@ -1365,8 +1503,10 @@ unsafe fn run_quick_long_ops_loop(
         let next_ip = next_target.exit_ip().unwrap_unchecked();
         (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
         stats::inc_quick_loop_completed(iterations);
-        return Ok(QuickLoopOutcome::Completed);
-    }
+        break 'quick_execution Ok(QuickLoopOutcome::Completed);
+    };
+    commit_property_shadows!();
+    outcome
 }
 
 #[cfg(all(feature = "quick-loops", target_vendor = "apple"))]

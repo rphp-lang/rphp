@@ -15,7 +15,7 @@ struct NativeMixedBuildState {
     property_binding_op_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     property_binding_property_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     property_binding_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
-    property_binding_receivers: [*const Value; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_object_identities: [usize; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     property_binding_object_slots: [usize; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     property_binding_count: usize,
     call_targets: [*const FunctionCommon; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],

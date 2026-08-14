@@ -13,6 +13,10 @@ enum QuickResolvedObjectOp {
         plan: *const LongPropertyMethodPlan,
         property_slots: [usize; 8],
         property_count: u8,
+        /// Region-local binding indices populated only for the no-JIT typed
+        /// executor after native admission has had its opportunity. `u8::MAX`
+        /// keeps the canonical per-call property transaction selected.
+        shadow_bindings: [u8; 8],
     },
     PropertyGetter {
         receiver: *const Value,
@@ -48,6 +52,113 @@ enum QuickResolvedObjectOp {
     VirtualDeclaredReads {
         values: [i64; 8],
     },
+}
+
+#[cfg(feature = "quick-loops")]
+const QUICK_PROPERTY_SHADOW_CAPACITY: usize = 8;
+
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+struct QuickPropertyShadowBinding {
+    property: *mut Value,
+    value: i64,
+}
+
+#[cfg(feature = "quick-loops")]
+impl QuickPropertyShadowBinding {
+    const EMPTY: Self = Self {
+        property: std::ptr::null_mut(),
+        value: 0,
+    };
+}
+
+/// Fixed request-local shadow state for declared Long properties participating
+/// in one closed typed region. Construction and publication stay in the
+/// surrounding unsafe executor, while transaction evaluation itself only
+/// touches these plain scalar values.
+#[cfg(feature = "quick-loops")]
+struct QuickPropertyShadowState {
+    bindings: [QuickPropertyShadowBinding; QUICK_PROPERTY_SHADOW_CAPACITY],
+    count: u8,
+    dirty_mask: u8,
+}
+
+#[cfg(feature = "quick-loops")]
+impl QuickPropertyShadowState {
+    fn new() -> Self {
+        Self {
+            bindings: [QuickPropertyShadowBinding::EMPTY; QUICK_PROPERTY_SHADOW_CAPACITY],
+            count: 0,
+            dirty_mask: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.count = 0;
+        self.dirty_mask = 0;
+    }
+
+    fn binding_index(&self, property: *mut Value) -> Option<u8> {
+        self.bindings[..self.count as usize]
+            .iter()
+            .position(|binding| binding.property == property)
+            .and_then(|index| u8::try_from(index).ok())
+    }
+
+    fn insert(&mut self, property: *mut Value, value: i64) -> Option<u8> {
+        if let Some(index) = self.binding_index(property) {
+            return Some(index);
+        }
+        let index = self.count as usize;
+        if index == QUICK_PROPERTY_SHADOW_CAPACITY {
+            return None;
+        }
+        self.bindings[index] = QuickPropertyShadowBinding {
+            property,
+            value,
+        };
+        self.count += 1;
+        Some(index as u8)
+    }
+
+    #[inline(always)]
+    fn apply(
+        &mut self,
+        arguments: &[i64; 8],
+        plan: &LongPropertyMethodPlan,
+        property_count: u8,
+        shadow_bindings: &[u8; 8],
+    ) -> bool {
+        if property_count == 0 || property_count > self.count {
+            return false;
+        }
+        let mut values = [0i64; 8];
+        for index in 0..property_count as usize {
+            let binding = shadow_bindings[index] as usize;
+            let Some(shadow) = self.bindings.get(binding) else {
+                return false;
+            };
+            values[index] = shadow.value;
+        }
+        let Some(written) = apply_resolved_long_property_plan_values(
+            arguments,
+            plan,
+            &mut values,
+            property_count,
+        ) else {
+            return false;
+        };
+        for index in 0..property_count as usize {
+            if written & (1 << index) == 0 {
+                continue;
+            }
+            let shadow = &mut self.bindings[shadow_bindings[index] as usize];
+            shadow.value = values[index];
+            self.dirty_mask |= 1 << shadow_bindings[index];
+        }
+        stats::record_quick_property_shadow_updates(written.count_ones());
+        true
+    }
 }
 
 #[inline]
@@ -571,6 +682,7 @@ unsafe fn resolve_quick_object_ops(
                     plan: property_plan,
                     property_slots,
                     property_count,
+                    shadow_bindings: [u8::MAX; 8],
                 }
             }
             QuickLongOp::PropertyGetterCall { call, .. } => {
