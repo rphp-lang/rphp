@@ -880,6 +880,7 @@ pub struct ScalarLongCall {
 /// wrapper. The shared plan vocabulary can name either a closure-valued public
 /// argument or a declared property of the method receiver; consumers resolve
 /// both through the same frame-free Long callback ABI.
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndirectScalarLongCallable {
     PublicArgument(u8),
@@ -890,6 +891,7 @@ pub enum IndirectScalarLongCallable {
 /// dynamic closure invocation and return. Runtime still guards the closure
 /// identity, signature, capture envelope and scalar body before executing it
 /// without either canonical frame.
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
 pub struct IndirectScalarLongFunctionPlan {
     pub public_args: u8,
     pub callable: IndirectScalarLongCallable,
@@ -1386,7 +1388,6 @@ pub struct UserFunction {
     pub scalar_string_plan: Option<Box<ScalarStringFunctionPlan>>,
     pub composed_scalar_long_plan: Option<Box<ComposedScalarLongFunctionPlan>>,
     pub composed_typed_long_plan: Option<Box<ComposedTypedLongFunctionPlan>>,
-    pub indirect_scalar_long_plan: Option<Box<IndirectScalarLongFunctionPlan>>,
     /// Last one- or two-class argument tuple that satisfied this declaration.
     /// Stable class IDs make repeated monomorphic DTO/service calls a single
     /// integer guard while new subclasses retain the canonical hierarchy check.
@@ -1394,6 +1395,38 @@ pub struct UserFunction {
     /// Public by-value parameters that may borrow an immutable heap Value from
     /// their synchronous caller. Indexed by public parameter position.
     pub borrowable_heap_args: u64,
+}
+
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+impl UserFunction {
+    #[inline]
+    pub fn indirect_scalar_long_plan(&self) -> Option<&IndirectScalarLongFunctionPlan> {
+        self.op_array
+            .block_plans
+            .iter()
+            .rev()
+            .find_map(|plan| match plan {
+                crate::vm::planner::BlockPlan::FunctionIndirectScalarLong(plan) => Some(&**plan),
+                _ => None,
+            })
+    }
+
+    pub(crate) fn set_indirect_scalar_long_plan(
+        &mut self,
+        plan: Option<Box<IndirectScalarLongFunctionPlan>>,
+    ) {
+        self.op_array.block_plans.retain(|block_plan| {
+            !matches!(
+                block_plan,
+                crate::vm::planner::BlockPlan::FunctionIndirectScalarLong(_)
+            )
+        });
+        if let Some(plan) = plan {
+            self.op_array.block_plans.push(
+                crate::vm::planner::BlockPlan::FunctionIndirectScalarLong(plan),
+            );
+        }
+    }
 }
 
 /// Handler signature for internal (built-in) functions.

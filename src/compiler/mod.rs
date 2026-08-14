@@ -7,9 +7,8 @@ use crate::vm::function::{
     BinaryLongRecursionPlan, CallPlan, CallStrategy, CleanupMode, ComposedScalarDoubleFunctionPlan,
     ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
     ComposedTypedLongFunctionPlan, ComposedTypedLongOp, DirectInternalFunctionHandler, FrameLayout,
-    FunctionCommon, FunctionType, HotStatus, IndirectScalarLongCallable,
-    IndirectScalarLongFunctionPlan, InternalFunction, InternalFunctionHandler, LongPlanProperty,
-    LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, LongRecursiveBase,
+    FunctionCommon, FunctionType, HotStatus, InternalFunction, InternalFunctionHandler,
+    LongPlanProperty, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, LongRecursiveBase,
     LongRecursiveCombine, LongRecursiveCondition, ObjectArrayEntry, ObjectArrayFunctionPlan,
     ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongConditionalAdjustment,
     ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongModuloAnySelect,
@@ -23,6 +22,8 @@ use crate::vm::function::{
     ScalarLongProgram, ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
     ScalarStringSelect, ScalarStringSource, SignatureInfo, UserFunction,
 };
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+use crate::vm::function::{IndirectScalarLongCallable, IndirectScalarLongFunctionPlan};
 use crate::vm::instruction::{
     InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OpType,
 };
@@ -988,7 +989,6 @@ pub fn make_user_function_full(
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
-        indirect_scalar_long_plan: None,
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
     };
@@ -1010,7 +1010,11 @@ pub fn make_user_function_full(
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
-    function.indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    {
+        let indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
+        function.set_indirect_scalar_long_plan(indirect_scalar_long_plan);
+    }
     function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
 }
@@ -1149,7 +1153,6 @@ pub fn make_user_function_typed(
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
-        indirect_scalar_long_plan: None,
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
     };
@@ -1171,7 +1174,11 @@ pub fn make_user_function_typed(
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
-    function.indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    {
+        let indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
+        function.set_indirect_scalar_long_plan(indirect_scalar_long_plan);
+    }
     function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
 }
@@ -4364,6 +4371,9 @@ fn build_composed_scalar_long_function_plan(
 /// not assume which closure will occupy the source: the live Value, exact
 /// function signature, empty initial capture envelope and scalar leaf plan are
 /// all guarded when a typed region is entered.
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+#[cold]
+#[inline(never)]
 fn build_indirect_scalar_long_function_plan(
     function: &UserFunction,
 ) -> Option<Box<IndirectScalarLongFunctionPlan>> {
@@ -5455,7 +5465,11 @@ pub fn finalize_user_method(
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
-    function.indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
+    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+    {
+        let indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
+        function.set_indirect_scalar_long_plan(indirect_scalar_long_plan);
+    }
 
     function
 }

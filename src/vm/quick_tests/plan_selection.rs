@@ -69,6 +69,8 @@
                     BlockPlan::QuickForeachLongAccumulate(_) => "foreach-long",
                     BlockPlan::QuickForeachObjectPropertyAccumulate(_) => "foreach-object",
                     BlockPlan::QuickLongOps(_) => "long-ops",
+                    #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+                    BlockPlan::FunctionIndirectScalarLong(_) => "function-indirect-scalar",
                 })
                 .collect::<Vec<_>>();
             panic!(

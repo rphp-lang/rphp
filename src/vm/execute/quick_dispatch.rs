@@ -1032,14 +1032,6 @@ unsafe fn run_quick_long_ops_loop(
                     QuickResolvedObjectOp::ScalarMethod { plan, .. } => {
                         evaluate_scalar_long_plan(&*plan, &arguments)
                     }
-                    QuickResolvedObjectOp::IndirectScalarMethod {
-                        plan,
-                        call: indirect_call,
-                        ..
-                    } => {
-                        let arguments = quick_typed_method_arguments(&slots, &indirect_call);
-                        evaluate_scalar_long_plan(&*plan, &arguments)
-                    }
                     QuickResolvedObjectOp::ObjectLongMethod {
                         receiver,
                         user,

@@ -23,12 +23,6 @@ enum QuickResolvedObjectOp {
         target: *const FunctionCommon,
         plan: *const ScalarLongFunctionPlan,
     },
-    IndirectScalarMethod {
-        outer_target: *const FunctionCommon,
-        closure_target: *const FunctionCommon,
-        plan: *const ScalarLongFunctionPlan,
-        call: QuickTypedMethodCall,
-    },
     ObjectLongMethod {
         receiver: *const Value,
         target: *const FunctionCommon,
@@ -140,18 +134,26 @@ impl QuickObjectCallRecorder<'_> {
                     | QuickResolvedObjectOp::VirtualDeclaredReads { .. } => {}
                     QuickResolvedObjectOp::PropertyMethod { target, .. }
                     | QuickResolvedObjectOp::PropertyGetter { target, .. }
-                    | QuickResolvedObjectOp::ScalarMethod { target, .. }
                     | QuickResolvedObjectOp::ObjectLongMethod { target, .. }
                     | QuickResolvedObjectOp::ComposedTypedMethod { target, .. } => {
                         record_scalar_calls_bulk(&*target, *count);
                     }
-                    QuickResolvedObjectOp::IndirectScalarMethod {
-                        outer_target,
-                        closure_target,
-                        ..
-                    } => {
-                        record_scalar_calls_bulk(&*outer_target, *count);
-                        record_scalar_calls_bulk(&*closure_target, *count);
+                    QuickResolvedObjectOp::ScalarMethod { target, plan } => {
+                        record_scalar_calls_bulk(&*target, *count);
+                        let target_user = &*(target as *const UserFunction);
+                        let is_direct = target_user
+                            .scalar_long_plan
+                            .as_deref()
+                            .is_some_and(|target_plan| {
+                                std::ptr::eq(target_plan as *const ScalarLongFunctionPlan, plan)
+                            });
+                        if !is_direct {
+                            // The closure target is deliberately absent from
+                            // the hot resolved-op enum. Keep aggregate logical
+                            // call telemetry exact without changing that enum.
+                            stats::inc_do_fcall_fast_by(*count);
+                            stats::inc_return_fast_by(*count);
+                        }
                     }
                     QuickResolvedObjectOp::ComposedProperty {
                         outer_target,
@@ -440,38 +442,58 @@ unsafe fn quick_object_property_read(
 /// used by named functions and monomorphic methods. Property and closure
 /// identity are resolved by the owning unsafe region-entry boundary; this
 /// helper only translates already-guarded scalar inputs.
-#[cfg(feature = "quick-loops")]
-fn quick_indirect_scalar_call(
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+#[cold]
+#[inline(never)]
+unsafe fn quick_indirect_scalar_call(
+    receiver: *const Value,
     outer_target: *const FunctionCommon,
-    closure_target: *const FunctionCommon,
-    scalar_plan: *const ScalarLongFunctionPlan,
+    outer_user: *const UserFunction,
     outer_call: QuickTypedMethodCall,
     wrapper: &IndirectScalarLongFunctionPlan,
 ) -> Option<QuickResolvedObjectOp> {
-    if wrapper.public_args != outer_call.argument_count || wrapper.arguments.len() > 8 {
+    if wrapper.public_args != outer_call.argument_count
+        || wrapper.arguments.len() != outer_call.argument_count as usize
+        || wrapper
+            .arguments
+            .iter()
+            .enumerate()
+            .any(|(index, source)| *source != ScalarLongSource::Input(index as u16))
+    {
         return None;
     }
 
-    let mut call = outer_call;
-    call.argument_count = wrapper.arguments.len() as u8;
-    call.arguments = [QuickLongOperand::Const(0); 8];
-    for (index, source) in wrapper.arguments.iter().copied().enumerate() {
-        call.arguments[index] = match source {
-            ScalarLongSource::Input(argument)
-                if argument < u16::from(outer_call.argument_count) =>
-            {
-                outer_call.arguments[argument as usize]
-            }
-            ScalarLongSource::Constant(value) => QuickLongOperand::Const(value),
-            ScalarLongSource::Input(_) | ScalarLongSource::Temporary(_) => return None,
-        };
+    let IndirectScalarLongCallable::ReceiverProperty { cache_ip } = wrapper.callable else {
+        // Public-argument callables require a retained heap input in the
+        // enclosing region, which this method-only consumer does not yet own.
+        return None;
+    };
+    let property_cache = (&*outer_user).op_array.cache.get(cache_ip as usize)?;
+    if property_cache.is_dynamic_property_read() {
+        return None;
+    }
+    let callable = quick_object_property_read(
+        &(&*outer_user).op_array,
+        receiver,
+        u32::from(cache_ip),
+        ValueType::Closure,
+    )?;
+    let closure = (&*callable).as_closure()?;
+    if closure.called_scope_class_id != 0
+        || closure.bound_this.is_some()
+        || !closure.captures.is_empty()
+    {
+        return None;
+    }
+    let closure_user = guarded_scalar_user_target(closure.func, wrapper.arguments.len())?;
+    let scalar_plan = (&*closure_user).scalar_long_plan.as_deref()?;
+    if scalar_plan.public_args as usize != wrapper.arguments.len() {
+        return None;
     }
 
-    Some(QuickResolvedObjectOp::IndirectScalarMethod {
-        outer_target,
-        closure_target,
+    Some(QuickResolvedObjectOp::ScalarMethod {
+        target: outer_target,
         plan: scalar_plan,
-        call,
     })
 }
 
@@ -658,62 +680,30 @@ unsafe fn resolve_quick_object_ops(
                         target,
                         plan: scalar_plan,
                     }
-                } else if let Some(wrapper) = (&*user).indirect_scalar_long_plan.as_deref() {
-                    let IndirectScalarLongCallable::ReceiverProperty { cache_ip } =
-                        wrapper.callable
-                    else {
-                        // Public-argument callables require a retained heap
-                        // input in the enclosing region, which this method-only
-                        // consumer does not yet own.
-                        return None;
-                    };
-                    let property_cache = (&*user).op_array.cache.get(cache_ip as usize)?;
-                    if property_cache.is_dynamic_property_read() {
-                        return None;
-                    }
-                    let callable = quick_object_property_read(
-                        &(&*user).op_array,
-                        receiver,
-                        u32::from(cache_ip),
-                        ValueType::Closure,
-                    )?;
-                    let closure = (&*callable).as_closure()?;
-                    if closure.called_scope_class_id != 0
-                        || closure.bound_this.is_some()
-                        || !closure.captures.is_empty()
-                    {
-                        return None;
-                    }
-                    let closure_target = closure.func;
-                    let closure_user =
-                        guarded_scalar_user_target(closure_target, wrapper.arguments.len())?;
-                    let scalar_plan = (&*closure_user).scalar_long_plan.as_deref()?;
-                    if scalar_plan.public_args as usize != wrapper.arguments.len() {
-                        return None;
-                    }
-                    quick_indirect_scalar_call(
-                        target,
-                        closure_target,
-                        scalar_plan,
-                        call,
-                        wrapper,
-                    )?
                 } else {
-                    let object_plan = (&*user).object_long_plan.as_deref()?;
-                    let arguments = call.arguments.map(QuickObjectLongArgument::Long);
-                    if !quick_object_long_arguments_match(
-                        &*user,
-                        object_plan,
-                        &arguments,
-                        call.argument_count,
-                    ) {
-                        return None;
-                    }
-                    QuickResolvedObjectOp::ObjectLongMethod {
-                        receiver,
-                        target,
-                        user,
-                        plan: object_plan,
+                    'resolve_scalar: {
+                        #[cfg(feature = "jit-prototype")]
+                        if let Some(wrapper) = (&*user).indirect_scalar_long_plan() {
+                            break 'resolve_scalar quick_indirect_scalar_call(
+                                receiver, target, user, call, wrapper,
+                            )?;
+                        }
+                        let object_plan = (&*user).object_long_plan.as_deref()?;
+                        let arguments = call.arguments.map(QuickObjectLongArgument::Long);
+                        if !quick_object_long_arguments_match(
+                            &*user,
+                            object_plan,
+                            &arguments,
+                            call.argument_count,
+                        ) {
+                            return None;
+                        }
+                        break 'resolve_scalar QuickResolvedObjectOp::ObjectLongMethod {
+                            receiver,
+                            target,
+                            user,
+                            plan: object_plan,
+                        };
                     }
                 }
             }

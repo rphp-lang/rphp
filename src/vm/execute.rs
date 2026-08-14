@@ -8,17 +8,18 @@ use super::function::{
     BinaryLongRecursionPlan, CallStrategy, ComposedScalarDoubleFunctionPlan,
     ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
     ComposedTypedLongFunctionPlan, ComposedTypedLongOp, FUNC_HOT_THRESHOLD, FunctionCommon,
-    FunctionType, HotStatus, IndirectScalarLongCallable, IndirectScalarLongFunctionPlan,
-    LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, LongRecursiveBase,
-    LongRecursiveCombine, LongRecursiveCondition, ObjectArrayFunctionPlan, ObjectArrayLongCall,
-    ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource,
-    ObjectLongOp, ObjectLongSource, ParamTypeHint, PropertyGetterMethodPlan,
-    PropertyInitMethodPlan, ReturnStrategy, ScalarDoubleFunctionPlan, ScalarDoubleOpKind,
-    ScalarDoubleProgram, ScalarDoubleSource, ScalarLongCall, ScalarLongCallGuard,
-    ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
-    ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan,
-    ScalarStringSource, UserFunction,
+    FunctionType, HotStatus, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp,
+    LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ObjectArrayFunctionPlan,
+    ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan,
+    ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ParamTypeHint,
+    PropertyGetterMethodPlan, PropertyInitMethodPlan, ReturnStrategy, ScalarDoubleFunctionPlan,
+    ScalarDoubleOpKind, ScalarDoubleProgram, ScalarDoubleSource, ScalarLongCall,
+    ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand,
+    ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
+    ScalarStringFunctionPlan, ScalarStringSource, UserFunction,
 };
+#[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+use super::function::{IndirectScalarLongCallable, IndirectScalarLongFunctionPlan};
 use super::instruction::{
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION,
     ASSIGN_CV_REBIND, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,

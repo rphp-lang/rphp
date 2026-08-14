@@ -498,22 +498,25 @@ unsafe fn native_quick_long_mixed_kernel(
                     QuickResolvedObjectOp::ScalarMethod {
                         target,
                         plan: scalar_plan,
-                    } => builder.lower_scalar_method(target, &*scalar_plan, &call, result)?,
-                    QuickResolvedObjectOp::IndirectScalarMethod {
-                        outer_target,
-                        closure_target,
-                        plan: scalar_plan,
-                        call: indirect_call,
                     } => {
-                        builder.lower_scalar_method(
-                            outer_target,
-                            &*scalar_plan,
-                            &indirect_call,
-                            result,
-                        )?;
-                        let completion = u8::try_from(builder.operation_count.checked_sub(1)?)
-                            .ok()?;
-                        builder.record_call(closure_target, completion)?;
+                        builder.lower_scalar_method(target, &*scalar_plan, &call, result)?;
+                        let target_user = &*(target as *const UserFunction);
+                        let is_direct = target_user
+                            .scalar_long_plan
+                            .as_deref()
+                            .is_some_and(|target_plan| {
+                                std::ptr::eq(
+                                    target_plan as *const ScalarLongFunctionPlan,
+                                    scalar_plan,
+                                )
+                            });
+                        if !is_direct {
+                            let completion = u8::try_from(builder.operation_count.checked_sub(1)?)
+                                .ok()?;
+                            // Aggregate telemetry retains both logical call
+                            // completions without enlarging the hot resolved op.
+                            builder.record_call(target, completion)?;
+                        }
                     }
                     QuickResolvedObjectOp::ObjectLongMethod {
                         target,
