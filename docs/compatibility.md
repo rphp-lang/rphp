@@ -12,34 +12,34 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`a30abdd30febceed2b13512381fdca1f19965d4d`, using the same runner commit. The
+`1f4352b12326c2202446d4cb15860e9c524429c1`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 919 | 2,843 | 65 | 1 | 221 | 0 | 2 | 24.428% |
+| `Zend/tests` | 950 | 2,813 | 65 | 1 | 221 | 0 | 1 | 25.246% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,007** | **3,023** | **75** | **1** | **237** | **0** | **2** | **24.988%** |
+| **Combined** | **1,038** | **2,993** | **75** | **1** | **237** | **0** | **1** | **25.750%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,007 / 4,345, or **23.176%**; including crashes and timeouts in the attempted
-denominator gives **24.975%**. These numbers are intentionally pre-alpha and do
+is 1,038 / 4,345, or **23.890%**; including crashes and timeouts in the attempted
+denominator gives **25.744%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
 language coverage. Of 4,032 attempted cases, six fail during `SKIPIF` before
-the test body, 694 are rejected in the observed parse/compile stage, and 3,332
-(**82.639%**) execute the test's `FILE` section past that stage. This is not a
+the test body, 749 are rejected in the observed parse/compile stage, and 3,277
+(**81.275%**) execute the test's `FILE` section past that stage. This is not a
 second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,202 runtime failures, 1,123 output mismatches,
-568 parse failures, 126 compile failures and six failed `SKIPIF` evaluations.
-Two cases terminate by signal and none times out. Of the 75 skips, 45 require
+The largest failure groups are 1,198 runtime failures, 1,070 output mismatches,
+568 parse failures, 151 compile failures and six failed `SKIPIF` evaluations.
+One case terminates by signal and none times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
 does not expose, while three require PHPDBG or CGI/header sections outside this
@@ -51,13 +51,46 @@ sections, zero timeouts and zero crashes. Five representative cases also pass
 through php-src's official `run-tests.php`. Two independent RPHP executions
 with a matching native PHP 8.2.33 runner produced byte-identical manifests with
 SHA-256
-`2eecae0a104a677ad7adb9dcf59d2f5530ee4ac8bfca1c7f5a3b858fd9fa99d7`
+`84eea489a1fa041baa91299a33c3fb42082759ea1adb51294556f62d3e0487c7`
 and byte-identical summaries with SHA-256
-`fa9497999147e722a32c5c058139b622e45d6ac2eb43327f70dd445148bdc61c`.
+`dac2e2f84f2261b73866e61b5e8ac5314cd6729163016a2e9e686bb7c81e904c`.
 
-Relative to the retained `8aade89` baseline, this checkpoint adds seven exact
-passes without losing a previous pass or adding a crash or timeout. It also
-removes the previous timeout in `Zend/tests/try/finally_goto_005.phpt`.
+Relative to the retained `a30abdd` baseline, this checkpoint adds 31 exact
+passes without losing a previous pass or adding a timeout. Concrete child
+methods now enforce the same parameter contravariance, return covariance,
+visibility, staticness and reference-mode contract as their effective concrete
+parent declaration before the child is published. The shared variance path
+resolves lexical `self` and `parent`, consuming-class trait scope, late-bound
+`static`, class aliases, implicit `Stringable`, `iterable` as
+`array|Traversable`, union/intersection relations and fixed-to-variadic
+subsumption. The formerly recursive
+`Zend/tests/type_declarations/variance/infinite_recursion.phpt` now produces
+PHP's declaration fatal instead of overflowing the native stack, reducing the
+crash count from two to one. The 43-case variance directory advances from four
+to ten exact passes; its delayed class-loading and trait-composition failures
+remain visible rather than being claimed as complete variance support.
+
+The exact additions are `Zend/tests/bug51421.phpt`, `objects_008.phpt`,
+`return_types/bug71978.phpt`, `return_types/inheritance001.phpt`,
+`return_types/inheritance002.phpt`, `return_types/never_no_variance.phpt`,
+`stringable_trait.phpt`; intersection-variance cases `invalid1`, `invalid2`,
+`invalid3`, `invalid_covariance_drop_type1` and
+`invalid_covariance_drop_type2`; mixed-inheritance parameter cases `error1`,
+`error2` and `error4` plus return cases `error1`, `error2` and `error3`; both
+`type_declarations/parameter_type_variance` cases; union-variance cases
+`invalid_001`, `invalid_002` and `invalid_003`; variance cases
+`class_order_autoload_error1`, `class_order_autoload_error2`,
+`class_order_autoload_error3`, `infinite_recursion`,
+`parent_in_class_failure2` and `static_variance_failure`; plus
+`variadic/illegal_variadic_override_ref` and
+`variadic/illegal_variadic_override_type`. The remaining signal termination is
+`Zend/tests/bug64660.phpt`; full delayed class linking/autoload validation and
+the large nested-array parser resource boundary remain separate work.
+
+The preceding `a30abdd` checkpoint, relative to the retained `8aade89`
+baseline, added seven exact passes without losing a previous pass or adding a
+crash or timeout. It also
+removed the previous timeout in `Zend/tests/try/finally_goto_005.phpt`.
 Non-local `goto`, `break` and `continue` now run every intervening `finally`
 block before reaching their destination; a `return` or `throw` from that
 `finally` supersedes the pending transfer. The other exact additions are
@@ -186,11 +219,11 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`a30abdd-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/a30abdd-arm64-manifest.jsonl),
+[`1f4352b-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/1f4352b-arm64-manifest.jsonl),
 with aggregate metadata in
-[`a30abdd-arm64-summary.json`](../tests/php-src/results/php-8.2.33/a30abdd-arm64-summary.json),
+[`1f4352b-arm64-summary.json`](../tests/php-src/results/php-8.2.33/1f4352b-arm64-summary.json),
 a directory/status navigation map and exact hazard list in
-[`a30abdd-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/a30abdd-arm64-coverage-map.json),
+[`1f4352b-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/1f4352b-arm64-coverage-map.json),
 and the full reference aggregate in
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in
