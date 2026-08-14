@@ -11,22 +11,23 @@ behavior.
 
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
-`651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`f1990e49f791074cff3856eeb6a20aa4781ab79b`, using the same runner commit. The
-recorded run used arm64 and a three-second per-process timeout. It discovered
-4,345 PHPT cases.
+`651db3ebfa622cae0c4e6b39766812efbd274ced` against default-release RPHP commit
+`caf5590d391b4e3d1236498e0178e71930cadbb4`, using the same runner commit. The
+recorded run used arm64 and a three-second per-process timeout; the complete
+default, no-default-features, generics-erased, generics-reified and all-features
+Cargo matrix passed separately. It discovered 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 992 | 2,772 | 65 | 1 | 221 | 0 | 0 | 26.355% |
+| `Zend/tests` | 993 | 2,771 | 65 | 1 | 221 | 0 | 0 | 26.382% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,080** | **2,952** | **75** | **1** | **237** | **0** | **0** | **26.786%** |
+| **Combined** | **1,081** | **2,951** | **75** | **1** | **237** | **0** | **0** | **26.811%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,080 / 4,345, or **24.856%**; including crashes and timeouts in the attempted
-denominator gives **26.786%**. These numbers are intentionally pre-alpha and do
+is 1,081 / 4,345, or **24.879%**; including crashes and timeouts in the attempted
+denominator gives **26.811%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -37,7 +38,7 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,172 runtime failures, 1,051 output mismatches,
+The largest failure groups are 1,171 runtime failures, 1,051 output mismatches,
 567 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
@@ -54,12 +55,36 @@ manifests and summaries. Four already-failing raw executions retain known
 non-semantic output variation from unordered object-property state; run
 durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
-`1a766da9dc11b9c2d3130a07c794be34c50e8602a64eafcdc44a6d56a257e785` and
+`88a0bc5c1b13c262a1ca2c3496a7fd443d27afd285e0b07ef52f5d1fd95c31d6` and
 its summary has SHA-256
-`67b9ac6cf5336bbf5141d083d2949fcbbdad6e07bcd6c85fea55611cebdeb0bd`.
+`94f03867ec743def52bc9c1793e7552d6e6d1add3e1161da61c346b062817dd1`.
 
-Relative to the retained `a89e091` baseline, this checkpoint adds six exact
-passes without losing a previous pass or adding a crash or timeout. A local
+Relative to the retained `f1990e4` baseline, this checkpoint adds one exact
+pass without losing a previous pass or adding a crash or timeout. Constant
+array expressions now apply PHP unpack semantics while folding: integer keys
+are reindexed, string keys overwrite in insertion order and forward `self::`
+class-constant dependencies resolve before property defaults. Class-constant
+dependency cycles link successfully and raise a catchable `Error` only when an
+affected value is read. When a permitted deferred `new` expression prevents
+folding a constant, parameter default or static-local initializer, the runtime
+materializer retains the constant-expression context and rejects Traversable
+objects rather than applying ordinary runtime array-unpack rules. Original
+clean-room regressions cover top-level and class constants, static properties,
+forward dependencies, key behavior, delayed cycle errors and deferred defaults
+and static locals.
+
+The exact addition is `Zend/tests/array_unpack/classes.phpt`. The related
+`array_unpack/gh9769.phpt` now reaches the correct constant-expression error
+message but remains an exact failure because general uncaught stack-trace and
+source-location formatting is still incomplete. The pinned Symfony
+FrameworkBundle 7.4.16 S3 gate remains green against PHP 8.2.33 across cold and
+cached loads, health and missing-route requests, deleted and malformed caches,
+and concurrent atomic publication. This checkpoint does not claim complete
+constant-expression, class-constant, diagnostic or PHP 8.2 compatibility.
+
+The preceding `f1990e4` checkpoint, relative to the retained `a89e091`
+baseline, added six exact passes without losing a previous pass or adding a
+crash or timeout. A local
 `unset($variable)` now replaces the compiled-variable binding itself rather
 than assigning `undef` through a reference target. Other local names, array
 elements and object properties that own the same reference cell retain both
