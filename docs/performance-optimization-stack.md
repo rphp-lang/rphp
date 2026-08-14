@@ -296,19 +296,76 @@ Expected leverage: potentially high only after Layers 1–5 expose a stable hot
 kernel. Current anonymous native samples make a specific code-generation goal
 unvalidated.
 
-### Layer 7 — startup and persistent typed artifacts
+### Layer 7 — long-lived program cache, then persistent artifacts
 
-Status: **deferred; Grade D**
+Status: **required for a long-lived-process throughput claim; Grade C until a
+repeated-request corpus measures parse/compile cost**
 
-If production cold-start or repeated JIT compilation becomes material, cache
-versioned portable bytecode/typed IR with source, dependency, ABI and feature
-hashes. Target-specific code may follow only with architecture, CPU-feature,
-relocation and helper-ABI validation. Any mismatch discards the artifact and
-returns to ordinary planning; unchecked executable memory is never restored.
+This is two ordered cache layers with different lifetimes and correctness
+contracts.
 
-The current default-JIT checkpoint already keeps fresh-process startup inside
-the one-percent gate and bounds executable mappings. Persistent artifacts are
-therefore not ahead of measured execution and representation work.
+#### Layer 7a — process-resident compiled-program cache
+
+Keep immutable compiled units alive across requests in one server or worker so
+the same source is not lexed, parsed, compiled, planned and JIT-compiled for
+every request. The cache should retain canonical bytecode `OpArray` graphs,
+immutable function/class metadata, typed plans and eligible bounded native
+code. Request execution still starts from fresh mutable state.
+
+This is a real current boundary, not an assumed future optimization. The CLI
+entry reads, lexes, parses and compiles its main source before constructing one
+`ExecutorGlobals`. `execute_included_file` likewise reads, tokenizes, parses and
+compiles each non-short-circuited include. The current `include_once` set avoids
+a second include only inside that executor; it is not a process-wide compiled-
+unit cache. A long-lived SAPI must therefore separate immutable program state
+from request state before claiming that warmed requests avoid compilation.
+
+The cache key and validation contract include canonical source identity,
+content or equivalent freshness identity, compiler/runtime ABI, feature and
+generic mode, relevant configuration, and every dependency that can affect
+compilation. Includes whose compilation depends on request-defined constants,
+autoload side effects or mutable declaration state remain uncached until those
+dependencies have explicit generations. `include` may execute cached bytecode
+more than once as PHP requires; `include_once` membership remains request-local.
+
+Cached code must never retain request-owned globals, static values,
+superglobals, included-file membership, handlers, exceptions, output buffers,
+resources, coroutine state or mutable service objects. Request-local symbol
+tables may point at immutable cached declarations, but inline caches and native
+code that embed class/function identities must validate process-stable
+generations or rebind before entry. Invalidation publishes a new generation;
+an old unit stays alive while an in-flight request can still execute it.
+
+The cache is memory-budgeted and observable. Telemetry records source lookups,
+compile hits/misses, invalidations and their reasons, reused bytecode/typed/JIT
+bytes, evictions, warm-up cost and resident memory. A disabled cache remains a
+canonical comparison mode.
+
+Acceptance requires a repeated-request application corpus that separates first
+request, warm request and steady-state throughput; proves source and transitive
+include invalidation while requests are active; resets every request-owned
+state category; produces identical output with the cache disabled; and reaches
+a bounded RSS plateau on ARM64 and physical x86-64. The gain must include cache
+lookup and invalidation checks, not compare a warmed executor with cold process
+startup.
+
+#### Layer 7b — versioned cross-process artifact
+
+Only after Layer 7a establishes the immutable/mutable boundary should a
+versioned `.rphpc` artifact preserve bytecode, portable typed IR, profiles and
+dependency hashes across process or server restarts. Target-specific native
+sections may follow only with architecture, CPU-feature, relocation,
+optimization-policy and runtime-helper ABI validation. Any mismatch discards
+the affected unit and returns to ordinary compilation; unchecked executable
+memory is never restored.
+
+The current default-JIT checkpoint keeps fresh-process startup inside the
+one-percent gate and bounds executable mappings, so Layer 7b remains behind the
+in-memory cache and a measured restart/deployment workload. Layer 7a may move
+ahead of lower-numbered speculative throughput layers when a long-lived server
+becomes the explicit product target, but it still consumes the same canonical
+bytecode, typed IR, native and materialization contracts rather than creating a
+second execution engine.
 
 ### Layer 8 — long-lived-runtime memory lifecycle
 
