@@ -12,33 +12,33 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against all-features RPHP commit
-`0afbae3f8ea9e1fdd0ed469b37e85644d61372f0`, using the same runner commit. The
+`8bcc5480a89eaef667612e138d4450d6bc498cc5`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout. It discovered
 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 951 | 2,813 | 65 | 1 | 221 | 0 | 0 | 25.266% |
+| `Zend/tests` | 972 | 2,792 | 65 | 1 | 221 | 0 | 0 | 25.824% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,039** | **2,993** | **75** | **1** | **237** | **0** | **0** | **25.769%** |
+| **Combined** | **1,060** | **2,972** | **75** | **1** | **237** | **0** | **0** | **26.290%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,039 / 4,345, or **23.913%**; including crashes and timeouts in the attempted
-denominator gives **25.769%**. These numbers are intentionally pre-alpha and do
+is 1,060 / 4,345, or **24.396%**; including crashes and timeouts in the attempted
+denominator gives **26.290%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
 language coverage. Of 4,032 attempted cases, six fail during `SKIPIF` before
-the test body, 750 are rejected in the observed parse/compile stage, and 3,276
-(**81.250%**) execute the test's `FILE` section past that stage. This is not a
+the test body, 749 are rejected in the observed parse/compile stage, and 3,277
+(**81.275%**) execute the test's `FILE` section past that stage. This is not a
 second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,198 runtime failures, 1,070 output mismatches,
-568 parse failures, 151 compile failures and six failed `SKIPIF` evaluations.
+The largest failure groups are 1,192 runtime failures, 1,056 output mismatches,
+567 parse failures, 151 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
 remain in the total: 234 require per-process `INI` behavior that the RPHP CLI
@@ -51,20 +51,47 @@ sections, zero timeouts and zero crashes. Five representative cases also pass
 through php-src's official `run-tests.php`. Two independent RPHP executions
 with a matching native PHP 8.2.33 runner produced byte-identical manifests with
 SHA-256
-`443efe219d81ca1d081fd38aaa70dafd375f717171b5518902c9a113bed741d0`
+`57959b27305707558a81d7e57e770b2b88255294195746d06d75f045851506d3`
 and byte-identical summaries with SHA-256
-`0dad206102e3c37bf637e0a6e5248c372b8592f7e2ffb249aff70e011b2550ed`.
+`ad95a739ab281225a38808ef38929e85725f7fd85463016ac038b8f3d3930b7c`.
 
-Relative to the retained `1f4352b` baseline, this checkpoint adds the exact
-pass `Zend/tests/bug64660.phpt` without losing a previous pass or adding a
-timeout. RPHP now measures structural delimiter nesting before recursive
-descent, gives valid moderately deep sources a dedicated parser stack, and
-turns an excessive source unit into PHP's source-qualified `Parse error: memory
-exhausted` diagnostic. The same diagnostic remains a catchable `ParseError`
-when the source is loaded through `include`. This removes the selected corpus's
-last signal termination: the pinned `Zend/tests` plus `tests/lang` gate now has
-zero crashes and zero timeouts. It does not claim that every PHP program or
-every parser resource boundary is supported.
+Relative to the retained `0afbae3` baseline, this checkpoint adds 21 exact
+passes without losing a previous pass or adding a crash or timeout. PHP source
+argument unpacking now uses a dedicated compiler and baseline-VM protocol
+instead of treating `...` as `call_user_func_array()`. It preserves PHP array
+reference cells and copy-on-write separation, consumes arrays and
+`Traversable` objects with their integer or string keys, retains evaluation and
+exception order, diagnoses invalid sources and key order, maps named and
+variadic parameters, and grows detached call frames for large argument lists.
+The contract applies to ordinary and dynamic functions, instance and static
+methods, constructors and relevant internal variadics. Original clean-room
+regressions cover those boundaries plus iterator errors, by-reference mutation,
+named variadics and multi-array `array_map(null, ...)`.
+
+The exact additions are all 14 cases under `Zend/tests/arg_unpack`, plus
+`Zend/tests/bug75786.phpt`,
+`Zend/tests/named_params/unknown_named_param.phpt`,
+`Zend/tests/named_params/unpack.phpt`,
+`Zend/tests/named_params/unpack_and_named_1.phpt`,
+`Zend/tests/named_params/unpack_and_named_2.phpt`,
+`Zend/tests/unpack_iterator_by_ref_type_check.phpt` and
+`Zend/tests/vm_stack_with_arg_extend.phpt`. The pinned Symfony FrameworkBundle
+7.4.16 S3 gate remains green against PHP 8.2.33 across cold and cached loads,
+health and missing-route requests, deleted and malformed caches, and concurrent
+atomic publication. This checkpoint does not claim complete call, iterator,
+diagnostic-location or standard-library compatibility.
+
+The preceding `0afbae3` checkpoint, relative to the retained `1f4352b`
+baseline, adds the exact pass `Zend/tests/bug64660.phpt` without losing a
+previous pass or adding a timeout. RPHP now measures structural delimiter
+nesting before recursive descent, gives valid moderately deep sources a
+dedicated parser stack, and turns an excessive source unit into PHP's
+source-qualified `Parse error: memory exhausted` diagnostic. The same
+diagnostic remains a catchable `ParseError` when the source is loaded through
+`include`. This removes the selected corpus's last signal termination: the
+pinned `Zend/tests` plus `tests/lang` gate now has zero crashes and zero
+timeouts. It does not claim that every PHP program or every parser resource
+boundary is supported.
 
 The preceding `1f4352b` checkpoint, relative to the retained `a30abdd`
 baseline, adds 31 exact passes without losing a previous pass or adding a
@@ -96,7 +123,7 @@ The exact additions are `Zend/tests/bug51421.phpt`, `objects_008.phpt`,
 `parent_in_class_failure2` and `static_variance_failure`; plus
 `variadic/illegal_variadic_override_ref` and
 `variadic/illegal_variadic_override_type`. At that checkpoint the remaining
-signal termination was `Zend/tests/bug64660.phpt`; the current parser-resource
+signal termination was `Zend/tests/bug64660.phpt`; the parser-resource
 checkpoint closes it. Full delayed class linking/autoload validation remains
 separate work.
 
@@ -111,8 +138,9 @@ block before reaching their destination; a `return` or `throw` from that
 `try/try_catch_finally_006.phpt`, `try/try_catch_finally_007.phpt`,
 `try/try_finally_014.phpt` and `try/try_finally_018.phpt`.
 
-The current Symfony S3 slice leaves that exact PHPT pass set unchanged while
-closing the general semantics that prevented a valid cold route cache. List
+The retained Symfony S3 checkpoint left its then-current exact PHPT pass set
+unchanged while closing the general semantics that prevented a valid cold
+route cache. List
 destructuring can assign ordinary, dynamic and nested `$this` properties;
 namespaced `callable|false` types keep the reserved literal type; by-value
 `foreach` writes through an existing reference, while by-reference `foreach`
@@ -232,11 +260,11 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`0afbae3-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/0afbae3-arm64-manifest.jsonl),
+[`8bcc548-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-manifest.jsonl),
 with aggregate metadata in
-[`0afbae3-arm64-summary.json`](../tests/php-src/results/php-8.2.33/0afbae3-arm64-summary.json),
+[`8bcc548-arm64-summary.json`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-summary.json),
 a directory/status navigation map and exact hazard list in
-[`0afbae3-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/0afbae3-arm64-coverage-map.json),
+[`8bcc548-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-coverage-map.json),
 and the full reference aggregate in
 [`reference-arm64-summary.json`](../tests/php-src/results/php-8.2.33/reference-arm64-summary.json),
 with image and official-runner cross-checks in
