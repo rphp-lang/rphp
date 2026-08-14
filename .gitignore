@@ -12,6 +12,7 @@ docs/*
 !docs/compatibility.md
 !docs/performance-dispatch-analysis.md
 !docs/performance-declared-object-lifecycle.md
+!docs/performance-optimization-stack.md
 !docs/roadmap.md
 !docs/roadmap-compatibility.md
 !docs/roadmap-execution-performance.md
