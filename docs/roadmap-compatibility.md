@@ -47,26 +47,24 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `e077e12` against
-php-src 8.2.33 `651db3e`: 1,092 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with eight exact additions and no lost pass relative
-to `e0d94aa`. Throwable creation records file and line before a user
-constructor runs, preserves that origin across later throws and renders the
-exact root `#0 {main}` uncaught diagnostic only where the trace is known to be
-empty. Sparse opcode source metadata also locates runtime
-constant-expression array-unpack errors without widening the 16-byte
-instruction. The additions cover seven general exception/source-line cases
-and `Zend/tests/array_unpack/gh9769.phpt`; only the separate
-undefined-variable warning case remains in that array-unpack directory. The
-corpus retains zero crashes and zero timeouts. Complete nested call traces and
-general call-site source locations remain explicit boundaries. The Symfony S3
-slice remains green against PHP 8.2.33 through cold, cached, deleted-cache,
-malformed-cache and concurrent publication transitions, including exact
-health and missing-route results.
+The current pinned PHP 8.2 differential baseline is RPHP `c6ac2e4` against
+php-src 8.2.33 `651db3e`: 1,105 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with 13 exact additions and no lost pass relative to
+`e077e12`. Throwable creation now snapshots the complete live PHP call chain,
+including caller source locations, named/static/instance/constructor call
+rules, closure names, method staticness and arguments. `getTrace()`,
+`getTraceAsString()` and top-level uncaught rendering consume the same stored
+creation trace, which later throws preserve. Sparse source metadata retains the
+16-byte instruction layout. The corpus retains zero crashes and zero timeouts.
+Internal callback frames, suspended generator/coroutine histories,
+exception-chain rendering and per-request Throwable INI controls remain
+explicit boundaries. The Symfony S3 slice remains green against PHP 8.2.33
+through cold, cached, deleted-cache, malformed-cache and concurrent publication
+transitions, including exact health and missing-route results.
 Runtime-resolved method/static/dynamic calls, by-reference returns, indirect
-`ArrayAccess` and `WeakMap` appends, nested uncaught stack-trace formatting,
-variable-variable syntax, generic undefined-variable warnings, delayed class
-linking/autoload validation and other visible failure clusters remain
+`ArrayAccess` and `WeakMap` appends, variable-variable syntax, generic
+undefined-variable warnings, delayed class linking/autoload validation and
+other visible failure clusters remain
 boundaries; the broader adoption goal remains active until the selected PHP 8.2
 contract corpus converges.
 

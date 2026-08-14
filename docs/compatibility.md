@@ -12,22 +12,22 @@ behavior.
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
 suites from PHP 8.2.33 commit
 `651db3ebfa622cae0c4e6b39766812efbd274ced` against default-release RPHP commit
-`e077e12429f3ebfe12482ac2050a7185d74964d5`, using the same runner commit. The
+`c6ac2e469201f74c94f4426ecffe58779bcc0417`, using the same runner commit. The
 recorded run used arm64 and a three-second per-process timeout; the complete
 default, no-default-features, generics-erased, generics-reified and all-features
 Cargo matrix passed separately. It discovered 4,345 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 1,004 | 2,760 | 65 | 1 | 221 | 0 | 0 | 26.674% |
+| `Zend/tests` | 1,017 | 2,747 | 65 | 1 | 221 | 0 | 0 | 27.019% |
 | `tests/lang` | 88 | 180 | 10 | 0 | 16 | 0 | 0 | 32.836% |
-| **Combined** | **1,092** | **2,940** | **75** | **1** | **237** | **0** | **0** | **27.083%** |
+| **Combined** | **1,105** | **2,927** | **75** | **1** | **237** | **0** | **0** | **27.406%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 1,092 / 4,345, or **25.132%**; including crashes and timeouts in the attempted
-denominator gives **27.083%**. These numbers are intentionally pre-alpha and do
+is 1,105 / 4,345, or **25.432%**; including crashes and timeouts in the attempted
+denominator gives **27.406%**. These numbers are intentionally pre-alpha and do
 not support a complete PHP 8.2 claim.
 
 The schema-5 execution profile makes the strict score less easy to mistake for
@@ -38,7 +38,7 @@ second compatibility score: invalid-source PHPT cases are supposed to stop in
 the front end, and reaching runtime says nothing about correct semantics or
 diagnostic text.
 
-The largest failure groups are 1,163 runtime failures, 1,050 output mismatches,
+The largest failure groups are 1,151 runtime failures, 1,049 output mismatches,
 565 parse failures, 156 compile failures and six failed `SKIPIF` evaluations.
 No case terminates by signal or times out. Of the 75 skips, 45 require
 unavailable extensions and 30 are selected by `SKIPIF`. Unsupported cases
@@ -55,12 +55,49 @@ manifests and summaries. Four already-failing raw executions retain known
 non-semantic output variation from unordered object-property state; run
 durations also vary, but neither enters the compact published artifacts. The
 manifest has SHA-256
-`a5d04abeceacab7cdc241fb9df9a3b4167125b46eab156bbc768245840d72a4d` and
+`d12475aa5297daa80d3611ca06a2a7ae0f732912c43d83efcb3d235e063cf2cd` and
 its summary has SHA-256
-`b1d50d608d3d832307d28c2bca70e698ae96c468c8d6d7720ec34d3d883ac5bb`.
+`ba0525b0487599aab16977168b8ba7946537f93d566fad0f51680b9fceea3d55`.
 
-Relative to the retained `e0d94aa` baseline, this checkpoint adds eight exact
-passes without losing a previous pass or adding a crash or timeout. `new` and
+Relative to the retained `e077e12` baseline, this checkpoint adds 13 exact
+passes without losing a previous pass or adding a crash or timeout. A
+`Throwable` now snapshots its complete live PHP call chain when it is created,
+not when it is later thrown. Named functions, instance and static methods,
+constructors, dynamic calls and closures retain PHP's call-site line rule;
+method frames retain their `->` or `::` staticness and argument snapshot.
+`getTrace()`, `getTraceAsString()` and the top-level uncaught diagnostic share
+that stored trace, including PHP's public `{closure}` name, argument rendering,
+anonymous-class normalization and final `{main}` sentinel. Throwing or
+rethrowing the object later does not replace its creation origin or trace.
+
+Original clean-room regressions cover nested functions, method arguments,
+multiline named/static/constructor calls, closure naming, anonymous-class
+arguments and preservation across a later throw. Differential probes match the
+pinned PHP 8.2.33 CLI for the structured trace and rendered string. The exact
+additions are `Zend/tests/bug29368_1.phpt`, `bug48228.phpt`, `bug48408.phpt`,
+`exception_023.phpt`, `gh8810_1.phpt` through `gh8810_4.phpt`,
+`gh8810_6.phpt`, `gh8810_7.phpt`, `return_types/020.phpt`,
+`try/try_finally_001.phpt` and
+`uncaught_exception_error_supression.phpt`.
+
+An alternating release control of 50 million ordinary object creations measured
+0.27 s for both the retained baseline and this candidate. A deliberately
+trace-heavy loop constructing 100,000 nested exceptions measured 0.05 s on the
+baseline, 0.11 s on this candidate and 0.02 s on the PHP 8.2.33 oracle. The
+isolated creation cost is the required eager trace snapshot and remains a named
+optimization boundary; the ordinary object path did not regress in this
+control. Internal callback frames, suspended generator/coroutine histories,
+exception-chain rendering and per-request INI controls such as
+`zend.exception_ignore_args` remain separate visible boundaries. The pinned Symfony FrameworkBundle
+7.4.16 S3 gate remains green against PHP 8.2.33 across cold and cached loads,
+health and missing-route requests, deleted and malformed caches, and concurrent
+atomic publication. This checkpoint does not claim complete Throwable,
+diagnostic or PHP 8.2 compatibility, and the broader PHP 8.2 corpus-convergence
+goal remains active.
+
+The preceding `e077e12` checkpoint, relative to the retained `e0d94aa`
+baseline, added eight exact passes without losing a previous pass or adding a
+crash or timeout. `new` and
 `throw` retain independent source lines through the lexer, AST and compiler;
 the compiler publishes only the sparse locations needed by observable
 opcodes, while `Instruction` remains 16 bytes. Every newly constructed
@@ -418,9 +455,9 @@ explicitly visible in the coverage map. General non-call `@` warning routing
 and complete user error-handler dispatch remain separate compatibility work.
 
 The authoritative per-path result is
-[`e077e12-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/e077e12-arm64-manifest.jsonl),
+[`c6ac2e4-arm64-manifest.jsonl`](../tests/php-src/results/php-8.2.33/c6ac2e4-arm64-manifest.jsonl),
 with aggregate metadata in
-[`e077e12-arm64-summary.json`](../tests/php-src/results/php-8.2.33/e077e12-arm64-summary.json).
+[`c6ac2e4-arm64-summary.json`](../tests/php-src/results/php-8.2.33/c6ac2e4-arm64-summary.json).
 The retained directory/status navigation map is
 [`8bcc548-arm64-coverage-map.json`](../tests/php-src/results/php-8.2.33/8bcc548-arm64-coverage-map.json),
 and the full reference aggregate is
