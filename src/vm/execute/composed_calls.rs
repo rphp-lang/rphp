@@ -743,6 +743,8 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
             OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => ScalarLongOpKind::Subtract,
             OpCode::Mul => ScalarLongOpKind::Multiply,
             OpCode::Mod | OpCode::Mod_LongLong => ScalarLongOpKind::Modulo,
+            OpCode::BitwiseAnd | OpCode::BitwiseAnd_LongLong => ScalarLongOpKind::BitwiseAnd,
+            OpCode::BitwiseOr | OpCode::BitwiseOr_LongLong => ScalarLongOpKind::BitwiseOr,
             OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => ScalarLongOpKind::BitwiseXor,
             _ => return None,
         };
@@ -938,7 +940,9 @@ unsafe fn guard_quick_scalar_call_tree_generics(
                 | OpCode::Mod
                 | OpCode::Mod_LongLong
                 | OpCode::BitwiseAnd
+                | OpCode::BitwiseAnd_LongLong
                 | OpCode::BitwiseOr
+                | OpCode::BitwiseOr_LongLong
                 | OpCode::BitwiseXor
                 | OpCode::BitwiseXor_LongLong
         ) {
@@ -1040,6 +1044,8 @@ unsafe fn evaluate_composed_scalar_call(
             OpCode::Mul => Some(ScalarLongOpKind::Multiply),
             OpCode::Mod | OpCode::Mod_LongLong => Some(ScalarLongOpKind::Modulo),
             OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => Some(ScalarLongOpKind::BitwiseXor),
+            OpCode::BitwiseAnd | OpCode::BitwiseAnd_LongLong => Some(ScalarLongOpKind::BitwiseAnd),
+            OpCode::BitwiseOr | OpCode::BitwiseOr_LongLong => Some(ScalarLongOpKind::BitwiseOr),
             _ => None,
         };
         if let Some(kind) = arithmetic_kind {

@@ -993,7 +993,9 @@ fn detect_long_ops_region_inner(
             | OpCode::Sub_TmpTmp
             | OpCode::Mul
             | OpCode::BitwiseAnd
+            | OpCode::BitwiseAnd_LongLong
             | OpCode::BitwiseOr
+            | OpCode::BitwiseOr_LongLong
             | OpCode::BitwiseXor
             | OpCode::BitwiseXor_LongLong => {
                 if instruction.result_type != OpType::Tmp {
@@ -1009,8 +1011,10 @@ fn detect_long_ops_region_inner(
                 add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
                 let kind = match instruction.opcode {
                     OpCode::Mul => ScalarLongOpKind::Multiply,
-                    OpCode::BitwiseAnd => ScalarLongOpKind::BitwiseAnd,
-                    OpCode::BitwiseOr => ScalarLongOpKind::BitwiseOr,
+                    OpCode::BitwiseAnd | OpCode::BitwiseAnd_LongLong => {
+                        ScalarLongOpKind::BitwiseAnd
+                    }
+                    OpCode::BitwiseOr | OpCode::BitwiseOr_LongLong => ScalarLongOpKind::BitwiseOr,
                     OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
                         ScalarLongOpKind::BitwiseXor
                     }

@@ -793,6 +793,8 @@ mod inner {
             221 => Some("Echo_String"),
             222 => Some("Echo_Long"),
             223 => Some("BitwiseXor_LongLong"),
+            224 => Some("BitwiseAnd_LongLong"),
+            225 => Some("BitwiseOr_LongLong"),
             _ => None,
         }
     }

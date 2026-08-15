@@ -1019,6 +1019,18 @@ fn propagate_declared_scalar_types(
                 result = KnownScalarType::Long;
                 OpCode::BitwiseXor_LongLong
             }
+            OpCode::BitwiseAnd
+                if left == KnownScalarType::Long && right == KnownScalarType::Long =>
+            {
+                result = KnownScalarType::Long;
+                OpCode::BitwiseAnd_LongLong
+            }
+            OpCode::BitwiseOr
+                if left == KnownScalarType::Long && right == KnownScalarType::Long =>
+            {
+                result = KnownScalarType::Long;
+                OpCode::BitwiseOr_LongLong
+            }
             OpCode::Concat
                 if left == KnownScalarType::String && right == KnownScalarType::String =>
             {
@@ -1049,15 +1061,27 @@ fn propagate_declared_scalar_types(
             OpCode::Concat | OpCode::Concat_StringString => {
                 result = KnownScalarType::String;
             }
-            OpCode::Mod_LongLong | OpCode::BitwiseXor_LongLong => {
+            OpCode::Mod_LongLong
+            | OpCode::BitwiseXor_LongLong
+            | OpCode::BitwiseAnd_LongLong
+            | OpCode::BitwiseOr_LongLong => {
                 result = KnownScalarType::Long;
             }
-            OpCode::BitwiseAnd
-            | OpCode::BitwiseOr
-            | OpCode::BitwiseXor
-            | OpCode::ShiftLeft
-            | OpCode::ShiftRight
-            | OpCode::BitwiseNot => result = KnownScalarType::Long,
+            OpCode::BitwiseAnd | OpCode::BitwiseOr | OpCode::BitwiseXor => {
+                result = if left == KnownScalarType::String && right == KnownScalarType::String {
+                    KnownScalarType::String
+                } else {
+                    KnownScalarType::Long
+                };
+            }
+            OpCode::BitwiseNot => {
+                result = if left == KnownScalarType::String {
+                    KnownScalarType::String
+                } else {
+                    KnownScalarType::Long
+                };
+            }
+            OpCode::ShiftLeft | OpCode::ShiftRight => result = KnownScalarType::Long,
             OpCode::IsEqual
             | OpCode::IsNotEqual
             | OpCode::IsSmaller
@@ -3169,6 +3193,20 @@ impl Compiler {
                 Ok(Value::double(base.powf(exponent)))
             }
             BinOp::BitwiseAnd | BinOp::BitwiseOr | BinOp::BitwiseXor => {
+                if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
+                    let (operation, preserve_longer_tail): (fn(u8, u8) -> u8, bool) = match op {
+                        BinOp::BitwiseAnd => (|left, right| left & right, false),
+                        BinOp::BitwiseOr => (|left, right| left | right, true),
+                        BinOp::BitwiseXor => (|left, right| left ^ right, false),
+                        _ => unreachable!(),
+                    };
+                    return Ok(Value::string(crate::value::php_byte_string_binary(
+                        left,
+                        right,
+                        operation,
+                        preserve_longer_tail,
+                    )));
+                }
                 let (left, right) = integer_pair().ok_or_else(unsupported)?;
                 Ok(Value::long(match op {
                     BinOp::BitwiseAnd => left & right,

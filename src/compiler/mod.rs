@@ -769,7 +769,9 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::Mod
                 | OpCode::Pow
                 | OpCode::BitwiseAnd
+                | OpCode::BitwiseAnd_LongLong
                 | OpCode::BitwiseOr
+                | OpCode::BitwiseOr_LongLong
                 | OpCode::BitwiseXor
                 | OpCode::BitwiseNot
                 | OpCode::ShiftLeft
@@ -2013,8 +2015,8 @@ fn scalar_long_op_kind(opcode: OpCode) -> Option<ScalarLongOpKind> {
         OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => Some(ScalarLongOpKind::Subtract),
         OpCode::Mul => Some(ScalarLongOpKind::Multiply),
         OpCode::Mod | OpCode::Mod_LongLong => Some(ScalarLongOpKind::Modulo),
-        OpCode::BitwiseAnd => Some(ScalarLongOpKind::BitwiseAnd),
-        OpCode::BitwiseOr => Some(ScalarLongOpKind::BitwiseOr),
+        OpCode::BitwiseAnd | OpCode::BitwiseAnd_LongLong => Some(ScalarLongOpKind::BitwiseAnd),
+        OpCode::BitwiseOr | OpCode::BitwiseOr_LongLong => Some(ScalarLongOpKind::BitwiseOr),
         OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => Some(ScalarLongOpKind::BitwiseXor),
         _ => None,
     }

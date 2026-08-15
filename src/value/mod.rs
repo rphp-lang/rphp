@@ -7,6 +7,51 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
 
+#[cold]
+#[inline(never)]
+pub(crate) fn php_byte_string_bytes(value: &str) -> Vec<u8> {
+    value.chars().map(|character| character as u8).collect()
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn php_byte_string_from_bytes(bytes: impl IntoIterator<Item = u8>) -> String {
+    bytes.into_iter().map(char::from).collect()
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn php_byte_string_binary(
+    left: &str,
+    right: &str,
+    operation: fn(u8, u8) -> u8,
+    preserve_longer_tail: bool,
+) -> String {
+    let left = php_byte_string_bytes(left);
+    let right = php_byte_string_bytes(right);
+    let common = left.len().min(right.len());
+    let capacity = if preserve_longer_tail {
+        left.len().max(right.len())
+    } else {
+        common
+    };
+    let mut result = Vec::with_capacity(capacity);
+    result.extend(
+        left[..common]
+            .iter()
+            .zip(&right[..common])
+            .map(|(&left, &right)| operation(left, right)),
+    );
+    if preserve_longer_tail {
+        if left.len() > common {
+            result.extend_from_slice(&left[common..]);
+        } else {
+            result.extend_from_slice(&right[common..]);
+        }
+    }
+    php_byte_string_from_bytes(result)
+}
+
 #[cfg(feature = "resource-lifetime")]
 use crate::resource_handle::ResourceHandle;
 use crate::vm::function::{FunctionCommon, FunctionType, UserFunction};

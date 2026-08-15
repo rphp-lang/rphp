@@ -463,6 +463,41 @@ echo '|', $second;
 }
 
 #[test]
+fn binary_hex_conversions_round_trip_bytes_and_report_invalid_input() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo bin2hex(chr(0).chr(127).chr(128).chr(255)), '|';
+echo bin2hex(hex2bin('00Ff7f80')), '|';
+set_error_handler(function ($level, $message) { echo $level, ':', $message, '|'; });
+echo hex2bin('0') === false ? 'odd|' : 'wrong|';
+echo hex2bin('0g') === false ? 'digit' : 'wrong';
+restore_error_handler();
+"#,
+        ),
+        "007f80ff|00ff7f80|2:hex2bin(): Hexadecimal input string must have an even length|odd|2:hex2bin(): Input string must be hexadecimal string|digit"
+    );
+}
+
+#[test]
+fn bitwise_string_operators_use_php_byte_and_length_rules() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$short = "12";
+$long = "abc";
+echo bin2hex($short & $long), '|';
+echo bin2hex($short | $long), '|';
+echo bin2hex($short ^ $long), '|';
+echo bin2hex(~hex2bin('007f80ff')), '|';
+echo 6 & "3";
+"#,
+        ),
+        "2122|717263|5050|ff807f00|2"
+    );
+}
+
+#[test]
 fn user_sorts_preserve_keys_and_compare_values_or_keys() {
     assert_eq!(
         run_php(
