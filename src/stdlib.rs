@@ -5835,7 +5835,7 @@ fn fn_print_r(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let v = arg!(ed, 0);
-    let output = print_r_value(v, 0);
+    let output = print_r_value(v, 0, eg);
     if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
         ret!(rv, Value::string(output));
     }
@@ -5853,7 +5853,7 @@ fn fn_var_export(
         Some(v) => v.is_truthy(),
         None => false,
     };
-    let output = var_export_value(v);
+    let output = var_export_value(v, eg);
     if return_str {
         ret!(rv, Value::string(output));
     } else {
@@ -6662,7 +6662,7 @@ fn var_dump_value_inner(
     }
 }
 
-fn print_r_value(val: &Value, indent: usize) -> String {
+fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
     match val.value_type() {
         ValueType::Null => String::new(),
         ValueType::True => "1".to_string(),
@@ -6692,11 +6692,40 @@ fn print_r_value(val: &Value, indent: usize) -> String {
                     "{}[{}] => {}",
                     inner,
                     key_str,
-                    print_r_value(v, indent + 1)
+                    print_r_value(v, indent + 1, eg)
                 ));
                 if v.value_type() != ValueType::Array {
                     out.push('\n');
                 }
+            }
+            out.push_str(&format!("{})\n", prefix));
+            out
+        }
+        ValueType::Object => {
+            let Some(object) = val.as_object() else {
+                return String::new();
+            };
+            let Some(class) = eg.find_class(&object.class_name) else {
+                return String::new();
+            };
+            if !class.is_enum {
+                return String::new();
+            }
+            let Some(name) = object.get_property("name").and_then(Value::as_str) else {
+                return String::new();
+            };
+            let prefix = "    ".repeat(indent);
+            let inner = "    ".repeat(indent + 1);
+            let value = object.get_property("value");
+            let backing = value.map_or("", |value| match value.value_type() {
+                ValueType::Long => ":int",
+                ValueType::String => ":string",
+                _ => "",
+            });
+            let mut out = format!("{} Enum{}\n{}(\n", object.class_name, backing, prefix);
+            out.push_str(&format!("{}[name] => {}\n", inner, name));
+            if let Some(value) = value {
+                out.push_str(&format!("{}[value] => {}\n", inner, value.echo_to_string()));
             }
             out.push_str(&format!("{})\n", prefix));
             out
@@ -6706,7 +6735,18 @@ fn print_r_value(val: &Value, indent: usize) -> String {
     }
 }
 
-fn var_export_value(val: &Value) -> String {
+fn enum_case_export(val: &Value, eg: &ExecutorGlobals) -> Option<String> {
+    let object = val.as_object()?;
+    eg.find_class(&object.class_name)?.is_enum.then_some(())?;
+    let case = object.get_property("name")?.as_str()?;
+    Some(format!(
+        "\\{}::{}",
+        object.class_name.trim_start_matches('\\'),
+        case
+    ))
+}
+
+fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
     match val.value_type() {
         ValueType::Null => "NULL".to_string(),
         ValueType::True => "true".to_string(),
@@ -6728,11 +6768,17 @@ fn var_export_value(val: &Value) -> String {
                     ArrayKey::Int(k) => format!("{}", k),
                     ArrayKey::String(k) => format!("'{}'", k),
                 };
-                out.push_str(&format!("  {} => {},\n", key_str, var_export_value(v)));
+                let exported = var_export_value(v, eg);
+                if enum_case_export(v, eg).is_some() {
+                    out.push_str(&format!("  {} =>\n  {},\n", key_str, exported));
+                } else {
+                    out.push_str(&format!("  {} => {},\n", key_str, exported));
+                }
             }
             out.push(')');
             out
         }
+        ValueType::Object => enum_case_export(val, eg).unwrap_or_else(|| "NULL".to_string()),
         _ => "NULL".to_string(),
     }
 }

@@ -694,6 +694,22 @@ fn print_r_return_mode_returns_without_writing_output() {
     );
 }
 
+#[test]
+fn enum_print_r_and_var_export_preserve_case_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace Domain;
+enum State: string { case Ready = "ready"; }
+print_r(State::Ready);
+echo var_export(State::Ready, true), "\n";
+echo var_export([State::Ready], true), "\n";
+"#
+        ),
+        "Domain\\State Enum:string\n(\n    [name] => Ready\n    [value] => ready\n)\n\\Domain\\State::Ready\narray (\n  0 =>\n  \\Domain\\State::Ready,\n)\n"
+    );
+}
+
 // === Practical combinations ===
 
 #[test]
