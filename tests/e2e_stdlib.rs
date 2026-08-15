@@ -974,6 +974,23 @@ fn gc_controls_expose_request_local_state_through_ini_get() {
 }
 
 #[test]
+fn parse_ini_supports_typed_sections_raw_bytes_and_integer_expressions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$typed = parse_ini_string("[service]\nport=8080\nenabled=yes\nmissing=null\n", true, INI_SCANNER_TYPED);
+var_dump($typed['service']['port'], $typed['service']['enabled'], $typed['service']['missing']);
+$raw = parse_ini_string("token=\"a;b\" ; ignored\nmask=(1|2)&3", false, INI_SCANNER_RAW);
+echo $raw['token'], ':', $raw['mask'], '|';
+$normal = parse_ini_string("mask=(1|2)&3", false, INI_SCANNER_NORMAL);
+echo $normal['mask'];
+"#
+        ),
+        "int(8080)\nbool(true)\nNULL\na;b:(1|2)&3|3"
+    );
+}
+
+#[test]
 fn pathinfo_supports_component_flags_used_by_source_loaders() {
     assert_eq!(
         run_php(
