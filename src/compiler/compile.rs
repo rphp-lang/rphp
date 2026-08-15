@@ -2603,7 +2603,6 @@ impl Compiler {
 
     fn statement_statically_returns(&self, statement: &Stmt) -> bool {
         match statement {
-            Stmt::Return { .. } => true,
             Stmt::If {
                 condition,
                 then_body,
@@ -2617,9 +2616,10 @@ impl Compiler {
                     } else {
                         else_body
                     };
-                    live_body
-                        .iter()
-                        .any(|statement| self.statement_statically_returns(statement))
+                    live_body.iter().any(|statement| {
+                        matches!(statement, Stmt::Return { .. })
+                            || self.statement_statically_returns(statement)
+                    })
                 }),
             _ => false,
         }
