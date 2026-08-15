@@ -106,6 +106,30 @@ var_dump((new MagicPropertyBag())->missing);
 }
 
 #[test]
+fn scalar_property_reads_warn_and_return_null_outside_silent_contexts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$null = null;
+$bool = true;
+$int = 1;
+$string = 'value';
+var_dump($null->missing);
+var_dump($bool->missing);
+var_dump($int->{1});
+var_dump($string->missing);
+var_dump(isset($null->missing));
+var_dump($null?->missing);
+var_dump(@$bool->suppressed);
+set_error_handler(function($code, $message) { echo "handled:$code:$message\n"; return true; });
+var_dump($int->handled);
+"#
+        ),
+        "\nWarning: Attempt to read property \"missing\" on null in <main> on line 6\nNULL\n\nWarning: Attempt to read property \"missing\" on bool in <main> on line 7\nNULL\n\nWarning: Attempt to read property \"1\" on int in <main> on line 8\nNULL\n\nWarning: Attempt to read property \"missing\" on string in <main> on line 9\nNULL\nbool(false)\nNULL\nNULL\nhandled:2:Attempt to read property \"handled\" on int\nNULL\n"
+    );
+}
+
+#[test]
 fn recursive_get_is_guarded_per_object_and_property() {
     assert_eq!(
         run_php(

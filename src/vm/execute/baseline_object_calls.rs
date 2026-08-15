@@ -684,7 +684,26 @@ fn op_fetch_obj_r_slow<'a>(
             set_result(Value::null());
             return Ok(ColdResult::Done);
         }
-        return Err(VmError::Fatal("Attempt to read property on non-object".into()));
+        let name = prop_name
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| prop_name.echo_to_string());
+        report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            &format!(
+                "Attempt to read property \"{name}\" on {}",
+                obj_val.type_name()
+            ),
+            opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
+        )?;
+        if let Some(result) = take_magic_exception(eg, frame) {
+            return Ok(result);
+        }
+        set_result(Value::null());
+        return Ok(ColdResult::Done);
     }
 
     let name = prop_name.as_str().unwrap_or("");
