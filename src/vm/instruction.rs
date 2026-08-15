@@ -121,6 +121,15 @@ pub const FETCH_OBJ_SILENT: u16 = 1;
 /// of invoking `offsetGet()` and potentially observing or throwing on a miss.
 pub const FETCH_DIM_ISSET: u16 = 1;
 
+/// An ordinary dimension read performed under PHP's `@` reporting mask.
+/// User handlers still receive the warning with the suppressed error level.
+pub const FETCH_DIM_ERROR_SUPPRESS: u16 = 1 << 1;
+
+/// An intermediate dimension read used only to reach the terminal operand of
+/// `isset()`/`empty()`. A miss preserves the ordinary empty value but does not
+/// emit the standalone read warning.
+pub const FETCH_DIM_SILENT: u16 = 1 << 2;
+
 /// `FetchDynamicVar` reads the symbol-table entry without reporting an
 /// undefined-variable diagnostic. Unlike `FETCH_DIM_ISSET`, the fetched value
 /// is preserved; this is required by `??=` and by mutations rooted at a

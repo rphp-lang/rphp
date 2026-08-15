@@ -98,7 +98,7 @@ impl Compiler {
     ) -> Result<(), String> {
         let mut root = source;
         let mut reversed_indices = Vec::new();
-        while let Expr::ArrayAccess { array, index } = root {
+        while let Expr::ArrayAccess { array, index, .. } = root {
             reversed_indices.push(index.as_ref().clone());
             root = array.as_ref();
         }
@@ -178,7 +178,7 @@ impl Compiler {
 
         let destination = self.resolve_cv(&format!("\0array_reference_{}", self.next_cv));
         match source {
-            Expr::ArrayAccess { array, index } if matches!(array.as_ref(), Expr::Globals { .. }) => {
+            Expr::ArrayAccess { array, index, .. } if matches!(array.as_ref(), Expr::Globals { .. }) => {
                 let (key, key_type) = self.compile_expr(index);
                 let mut bind = Instruction::new(OpCode::BindGlobalRef);
                 bind.op1 = key;
@@ -373,7 +373,7 @@ impl Compiler {
                 ))
             }
             Expr::ArrayAccess { .. } => {
-                if let Expr::ArrayAccess { array, index } = source
+                if let Expr::ArrayAccess { array, index, .. } = source
                     && matches!(array.as_ref(), Expr::Globals { .. })
                 {
                     let (key, key_type) = self.compile_expr(index);
@@ -392,7 +392,7 @@ impl Compiler {
                 }
                 let mut root = source;
                 let mut reversed_indices = Vec::new();
-                while let Expr::ArrayAccess { array, index } = root {
+                while let Expr::ArrayAccess { array, index, .. } = root {
                     reversed_indices.push(index.as_ref().clone());
                     root = array.as_ref();
                 }
@@ -658,7 +658,7 @@ impl Compiler {
                 )
             }
             Expr::ArrayAccess { .. } => {
-                if let Expr::ArrayAccess { array, index } = target
+                if let Expr::ArrayAccess { array, index, .. } = target
                     && matches!(array.as_ref(), Expr::Globals { .. })
                 {
                     let (key, key_type) = self.compile_expr(index);
@@ -673,7 +673,7 @@ impl Compiler {
                 } else {
                     let mut root = target;
                     let mut reversed_indices = Vec::new();
-                    while let Expr::ArrayAccess { array, index } = root {
+                    while let Expr::ArrayAccess { array, index, .. } = root {
                         reversed_indices.push(index.as_ref().clone());
                         root = array.as_ref();
                     }
@@ -919,7 +919,7 @@ impl Compiler {
             Expr::ArrayAccess { .. } => {
                 let mut root = target;
                 let mut reversed_indices = Vec::new();
-                while let Expr::ArrayAccess { array, index } = root {
+                while let Expr::ArrayAccess { array, index, .. } = root {
                     reversed_indices.push(index.as_ref().clone());
                     root = array.as_ref();
                 }
@@ -1033,7 +1033,7 @@ impl Compiler {
         let source_is_internal = !matches!(source, Expr::Variable { .. });
         let source = self.compile_array_element_reference_source(source)?;
 
-        if let Expr::ArrayAccess { array, index } = target
+        if let Expr::ArrayAccess { array, index, .. } = target
             && matches!(array.as_ref(), Expr::Globals { .. })
         {
             let (key, key_type) = self.compile_expr(index);
@@ -1115,7 +1115,7 @@ impl Compiler {
             Expr::ArrayAccess { .. } => {
                 let mut root = target;
                 let mut reversed_indices = Vec::new();
-                while let Expr::ArrayAccess { array, index } = root {
+                while let Expr::ArrayAccess { array, index, .. } = root {
                     reversed_indices.push(index.as_ref().clone());
                     root = array.as_ref();
                 }
@@ -2387,7 +2387,7 @@ impl Compiler {
                         Expr::ArrayAccess { .. } => {
                             let mut root = target;
                             let mut indices = Vec::new();
-                            while let Expr::ArrayAccess { array, index } = root {
+                            while let Expr::ArrayAccess { array, index, .. } = root {
                                 indices.push((**index).clone());
                                 root = array;
                             }

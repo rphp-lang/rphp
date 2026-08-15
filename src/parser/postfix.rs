@@ -44,13 +44,14 @@ impl Parser {
     fn parse_dynamic_new_class_expression(&mut self, mut expr: Expr) -> Result<Expr, String> {
         loop {
             match self.peek() {
-                Token::LBracket(_) if self.peek_at(1) != Token::RBracket => {
+                Token::LBracket(line) if self.peek_at(1) != Token::RBracket => {
                     self.advance();
                     let index = self.parse_expr()?;
                     self.expect(&Token::RBracket)?;
                     expr = Expr::ArrayAccess {
                         array: Box::new(expr),
                         index: Box::new(index),
+                        line,
                     };
                 }
                 Token::Arrow | Token::NullSafe => {
@@ -276,6 +277,7 @@ impl Parser {
                     expr = Expr::ArrayAccess {
                         array: Box::new(expr),
                         index: Box::new(index),
+                        line,
                     };
                 }
                 Token::LParen(line) => {
