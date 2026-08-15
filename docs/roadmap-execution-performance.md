@@ -240,15 +240,18 @@ A milestone may advance only when:
 
 ## Current ordering
 
-1. Regenerate the post-Layer-1 scorecard and typed/JIT coverage matrix on the
-   exact integrated baseline.
-2. Profile a representative non-order DTO or small-array cross-call graph and
-   admit Layer 2 only when dual-host owner/allocation evidence shows a material
-   remaining cost.
-3. Deliver one complete baseline → typed IR → exact exit → ARM64/x86-64 vertical
-   slice where applicable.
-4. Remove the superseded special mechanism and remeasure after convergence.
-5. Repeat by execution-weighted impact; keep new coroutine expansion deferred.
+1. Bisect the dynamic String-key file-entry admission change between accepted
+   commit `a8a7ac2` and integrated `be76152` with the exact mixed-update target
+   and both independent read controls.
+2. Add one general file-entry regression and explain why operation-level tests
+   retain the contract while the current scorecard rejects `array_shape`.
+3. Restore the common typed proof, exact exits and ARM64/x86-64 lowering only
+   when the wider admission remains semantically valid; otherwise retain the
+   canonical guard and select another measured gap.
+4. Rerun the full dual-host scorecard and keep every corpus/holdout regression
+   below one percent.
+5. Reconsider value-only `foreach` only after the higher-weight String-key
+   family; keep Layer 2 and new coroutine expansion deferred without evidence.
 
 Completion checkpoint (2026-08-14): the profiled nonescaping literal declared
 object M1/M3/M5 slice is accepted. A whole-OpArray use proof admits only
@@ -331,6 +334,23 @@ structural counters and limits are in
 The next goal is the post-Layer-1 Layer 0/2 evidence checkpoint; it must admit
 or reject a representative non-order virtual-value graph before any Layer 2
 implementation begins.
+
+Completion checkpoint (2026-08-15): the post-Layer-1 selection scorecard is
+accepted on clean `be76152`. ARM64 and physical x86-64 each retained 1,200
+timing rows, 80 summaries, 48 RSS observations and 48 instrumented lanes with
+identical outputs and no missing lane. The current corpus contains no material
+new non-order DTO or small-array owner stream across calls, so Layer 2 is
+rejected for this cycle rather than justified with an invented benchmark. Both
+hosts instead expose the same higher-weight gap: dynamic String-key read,
+CV-read and mixed-update file-entry workloads each reject one million
+backedges as `array_shape`, execute zero optimized iterations and create no
+native mapping. The mixed target measures 181.017 ms on ARM64 and 213.687 ms
+on x86-64; fresh profiling confirms canonical dispatch, cleanup, COW and
+String-key lookup work rather than hidden generated code. Exact distributions,
+structure, infrastructure exclusions and the next bounded bisect are in
+[`execution-scorecard.md`](execution-scorecard.md). Layer 2 may reopen only
+after a representative corpus introduces a measured hot owner cost and an
+independent materialization branch.
 
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.

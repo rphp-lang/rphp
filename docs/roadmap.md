@@ -25,7 +25,7 @@ microbenchmark improves.
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
 | PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | Complete the active array-reference/l-value rebind checkpoint, then close the general return-by-reference call alias gap while retaining the pinned Symfony S3 gate. |
-| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Regenerate the post-Layer-1 execution-weighted scorecard, then admit or reject one representative non-order cross-call virtual-value graph from dual-host owner/allocation evidence. |
+| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
 diagnostic observation or favorable but unverified benchmark remains work in
