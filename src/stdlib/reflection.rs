@@ -1621,6 +1621,8 @@ fn property_modifiers(property: &PropertyDefinition, is_static: bool) -> i64 {
 
 fn reflected_property_value(property: &PropertyDefinition, is_static: bool) -> Value {
     let declaring_class = property.declaring_class.clone();
+    let has_type = !matches!(property.type_hint, ParamTypeHint::None);
+    let (type_kind, type_name, allows_null) = hint_metadata(&property.type_hint);
     object_value(
         "ReflectionProperty",
         [
@@ -1636,6 +1638,10 @@ fn reflected_property_value(property: &PropertyDefinition, is_static: bool) -> V
                 "__reflection_modifiers",
                 Value::long(property_modifiers(property, is_static)),
             ),
+            ("__reflection_has_type", Value::bool(has_type)),
+            ("__reflection_type_kind", Value::string(type_kind)),
+            ("__reflection_type_name", Value::string(type_name)),
+            ("__reflection_allows_null", Value::bool(allows_null)),
             ("name", Value::string(property.name.clone())),
             ("class", Value::string(declaring_class)),
         ],
@@ -1669,6 +1675,7 @@ fn class_get_properties(
             class
                 .static_properties
                 .iter()
+                .filter(|_| !class.is_enum)
                 .map(|property| (property, true)),
         )
     {
@@ -1801,6 +1808,7 @@ fn property_construct(
                 (
                     property.declaring_class.clone(),
                     property_modifiers(property, false),
+                    property.type_hint.clone(),
                 )
             })
             .or_else(|| {
@@ -1812,6 +1820,7 @@ fn property_construct(
                         (
                             property.declaring_class.clone(),
                             property_modifiers(property, true),
+                            property.type_hint.clone(),
                         )
                     })
             })
@@ -1821,9 +1830,15 @@ fn property_construct(
             object.set_property("__reflection_target", target);
             object.set_property("__reflection_property", Value::string(name.clone()));
             object.set_property("name", Value::string(name));
-            if let Some((declaring_class, modifiers)) = metadata {
+            if let Some((declaring_class, modifiers, type_hint)) = metadata {
+                let has_type = !matches!(type_hint, ParamTypeHint::None);
+                let (type_kind, type_name, allows_null) = hint_metadata(&type_hint);
                 object.set_property("class", Value::string(declaring_class));
                 object.set_property("__reflection_modifiers", Value::long(modifiers));
+                object.set_property("__reflection_has_type", Value::bool(has_type));
+                object.set_property("__reflection_type_kind", Value::string(type_kind));
+                object.set_property("__reflection_type_name", Value::string(type_name));
+                object.set_property("__reflection_allows_null", Value::bool(allows_null));
             }
         }
     });

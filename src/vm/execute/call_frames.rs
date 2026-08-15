@@ -464,51 +464,10 @@ fn call_magic_method(
         None => return Ok(None),
     };
 
-    let func_common = unsafe { &*func_ptr };
-    if func_common.fn_type != FunctionType::User {
-        return Ok(None);
-    }
-
-    let user = unsafe { &*(func_ptr as *const UserFunction) };
-    let num_explicit_args = args.len() as u32;
-
-    // Push a call frame: +1 for $this at CV 0
-    let call = eg.vm_stack.push_call_frame(
-        func_ptr,
-        num_explicit_args + 1,
-        num_explicit_args,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-    );
-    let mut return_value = Value::null();
-    unsafe {
-        (*call).return_value = &mut return_value;
-        (*call).opline = user.op_array.instructions.as_ptr();
-        // Write $this directly — cleanup handles it separately.
-        frame_set_this(call, obj_val.clone());
-        // Set arguments in CV slots starting at 1 (after $this)
-        // These are fresh uninitialized slots (within num_args range), use init.
-        for (i, arg) in args.iter().enumerate() {
-            let cv = (*call).cv_mut(1 + i as u32);
-            frame_slot_init(call, cv as *mut Value, arg.clone());
-        }
-    }
-
-    let saved_execute_data = eg.current_execute_data.get();
-    eg.current_execute_data.set(call);
-    let result = execute_ex(eg, call);
-    eg.current_execute_data.set(saved_execute_data);
-
-    if result.is_ok() {
-        run_frame_destructors(eg, call)?;
-    }
-    unsafe { cleanup_frame_slots(call) };
-    pop_vm_call_frame(eg, call);
-
-    match result {
-        Ok(()) => Ok(Some(return_value)),
-        Err(e) => Err(e),
-    }
+    let mut call_args = Vec::with_capacity(args.len() + 1);
+    call_args.push(obj_val.clone());
+    call_args.extend_from_slice(args);
+    Ok(Some(call_function(eg, func_ptr, &call_args)?))
 }
 
 const PROPERTY_GUARD_GET: u8 = 1;

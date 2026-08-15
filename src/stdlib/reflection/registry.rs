@@ -870,6 +870,22 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_method!(
         "ReflectionProperty",
+        "gettype",
+        parameter_get_type,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
+        "hastype",
+        parameter_has_type,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
         "getdoccomment",
         reflection_get_doc_comment,
         1,
