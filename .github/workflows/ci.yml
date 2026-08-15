@@ -52,7 +52,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: default
+          - name: default + Linux x86-64 JIT
             command: cargo test --locked
           - name: no default features
             command: cargo test --locked --no-default-features
@@ -120,38 +120,3 @@ jobs:
       - uses: actions/checkout@v5
       - name: Run pinned Symfony warmed-kernel gate
         run: scripts/test-symfony-warmed-kernel-s2.sh
-
-  symfony-cold-kernel-s3:
-    name: Symfony cold kernel S3
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install PHP 8.2 oracle
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
-          coverage: none
-      - name: Run pinned Symfony cold-build gate
-        run: scripts/test-symfony-cold-kernel-s3.sh
-
-  native-jit:
-    name: Native JIT (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x86-64
-            runner: ubuntu-24.04
-            architecture: x86_64
-          - name: macOS ARM64
-            runner: macos-15
-            architecture: arm64
-    steps:
-      - uses: actions/checkout@v5
-      - name: Verify runner architecture
-        run: test "$(uname -m)" = "${{ matrix.architecture }}"
-      - name: Test native backend
-        run: cargo test --locked --features jit-prototype

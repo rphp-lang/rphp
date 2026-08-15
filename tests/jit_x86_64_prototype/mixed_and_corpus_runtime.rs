@@ -66,13 +66,15 @@ fn real_php_constant_bound_keeps_three_recurrences_and_an_invariant_native() {
 
 #[test]
 fn real_php_finite_string_method_and_hash_update_enter_one_native_region() {
-    let source = "<?php class MixedNativeModel { public function score(int $value, string $key): int { return $value + strlen($key); } } $model = new MixedNativeModel(); $values = ['left' => 0, 'right' => 0]; $key = 'left'; $needle = -1; for ($i = 0; $i < 100000; $i++) { if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } $score = $model->score($i, $key); $values[$key] = $values[$key] + $score; if ($i === $needle) { echo 'never'; } } echo $values['left'] . ':' . $values['right'] . ':' . $i;";
+    let source = "<?php class MixedNativeModel { public function score(int $value, string $key): int { return $value + strlen($key); } } function runMixedNativeHash() { $model = new MixedNativeModel(); $values = ['left' => 0, 'right' => 0]; $key = 'left'; $needle = -1; for ($i = 0; $i < 100000; $i++) { if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } $score = $model->score($i, $key); $values[$key] = $values[$key] + $score; if ($i === $needle) { echo 'never'; } } echo $values['left'] . ':' . $values['right'] . ':' . $i; } runMixedNativeHash();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions { globals.register_function(name, &function.common as *const FunctionCommon).unwrap(); }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
@@ -81,7 +83,7 @@ fn real_php_finite_string_method_and_hash_update_enter_one_native_region() {
     drop(globals);
     assert_eq!(captured_output(&output), "2500200000:2500200000:100000");
 
-    let plan = main
+    let plan = functions.iter().find(|(name, _)| name.eq_ignore_ascii_case("runMixedNativeHash")).map(|(_, function)| function).unwrap()
         .op_array
         .block_plans
         .iter()
@@ -198,13 +200,15 @@ fn read_only_hash_context_rejects_missing_non_long_or_referenced_entry_before_na
 
 #[test]
 fn native_mixed_hash_region_replays_taken_cold_edge_after_prior_store() {
-    let source = "<?php class MixedColdModel { public function score(int $value, string $key): int { return $value + strlen($key); } } $model = new MixedColdModel(); $values = ['left' => 0, 'right' => 0]; $key = 'left'; $needle = 73; for ($i = 0; $i < 1000; $i++) { if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } $score = $model->score($i, $key); $values[$key] = $values[$key] + $score; if ($i === $needle) { echo 'hit:' . $i . '|'; } } echo $values['left'] . ':' . $values['right'] . ':' . $i;";
+    let source = "<?php class MixedColdModel { public function score(int $value, string $key): int { return $value + strlen($key); } } function runMixedColdHash() { $model = new MixedColdModel(); $values = ['left' => 0, 'right' => 0]; $key = 'left'; $needle = 73; for ($i = 0; $i < 1000; $i++) { if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } $score = $model->score($i, $key); $values[$key] = $values[$key] + $score; if ($i === $needle) { echo 'hit:' . $i . '|'; } } echo $values['left'] . ':' . $values['right'] . ':' . $i; } runMixedColdHash();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions { globals.register_function(name, &function.common as *const FunctionCommon).unwrap(); }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
@@ -213,7 +217,7 @@ fn native_mixed_hash_region_replays_taken_cold_edge_after_prior_store() {
     drop(globals);
     assert_eq!(captured_output(&output), "hit:73|252000:252000:1000");
 
-    let plan = main
+    let plan = functions.iter().find(|(name, _)| name.eq_ignore_ascii_case("runMixedColdHash")).map(|(_, function)| function).unwrap()
         .op_array
         .block_plans
         .iter()

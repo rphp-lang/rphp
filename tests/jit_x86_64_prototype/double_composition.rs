@@ -1,6 +1,6 @@
 #[test]
 fn composed_conditional_double_leaf_is_flattened_into_one_native_region() {
-    let source = "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } function composedFloat(float $value, float $pivot): float { return (conditionalFloat($value, $pivot) * 1.25) + 3.0; } $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += composedFloat($i * 0.5, 25000.0); } echo $i . ':' . $total;";
+    let source = "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } function composedFloat(float $value, float $pivot): float { return (conditionalFloat($value, $pivot) * 1.25) + 3.0; } function runComposedDouble() { $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += composedFloat($i * 0.5, 25000.0); } echo $i . ':' . $total; } runComposedDouble();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -17,7 +17,7 @@ fn composed_conditional_double_leaf_is_flattened_into_one_native_region() {
     drop(globals);
     assert_eq!(captured_output(&output), "100000:2344081250");
 
-    let loop_plan = main
+    let loop_plan = functions.iter().find(|(name, _)| name.eq_ignore_ascii_case("runComposedDouble")).map(|(_, function)| function).unwrap()
         .op_array
         .block_plans
         .iter()
@@ -47,20 +47,22 @@ fn composed_conditional_double_leaf_is_flattened_into_one_native_region() {
 
 #[test]
 fn same_receiver_conditional_double_method_is_flattened_into_one_native_region() {
-    let source = "<?php class FloatPipeline { public function conditional(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } public function composed(float $value, float $pivot): float { return ($this->conditional($value, $pivot) * 1.25) + 3.0; } } $pipeline = new FloatPipeline(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->composed($i * 0.5, 25000.0); } echo $i . ':' . $total;";
+    let source = "<?php class FloatPipeline { public function conditional(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } public function composed(float $value, float $pivot): float { return ($this->conditional($value, $pivot) * 1.25) + 3.0; } } function runConditionalPipeline() { $pipeline = new FloatPipeline(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->composed($i * 0.5, 25000.0); } echo $i . ':' . $total; } runConditionalPipeline();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions { globals.register_function(name, &function.common as *const FunctionCommon).unwrap(); }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
 
     execute::execute(&mut globals, &main).unwrap();
     assert_eq!(captured_output(&output), "100000:2344081250");
-    let loop_plan = main
+    let loop_plan = functions.iter().find(|(name, _)| name.eq_ignore_ascii_case("runConditionalPipeline")).map(|(_, function)| function).unwrap()
         .op_array
         .block_plans
         .iter()
@@ -98,13 +100,15 @@ fn same_receiver_conditional_double_method_is_flattened_into_one_native_region()
 
 #[test]
 fn same_receiver_nested_double_method_is_flattened_into_one_native_region() {
-    let source = "<?php class FloatPipeline { public function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } public function calculate(float $value, float $scale): float { return ($this->scaleAndShift($value, $scale) * 0.5) + 2.0; } } $pipeline = new FloatPipeline(); $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->calculate($i * 0.5, $scale); } echo $i . ':' . $total;";
+    let source = "<?php class FloatPipeline { public function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } public function calculate(float $value, float $scale): float { return ($this->scaleAndShift($value, $scale) * 0.5) + 2.0; } } function runNestedPipeline() { $pipeline = new FloatPipeline(); $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->calculate($i * 0.5, $scale); } echo $i . ':' . $total; } runNestedPipeline();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions { globals.register_function(name, &function.common as *const FunctionCommon).unwrap(); }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
@@ -112,7 +116,7 @@ fn same_receiver_nested_double_method_is_flattened_into_one_native_region() {
     execute::execute(&mut globals, &main).unwrap();
     assert_eq!(captured_output(&output), "100000:2500225000");
 
-    let loop_plan = main
+    let loop_plan = functions.iter().find(|(name, _)| name.eq_ignore_ascii_case("runNestedPipeline")).map(|(_, function)| function).unwrap()
         .op_array
         .block_plans
         .iter()
@@ -158,7 +162,7 @@ fn same_receiver_nested_double_method_is_flattened_into_one_native_region() {
 
 #[test]
 fn recursive_composed_double_tree_is_flattened_into_one_native_region() {
-    let source = "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } function calculateOuter(float $value, float $scale): float { return calculateNested($value, $scale) + 3.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateOuter($i * 0.5, $scale); } echo $i . ':' . $total;";
+    let source = "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } function calculateOuter(float $value, float $scale): float { return calculateNested($value, $scale) + 3.0; } function runRecursiveDouble() { $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateOuter($i * 0.5, $scale); } echo $i . ':' . $total; } runRecursiveDouble();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -175,7 +179,7 @@ fn recursive_composed_double_tree_is_flattened_into_one_native_region() {
     drop(globals);
     assert_eq!(captured_output(&output), "100000:2500525000");
 
-    let loop_plan = main
+    let loop_plan = functions.iter().find(|(name, _)| name.eq_ignore_ascii_case("runRecursiveDouble")).map(|(_, function)| function).unwrap()
         .op_array
         .block_plans
         .iter()

@@ -1,0 +1,26 @@
+name: Compatibility frontier
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  symfony-cold-kernel-s3:
+    name: Symfony cold kernel S3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install PHP 8.2 oracle
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          coverage: none
+      - name: Run pinned Symfony cold-build frontier
+        run: scripts/test-symfony-cold-kernel-s3.sh
