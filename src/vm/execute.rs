@@ -307,17 +307,28 @@ pub(crate) fn called_class_name_for_internal_call<'a>(
     eg: &'a ExecutorGlobals,
     internal_frame: *mut ExecuteData,
 ) -> Option<&'a str> {
+    let caller = caller_frame_for_internal_call(internal_frame)?;
+    let class_id = late_static_call_class_id(eg, caller);
+    eg.class_by_id(class_id).map(|class| class.name.as_str())
+}
+
+/// Resolve the lexical class scope of the user frame that invoked an internal
+/// function, including the consuming class of shared trait bytecode.
+pub(crate) fn lexical_class_name_for_internal_call(
+    eg: &ExecutorGlobals,
+    internal_frame: *mut ExecuteData,
+) -> Option<String> {
+    get_caller_class(caller_frame_for_internal_call(internal_frame)?, eg)
+}
+
+fn caller_frame_for_internal_call(internal_frame: *mut ExecuteData) -> Option<*mut ExecuteData> {
     if internal_frame.is_null() {
         return None;
     }
     // SAFETY: an internal handler receives its own live frame; its saved caller
     // remains live for the duration of the handler invocation.
     let caller = unsafe { (*internal_frame).prev_execute_data };
-    if caller.is_null() {
-        return None;
-    }
-    let class_id = late_static_call_class_id(eg, caller);
-    eg.class_by_id(class_id).map(|class| class.name.as_str())
+    (!caller.is_null()).then_some(caller)
 }
 
 #[inline(always)]

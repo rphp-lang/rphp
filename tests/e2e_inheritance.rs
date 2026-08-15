@@ -126,6 +126,43 @@ try { get_called_class(); } catch (Error $error) { echo $error->getMessage(), "\
 }
 
 #[test]
+fn get_parent_class_handles_lexical_trait_object_alias_and_invalid_inputs() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentProbe {}
+trait ParentTrait { public function parentFromTrait() { var_dump(get_parent_class()); } }
+class ChildProbe extends ParentProbe {
+    use ParentTrait;
+    public function parentFromMethod() { var_dump(get_parent_class()); }
+}
+class_alias("ChildProbe", "ChildAlias");
+$child = new ChildProbe;
+$child->parentFromMethod();
+$child->parentFromTrait();
+var_dump(get_parent_class($child));
+var_dump(get_parent_class("ChildAlias"));
+var_dump(get_parent_class("\\ChildAlias"));
+var_dump(get_parent_class("ParentProbe"));
+var_dump(get_parent_class());
+foreach (["MissingParentProbe", "", [], 1, null] as $invalid) {
+    try { get_parent_class($invalid); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "string(11) \"ParentProbe\"\nstring(11) \"ParentProbe\"\n",
+            "string(11) \"ParentProbe\"\nstring(11) \"ParentProbe\"\nstring(11) \"ParentProbe\"\nbool(false)\nbool(false)\n",
+            "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, string given\n",
+            "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, string given\n",
+            "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, array given\n",
+            "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n",
+            "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, null given\n",
+        )
+    );
+}
+
+#[test]
 fn parent_instance_call_forwards_this_receiver() {
     assert_eq!(
         run_php(

@@ -938,3 +938,27 @@ var_dump(interface_exists('LoadedProbeInterface', false));
         "load|bool(false)\nbool(false)\nbool(true)\n"
     );
 }
+
+#[test]
+fn get_parent_class_autoloads_a_class_string_and_returns_the_canonical_parent() {
+    let dir = TempPhpDir::new();
+    let child = dir.write(
+        "AutoloadParentChild.php",
+        "<?php class AutoloadParentBase {} class AutoloadParentChild extends AutoloadParentBase {}",
+    );
+    let source = format!(
+        r#"<?php
+spl_autoload_register(function ($name) {{
+    echo "load:$name|";
+    if ($name === 'AutoloadParentChild') {{ require '{child}'; }}
+}});
+var_dump(get_parent_class('AutoloadParentChild'));
+var_dump(get_parent_class('autoloadparentchild'));
+"#
+    );
+
+    assert_eq!(
+        run_php(&source),
+        "load:AutoloadParentChild|string(18) \"AutoloadParentBase\"\nstring(18) \"AutoloadParentBase\"\n"
+    );
+}
