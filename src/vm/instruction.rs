@@ -116,6 +116,10 @@ pub const CLASS_CONST_COMPILE_TIME_NAME: u16 = 1 << 3;
 /// scalar intermediate produces null without the ordinary read diagnostic.
 pub const FETCH_OBJ_SILENT: u16 = 1;
 
+/// An ordinary property read performed under PHP's `@` reporting mask.
+/// User handlers still receive the warning with the suppressed error level.
+pub const FETCH_OBJ_ERROR_SUPPRESS: u16 = 1 << 1;
+
 /// `FetchDimR` is the terminal probe of `isset($container[$offset])`. Arrays
 /// can answer directly; ArrayAccess objects dispatch `offsetExists()` instead
 /// of invoking `offsetGet()` and potentially observing or throwing on a miss.

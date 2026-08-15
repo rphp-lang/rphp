@@ -65,6 +65,7 @@ impl Parser {
                             object: Box::new(expr),
                             property: Box::new(property),
                             nullsafe,
+                            line: self.last_primary_line.unwrap_or(0),
                         };
                         continue;
                     }
@@ -77,6 +78,7 @@ impl Parser {
                                 line: 0,
                             }),
                             nullsafe,
+                            line: self.last_primary_line.unwrap_or(0),
                         };
                         continue;
                     }
@@ -86,6 +88,7 @@ impl Parser {
                             object: Box::new(expr),
                             property: Box::new(property),
                             nullsafe,
+                            line: self.last_primary_line.unwrap_or(0),
                         };
                         continue;
                     }
@@ -97,6 +100,7 @@ impl Parser {
                         object: Box::new(expr),
                         property,
                         nullsafe,
+                        line: self.last_primary_line.unwrap_or(0),
                     };
                 }
                 _ => break,
@@ -447,6 +451,7 @@ impl Parser {
                                 object: Box::new(expr),
                                 property: Box::new(member),
                                 nullsafe: false,
+                                line: expression_line.unwrap_or(0),
                             };
                         }
                         continue;
@@ -472,6 +477,7 @@ impl Parser {
                                 object: Box::new(expr),
                                 property: Box::new(member),
                                 nullsafe,
+                                line: expression_line.unwrap_or(0),
                             };
                         }
                         continue;
@@ -516,6 +522,7 @@ impl Parser {
                                 object: Box::new(expr),
                                 property: Box::new(member),
                                 nullsafe,
+                                line: expression_line.unwrap_or(0),
                             };
                         }
                         continue;
@@ -589,6 +596,7 @@ impl Parser {
                             object: Box::new(expr),
                             property: member,
                             nullsafe,
+                            line: member_line.or(expression_line).unwrap_or(0),
                         };
                     }
                 }

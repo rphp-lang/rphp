@@ -211,12 +211,14 @@ pub enum Expr {
         object: Box<Expr>,
         property: String,
         nullsafe: bool,
+        line: usize,
     },
     DynamicPropertyAccess {
         // $obj->{$property}
         object: Box<Expr>,
         property: Box<Expr>,
         nullsafe: bool,
+        line: usize,
     },
     MethodCall {
         // $obj->method(args) or $obj?->method(args)

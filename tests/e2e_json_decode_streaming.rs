@@ -149,7 +149,7 @@ echo value_of($first) . '|'
     . (value_of($missing) === null ? 'null' : 'bad');
 "#,
         ),
-        "11|17|31|11|23|null"
+        "11|17|31|11|\nWarning: Undefined property: stdClass::$value in value_of on line 6\n23|null"
     );
 }
 
@@ -187,7 +187,7 @@ echo name_length($dynamic) . '|'
     . name_length($missing);
 "#,
         ),
-        "5|5|8|5|0"
+        "\nWarning: Undefined property: stdClass::$name in name_length on line 6\n5|5|8|5|0"
     );
 }
 
