@@ -5113,6 +5113,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 op_array = unsafe { (*frame).op_array() };
             }
 
+            OpCode::Eval => {
+                match op_eval(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    ColdResult::Done => {}
+                    ColdResult::Continue | ColdResult::Return => {
+                        unreachable!("eval cannot suspend or pre-advance its caller")
+                    }
+                }
+            }
+
             OpCode::CloneObj => {
                 match op_clone_obj(eg, frame, op_array, opline)? {
                     ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }

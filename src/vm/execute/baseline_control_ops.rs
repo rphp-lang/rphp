@@ -76,30 +76,19 @@ fn compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
     known
 }
 
-/// Compile, register and execute one already-resolved PHP file. Ordinary
-/// include opcodes provide their caller frame for the existing scope bridge;
-/// internal loaders deliberately execute without borrowing an internal frame
-/// as a user `OpArray`.
+/// Compile, register and execute one PHP source unit. Includes and eval use the
+/// same scope bridge, declaration registration and exception propagation; the
+/// caller supplies their distinct source identity and implicit return value.
 #[cold]
-pub(crate) fn execute_included_file(
+fn execute_source_unit(
     eg: &mut ExecutorGlobals,
+    source: String,
     resolved_path: &str,
-    is_once: bool,
+    canonical: String,
+    implicit_return: Value,
+    record_included: bool,
     caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
 ) -> Result<IncludeFileOutcome, VmError> {
-    let canonical = std::fs::canonicalize(&resolved_path)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| resolved_path.to_string());
-
-    if is_once && eg.included_files.contains(&canonical) {
-        return Ok(IncludeFileOutcome::AlreadyIncluded);
-    }
-
-    let source = match std::fs::read(&resolved_path) {
-        Ok(bytes) => crate::lexer::decode_php_source(&bytes),
-        Err(error) => return Ok(IncludeFileOutcome::Missing(error)),
-    };
-
     let tokens = match crate::lexer::Lexer::new(&source).tokenize() {
         Ok(tokens) => tokens,
         Err(error) => {
@@ -110,8 +99,15 @@ pub(crate) fn execute_included_file(
             ));
         }
     };
+    let caller_class = caller.and_then(|(frame, _)| get_caller_class(frame, eg));
+    let caller_parent = caller_class
+        .as_deref()
+        .and_then(|class| eg.find_class(class))
+        .and_then(|class| class.parent.clone());
+    let class_scope_active = caller_class.is_some();
     let stmts = match crate::parser::Parser::new(tokens)
         .with_source_name(canonical.clone())
+        .with_class_scope_active(class_scope_active)
         .parse()
     {
         Ok(statements) => statements,
@@ -132,7 +128,8 @@ pub(crate) fn execute_included_file(
     let mut compile_result = loop {
         let compiler = crate::compiler::compile::Compiler::new()
             .with_source_path(canonical.clone())
-            .with_implicit_return_value(Value::long(1))
+            .with_implicit_return_value(implicit_return.clone())
+            .with_lexical_class_scope(caller_class.clone(), caller_parent.clone())
             .with_known_constants(compilation_constants(eg));
         match compiler.compile(&stmts) {
             Ok(result) => break result,
@@ -166,7 +163,9 @@ pub(crate) fn execute_included_file(
             }
         }
     };
-    eg.record_included_file(canonical.clone());
+    if record_included {
+        eg.record_included_file(canonical.clone());
+    }
 
     // Includes are separate compilation units, but both generic runtimes and
     // Reflection consume one executor-wide interned metadata graph. Merge the
@@ -233,13 +232,22 @@ pub(crate) fn execute_included_file(
         );
     }
 
-    let scope_vars: Vec<(u32, String)> = caller.map_or_else(Vec::new, |(_, op_array)| {
+    let mut scope_vars: Vec<(u32, String)> = caller.map_or_else(Vec::new, |(_, op_array)| {
         if !op_array.all_cvs.is_empty() {
             op_array.all_cvs.clone()
         } else {
             op_array.main_scope_vars.clone()
         }
     });
+    if let Some((frame, _)) = caller {
+        let function = unsafe { (*frame).func };
+        if !function.is_null()
+            && unsafe { (*function).sig.this_offset == 1 }
+            && !scope_vars.iter().any(|(_, name)| name == "this")
+        {
+            scope_vars.push((0, "this".to_string()));
+        }
+    }
     let caller_is_local_scope = caller.is_some_and(|(_, op_array)| op_array.main_scope_vars.is_empty());
     let included_global_vars = &main_func.op_array.global_vars;
     let caller_global_vars = caller.map(|(_, op_array)| &op_array.global_vars[..]).unwrap_or(&[]);
@@ -291,6 +299,10 @@ pub(crate) fn execute_included_file(
     }
     if let Some((caller_frame, _)) = caller {
         eg.alias_dynamic_scope(inc_frame as usize, caller_frame as usize);
+        let called_class_id = called_class_id_for_frame(eg, caller_frame, 0);
+        if called_class_id != 0 {
+            publish_late_static_call_class_id(eg, inc_frame, called_class_id);
+        }
     }
     if caller.is_some() {
         for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
@@ -352,6 +364,56 @@ pub(crate) fn execute_included_file(
     Ok(IncludeFileOutcome::Executed(inc_return_value))
 }
 
+/// Compile, register and execute one already-resolved PHP file. Ordinary
+/// include opcodes provide their caller frame for the existing scope bridge;
+/// internal loaders deliberately execute without borrowing an internal frame
+/// as a user `OpArray`.
+#[cold]
+pub(crate) fn execute_included_file(
+    eg: &mut ExecutorGlobals,
+    resolved_path: &str,
+    is_once: bool,
+    caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
+) -> Result<IncludeFileOutcome, VmError> {
+    let canonical = std::fs::canonicalize(resolved_path)
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|_| resolved_path.to_string());
+    if is_once && eg.included_files.contains(&canonical) {
+        return Ok(IncludeFileOutcome::AlreadyIncluded);
+    }
+    let source = match std::fs::read(resolved_path) {
+        Ok(bytes) => crate::lexer::decode_php_source(&bytes),
+        Err(error) => return Ok(IncludeFileOutcome::Missing(error)),
+    };
+    execute_source_unit(
+        eg,
+        source,
+        resolved_path,
+        canonical,
+        Value::long(1),
+        true,
+        caller,
+    )
+}
+
+#[cold]
+fn execute_eval_source(
+    eg: &mut ExecutorGlobals,
+    source: &str,
+    source_name: String,
+    caller: (*mut ExecuteData, &crate::compiler::OpArray),
+) -> Result<IncludeFileOutcome, VmError> {
+    execute_source_unit(
+        eg,
+        format!("<?php {source}"),
+        &source_name,
+        source_name.clone(),
+        Value::null(),
+        false,
+        Some(caller),
+    )
+}
+
 fn write_include_result(
     frame: *mut ExecuteData,
     opline: &crate::vm::instruction::Instruction,
@@ -368,6 +430,42 @@ fn write_include_result(
             frame_tmp_set(frame, result, value);
         } else {
             slot_set(result, value);
+        }
+    }
+}
+
+#[inline(never)]
+fn op_eval<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let source = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) }
+        .echo_to_string();
+    let source_file = if op_array.source_file.is_empty() {
+        op_array.name.as_str()
+    } else {
+        op_array.source_file.as_str()
+    };
+    let source_name = format!(
+        "{}({}) : eval()'d code",
+        source_file,
+        opline.extended_value
+    );
+    match execute_eval_source(eg, &source, source_name, (frame, op_array))? {
+        IncludeFileOutcome::Executed(value) => {
+            write_include_result(frame, opline, value);
+            Ok(ColdResult::Done)
+        }
+        IncludeFileOutcome::Thrown(exception) => Ok(match throw_in_frame(eg, frame, exception) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        }),
+        IncludeFileOutcome::AlreadyIncluded | IncludeFileOutcome::Missing(_) => {
+            unreachable!("eval source is neither filesystem-backed nor include-once")
         }
     }
 }

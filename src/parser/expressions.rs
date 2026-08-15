@@ -1008,12 +1008,24 @@ impl Parser {
                         return Ok(Expr::FirstClassFunctionCallable(name));
                     }
                     let args = self.parse_call_args()?;
-                    Ok(Expr::FunctionCall {
-                        name,
-                        args,
-                        generic_args: Vec::new(),
-                        line,
-                    })
+                    if name.eq_ignore_ascii_case("eval") {
+                        let mut args = args.into_iter();
+                        let source = match (args.next(), args.next()) {
+                            (Some(CallArg::Positional(source)), None) => source,
+                            _ => return Err("eval() expects exactly one positional argument".into()),
+                        };
+                        Ok(Expr::Eval {
+                            source: Box::new(source),
+                            line,
+                        })
+                    } else {
+                        Ok(Expr::FunctionCall {
+                            name,
+                            args,
+                            generic_args: Vec::new(),
+                            line,
+                        })
+                    }
                 } else {
                     // Bare identifier — constant reference (e.g., PHP_INT_MAX, FOO)
                     Ok(Expr::Constant(name))

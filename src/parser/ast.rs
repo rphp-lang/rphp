@@ -107,6 +107,12 @@ pub enum Expr {
         generic_args: Vec<TypeHint>,
         line: usize,
     },
+    /// PHP's eval language construct. Runtime compilation shares the caller's
+    /// variable and class scope but remains a distinct source unit.
+    Eval {
+        source: Box<Expr>,
+        line: usize,
+    },
     PostInc { name: String, line: usize }, // $i++
     PostDec { name: String, line: usize }, // $i--
     PostIncTarget(Box<Expr>), // self::$value++, $object->property++, $array[$key]++
@@ -361,6 +367,7 @@ impl Expr {
             | Expr::Empty(inner)
             | Expr::Throw { expr: inner, .. }
             | Expr::Include { path: inner, .. }
+            | Expr::Eval { source: inner, .. }
             | Expr::BitwiseNot(inner)
             | Expr::Clone(inner)
             | Expr::DynamicVariable { name: inner, .. } => inner.contains_yield(),

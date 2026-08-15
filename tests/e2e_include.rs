@@ -60,6 +60,74 @@ fn test_basic_require() {
 }
 
 #[test]
+fn eval_returns_values_and_shares_the_callers_local_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$outer = 'before';
+function run_eval() {
+    $local = 4;
+    $result = eval('$local += 3; $created = "inside"; return $local * 2;');
+    echo $result, '|', $local, '|', $created;
+}
+run_eval();
+echo '|', $outer;
+"#,
+        ),
+        "14|7|inside|before"
+    );
+}
+
+#[test]
+fn eval_inherits_this_and_lexical_class_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class EvalScopeParent {
+    private const LABEL = 'parent';
+    private $value = 2;
+    public function run(): void {
+        eval('$this->value += 3; echo self::LABEL, "|", static::class, "|", $this->value;');
+    }
+}
+class EvalScopeChild extends EvalScopeParent {}
+(new EvalScopeChild)->run();
+"#,
+        ),
+        "parent|EvalScopeChild|5"
+    );
+}
+
+#[test]
+fn eval_registers_declarations_and_throws_parse_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(eval('$value = 1;'));
+eval('function eval_function() { return 6; } class EvalClass { public $value = 7; }');
+echo eval_function(), '|', (new EvalClass)->value, '|';
+try {
+    eval('this is not valid PHP');
+} catch (ParseError $error) {
+    echo get_class($error);
+}
+"#,
+        ),
+        "NULL\n6|7|ParseError"
+    );
+}
+
+#[test]
+fn eval_compiles_generated_wide_addition_without_host_stack_overflow() {
+    let expression = std::iter::repeat_n("1", 2_001)
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!("<?php eval('echo {expression};');");
+
+    assert_eq!(run_php(&source), "2001");
+}
+
+#[test]
 fn include_expressions_return_explicit_and_implicit_values() {
     let (_explicit_dir, explicit) = write_temp_php("explicit.php", "<?php return 'loaded';");
     let (_implicit_dir, implicit) = write_temp_php("implicit.php", "<?php $value = 1;");

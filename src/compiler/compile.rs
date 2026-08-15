@@ -1659,6 +1659,16 @@ impl Compiler {
         self
     }
 
+    pub(crate) fn with_lexical_class_scope(
+        mut self,
+        class: Option<String>,
+        parent: Option<String>,
+    ) -> Self {
+        self.lexical_static_class = class;
+        self.lexical_static_parent = parent;
+        self
+    }
+
     /// Emit source provenance without widening the compact instruction. Only
     /// opcodes whose location is already observable use this path; zero stays
     /// the explicit marker for synthetic bytecode.
@@ -3824,6 +3834,40 @@ impl Compiler {
         accumulated
     }
 
+    /// Compile a parser-produced left-deep addition chain iteratively. Dynamic
+    /// eval can legitimately receive generated expressions with thousands of
+    /// terms; retaining one Rust frame per `+` would turn valid PHP into a
+    /// process stack overflow before the VM sees any bytecode.
+    fn compile_add_chain(&mut self, left: &Expr, right: &Expr) -> (u16, OpType) {
+        let mut reversed = vec![right];
+        let mut first = left;
+        while let Expr::BinaryOp {
+            op: BinOp::Add,
+            left,
+            right,
+        } = first
+        {
+            reversed.push(right);
+            first = left;
+        }
+
+        let mut accumulated = self.compile_expr(first);
+        for operand in reversed.into_iter().rev() {
+            let next = self.compile_expr(operand);
+            let result = self.alloc_tmp();
+            let mut add = Instruction::new(OpCode::Add);
+            add.op1 = accumulated.0;
+            add.op1_type = accumulated.1;
+            add.op2 = next.0;
+            add.op2_type = next.1;
+            add.result = result;
+            add.result_type = OpType::Tmp;
+            self.instructions.push(add);
+            accumulated = (result, OpType::Tmp);
+        }
+        accumulated
+    }
+
     fn compile_expr(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
             Expr::Integer(n) => {
@@ -3880,6 +3924,9 @@ impl Compiler {
             Expr::BinaryOp { op, left, right } => {
                 if matches!(op, BinOp::Concat) {
                     return self.compile_concat_chain(left, right);
+                }
+                if matches!(op, BinOp::Add) {
+                    return self.compile_add_chain(left, right);
                 }
                 // Short-circuit logical operators
                 match op {
@@ -4549,6 +4596,19 @@ impl Compiler {
                 include.result_type = OpType::Tmp;
                 include.extended_value = u32::from(*is_require) | (u32::from(*is_once) << 1);
                 self.instructions.push(include);
+                (result, OpType::Tmp)
+            }
+            Expr::Eval { source, line } => {
+                let (source_op, source_type) = self.compile_expr(source);
+                let result = self.alloc_tmp();
+                let mut eval = Instruction::new(OpCode::Eval);
+                eval.op1 = source_op;
+                eval.op1_type = source_type;
+                eval.result = result;
+                eval.result_type = OpType::Tmp;
+                eval.extended_value = u32::try_from(*line).unwrap_or(u32::MAX);
+                self.instructions.push(eval);
+                self.definitely_defined_cvs.clear();
                 (result, OpType::Tmp)
             }
             Expr::FunctionCall {

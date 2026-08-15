@@ -48,6 +48,11 @@ impl Parser {
         self
     }
 
+    pub(crate) fn with_class_scope_active(mut self, active: bool) -> Self {
+        self.class_scope_active = active;
+        self
+    }
+
     pub fn parse(&mut self) -> Result<Vec<Stmt>, String> {
         let (max_depth, deepest_line) = self.check_syntax_nesting()?;
         if max_depth > Self::DEDICATED_STACK_NESTING {

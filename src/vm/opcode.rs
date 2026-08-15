@@ -227,6 +227,8 @@ pub enum OpCode {
     /// Both variable names remain aliases until one is explicitly rebound or
     /// unset; ordinary assignments through either CV update the shared cell.
     BindCvRef = 165,
+    /// Compile and execute op1 as PHP source in the active lexical scope.
+    Eval = 166,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.
