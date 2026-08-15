@@ -947,3 +947,19 @@ echo bar() ?: 99;
         "y99"
     );
 }
+
+#[test]
+fn unary_plus_coerces_numbers_and_preserves_precedence() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = "12";
+var_dump(+$value);
+var_dump(+2.5);
+var_dump(+-3);
+var_dump(+true);
+"#
+        ),
+        "int(12)\nfloat(2.5)\nint(-3)\nint(1)\n"
+    );
+}
