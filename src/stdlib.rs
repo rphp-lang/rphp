@@ -715,6 +715,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // --- Reflection / class introspection ---
     reg!("get_class", fn_get_class, 1, 0, "object");
     reg!("get_called_class", fn_get_called_class, 0, 0);
+    reg!(
+        "get_parent_class",
+        fn_get_parent_class,
+        1,
+        0,
+        "object_or_class"
+    );
     reg!("get_included_files", fn_get_included_files, 0, 0);
     reg!("get_required_files", fn_get_included_files, 0, 0);
     reg!("get_declared_classes", fn_get_declared_classes, 0, 0);
@@ -5518,6 +5525,58 @@ fn fn_get_called_class(
         return Ok(());
     };
     ret!(rv, Value::string(class_name));
+}
+
+fn invalid_parent_class_argument(eg: &mut ExecutorGlobals, value: &Value) {
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, {} given",
+            value.type_name()
+        ),
+    ));
+}
+
+fn fn_get_parent_class(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let class_name = if let Some(target) = arg_opt!(ed, 0) {
+        if let Some(object) = target.as_object() {
+            object.class_name.to_string()
+        } else if target.value_type() == ValueType::Closure {
+            ret!(rv, Value::bool(false));
+        } else if let Some(class_name) = target.as_str() {
+            if !autoload::ensure_symbol_loaded(eg, class_name)? {
+                if eg.exception.is_none() {
+                    invalid_parent_class_argument(eg, target);
+                }
+                return Ok(());
+            }
+            class_name
+                .strip_prefix('\\')
+                .unwrap_or(class_name)
+                .to_string()
+        } else {
+            invalid_parent_class_argument(eg, target);
+            return Ok(());
+        }
+    } else {
+        let Some(class_name) = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed)
+        else {
+            ret!(rv, Value::bool(false));
+        };
+        class_name
+    };
+
+    let parent = find_class_case_insensitive(eg, &class_name)
+        .and_then(|class| class.parent.as_deref())
+        .map(str::to_owned);
+    match parent {
+        Some(parent) => ret!(rv, Value::string(parent)),
+        None => ret!(rv, Value::bool(false)),
+    }
 }
 
 fn declared_names_value(names: Vec<String>) -> Value {
