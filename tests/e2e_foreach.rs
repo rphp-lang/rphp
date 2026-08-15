@@ -835,3 +835,62 @@ fn foreach_rejects_list_keys_and_empty_lists() {
         assert!(format!("{error:?}").contains(expected));
     }
 }
+
+#[test]
+fn foreach_iterates_visible_object_properties_and_updates_them_by_reference() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ObjectForeachParent {
+    private $shadow = 'parent';
+    protected $guarded = 2;
+    public $open = 3;
+    public function values(): void {
+        foreach ($this as $key => $value) echo "$key=$value;";
+    }
+    public function update(): void {
+        foreach ($this as $key => &$value) if (is_int($value)) $value *= 10;
+        unset($value);
+    }
+}
+class ObjectForeachChild extends ObjectForeachParent {
+    public $shadow = 'child';
+    public $child = 4;
+}
+$object = new ObjectForeachChild;
+$object->{12} = 5;
+foreach ($object as $key => $value) echo "$key=$value;";
+echo '|';
+$object->values();
+echo '|';
+$object->update();
+$after = get_object_vars($object);
+echo $object->open, ':', $object->child, ':', $after[12];
+"#,
+        ),
+        concat!(
+            "open=3;shadow=child;child=4;12=5;|",
+            "shadow=parent;guarded=2;open=3;child=4;12=5;|",
+            "30:40:50",
+        )
+    );
+}
+
+#[test]
+fn foreach_by_reference_rejects_readonly_object_properties() {
+    let error = common::run_php_expect_error(
+        r#"<?php
+readonly class ReadonlyObjectForeach {
+    public int $value;
+    public function __construct() { $this->value = 1; }
+    public function update(): void { foreach ($this as &$value) {} }
+}
+(new ReadonlyObjectForeach)->update();
+"#,
+    );
+    assert!(
+        format!("{error:?}").contains(
+            "Cannot acquire reference to readonly property ReadonlyObjectForeach::$value"
+        )
+    );
+}
