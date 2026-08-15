@@ -2107,7 +2107,6 @@ fn fn_spl_priority_queue_is_empty(
     );
 }
 
-#[cfg(feature = "value-errors")]
 #[cold]
 fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
     use crate::compiler::compile::ClassDef;
@@ -2534,7 +2533,6 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     funcs.extend(reflection::register(eg));
 
-    #[cfg(feature = "value-errors")]
     funcs.extend(register_value_error(eg));
 
     let empty_internal_type =
