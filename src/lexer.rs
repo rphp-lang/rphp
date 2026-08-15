@@ -197,6 +197,15 @@ pub fn decode_php_source(bytes: &[u8]) -> String {
     output
 }
 
+fn decode_numeric_literal(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .copied()
+        .filter(|byte| *byte != b'_')
+        .map(char::from)
+        .collect()
+}
+
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
         Self {
@@ -760,62 +769,52 @@ impl<'a> Lexer<'a> {
                 b'x' | b'X' => {
                     self.pos += 2; // skip 0x
                     let hex_start = self.pos;
-                    while self.pos < self.src.len() && self.src[self.pos].is_ascii_hexdigit() {
-                        self.pos += 1;
-                    }
+                    self.consume_numeric_digits(|byte| byte.is_ascii_hexdigit());
                     if self.pos == hex_start {
                         return Err(format!(
                             "Expected hex digits after 0x at position {}",
                             start
                         ));
                     }
-                    let s = std::str::from_utf8(&self.src[hex_start..self.pos]).unwrap();
-                    let n = i64::from_str_radix(s, 16)
+                    let s = decode_numeric_literal(&self.src[hex_start..self.pos]);
+                    let n = i64::from_str_radix(&s, 16)
                         .map_err(|_| format!("Invalid hex literal at position {}", start))?;
                     return Ok(Token::Integer(n));
                 }
                 b'b' | b'B' => {
                     self.pos += 2; // skip 0b
                     let bin_start = self.pos;
-                    while self.pos < self.src.len()
-                        && (self.src[self.pos] == b'0' || self.src[self.pos] == b'1')
-                    {
-                        self.pos += 1;
-                    }
+                    self.consume_numeric_digits(|byte| matches!(byte, b'0' | b'1'));
                     if self.pos == bin_start {
                         return Err(format!(
                             "Expected binary digits after 0b at position {}",
                             start
                         ));
                     }
-                    let s = std::str::from_utf8(&self.src[bin_start..self.pos]).unwrap();
-                    let n = i64::from_str_radix(s, 2)
+                    let s = decode_numeric_literal(&self.src[bin_start..self.pos]);
+                    let n = i64::from_str_radix(&s, 2)
                         .map_err(|_| format!("Invalid binary literal at position {}", start))?;
                     return Ok(Token::Integer(n));
                 }
                 b'o' | b'O' => {
                     self.pos += 2; // skip 0o
                     let octal_start = self.pos;
-                    while self.pos < self.src.len() && matches!(self.src[self.pos], b'0'..=b'7') {
-                        self.pos += 1;
-                    }
+                    self.consume_numeric_digits(|byte| matches!(byte, b'0'..=b'7'));
                     if self.pos == octal_start {
                         return Err(format!(
                             "Expected octal digits after 0o at position {}",
                             start
                         ));
                     }
-                    let literal = std::str::from_utf8(&self.src[octal_start..self.pos]).unwrap();
-                    let number = i64::from_str_radix(literal, 8)
+                    let literal = decode_numeric_literal(&self.src[octal_start..self.pos]);
+                    let number = i64::from_str_radix(&literal, 8)
                         .map_err(|_| format!("Invalid octal literal at position {}", start))?;
                     return Ok(Token::Integer(number));
                 }
                 _ => {}
             }
         }
-        while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
-            self.pos += 1;
-        }
+        self.consume_numeric_digits(|byte| byte.is_ascii_digit());
         let mut is_float = false;
         // Check for decimal point followed by digit → float
         if self.pos < self.src.len()
@@ -827,9 +826,7 @@ impl<'a> Lexer<'a> {
         {
             is_float = true;
             self.pos += 1; // skip '.'
-            while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
-                self.pos += 1;
-            }
+            self.consume_numeric_digits(|byte| byte.is_ascii_digit());
         }
         // Scientific notation is valid with or without a decimal point.
         if self.pos < self.src.len() && matches!(self.src[self.pos], b'e' | b'E') {
@@ -840,23 +837,37 @@ impl<'a> Lexer<'a> {
             if self.src.get(exponent).is_some_and(u8::is_ascii_digit) {
                 is_float = true;
                 self.pos = exponent + 1;
-                while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
-                    self.pos += 1;
-                }
+                self.consume_numeric_digits(|byte| byte.is_ascii_digit());
             }
         }
         if is_float {
-            let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
+            let s = decode_numeric_literal(&self.src[start..self.pos]);
             let f: f64 = s
                 .parse()
                 .map_err(|_| format!("Invalid float literal at position {}", start))?;
             Ok(Token::Float(f))
         } else {
-            let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
+            let s = decode_numeric_literal(&self.src[start..self.pos]);
             let n: i64 = s
                 .parse()
                 .map_err(|_| format!("Integer literal too large at position {}", start))?;
             Ok(Token::Integer(n))
+        }
+    }
+
+    fn consume_numeric_digits(&mut self, valid: impl Fn(u8) -> bool) {
+        while self.pos < self.src.len() {
+            if valid(self.src[self.pos]) {
+                self.pos += 1;
+            } else if self.src[self.pos] == b'_'
+                && self.pos > 0
+                && valid(self.src[self.pos - 1])
+                && self.src.get(self.pos + 1).is_some_and(|byte| valid(*byte))
+            {
+                self.pos += 1;
+            } else {
+                break;
+            }
         }
     }
 
