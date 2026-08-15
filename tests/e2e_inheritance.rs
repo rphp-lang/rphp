@@ -250,6 +250,48 @@ try { get_class_vars('MissingVars'); } catch (TypeError $error) { echo $error->g
 }
 
 #[test]
+fn inherited_private_property_reads_are_undefined_outside_the_owner_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PrivateReadParent {
+    private $value = 'parent';
+    public function readFromOwner(object $target) { var_dump($target->value); }
+}
+class PrivateReadChild extends PrivateReadParent {
+    public function readFromChild(object $target) { var_dump($target->value); }
+}
+$parent = new PrivateReadParent;
+$child = new PrivateReadChild;
+set_error_handler(function ($level, $message) { echo "warning:$message\n"; return true; });
+var_dump($child->value);
+$child->readFromChild($child);
+$parent->readFromOwner($child);
+"#,
+        ),
+        concat!(
+            "warning:Undefined property: PrivateReadChild::$value\nNULL\n",
+            "warning:Undefined property: PrivateReadChild::$value\nNULL\n",
+            "string(6) \"parent\"\n",
+        )
+    );
+
+    let error = run_php_expect_error(
+        r#"<?php
+class PrivateReadExactParent { private $value = 'parent'; }
+class PrivateReadExactChild extends PrivateReadExactParent {
+    public function read(object $target) { return $target->value; }
+}
+(new PrivateReadExactChild)->read(new PrivateReadExactParent);
+"#,
+    );
+    assert!(
+        format!("{error:?}")
+            .contains("Cannot access private property PrivateReadExactParent::$value")
+    );
+}
+
+#[test]
 fn parent_instance_call_forwards_this_receiver() {
     assert_eq!(
         run_php(

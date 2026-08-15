@@ -782,7 +782,17 @@ fn op_fetch_obj_r_slow<'a>(
                         false
                     }
                 });
-                if !own_private && !caller_has_own {
+                // A parent's private property is not a member of the child
+                // scope. Unless the declaring parent is the caller, reading
+                // it through a child object follows the ordinary undefined
+                // property path (including __get and its warning) rather than
+                // reporting an inaccessible declaration.
+                let hidden_parent_private = vis == Visibility::Private
+                    && !defining_class.eq_ignore_ascii_case(&obj.class_name)
+                    && !own_private;
+                if hidden_parent_private {
+                    property_accessible = false;
+                } else if !own_private && !caller_has_own {
                     if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
                         let has_getter = eg
                             .find_function(&format!(
