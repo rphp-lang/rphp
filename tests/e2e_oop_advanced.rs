@@ -427,3 +427,32 @@ fn enum_rejects_an_explicit_cases_method() {
     );
     assert!(format!("{error:?}").contains("Cannot redeclare Suit::cases()"));
 }
+
+#[test]
+fn backed_enum_from_and_try_from_resolve_cases_and_unknown_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum Suit: string { case Hearts = "H"; case Diamonds = "D"; }
+enum Code: int { case Missing = -1; case Ready = 2; }
+echo Suit::from("H")->name, "\n";
+echo Code::from(-1)->name, "\n";
+var_dump(Suit::tryFrom("X"));
+var_dump(Code::tryFrom(3));
+try { Suit::from("X"); } catch (ValueError $error) { echo $error->getMessage(), "\n"; }
+try { Code::from(3); } catch (ValueError $error) { echo $error->getMessage(), "\n"; }
+"#
+        ),
+        "Hearts\nMissing\nNULL\nNULL\n\"X\" is not a valid backing value for enum Suit\n3 is not a valid backing value for enum Code\n"
+    );
+}
+
+#[test]
+fn backed_enum_rejects_explicit_from_methods() {
+    for method in ["from", "tryFrom"] {
+        let source =
+            format!("<?php enum Suit: int {{ public static function {method}(int $value) {{}} }}");
+        let error = run_php_expect_error(&source);
+        assert!(format!("{error:?}").contains(&format!("Cannot redeclare Suit::{method}()")));
+    }
+}

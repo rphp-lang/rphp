@@ -3651,6 +3651,116 @@ impl Compiler {
                     return_type: None,
                     generic_params: vec![],
                 });
+                if is_backed {
+                    for reserved in ["from", "tryFrom"] {
+                        if methods
+                            .iter()
+                            .any(|method| method.name.eq_ignore_ascii_case(reserved))
+                        {
+                            return Err(format!("Cannot redeclare {name}::{reserved}()"));
+                        }
+                    }
+
+                    let lookup_body = |fallback: Stmt| {
+                        let mut body = cases
+                            .iter()
+                            .filter_map(|(case, backing_value)| {
+                                backing_value.as_ref().map(|backing_value| Stmt::If {
+                                    condition: Expr::BinaryOp {
+                                        op: BinOp::Identical,
+                                        left: Box::new(Expr::Variable {
+                                            name: "value".to_string(),
+                                            line: 0,
+                                        }),
+                                        right: Box::new(backing_value.clone()),
+                                    },
+                                    then_body: vec![Stmt::Return {
+                                        expr: Some(Expr::ClassConstant {
+                                            class_name: "self".to_string(),
+                                            constant: case.clone(),
+                                        }),
+                                        line: 0,
+                                    }],
+                                    else_body: vec![],
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        body.push(fallback);
+                        body
+                    };
+                    let value_param = crate::parser::Param {
+                        name: "value".to_string(),
+                        line: 0,
+                        default: None,
+                        is_variadic: false,
+                        is_ref: false,
+                        type_hint: backing_type.clone(),
+                        promotion: None,
+                    };
+                    enum_methods.push(crate::parser::ClassMethod {
+                        visibility: Visibility::Public,
+                        name: "tryFrom".to_string(),
+                        params: vec![value_param.clone()],
+                        body: lookup_body(Stmt::Return {
+                            expr: Some(Expr::Null),
+                            line: 0,
+                        }),
+                        is_static: true,
+                        is_final: false,
+                        is_abstract: false,
+                        returns_by_ref: false,
+                        return_type: None,
+                        generic_params: vec![],
+                    });
+
+                    let displayed_value = if matches!(backing_type, Some(TypeHint::String)) {
+                        Expr::BinaryOp {
+                            op: BinOp::Concat,
+                            left: Box::new(Expr::StringLiteral("\"".to_string())),
+                            right: Box::new(Expr::BinaryOp {
+                                op: BinOp::Concat,
+                                left: Box::new(Expr::Variable {
+                                    name: "value".to_string(),
+                                    line: 0,
+                                }),
+                                right: Box::new(Expr::StringLiteral("\"".to_string())),
+                            }),
+                        }
+                    } else {
+                        Expr::Variable {
+                            name: "value".to_string(),
+                            line: 0,
+                        }
+                    };
+                    let error_message = Expr::BinaryOp {
+                        op: BinOp::Concat,
+                        left: Box::new(displayed_value),
+                        right: Box::new(Expr::StringLiteral(format!(
+                            " is not a valid backing value for enum {resolved_enum}"
+                        ))),
+                    };
+                    enum_methods.push(crate::parser::ClassMethod {
+                        visibility: Visibility::Public,
+                        name: "from".to_string(),
+                        params: vec![value_param],
+                        body: lookup_body(Stmt::Throw {
+                            expr: Expr::New {
+                                class_name: "ValueError".to_string(),
+                                args: vec![crate::parser::CallArg::Positional(error_message)],
+                                generic_args: vec![],
+                                line: 0,
+                                call_line: 0,
+                            },
+                            line: 0,
+                        }),
+                        is_static: true,
+                        is_final: false,
+                        is_abstract: false,
+                        returns_by_ref: false,
+                        return_type: None,
+                        generic_params: vec![],
+                    });
+                }
 
                 // Compile methods
                 let mut compiled_methods = Vec::new();
