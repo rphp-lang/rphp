@@ -256,6 +256,7 @@ impl Parser {
                 | Token::Ampersand
                 | Token::Question
                 | Token::Backslash
+                | Token::Namespace
                 | Token::ArrayKw
                 | Token::Null
                 | Token::Static
@@ -286,6 +287,9 @@ impl Parser {
                 self.last_primary_line = Some(line);
                 parts.push(n);
             }
+            Token::True => parts.push("true".to_string()),
+            Token::False => parts.push("false".to_string()),
+            Token::Null => parts.push("null".to_string()),
             other => {
                 return Err(format!(
                     "Expected identifier in qualified name, got {:?}",
@@ -297,6 +301,9 @@ impl Parser {
             self.advance(); // consume '\'
             match self.advance() {
                 Token::Identifier(n, _) => parts.push(n),
+                Token::True => parts.push("true".to_string()),
+                Token::False => parts.push("false".to_string()),
+                Token::Null => parts.push("null".to_string()),
                 other => {
                     return Err(format!(
                         "Expected identifier after '\\' in qualified name, got {:?}",
@@ -311,6 +318,32 @@ impl Parser {
         } else {
             Ok(name)
         }
+    }
+
+    /// Parse PHP's explicit namespace-relative form, `namespace\\Name`.
+    /// The marker is retained so resolution can bypass ordinary imports.
+    fn parse_namespace_relative_name(&mut self) -> Result<String, String> {
+        self.expect(&Token::Namespace)?;
+        self.expect(&Token::Backslash)?;
+        let first = match self.advance() {
+            Token::Identifier(name, line) => {
+                self.last_primary_line = Some(line);
+                name
+            }
+            Token::True => "true".to_string(),
+            Token::False => "false".to_string(),
+            Token::Null => "null".to_string(),
+            other => {
+                return Err(format!(
+                    "Expected identifier after 'namespace\\\\', got {:?}",
+                    other
+                ));
+            }
+        };
+        Ok(format!(
+            "namespace\\{}",
+            self.parse_type_name_tail(first, false)?
+        ))
     }
 
     /// Parse the leading name of a use declaration, retaining the `\{`
@@ -413,6 +446,7 @@ impl Parser {
                 self.tokens.get(self.pos + 1),
                 Some(Token::Identifier(_, _))
                     | Some(Token::Backslash)
+                    | Some(Token::Namespace)
                     | Some(Token::ArrayKw)
                     | Some(Token::Null)
                     | Some(Token::Static)
@@ -436,6 +470,7 @@ impl Parser {
                     self.tokens.get(self.pos + 1),
                     Some(Token::Identifier(_, _))
                         | Some(Token::Backslash)
+                        | Some(Token::Namespace)
                         | Some(Token::ArrayKw)
                         | Some(Token::Null)
                         | Some(Token::Static)
@@ -450,7 +485,7 @@ impl Parser {
                     Some(Token::Variable(_, _)) | Some(Token::Pipe) | Some(Token::Ampersand)
                 )
             }
-            Token::Backslash => true,
+            Token::Backslash | Token::Namespace => true,
             Token::ArrayKw | Token::Null => {
                 matches!(
                     self.tokens.get(self.pos + 1),
@@ -490,6 +525,7 @@ impl Parser {
                 next,
                 Some(Token::Identifier(_, _))
                     | Some(Token::Backslash)
+                    | Some(Token::Namespace)
                     | Some(Token::ArrayKw)
                     | Some(Token::Null)
             );
@@ -524,6 +560,11 @@ impl Parser {
                     return Ok(Some(hint));
                 }
                 Ok(None)
+            }
+            Token::Namespace => {
+                let hint = self.parse_base_type_hint()?;
+                let hint = self.maybe_parse_compound_type(hint)?;
+                Ok(Some(hint))
             }
             Token::Backslash => {
                 let hint = self.parse_base_type_hint()?;
@@ -599,6 +640,20 @@ impl Parser {
                     Ok(TypeHint::ClassName(name))
                 }
             },
+            Token::Namespace => {
+                self.expect(&Token::Backslash)?;
+                let first = match self.advance() {
+                    Token::Identifier(name, _) => name,
+                    other => {
+                        return Err(format!(
+                            "Expected identifier after 'namespace\\\\' in type hint, got {:?}",
+                            other
+                        ));
+                    }
+                };
+                let name = self.parse_type_name_tail(first, false)?;
+                Ok(TypeHint::ClassName(format!("namespace\\{name}")))
+            }
             Token::Backslash => {
                 let first = match self.advance() {
                     Token::Identifier(name, _) => name,

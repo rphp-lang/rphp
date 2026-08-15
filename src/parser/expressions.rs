@@ -932,6 +932,26 @@ impl Parser {
                 Token::MagicConstant { name, line } => Ok(Expr::MagicConstant { name, line }),
                 _ => unreachable!(),
             },
+            Token::Namespace if self.peek_at(1) == Token::Backslash => {
+                let name = self.parse_namespace_relative_name()?;
+                let named_line = self.last_primary_line;
+                if self.peek() == Token::DoubleColon {
+                    return self.parse_named_static_access(name);
+                }
+                if matches!(self.peek(), Token::LParen(_)) {
+                    let paren_line = self.expect_lparen()?;
+                    let line = named_line.unwrap_or(paren_line);
+                    let args = self.parse_call_args()?;
+                    Ok(Expr::FunctionCall {
+                        name,
+                        args,
+                        generic_args: Vec::new(),
+                        line,
+                    })
+                } else {
+                    Ok(Expr::Constant(name))
+                }
+            }
             Token::Identifier(_, _) => {
                 let name = if self.peek_at(1) == Token::Backslash {
                     // Qualified name: App\Models\User
@@ -1099,8 +1119,12 @@ impl Parser {
                     });
                 }
                 let (class_name, call_line) = match self.peek() {
-                    Token::Backslash | Token::Identifier(_, _) => {
-                        let class_name = self.parse_qualified_name()?;
+                    Token::Backslash | Token::Identifier(_, _) | Token::Namespace => {
+                        let class_name = if self.peek() == Token::Namespace {
+                            self.parse_namespace_relative_name()?
+                        } else {
+                            self.parse_qualified_name()?
+                        };
                         (class_name, self.last_primary_line.unwrap_or(line))
                     }
                     Token::Static if self.class_scope_active => {
