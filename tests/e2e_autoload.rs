@@ -962,3 +962,34 @@ var_dump(get_parent_class('autoloadparentchild'));
         "load:AutoloadParentChild|string(18) \"AutoloadParentBase\"\nstring(18) \"AutoloadParentBase\"\n"
     );
 }
+
+#[test]
+fn get_class_methods_autoloads_class_strings_but_not_objects() {
+    let dir = TempPhpDir::new();
+    let class_file = dir.write(
+        "AutoloadMethodInventory.php",
+        "<?php class AutoloadMethodParent { public function inheritedMethod() {} } class AutoloadMethodInventory extends AutoloadMethodParent { public function ownMethod() {} }",
+    );
+    let source = format!(
+        r#"<?php
+spl_autoload_register(function ($name) {{
+    echo "load:$name|";
+    if ($name === 'AutoloadMethodInventory') {{ require '{class_file}'; }}
+}});
+var_dump(get_class_methods('AutoloadMethodInventory'));
+$object = new AutoloadMethodInventory;
+var_dump(get_class_methods($object));
+"#
+    );
+
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "load:AutoloadMethodInventory|array(2) {\n",
+            "  [0]=>\n  string(9) \"ownMethod\"\n",
+            "  [1]=>\n  string(15) \"inheritedMethod\"\n}\n",
+            "array(2) {\n  [0]=>\n  string(9) \"ownMethod\"\n",
+            "  [1]=>\n  string(15) \"inheritedMethod\"\n}\n",
+        )
+    );
+}
