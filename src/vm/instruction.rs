@@ -129,6 +129,11 @@ pub const FETCH_OBJ_MODIFY: u16 = 1 << 2;
 /// or scalar receiver throws PHP's dedicated inc/dec error.
 pub const FETCH_OBJ_INCDEC: u16 = 1 << 3;
 
+/// `FetchObjR` is the deferred read of a compound property assignment. A
+/// scalar receiver throws PHP's direct-assignment error before the arithmetic
+/// operation is attempted.
+pub const FETCH_OBJ_COMPOUND: u16 = 1 << 4;
+
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;
