@@ -806,3 +806,41 @@ echo count($arguments[0]), ':', $arguments[0][0], ':', $arguments[0][1], ':', $a
         "3:initial:added:priority"
     );
 }
+
+#[test]
+fn get_object_vars_preserves_scope_dynamic_keys_cow_and_references() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ObjectVarsParent {
+    private $shadow = 'parent';
+    protected $guarded = 'protected';
+    public array $normal = ['initial'];
+    public $linked;
+    public int $typed;
+    public function inspect(object $object): array { return get_object_vars($object); }
+}
+class ObjectVarsChild extends ObjectVarsParent { public $shadow = 'child'; }
+$reference = ['initial'];
+$object = new ObjectVarsChild;
+$object->linked = &$reference;
+$object->{123} = 'numeric';
+$outside = get_object_vars($object);
+$inside = $object->inspect($object);
+$object->normal[] = 'later';
+$object->linked[] = 'alias';
+echo $outside['shadow'], '|', isset($outside['guarded']) ? 'bad' : 'hidden', '|';
+echo $inside['shadow'], '|', $inside['guarded'], '|';
+echo implode(',', $outside['normal']), '|', implode(',', $outside['linked']), '|';
+echo implode(',', $reference), '|', $outside[123], '|';
+var_dump(array_key_exists('typed', $outside), get_object_vars(function () {}));
+try { get_object_vars(42); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "child|hidden|parent|protected|initial|initial,alias|initial,alias|numeric|",
+            "bool(false)\narray(0) {\n}\n",
+            "get_object_vars(): Argument #1 ($object) must be of type object, int given\n",
+        )
+    );
+}

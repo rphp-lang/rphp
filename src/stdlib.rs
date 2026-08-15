@@ -723,6 +723,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "object_or_class"
     );
     reg!("get_class_vars", fn_get_class_vars, 1, 1, "class");
+    reg!("get_object_vars", fn_get_object_vars, 1, 1, "object");
     reg!(
         "get_parent_class",
         fn_get_parent_class,
@@ -5739,6 +5740,100 @@ fn fn_get_class_vars(
     ret!(rv, Value::array(result));
 }
 
+fn clone_object_var(value: &Value) -> Value {
+    if value.is_owned_reference() {
+        value.clone_owned_reference_alias()
+    } else {
+        value.clone()
+    }
+}
+
+fn set_object_var(result: &mut PhpArray, name: &str, value: Value) {
+    if let Some(key) = crate::value::canonical_decimal_array_key(name) {
+        result.set_int(key, value);
+    } else {
+        result.set_str(name, value);
+    }
+}
+
+fn fn_get_object_vars(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let target = arg!(ed, 0);
+    if target.value_type() == ValueType::Closure {
+        ret!(rv, Value::array(PhpArray::new()));
+    }
+    let Some(object) = target.as_object() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "get_object_vars(): Argument #1 ($object) must be of type object, {} given",
+                target.type_name()
+            ),
+        ));
+        return Ok(());
+    };
+
+    let caller_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
+    let dynamic_len = object
+        .dynamic_properties
+        .as_ref()
+        .map_or(0, |properties| properties.len());
+    let mut result = PhpArray::with_hash_capacity(object.property_values.len() + dynamic_len);
+    let mut lineage = Vec::new();
+    let mut current = Some(object.class_name.to_string());
+    while let Some(class_name) = current {
+        let Some(class) = find_class_case_insensitive(eg, &class_name) else {
+            break;
+        };
+        lineage.push(class.name.clone());
+        current = class.parent.clone();
+    }
+    lineage.reverse();
+    let mut slots = (0..object.property_values.len()).collect::<Vec<_>>();
+    slots.sort_by_key(|slot| {
+        eg.instance_property_definition(object.class_id, *slot)
+            .and_then(|definition| {
+                lineage.iter().position(|class_name| {
+                    class_name.eq_ignore_ascii_case(&definition.declaring_class)
+                })
+            })
+            .unwrap_or(lineage.len())
+    });
+    let mut private_names = std::collections::HashSet::new();
+    for slot in slots {
+        let value = &object.property_values[slot];
+        if value.is_undef() {
+            continue;
+        }
+        let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
+            continue;
+        };
+        if method_visible_from_scope(
+            eg,
+            definition.visibility,
+            &definition.declaring_class,
+            caller_class.as_deref(),
+        ) {
+            let is_private = definition.visibility == Visibility::Private;
+            if is_private || !private_names.contains(&definition.name) {
+                set_object_var(&mut result, &definition.name, clone_object_var(value));
+            }
+            if is_private {
+                private_names.insert(definition.name.clone());
+            }
+        }
+    }
+    object.for_each_dynamic_property(|name, value| {
+        if !value.is_undef() {
+            set_object_var(&mut result, name, clone_object_var(value));
+        }
+    });
+    ret!(rv, Value::array(result));
+}
+
 fn invalid_class_methods_argument(eg: &mut ExecutorGlobals, value: &Value) {
     eg.exception = Some(crate::value::make_error_value(
         "TypeError",
@@ -7133,6 +7228,7 @@ fn var_dump_value_inner(
 }
 
 fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
+    let val = val.dereferenced();
     match val.value_type() {
         ValueType::Null => String::new(),
         ValueType::True => "1".to_string(),
@@ -7149,8 +7245,10 @@ fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
         ValueType::String => val.as_str().unwrap().to_string(),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
-            let prefix = "    ".repeat(indent);
-            let inner = "    ".repeat(indent + 1);
+            // print_r() indents a nested array's body relative to both the
+            // containing key and its `=>` value column.
+            let prefix = "    ".repeat(indent * 2);
+            let inner = "    ".repeat(indent * 2 + 1);
             let mut out = "Array\n".to_string();
             out.push_str(&format!("{}(\n", prefix));
             for (key, v) in arr.iter() {
@@ -7164,9 +7262,7 @@ fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
                     key_str,
                     print_r_value(v, indent + 1, eg)
                 ));
-                if v.value_type() != ValueType::Array {
-                    out.push('\n');
-                }
+                out.push('\n');
             }
             out.push_str(&format!("{})\n", prefix));
             out
