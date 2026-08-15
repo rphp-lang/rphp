@@ -806,6 +806,7 @@ impl Parser {
                 self.consume_reference_return_marker();
                 let name = match self.advance() {
                     Token::Identifier(n, _) => n,
+                    Token::From => "from".to_string(),
                     other => return Err(format!("Expected function name, got {:?}", other)),
                 };
                 // A named function never inherits the surrounding method's
@@ -931,7 +932,7 @@ impl Parser {
             | Token::PlusPlus
             | Token::MinusMinus
             | Token::ArrayKw => self.parse_expression_statement(),
-            Token::Identifier(_, _) | Token::Backslash => {
+            Token::Identifier(_, _) | Token::Backslash | Token::From => {
                 // Check for list() destructuring: list($a, $b) = expr;
                 if let Token::Identifier(ref name, _) = self.peek() {
                     if name == "list" && matches!(self.peek_at(1), Token::LParen(_)) {

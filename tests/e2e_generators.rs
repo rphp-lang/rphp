@@ -831,3 +831,20 @@ try {
         "caught"
     );
 }
+
+#[test]
+fn semi_reserved_from_is_valid_for_functions_and_static_members() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function from() { yield 1; yield 2; }
+class Factory {
+    public static function from() { return "method"; }
+}
+foreach (from() as $value) echo $value;
+echo ":", Factory::from();
+"#
+        ),
+        "12:method"
+    );
+}
