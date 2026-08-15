@@ -311,3 +311,23 @@ fn test_php_bubble_sort() {
         "12345"
     );
 }
+
+#[test]
+fn mixed_case_long_array_constructor_preserves_contextual_member_names() {
+    assert_eq!(
+        run_php(
+            "<?php
+function first($items) {
+    foreach ($items as $item) { if ($item) { return $item; } }
+    return 0;
+}
+class Box {
+    public function array() { return 7; }
+}
+$box = new Box;
+echo first(ArRaY (0, 3)), ':', $box->ArRaY();
+"
+        ),
+        "3:7"
+    );
+}
