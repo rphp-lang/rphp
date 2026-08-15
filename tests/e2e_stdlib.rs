@@ -477,6 +477,25 @@ fn strnatcmp_orders_numeric_segments_like_php() {
 }
 
 #[test]
+fn string_comparisons_preserve_byte_differences_limits_and_ascii_case_folding() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo strcmp("a", "d"), ":", strcmp("qwe", "qwer"), ":", strcmp("A\x00B", "A\x00c"), "\n";
+echo strcasecmp("qwerty", "QweRty"), ":", strcasecmp("A\x00B", "a\x00c"), "\n";
+echo strncmp("qwerty", "qwerty123", 6), ":", strncmp("qwerty", "qwerty123", 7), ":", strncmp("a", "d", 0), "\n";
+echo strncasecmp("qwErtY", "qwer", 7), ":", strncasecmp("q123", "Q123", 3), "\n";
+echo strcmp(string2: "b", string1: "a"), "\n";
+foreach (["strncmp", "strncasecmp"] as $function) {
+    try { $function("a", "b", -1); } catch (ValueError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        "-3:-1:-33\n0:-1\n0:-1:0\n1:0\n-1\nstrncmp(): Argument #3 ($length) must be greater than or equal to 0\nstrncasecmp(): Argument #3 ($length) must be greater than or equal to 0\n"
+    );
+}
+
+#[test]
 fn incremental_xxh128_hash_matches_one_shot_hash() {
     assert_eq!(
         run_php(

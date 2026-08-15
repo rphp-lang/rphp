@@ -511,6 +511,18 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "flags"
     );
     reg!("substr", fn_substr, 3, 2, "string", "offset", "length");
+    reg!("strcmp", fn_strcmp, 2, 2, "string1", "string2");
+    reg!("strncmp", fn_strncmp, 3, 3, "string1", "string2", "length");
+    reg!("strcasecmp", fn_strcasecmp, 2, 2, "string1", "string2");
+    reg!(
+        "strncasecmp",
+        fn_strncasecmp,
+        3,
+        3,
+        "string1",
+        "string2",
+        "length"
+    );
     reg!("strnatcmp", fn_strnatcmp, 2, 2, "string1", "string2");
     reg!(
         "substr_compare",
@@ -3799,6 +3811,111 @@ fn fn_strlen(
 ) -> Result<(), VmError> {
     let result = direct_strlen(std::slice::from_ref(arg!(ed, 0)))?;
     ret!(rv, result);
+}
+
+fn compare_php_strings(left: &[u8], right: &[u8], length: usize, fold_ascii_case: bool) -> i64 {
+    let compared_length = left.len().min(right.len()).min(length);
+    for index in 0..compared_length {
+        let mut left_byte = left[index];
+        let mut right_byte = right[index];
+        if fold_ascii_case {
+            left_byte = left_byte.to_ascii_lowercase();
+            right_byte = right_byte.to_ascii_lowercase();
+        }
+        if left_byte != right_byte {
+            return i64::from(left_byte) - i64::from(right_byte);
+        }
+    }
+
+    if compared_length == length {
+        return 0;
+    }
+    match left.len().cmp(&right.len()) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+fn fn_strcmp(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let left = arg_str!(ed, 0);
+    let right = arg_str!(ed, 1);
+    ret!(
+        rv,
+        Value::long(compare_php_strings(
+            left.as_bytes(),
+            right.as_bytes(),
+            usize::MAX,
+            false
+        ))
+    );
+}
+
+fn fn_strcasecmp(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let left = arg_str!(ed, 0);
+    let right = arg_str!(ed, 1);
+    ret!(
+        rv,
+        Value::long(compare_php_strings(
+            left.as_bytes(),
+            right.as_bytes(),
+            usize::MAX,
+            true
+        ))
+    );
+}
+
+fn compare_php_strings_with_length(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function_name: &str,
+    fold_ascii_case: bool,
+) -> Result<(), VmError> {
+    let length = arg_long!(ed, 2);
+    if length < 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!("{function_name}(): Argument #3 ($length) must be greater than or equal to 0"),
+        ));
+        return Ok(());
+    }
+    let left = arg_str!(ed, 0);
+    let right = arg_str!(ed, 1);
+    let length = usize::try_from(length).unwrap_or(usize::MAX);
+    ret!(
+        rv,
+        Value::long(compare_php_strings(
+            left.as_bytes(),
+            right.as_bytes(),
+            length,
+            fold_ascii_case
+        ))
+    );
+}
+
+fn fn_strncmp(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    compare_php_strings_with_length(ed, rv, eg, "strncmp", false)
+}
+
+fn fn_strncasecmp(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    compare_php_strings_with_length(ed, rv, eg, "strncasecmp", true)
 }
 
 fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
