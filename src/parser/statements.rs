@@ -753,15 +753,18 @@ impl Parser {
                     generic_params,
                 })
             }
-            Token::Return => {
+            Token::Return { line } => {
                 self.advance(); // consume 'return'
                 if self.peek() == Token::Semicolon {
                     self.advance();
-                    Ok(Stmt::Return(None))
+                    Ok(Stmt::Return { expr: None, line })
                 } else {
                     let expr = self.parse_expr()?;
                     self.expect(&Token::Semicolon)?;
-                    Ok(Stmt::Return(Some(expr)))
+                    Ok(Stmt::Return {
+                        expr: Some(expr),
+                        line,
+                    })
                 }
             }
             Token::Unset => {

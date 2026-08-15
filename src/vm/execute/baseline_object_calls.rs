@@ -605,7 +605,8 @@ fn try_cached_fetch_obj_r(
 ) -> CachedFetchObjResult {
     let obj_val = unsafe {
         &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-    };
+    }
+    .dereferenced();
     if obj_val.value_type() != ValueType::Object {
         return CachedFetchObjResult::Miss;
     }
@@ -666,7 +667,8 @@ fn op_fetch_obj_r_slow<'a>(
     // result slot; none of these borrows escape this non-reentrant opcode.
     let (obj_val, prop_name, result_ptr) = unsafe {
         (
-            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+                .dereferenced(),
             &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
             (*frame).get_op_mut(opline.result as u32, opline.result_type),
         )
@@ -881,7 +883,8 @@ fn op_isset_obj<'a>(
     // result slot; none of these borrows escape this non-reentrant opcode.
     let (object, property, result_ptr) = unsafe {
         (
-            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+                .dereferenced(),
             &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
             (*frame).get_op_mut(opline.result as u32, opline.result_type),
         )
@@ -1175,7 +1178,8 @@ fn op_assign_obj_prop<'a>(
         } else {
             val
         };
-        let obj = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let obj = (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+            .dereferenced();
         (prop_name, val, obj)
     };
     let mut assigned = val.clone();

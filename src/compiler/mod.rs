@@ -1134,7 +1134,8 @@ pub(crate) fn make_user_function_typed_with_return_mode(
     } else {
         CleanupMode::ScanAll
     };
-    let ret = if !needs_late_static_scope
+    let ret = if !returns_reference
+        && !needs_late_static_scope
         && typed_function_supports_fast_return(&op_array, &return_type_hint)
     {
         ReturnStrategy::Fast
@@ -5664,10 +5665,12 @@ pub fn finalize_user_method(
                 instruction._pad &= !LATE_STATIC_PROP_EMBEDDED_SCOPE;
             }
         }
-        if typed_function_supports_fast_return(
-            &function.op_array,
-            &function.common.sig.return_type_hint,
-        ) {
+        if !function.common.sig.returns_reference
+            && typed_function_supports_fast_return(
+                &function.op_array,
+                &function.common.sig.return_type_hint,
+            )
+        {
             function.common.plan.ret = ReturnStrategy::Fast;
         }
     }
@@ -5693,7 +5696,8 @@ pub fn finalize_user_method(
 
     let common = &function.common;
     let scalar_strategy = common.sig.declared_scalar_call_strategy();
-    let can_use_fast_scalar = scalar_strategy.is_some()
+    let can_use_fast_scalar = !common.sig.returns_reference
+        && scalar_strategy.is_some()
         && !common.plan.needs_late_static_scope()
         && !common.sig.is_variadic
         && common.sig.ref_args == 0

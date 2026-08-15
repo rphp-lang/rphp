@@ -655,7 +655,10 @@ pub enum Stmt {
         expr: Expr,
         cases: Vec<SwitchCase>,
     },
-    Return(Option<Expr>),
+    Return {
+        expr: Option<Expr>,
+        line: usize,
+    },
     ExprStmt(Expr),
     ArrayAssign {
         // $a[idx] = expr
@@ -848,7 +851,7 @@ impl Stmt {
                             || case.body.iter().any(Stmt::contains_yield)
                     })
             }
-            Stmt::Return(expr) => expr.as_ref().is_some_and(Expr::contains_yield),
+            Stmt::Return { expr, .. } => expr.as_ref().is_some_and(Expr::contains_yield),
             Stmt::ArrayAssign { index, expr, .. } => {
                 index.contains_yield() || expr.contains_yield()
             }

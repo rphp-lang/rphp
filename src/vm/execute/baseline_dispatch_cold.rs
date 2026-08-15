@@ -77,6 +77,19 @@ fn report_php_warning(
     message: &str,
     suppressed: bool,
 ) -> Result<(), VmError> {
+    report_php_diagnostic(eg, frame, op_array, opline, message, 2, "Warning", suppressed)
+}
+
+fn report_php_diagnostic(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    message: &str,
+    level: i64,
+    label: &str,
+    suppressed: bool,
+) -> Result<(), VmError> {
     let instruction_index = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
@@ -89,21 +102,31 @@ fn report_php_warning(
     if suppressed {
         eg.begin_error_suppression(frame as usize);
     }
-    let handled = crate::stdlib::dispatch_php_error(eg, frame, 2, message, file, line);
+    let handled = crate::stdlib::dispatch_php_error(eg, frame, level, message, file, line);
     // Decide whether the built-in diagnostic is visible while the suppression
     // scope is still active. Restoring the caller's mask first would make an
     // ordinary `@$missing` warn merely because the outer mask contains
     // E_WARNING. A handler may explicitly re-enable E_WARNING inside `@`, in
     // which case PHP does expose the declined built-in diagnostic.
-    let report_builtin = eg.error_reporting & 2 != 0;
+    let report_builtin = eg.error_reporting & level != 0;
     if suppressed {
         eg.end_error_suppression(frame as usize);
     }
     let handled = handled?;
     if !handled && report_builtin {
-        eg.write_output(format!("\nWarning: {message} in {file} on line {line}\n").as_bytes());
+        eg.write_output(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
     }
     Ok(())
+}
+
+fn report_php_notice(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    message: &str,
+) -> Result<(), VmError> {
+    report_php_diagnostic(eg, frame, op_array, opline, message, 8, "Notice", false)
 }
 
 fn scalar_dynamic_variable_name(value: &Value) -> Result<String, VmError> {
@@ -2459,7 +2482,7 @@ fn op_bind_default_param(
 
 #[inline(never)]
 fn op_bind_global(
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
@@ -2468,7 +2491,8 @@ fn op_bind_global(
     // frame and its op array before dispatch reached this opcode.
     let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let name = name_val.as_str().unwrap_or("").to_string();
-    let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
+    // SAFETY: BindGlobal's destination is compiler-validated as a CV in this frame.
+    let cv_ptr = unsafe { (*frame).cv_mut(opline.op1 as u32) as *mut Value };
     // At top level `global $name` binds the symbol table to the CV that is
     // already the same global-scope variable. Do not replace an initialized
     // value with null merely because the detached globals snapshot has not
@@ -2478,7 +2502,18 @@ fn op_bind_global(
         return;
     }
     let value = eg.globals.get(&name).cloned().unwrap_or_else(Value::null);
-    unsafe { slot_set(cv_ptr, value) };
+    let binding = if value.is_owned_reference() {
+        value.clone_owned_reference_alias()
+    } else {
+        Value::owned_reference(reference_initial_value(value))
+    };
+    globals_set(
+        &mut eg.globals,
+        &name,
+        binding.clone_owned_reference_alias(),
+    );
+    // SAFETY: cv_ptr is the live BindGlobal destination derived above.
+    unsafe { frame_slot_set(frame, cv_ptr, binding) };
 }
 
 #[inline(never)]
@@ -2607,15 +2642,20 @@ fn op_global_dimension(
                 } else {
                     Value::owned_reference(Value::null())
                 };
+                let mut destination_binding = binding.clone_owned_reference_alias();
+                if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                    destination_binding.mark_internal_reference_alias();
+                }
                 globals_set(
                     &mut eg.globals,
                     &name,
                     binding.clone_owned_reference_alias(),
                 );
+                eg.dirty_globals.insert(name.clone());
                 frame_slot_set(
                     frame,
                     (*frame).cv_mut(opline.result as u32),
-                    binding.clone_owned_reference_alias(),
+                    destination_binding,
                 );
             }
             OpCode::AssignGlobalRef => {

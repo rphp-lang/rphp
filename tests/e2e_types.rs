@@ -506,6 +506,72 @@ var_dump($missingRef);"#;
 }
 
 #[test]
+fn reference_returning_calls_preserve_aliases_through_forwarders_and_finally() {
+    let source = r#"<?php
+function &leaf(&$slot) { return $slot; }
+function &forward(&$slot) { return leaf($slot); }
+function &throughFinally(&$slot) { try { return forward($slot); } finally { echo "finally:"; } }
+$value = 5;
+$alias =& throughFinally($value);
+$alias = 13;
+echo $value, ':', $alias, "\n";
+$closure = function &(&$slot) { return $slot; };
+$closureAlias =& $closure($value);
+$closureAlias = 21;
+echo $value, ':', $alias, ':', $closureAlias, "\n";"#;
+
+    assert_eq!(run_php(source), "finally:13:13\n21:21:21\n");
+}
+
+#[test]
+fn reference_returns_preserve_global_array_and_method_property_cells() {
+    let source = r#"<?php
+function &globalSlot() { return $GLOBALS['shared']; }
+class Holder {
+    public $value = 3;
+    public function &slot() { return $this->value; }
+}
+$shared = 1;
+$globalAlias =& globalSlot();
+$globalAlias = 2;
+$holder = new Holder;
+$propertyAlias =& $holder->slot();
+$propertyAlias = 4;
+echo $shared, ':', $globalAlias, ':', $holder->value, ':', $propertyAlias, "\n";"#;
+
+    assert_eq!(run_php(source), "2:2:4:4\n");
+}
+
+#[test]
+fn invalid_reference_call_and_return_diagnostics_use_the_operator_source_line() {
+    let file = "/virtual/reference-return-diagnostics.php";
+    let source = r#"<?php
+function value() { return 1; }
+function &invalid() { return 2; }
+$assigned =& value();
+$returned =& invalid();"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "\nNotice: Only variables should be assigned by reference in {file} on line 4\n\nNotice: Only variable references should be returned by reference in {file} on line 3\n"
+        )
+    );
+}
+
+#[test]
+fn by_value_reads_separate_reference_returning_call_results() {
+    let source = r#"<?php
+function &expose(&$slot) { return $slot; }
+$value = 5;
+$copy = expose($value);
+$copy = 13;
+echo $value, ':', $copy, "\n";"#;
+
+    assert_eq!(run_php(source), "5:13\n");
+}
+
+#[test]
 fn explicit_reporting_change_inside_suppressed_call_reenables_warning_and_persists() {
     let output = run_php(
         "<?php error_reporting(E_NOTICE); function revealMaskedWarning() { error_reporting(E_ALL); echo $forgotten; throw new RuntimeException('stop'); } try { @revealMaskedWarning(); } catch (RuntimeException $error) {} echo 'mask=', error_reporting();",
