@@ -808,3 +808,30 @@ echo $sum;
         "64.5"
     );
 }
+
+#[test]
+fn foreach_accepts_legacy_list_destructuring() {
+    assert_eq!(
+        run_php(
+            "<?php $rows = [[1, 2], [3, 4]]; foreach ($rows as list($a, $b)) echo $a + $b; foreach ($rows as $key => list($a,)) echo $key . $a;"
+        ),
+        "370113"
+    );
+}
+
+#[test]
+fn foreach_rejects_list_keys_and_empty_lists() {
+    for (source, expected) in [
+        (
+            "<?php foreach ([[1]] as list($key) => list($value)) {}",
+            "Cannot use list as key element",
+        ),
+        (
+            "<?php foreach ([[1]] as $key => list()) {}",
+            "Cannot use empty list",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        assert!(format!("{error:?}").contains(expected));
+    }
+}
