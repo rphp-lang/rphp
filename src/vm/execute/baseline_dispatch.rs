@@ -1,5 +1,26 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+#[cold]
+fn enum_relational_result(
+    eg: &ExecutorGlobals,
+    left: &Value,
+    right: &Value,
+    inclusive: bool,
+) -> Option<bool> {
+    let left = left.dereferenced();
+    let right = right.dereferenced();
+    let is_enum = |value: &Value| {
+        value
+            .as_object()
+            .and_then(|object| eg.find_class(&object.class_name))
+            .is_some_and(|class| class.is_enum)
+    };
+    let left_is_enum = is_enum(left);
+    let right_is_enum = is_enum(right);
+    (left_is_enum || right_is_enum)
+        .then(|| inclusive && left_is_enum && right_is_enum && values_identical(left, right))
+}
+
 /// Return the innermost finally block crossed by a non-local jump. The whole
 /// try/catch/finally instruction span counts as local: compiler-generated jumps
 /// into the block's own finally must not create a continuation.
@@ -750,15 +771,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
-                    unsafe { frame_tmp_set_bool(frame, result_ptr, l1 < l2) };
+                let result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1 < l2
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { frame_tmp_set_bool(frame, result_ptr, d1 < d2) };
+                    d1 < d2
                 } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
-                    unsafe { frame_tmp_set_bool(frame, result_ptr, s1 < s2) };
+                    s1 < s2
+                } else if let Some(result) = enum_relational_result(eg, op1, op2, false) {
+                    result
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
-                }
+                };
+                unsafe { frame_tmp_set_bool(frame, result_ptr, result) };
             }
 
             OpCode::IsSmallerOrEqual_CvConst => {
@@ -766,15 +790,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
-                    unsafe { frame_tmp_set_bool(frame, result_ptr, l1 <= l2) };
+                let result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1 <= l2
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { frame_tmp_set_bool(frame, result_ptr, d1 <= d2) };
+                    d1 <= d2
                 } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
-                    unsafe { frame_tmp_set_bool(frame, result_ptr, s1 <= s2) };
+                    s1 <= s2
+                } else if let Some(result) = enum_relational_result(eg, op1, op2, true) {
+                    result
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
-                }
+                };
+                unsafe { frame_tmp_set_bool(frame, result_ptr, result) };
             }
 
             OpCode::IsEqual_CvConst => {
@@ -1217,6 +1244,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         OpCode::IsSmallerOrEqual => d1 <= d2,
                         _ => unreachable!(),
                     }
+                } else if matches!(
+                    opline.opcode,
+                    OpCode::IsSmaller | OpCode::IsSmallerOrEqual
+                ) && let Some(result) = enum_relational_result(
+                    eg,
+                    op1,
+                    op2,
+                    opline.opcode == OpCode::IsSmallerOrEqual,
+                ) {
+                    result
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
                 };

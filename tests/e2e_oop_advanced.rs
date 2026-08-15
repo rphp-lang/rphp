@@ -456,3 +456,23 @@ fn backed_enum_rejects_explicit_from_methods() {
         assert!(format!("{error:?}").contains(&format!("Cannot redeclare Suit::{method}()")));
     }
 }
+
+#[test]
+fn enum_relational_comparison_is_identity_only() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum State { case Ready; case Done; }
+$ready = State::Ready;
+$alias = $ready;
+$done = State::Done;
+foreach ([
+    $ready < $alias, $ready <= $alias, $ready > $alias, $ready >= $alias,
+    $ready < $done, $ready <= $done, $ready > $done, $ready >= $done,
+    $ready < true, $ready <= true, true < $ready, true <= $ready,
+] as $result) var_dump($result);
+"#
+        ),
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+}
