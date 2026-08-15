@@ -357,3 +357,41 @@ fn test_enum_rejects_explicit_implicit_and_serializable_interfaces() {
         assert!(format!("{error:?}").contains("cannot implement"));
     }
 }
+
+#[test]
+fn enum_composes_trait_methods_constants_and_aliases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait Labelled {
+    private const PREFIX = "case:";
+    public function label(): string { return self::PREFIX . $this->name; }
+}
+enum Item {
+    use Labelled { label as private hiddenLabel; }
+    case One;
+    public function reveal(): string { return $this->hiddenLabel(); }
+}
+echo Item::One->reveal();
+"#
+        ),
+        "case:One"
+    );
+}
+
+#[test]
+fn enum_rejects_trait_properties_and_forbidden_magic_methods() {
+    for (source, expected) in [
+        (
+            "<?php trait T { public $value; } enum E { use T; }",
+            "cannot include properties",
+        ),
+        (
+            "<?php trait T { function __construct() {} } enum E { use T; }",
+            "cannot include magic method",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(format!("{error:?}").contains(expected));
+    }
+}

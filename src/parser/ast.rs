@@ -789,6 +789,8 @@ pub enum Stmt {
         name: String,
         backing_type: Option<TypeHint>,
         implements: Vec<GenericAncestor>,
+        uses: Vec<GenericAncestor>,
+        trait_aliases: Vec<TraitAlias>,
         cases: Vec<(String, Option<Expr>)>, // (case_name, optional_value)
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
