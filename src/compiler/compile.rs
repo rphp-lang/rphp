@@ -30,11 +30,12 @@ use crate::vm::instruction::{
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
     CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_SILENT,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC,
-    FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
-    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_UNPACKED_ARGUMENTS, OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND,
+    FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
+    OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER,
 };
 use crate::vm::opcode::OpCode;
 
@@ -4041,17 +4042,93 @@ impl Compiler {
                         right_type,
                     )
                 } else {
-                    let (left, left_type, writeback) =
-                        match self.compile_foreach_reference_source(target, false) {
-                            Ok(source) => source,
-                            Err(error) => {
-                                self.deferred_error = Some(error);
-                                let null = self.add_literal(Value::null());
-                                return (null, OpType::Const);
+                    match target.as_ref() {
+                        Expr::PropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                            line,
+                        } => {
+                            let (object, object_type, mut deferred) =
+                                self.prepare_property_modify_base(object);
+                            let property = self.add_literal(Value::string(property.clone()));
+                            let left = self.alloc_tmp();
+                            let mut fetch = Instruction::new(OpCode::FetchObjR);
+                            fetch.op1 = object;
+                            fetch.op1_type = object_type;
+                            fetch.op2 = property;
+                            fetch.op2_type = OpType::Const;
+                            fetch.result = left;
+                            fetch.result_type = OpType::Tmp;
+                            fetch._pad |= FETCH_OBJ_COMPOUND;
+                            deferred.push((fetch, *line));
+                            let (right, right_type) = self.compile_expr(expr);
+                            for (fetch, line) in deferred {
+                                self.push_instruction_at_line(fetch, line);
                             }
-                        };
-                    let (right, right_type) = self.compile_expr(expr);
-                    (left, left_type, writeback, right, right_type)
+                            (
+                                left,
+                                OpType::Tmp,
+                                ForeachArrayWriteback::ObjectProperty {
+                                    object,
+                                    object_type,
+                                    property,
+                                    property_type: OpType::Const,
+                                },
+                                right,
+                                right_type,
+                            )
+                        }
+                        Expr::DynamicPropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                            line,
+                        } => {
+                            let (object, object_type, mut deferred) =
+                                self.prepare_property_modify_base(object);
+                            let (property, property_type) = self.compile_expr(property);
+                            let left = self.alloc_tmp();
+                            let mut fetch = Instruction::new(OpCode::FetchObjR);
+                            fetch.op1 = object;
+                            fetch.op1_type = object_type;
+                            fetch.op2 = property;
+                            fetch.op2_type = property_type;
+                            fetch.result = left;
+                            fetch.result_type = OpType::Tmp;
+                            fetch._pad |= FETCH_OBJ_COMPOUND;
+                            deferred.push((fetch, *line));
+                            let (right, right_type) = self.compile_expr(expr);
+                            for (fetch, line) in deferred {
+                                self.push_instruction_at_line(fetch, line);
+                            }
+                            (
+                                left,
+                                OpType::Tmp,
+                                ForeachArrayWriteback::ObjectProperty {
+                                    object,
+                                    object_type,
+                                    property,
+                                    property_type,
+                                },
+                                right,
+                                right_type,
+                            )
+                        }
+                        _ => {
+                            let (left, left_type, writeback) =
+                                match self.compile_foreach_reference_source(target, false) {
+                                    Ok(source) => source,
+                                    Err(error) => {
+                                        self.deferred_error = Some(error);
+                                        let null = self.add_literal(Value::null());
+                                        return (null, OpType::Const);
+                                    }
+                                };
+                            let (right, right_type) = self.compile_expr(expr);
+                            (left, left_type, writeback, right, right_type)
+                        }
+                    }
                 };
                 let opcode = match op {
                     BinOp::Add => OpCode::Add,

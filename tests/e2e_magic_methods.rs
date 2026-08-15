@@ -193,6 +193,32 @@ var_dump(++$object->stored, $object->stored++, $object->stored);
 }
 
 #[test]
+fn compound_property_assignment_defers_fetch_and_uses_scalar_write_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function compound_value($value) { echo "rhs\n"; return $value; }
+foreach ([null, true, 12, 's'] as $value) {
+    try { $value->{7} += compound_value(3); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    var_dump($value);
+}
+try { $null = null; $null->bad += compound_value([]); } catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), "\n"; }
+set_error_handler(function($code, $message) { echo "warning:$message\n"; return true; });
+$object = new stdClass();
+$object->missing += compound_value(3);
+var_dump($object->missing);
+function compound_base() { echo "base\n"; return null; }
+function compound_name() { echo "name\n"; return 'inner'; }
+try { compound_base()->{compound_name()}->nested += compound_value(3); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+$valid = (object) ['number' => 2];
+var_dump($valid->number += compound_value(3));
+"#
+        ),
+        "rhs\nAttempt to assign property \"7\" on null\nNULL\nrhs\nAttempt to assign property \"7\" on bool\nbool(true)\nrhs\nAttempt to assign property \"7\" on int\nint(12)\nrhs\nAttempt to assign property \"7\" on string\nstring(1) \"s\"\nrhs\nError:Attempt to assign property \"bad\" on null\nrhs\nwarning:Undefined property: stdClass::$missing\nint(3)\nbase\nname\nrhs\nAttempt to modify property \"inner\" on null\nrhs\nint(5)\n"
+    );
+}
+
+#[test]
 fn recursive_get_is_guarded_per_object_and_property() {
     assert_eq!(
         run_php(

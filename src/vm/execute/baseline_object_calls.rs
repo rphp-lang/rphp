@@ -665,7 +665,9 @@ fn scalar_property_write_fetch_throw<'a>(
     receiver_type: &str,
     flags: u16,
 ) -> ColdResult<'a> {
-    let action = if flags & FETCH_OBJ_INCDEC != 0 {
+    let action = if flags & FETCH_OBJ_COMPOUND != 0 {
+        "assign"
+    } else if flags & FETCH_OBJ_INCDEC != 0 {
         "increment/decrement"
     } else {
         "modify"
@@ -710,7 +712,8 @@ fn op_fetch_obj_r_slow<'a>(
             .as_str()
             .map(str::to_string)
             .unwrap_or_else(|| prop_name.echo_to_string());
-        let write_flags = opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC);
+        let write_flags =
+            opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND);
         if write_flags != 0 {
             return Ok(scalar_property_write_fetch_throw(
                 eg,
