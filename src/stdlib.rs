@@ -1016,6 +1016,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("func_num_args", fn_func_num_args, 0, 0);
     reg!("func_get_arg", fn_func_get_arg, 1, 1, "position");
     reg!("func_get_args", fn_func_get_args, 0, 0);
+    reg_ref!("extract", fn_extract, 3, 1, 0b1, "array", "flags", "prefix");
+    reg!("get_defined_vars", fn_get_defined_vars, 0, 0);
     reg!(
         "debug_backtrace",
         fn_debug_backtrace,
@@ -7131,6 +7133,137 @@ fn fn_func_get_args(
     ret!(rv, Value::array(arguments));
 }
 
+const EXTR_SKIP: i64 = 1;
+const EXTR_PREFIX_SAME: i64 = 2;
+const EXTR_PREFIX_ALL: i64 = 3;
+const EXTR_PREFIX_INVALID: i64 = 4;
+const EXTR_PREFIX_IF_EXISTS: i64 = 5;
+const EXTR_IF_EXISTS: i64 = 6;
+const EXTR_REFS: i64 = 256;
+
+fn fn_extract(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let flags = arg_opt!(ed, 1).and_then(Value::as_long).unwrap_or(0);
+    let mode = flags & 0xff;
+    if !matches!(mode, 0..=6) {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "extract(): Argument #2 ($flags) must be a valid extract flag",
+        ));
+        return Ok(());
+    }
+    let prefix = arg_opt!(ed, 2)
+        .map(Value::echo_to_string)
+        .unwrap_or_default();
+    if matches!(
+        mode,
+        EXTR_PREFIX_SAME | EXTR_PREFIX_ALL | EXTR_PREFIX_INVALID | EXTR_PREFIX_IF_EXISTS
+    ) && prefix.is_empty()
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "extract(): Argument #3 ($prefix) must be a valid identifier",
+        ));
+        return Ok(());
+    }
+
+    let array_pointer = arg_mut!(ed, 0);
+    let Some(array) = (unsafe { &mut *array_pointer }).as_array_mut() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "extract(): Argument #1 ($array) must be of type array",
+        ));
+        return Ok(());
+    };
+    let keys: Vec<ArrayKey> = array.iter().map(|(key, _)| key).collect();
+    let mut candidates = Vec::with_capacity(keys.len());
+    for key in keys {
+        let raw_name = match &key {
+            ArrayKey::Int(key) => key.to_string(),
+            ArrayKey::String(key) => key.clone(),
+        };
+        let valid = valid_variable_name(&raw_name);
+        let exists =
+            valid && crate::vm::execute::caller_scope_variable(eg, ed, &raw_name).is_some();
+        let name = match mode {
+            EXTR_SKIP if exists => continue,
+            EXTR_PREFIX_SAME if exists => format!("{prefix}_{raw_name}"),
+            EXTR_PREFIX_ALL => format!("{prefix}_{raw_name}"),
+            EXTR_PREFIX_INVALID if !valid => format!("{prefix}_{raw_name}"),
+            EXTR_PREFIX_IF_EXISTS if exists => format!("{prefix}_{raw_name}"),
+            EXTR_PREFIX_IF_EXISTS | EXTR_IF_EXISTS if !exists => continue,
+            _ if !valid => continue,
+            _ => raw_name,
+        };
+        if !valid_variable_name(&name) {
+            continue;
+        }
+        if name == "this" {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "Cannot re-assign $this",
+            ));
+            return Ok(());
+        }
+        candidates.push((key, name));
+    }
+
+    let references = flags & EXTR_REFS != 0;
+    let mut extracted = 0;
+    for (key, name) in candidates {
+        let value = match &key {
+            ArrayKey::Int(key) => array.get_int_mut(*key),
+            ArrayKey::String(key) => array.get_str_mut(key),
+        }
+        .expect("extract key snapshot must remain present");
+        let extracted_value = if references {
+            if value.is_owned_reference() {
+                value.clone_owned_reference_alias()
+            } else {
+                let owned = Value::owned_reference(value.dereferenced().clone());
+                let alias = owned.clone_owned_reference_alias();
+                *value = owned;
+                alias
+            }
+        } else {
+            value.clone()
+        };
+        debug_assert!(crate::vm::execute::set_caller_scope_variable(
+            eg,
+            ed,
+            &name,
+            extracted_value
+        ));
+        extracted += 1;
+    }
+    ret!(rv, Value::long(extracted));
+}
+
+fn valid_variable_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    (first == '_' || first.is_alphabetic() || !first.is_ascii())
+        && characters.all(|character| {
+            character == '_' || character.is_alphanumeric() || !character.is_ascii()
+        })
+}
+
+fn fn_get_defined_vars(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::array(crate::vm::execute::caller_scope_variables(eg, ed))
+    );
+}
+
 /// Collect the live PHP call chain behind the internal debug_backtrace frame.
 ///
 /// # Safety (debug and creation modes)
@@ -8360,6 +8493,62 @@ impl ResolvedCallback {
     }
 }
 
+#[inline]
+pub(crate) fn scope_introspection_callback_name(
+    resolved: &ResolvedCallback,
+) -> Option<&'static str> {
+    // SAFETY: resolved callback pointers come from the request-owned immutable
+    // function table and remain live for the descriptor's lifetime.
+    let function = unsafe { Function::from_common_ptr(resolved.func_ptr) };
+    let handler = function.dispatch(|_| None, |internal| Some(internal.handler))?;
+    let name = if std::ptr::fn_addr_eq(
+        handler,
+        fn_extract as crate::vm::function::InternalFunctionHandler,
+    ) {
+        Some("extract")
+    } else if std::ptr::fn_addr_eq(
+        handler,
+        fn_get_defined_vars as crate::vm::function::InternalFunctionHandler,
+    ) {
+        Some("get_defined_vars")
+    } else if std::ptr::fn_addr_eq(
+        handler,
+        fn_func_get_args as crate::vm::function::InternalFunctionHandler,
+    ) {
+        Some("func_get_args")
+    } else if std::ptr::fn_addr_eq(
+        handler,
+        fn_func_get_arg as crate::vm::function::InternalFunctionHandler,
+    ) {
+        Some("func_get_arg")
+    } else if std::ptr::fn_addr_eq(
+        handler,
+        fn_func_num_args as crate::vm::function::InternalFunctionHandler,
+    ) {
+        Some("func_num_args")
+    } else {
+        None
+    };
+    name
+}
+
+#[inline]
+fn reject_scope_introspection_callback(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+) -> bool {
+    let name = scope_introspection_callback_name(resolved);
+    if let Some(name) = name {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Cannot call {name}() dynamically"),
+        ));
+        true
+    } else {
+        false
+    }
+}
+
 /// Get the calling scope's class name from an ExecuteData frame.
 /// Walks prev_execute_data to find the caller's declaring class.
 fn get_calling_scope_class<'a>(
@@ -8787,6 +8976,9 @@ pub(super) fn call_resolved_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
+    if reject_scope_introspection_callback(eg, resolved) {
+        return Ok(Value::null());
+    }
     if !resolved.has_context() && resolved.use_vars.is_empty() {
         call_function_iter(eg, resolved.func_ptr, num_args, args)
     } else {
@@ -8812,6 +9004,9 @@ pub(super) fn call_resolved_owned_iter<I>(
 where
     I: Iterator<Item = Value>,
 {
+    if reject_scope_introspection_callback(eg, resolved) {
+        return Ok(Value::null());
+    }
     if !resolved.has_context() && resolved.use_vars.is_empty() {
         call_function_owned_iter(eg, resolved.func_ptr, num_args, args)
     } else {
@@ -8837,6 +9032,9 @@ fn call_resolved_owned_iter_with_named<I>(
 where
     I: Iterator<Item = Value>,
 {
+    if reject_scope_introspection_callback(eg, resolved) {
+        return Ok(Value::null());
+    }
     call_function_owned_iter_with_context_and_named(
         eg,
         resolved.func_ptr,
@@ -8859,6 +9057,9 @@ pub(super) fn call_resolved_owned_iter_readback_arg0<I>(
 where
     I: Iterator<Item = Value>,
 {
+    if reject_scope_introspection_callback(eg, resolved) {
+        return Ok((Value::null(), Value::null()));
+    }
     call_function_owned_iter_readback_arg0_with_context(
         eg,
         resolved.func_ptr,
@@ -8879,6 +9080,9 @@ pub(crate) fn call_resolved_with_values(
     resolved: &ResolvedCallback,
     args: &[Value],
 ) -> Result<Value, VmError> {
+    if reject_scope_introspection_callback(eg, resolved) {
+        return Ok(Value::null());
+    }
     if resolved.prepend_args.is_empty() && resolved.use_vars.is_empty() && !resolved.has_context() {
         if let Some(result) =
             unsafe { try_execute_scalar_long_callback(resolved.func_ptr, args.len(), args.iter()) }

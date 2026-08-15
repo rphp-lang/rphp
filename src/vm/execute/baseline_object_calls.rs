@@ -2169,8 +2169,34 @@ fn op_init_user_call<'a>(
         }
     };
 
+    if let Some(name) = crate::stdlib::scope_introspection_callback_name(&resolved) {
+        let error = make_error_value("Error", &format!("Cannot call {name}() dynamically"));
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+        });
+    }
+
     init_resolved_user_call(eg, frame, opline.extended_value, resolved);
     Ok(ColdResult::Done)
+}
+
+fn scope_introspection_function_name(name: &str) -> Option<&'static str> {
+    let normalized = name.strip_prefix('\\').unwrap_or(name);
+    if normalized.contains('\\') {
+        return None;
+    }
+    match normalized.to_ascii_lowercase().as_str() {
+        "extract" => Some("extract"),
+        "compact" => Some("compact"),
+        "get_defined_vars" => Some("get_defined_vars"),
+        "func_get_args" => Some("func_get_args"),
+        "func_get_arg" => Some("func_get_arg"),
+        "func_num_args" => Some("func_num_args"),
+        _ => None,
+    }
 }
 
 #[inline]
@@ -2395,6 +2421,18 @@ fn op_init_dynamic_call<'a>(
         return Ok(ColdResult::Done);
     } else if let Some(func_name) = callable.as_str() {
         // Simple string function call: $func = "my_func"; $func()
+        if let Some(normalized) = scope_introspection_function_name(func_name) {
+            let error = make_error_value(
+                "Error",
+                &format!("Cannot call {normalized}() dynamically"),
+            );
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
         let func_ptr = eg.find_function(func_name).ok_or_else(|| {
             VmError::Fatal(format!("Call to undefined function {}()", func_name))
         })?;
