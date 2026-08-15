@@ -6005,16 +6005,13 @@ impl Compiler {
                             self.instructions.push(bind);
                             return (destination, OpType::Cv);
                         }
-                        let (array, array_type) = self.compile_expr(array);
-                        let (index, index_type) = self.compile_expr(index);
-                        let mut bind = Instruction::new(OpCode::BindArrayDimRef);
-                        bind.op1 = array;
-                        bind.op1_type = array_type;
-                        bind.op2 = index;
-                        bind.op2_type = index_type;
-                        bind.result = destination;
-                        bind.result_type = OpType::Cv;
-                        self.instructions.push(bind);
+                        if let Err(error) =
+                            self.compile_array_element_reference_binding(target, destination)
+                        {
+                            self.deferred_error = Some(error);
+                            let null = self.add_literal(Value::null());
+                            return (null, OpType::Const);
+                        }
                         (destination, OpType::Cv)
                     }
                     _ => {

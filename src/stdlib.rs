@@ -6528,6 +6528,7 @@ fn var_dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
         val,
         indent,
         eg,
+        false,
         &mut std::collections::HashSet::new(),
         &mut std::collections::HashSet::new(),
     )
@@ -6537,17 +6538,24 @@ fn var_dump_value_inner(
     val: &Value,
     indent: usize,
     eg: &ExecutorGlobals,
+    show_reference: bool,
     visited_arrays: &mut std::collections::HashSet<usize>,
     visited_objects: &mut std::collections::HashSet<usize>,
 ) -> String {
     if val.is_reference() {
-        return var_dump_value_inner(
+        let mut output = var_dump_value_inner(
             val.dereferenced(),
             indent,
             eg,
+            false,
             visited_arrays,
             visited_objects,
         );
+        let recursive = output[indent * 2..].starts_with("*RECURSION*");
+        if show_reference && val.owned_reference_is_aliased() && !recursive {
+            output.insert(indent * 2, '&');
+        }
+        return output;
     }
     let prefix = "  ".repeat(indent);
     match val.value_type() {
@@ -6579,6 +6587,7 @@ fn var_dump_value_inner(
                     v,
                     indent + 1,
                     eg,
+                    true,
                     visited_arrays,
                     visited_objects,
                 ));
@@ -6622,6 +6631,7 @@ fn var_dump_value_inner(
                         &value,
                         indent + 1,
                         eg,
+                        true,
                         visited_arrays,
                         visited_objects,
                     ));

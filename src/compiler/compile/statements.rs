@@ -90,6 +90,38 @@ pub(super) enum ForeachArrayWriteback {
 }
 
 impl Compiler {
+    pub(super) fn compile_array_element_reference_binding(
+        &mut self,
+        source: &Expr,
+        destination: u16,
+    ) -> Result<(), String> {
+        let mut root = source;
+        let mut reversed_indices = Vec::new();
+        while let Expr::ArrayAccess { array, index } = root {
+            reversed_indices.push(index.as_ref().clone());
+            root = array.as_ref();
+        }
+        reversed_indices.reverse();
+        let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
+        let &(container, container_type) = path.containers.last().unwrap();
+        let &(key, key_type) = path.keys.last().unwrap();
+        let mut bind = Instruction::new(OpCode::BindArrayDimRef);
+        bind.op1 = container;
+        bind.op1_type = container_type;
+        bind.op2 = key;
+        bind.op2_type = key_type;
+        bind.result = destination;
+        bind.result_type = OpType::Cv;
+        self.instructions.push(bind);
+        self.rebuild_mutable_array_path(&path);
+        self.write_back_mutable_array_root(&path);
+        if let Expr::Variable { name, .. } = root {
+            let cv = self.resolve_cv(name);
+            self.definitely_defined_cvs.insert(cv);
+        }
+        Ok(())
+    }
+
     pub(super) fn compile_array_append_argument_reference(
         &mut self,
         target: &Expr,
@@ -182,26 +214,7 @@ impl Compiler {
                 self.instructions.push(bind);
             }
             Expr::ArrayAccess { .. } => {
-                let mut root = source;
-                let mut reversed_indices = Vec::new();
-                while let Expr::ArrayAccess { array, index } = root {
-                    reversed_indices.push(index.as_ref().clone());
-                    root = array.as_ref();
-                }
-                reversed_indices.reverse();
-                let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
-                let &(container, container_type) = path.containers.last().unwrap();
-                let &(key, key_type) = path.keys.last().unwrap();
-                let mut bind = Instruction::new(OpCode::BindArrayDimRef);
-                bind.op1 = container;
-                bind.op1_type = container_type;
-                bind.op2 = key;
-                bind.op2_type = key_type;
-                bind.result = destination;
-                bind.result_type = OpType::Cv;
-                self.instructions.push(bind);
-                self.rebuild_mutable_array_path(&path);
-                self.write_back_mutable_array_root(&path);
+                self.compile_array_element_reference_binding(source, destination)?;
             }
             _ => return Err("Array reference element must contain a mutable l-value".into()),
         }

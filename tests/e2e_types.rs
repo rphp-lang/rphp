@@ -303,6 +303,60 @@ fn local_array_reference_mutation_preserves_an_ordinary_cow_copy() {
 }
 
 #[test]
+fn rebinding_and_unsetting_the_last_alias_clear_array_reference_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = [1, 2, 3];
+$alias =& $values[0];
+echo "FIRST\n";
+var_dump($values);
+$alias =& $values[1];
+$alias = 9;
+echo "SECOND\n";
+var_dump($values);
+unset($alias);
+echo "LAST\n";
+var_dump($values);"#
+        ),
+        "FIRST\narray(3) {\n  [0]=>\n  &int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\nSECOND\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  &int(9)\n  [2]=>\n  int(3)\n}\nLAST\narray(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(9)\n  [2]=>\n  int(3)\n}\n"
+    );
+}
+
+#[test]
+fn array_element_reference_assignment_writes_back_nested_mutable_roots() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferenceBox {
+    public array $values = [['score' => 1]];
+}
+$box = new ReferenceBox();
+$propertyAlias =& $box->values[0]['score'];
+$propertyAlias = 7;
+$GLOBALS['state'] = [['score' => 2]];
+$globalAlias =& $GLOBALS['state'][0]['score'];
+$globalAlias = 8;
+echo $box->values[0]['score'], ':', $GLOBALS['state'][0]['score'];"#
+        ),
+        "7:8"
+    );
+}
+
+#[test]
+fn nested_array_reference_cells_are_visible_to_var_dump() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = 7;
+$array = [&$value];
+var_dump($array, $value);"#
+        ),
+        "array(1) {\n  [0]=>\n  &int(7)\n}\nint(7)\n"
+    );
+}
+
+#[test]
 fn destructuring_reads_a_retained_rhs_while_writing_through_an_alias() {
     assert_eq!(
         run_php(

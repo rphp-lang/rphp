@@ -4659,20 +4659,42 @@ impl Value {
     #[inline]
     pub(crate) fn clone_owned_reference_alias(&self) -> Self {
         debug_assert!(self.is_owned_reference());
-        // SAFETY: owned-reference construction stores an `Rc<UnsafeCell<Value>>`
-        // raw pointer and every alias balances this increment in `Drop`.
-        unsafe {
-            Rc::increment_strong_count(self.data.ptr as *const UnsafeCell<Value>);
-        }
+        let retained = Rc::clone(&self.owned_reference_rc());
         Self {
             data: ValueData {
-                ptr: unsafe { self.data.ptr },
+                ptr: Rc::into_raw(retained) as *mut u8,
             },
             // The local-static initializer marker belongs to one frame slot,
             // not to the shared PHP reference cell or any aliases of it.
             type_info: self.type_info & !Self::LOCAL_STATIC_INITIALIZER_FLAG,
             _not_send: PhantomData,
         }
+    }
+
+    /// Temporarily reconstruct the existing Rc owner without consuming it.
+    #[inline]
+    fn owned_reference_rc(&self) -> std::mem::ManuallyDrop<Rc<UnsafeCell<Value>>> {
+        debug_assert!(self.is_owned_reference());
+        // SAFETY: owned-reference construction stores exactly this raw Rc
+        // pointer, and ManuallyDrop leaves the existing strong owner intact.
+        unsafe {
+            std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const UnsafeCell<Value>))
+        }
+    }
+
+    /// Whether this request-owned reference cell is still reachable through
+    /// more than one PHP storage location.
+    ///
+    /// Zend makes a reference wrapper visually invisible once its last alias
+    /// is rebound or unset. The stable allocation remains internally useful:
+    /// in particular, a later by-reference argument unpack may acquire the
+    /// array element again without losing its l-value identity.
+    #[inline]
+    pub(crate) fn owned_reference_is_aliased(&self) -> bool {
+        if !self.is_owned_reference() {
+            return false;
+        }
+        Rc::strong_count(&self.owned_reference_rc()) > 1
     }
 
     /// Clone a lexical capture while retaining explicit PHP reference
