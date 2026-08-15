@@ -765,9 +765,9 @@ pub enum Stmt {
         body: Vec<Stmt>, // if braced: namespace App { ... }, else: rest of file
     },
     UseDecl {
-        // use App\Models\User; or use function App\Helpers\slug as make_slug;
-        kind: UseKind,
-        imports: Vec<(String, String)>, // (fully_qualified, alias)
+        // Each entry carries its own kind so mixed group-use declarations can
+        // import classes, functions and constants in one statement.
+        imports: Vec<(UseKind, String, String)>, // (kind, fully_qualified, alias)
     },
     Const {
         // const FOO = expr;

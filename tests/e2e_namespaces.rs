@@ -322,6 +322,45 @@ namespace Consumer {
     assert_eq!(out, "41|42|1|43");
 }
 
+#[test]
+fn group_use_supports_mixed_kinds_aliases_compound_names_and_trailing_comma() {
+    let out = run_php(
+        r#"<?php
+namespace Vendor\Package {
+    class Item { public static function name() { return "item"; } }
+    class NestedItem { public static function name() { return "nested"; } }
+    function helper() { return "helper"; }
+    const VALUE = 42;
+}
+namespace Vendor\Package\Nested {
+    class Entry { public static function name() { return "entry"; } }
+}
+namespace Application {
+    use Vendor\Package\{
+        Item as Product,
+        Nested\Entry,
+        function helper as assist,
+        const VALUE as ANSWER,
+    };
+    echo Product::name(), "|", Entry::name(), "|", assist(), "|", ANSWER;
+}
+"#,
+    );
+    assert_eq!(out, "item|entry|helper|42");
+}
+
+#[test]
+fn group_use_rejects_empty_nested_and_kind_overrides() {
+    for source in [
+        "<?php use Vendor\\Package\\{};",
+        "<?php use Vendor\\Package\\{Item\\{Nested}};",
+        "<?php use function Vendor\\Package\\{helper, const VALUE};",
+    ] {
+        let tokens = rphp::lexer::Lexer::new(source).tokenize().unwrap();
+        assert!(rphp::parser::Parser::new(tokens).parse().is_err());
+    }
+}
+
 // ─── Namespace with interfaces/traits ─────────────────────────────
 
 #[test]

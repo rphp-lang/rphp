@@ -313,6 +313,61 @@ impl Parser {
         }
     }
 
+    /// Parse the leading name of a use declaration, retaining the `\{`
+    /// boundary that distinguishes a group import from an ordinary qualified
+    /// name. Whitespace is already absent from the token stream.
+    fn parse_use_name(&mut self) -> Result<(String, bool), String> {
+        let leading_backslash = if self.peek() == Token::Backslash {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let mut parts = match self.advance() {
+            Token::Identifier(name, _) => vec![name],
+            other => {
+                return Err(format!(
+                    "Expected identifier in use declaration, got {:?}",
+                    other
+                ));
+            }
+        };
+        while self.peek() == Token::Backslash {
+            self.advance();
+            if self.peek() == Token::LBrace {
+                self.advance();
+                let mut prefix = parts.join("\\");
+                if leading_backslash {
+                    prefix.insert(0, '\\');
+                }
+                return Ok((prefix, true));
+            }
+            match self.advance() {
+                Token::Identifier(name, _) => parts.push(name),
+                other => {
+                    return Err(format!(
+                        "Expected identifier after '\\' in use declaration, got {:?}",
+                        other
+                    ));
+                }
+            }
+        }
+        let mut name = parts.join("\\");
+        if leading_backslash {
+            name.insert(0, '\\');
+        }
+        Ok((name, false))
+    }
+
+    fn consume_use_alias_keyword(&mut self) -> bool {
+        let is_alias = self.peek() == Token::As
+            || matches!(self.peek(), Token::Identifier(name, _) if name.eq_ignore_ascii_case("as"));
+        if is_alias {
+            self.advance();
+        }
+        is_alias
+    }
+
     fn parse_return_type(&mut self) -> Result<Option<TypeHint>, String> {
         if self.peek() == Token::Colon {
             self.advance(); // consume ':'

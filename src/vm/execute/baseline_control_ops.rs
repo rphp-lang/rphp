@@ -28,13 +28,13 @@ fn include_parse_error(
 fn imported_class_name(statements: &[crate::parser::Stmt], alias: &str) -> Option<String> {
     for statement in statements {
         match statement {
-            crate::parser::Stmt::UseDecl {
-                kind: crate::parser::UseKind::Class,
-                imports,
-            } => {
-                if let Some((name, _)) = imports
+            crate::parser::Stmt::UseDecl { imports } => {
+                if let Some((_, name, _)) = imports
                     .iter()
-                    .find(|(_, imported_alias)| imported_alias.eq_ignore_ascii_case(alias))
+                    .find(|(kind, _, imported_alias)| {
+                        *kind == crate::parser::UseKind::Class
+                            && imported_alias.eq_ignore_ascii_case(alias)
+                    })
                 {
                     return Some(name.trim_start_matches('\\').to_string());
                 }

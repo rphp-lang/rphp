@@ -206,33 +206,105 @@ impl Parser {
                 } else {
                     UseKind::Class
                 };
+                let (first_name, grouped) = self.parse_use_name()?;
                 let mut imports = Vec::new();
-                loop {
-                    let fqn = self.parse_qualified_name()?;
-                    let alias = if self.peek() == Token::As {
-                        self.advance(); // consume 'as'
-                        match self.advance() {
-                            Token::Identifier(n, _) => n,
-                            other => {
-                                return Err(format!(
-                                    "Expected alias name after 'as', got {:?}",
-                                    other
-                                ));
+                if grouped {
+                    if self.peek() == Token::RBrace {
+                        return Err("Group use declaration cannot be empty".to_string());
+                    }
+                    loop {
+                        let item_kind = if self.peek() == Token::Function {
+                            if kind != UseKind::Class {
+                                return Err(
+                                    "Typed group use declaration cannot override its kind"
+                                        .to_string(),
+                                );
                             }
+                            self.advance();
+                            UseKind::Function
+                        } else if self.peek() == Token::Const {
+                            if kind != UseKind::Class {
+                                return Err(
+                                    "Typed group use declaration cannot override its kind"
+                                        .to_string(),
+                                );
+                            }
+                            self.advance();
+                            UseKind::Const
+                        } else {
+                            kind
+                        };
+                        if self.peek() == Token::Backslash {
+                            return Err(
+                                "Group use item cannot start with a namespace separator"
+                                    .to_string(),
+                            );
                         }
-                    } else {
-                        // Default alias = last segment
-                        fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
-                    };
-                    imports.push((fqn, alias));
-                    if self.peek() == Token::Comma {
+                        let (relative_name, nested_group) = self.parse_use_name()?;
+                        if nested_group {
+                            return Err("Nested group use declaration is not allowed".to_string());
+                        }
+                        let alias = if self.consume_use_alias_keyword() {
+                            match self.advance() {
+                                Token::Identifier(name, _) => name,
+                                other => {
+                                    return Err(format!(
+                                        "Expected alias name after 'as', got {:?}",
+                                        other
+                                    ));
+                                }
+                            }
+                        } else {
+                            relative_name
+                                .rsplit('\\')
+                                .next()
+                                .unwrap_or(&relative_name)
+                                .to_string()
+                        };
+                        imports.push((
+                            item_kind,
+                            format!("{first_name}\\{relative_name}"),
+                            alias,
+                        ));
+                        if self.peek() != Token::Comma {
+                            break;
+                        }
                         self.advance();
-                    } else {
-                        break;
+                        if self.peek() == Token::RBrace {
+                            break;
+                        }
+                    }
+                    self.expect(&Token::RBrace)?;
+                } else {
+                    let mut fqn = first_name;
+                    loop {
+                        let alias = if self.consume_use_alias_keyword() {
+                            match self.advance() {
+                                Token::Identifier(name, _) => name,
+                                other => {
+                                    return Err(format!(
+                                        "Expected alias name after 'as', got {:?}",
+                                        other
+                                    ));
+                                }
+                            }
+                        } else {
+                            fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
+                        };
+                        imports.push((kind, fqn, alias));
+                        if self.peek() != Token::Comma {
+                            break;
+                        }
+                        self.advance();
+                        let (next_name, nested_group) = self.parse_use_name()?;
+                        if nested_group {
+                            return Err("Group use prefix must start a use declaration".to_string());
+                        }
+                        fqn = next_name;
                     }
                 }
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::UseDecl { kind, imports })
+                Ok(Stmt::UseDecl { imports })
             }
             Token::Const => {
                 self.advance(); // consume 'const'
