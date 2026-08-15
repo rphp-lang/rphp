@@ -240,6 +240,8 @@ fn quick_hash_invariant_string_fetch_falls_back_for_missing_value_exactly() {
 $values = [];
 $sum = 0;
 $last = 7;
+$GLOBALS['warnings'] = 0;
+set_error_handler(function() { $GLOBALS['warnings']++; return true; });
 for ($i = 0; $i < 100; $i++) {
     $last = $values['missing'];
     $sum += $i;
@@ -249,9 +251,11 @@ echo '|';
 echo is_null($last) ? 'null' : 'value';
 echo '|';
 echo $i;
+echo '|';
+echo $GLOBALS['warnings'];
 "
         ),
-        "4950|null|100"
+        "4950|null|100|100"
     );
 }
 
@@ -329,6 +333,8 @@ $values = range(1, 100);
 $values['sentinel'] = 0;
 $sum = 0;
 $last = 0;
+$GLOBALS['warnings'] = 0;
+set_error_handler(function() { $GLOBALS['warnings']++; return true; });
 for ($i = 0; $i < 200; $i++) {
     $last = $values[$i];
     $sum += $i;
@@ -338,9 +344,11 @@ echo '|';
 echo is_null($last) ? 'null' : 'value';
 echo '|';
 echo $i;
+echo '|';
+echo $GLOBALS['warnings'];
 "
         ),
-        "19900|null|200"
+        "19900|null|200|100"
     );
 }
 

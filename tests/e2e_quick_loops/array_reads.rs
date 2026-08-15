@@ -25,6 +25,8 @@ fn quick_packed_array_read_deoptimizes_for_missing_key() {
 $values = range(1, 100);
 $sum = 0;
 $last = 0;
+$GLOBALS['warnings'] = 0;
+set_error_handler(function() { $GLOBALS['warnings']++; return true; });
 for ($i = 0; $i < 200; $i++) {
     $last = $values[$i];
     $sum += $i;
@@ -34,9 +36,11 @@ echo '|';
 echo is_null($last) ? 'null' : 'value';
 echo '|';
 echo $i;
+echo '|';
+echo $GLOBALS['warnings'];
 "
         ),
-        "19900|null|200"
+        "19900|null|200|100"
     );
 }
 

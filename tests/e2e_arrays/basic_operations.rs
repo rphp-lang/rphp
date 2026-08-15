@@ -83,8 +83,11 @@ fn test_e2e_array_unpack_reindexes_integer_keys_and_preserves_string_keys() {
 
 #[test]
 fn test_e2e_array_missing_key_returns_null() {
-    // Accessing non-existent key returns null (echoes as empty string)
-    assert_eq!(run_php("<?php $a = [1, 2]; echo $a[5]; echo 'end';"), "end");
+    // Accessing a non-existent key warns and produces null (which echoes empty).
+    assert_eq!(
+        run_php("<?php $a = [1, 2]; echo $a[5]; echo 'end';"),
+        "\nWarning: Undefined array key 5 in <main> on line 1\nend"
+    );
 }
 
 // === Array assignment ===
@@ -324,21 +327,21 @@ fn test_e2e_array_in_switch() {
 
 #[test]
 fn test_e2e_array_loop_past_end() {
-    // Loop reads past the end of the array — should get nulls (empty echo)
+    // Loop reads past the end of the array — each missing read warns and yields null.
     assert_eq!(
         run_php(
             "<?php $a = [10, 20]; $r = ''; for ($i = 0; $i < 5; $i++) { $v = $a[$i]; if ($v) { $r .= $v; } else { $r .= '_'; } } echo $r;"
         ),
-        "1020___"
+        "\nWarning: Undefined array key 2 in <main> on line 1\n\nWarning: Undefined array key 3 in <main> on line 1\n\nWarning: Undefined array key 4 in <main> on line 1\n1020___"
     );
 }
 
 #[test]
 fn test_e2e_array_negative_index() {
-    // PHP arrays don't have negative indexing (unlike Python) — returns null
+    // PHP arrays don't have Python-style negative indexing.
     assert_eq!(
         run_php("<?php $a = [1, 2, 3]; if ($a[-1]) { echo 'yes'; } else { echo 'no'; }"),
-        "no"
+        "\nWarning: Undefined array key -1 in <main> on line 1\nno"
     );
 }
 
@@ -357,7 +360,7 @@ fn test_e2e_array_sparse_keys() {
         run_php(
             "<?php $a = []; $a[0] = 'a'; $a[5] = 'b'; $a[100] = 'c'; echo $a[0]; echo $a[5]; echo $a[100]; echo $a[1];"
         ),
-        "abc"
+        "abc\nWarning: Undefined array key 1 in <main> on line 1\n"
     );
 }
 
@@ -415,7 +418,7 @@ fn test_e2e_array_non_numeric_string_key_preserved() {
     // "01" is NOT normalized to 1 (leading zero)
     assert_eq!(
         run_php("<?php $a = []; $a['01'] = 'x'; if ($a[1]) { echo 'int'; } else { echo 'str'; }"),
-        "str"
+        "\nWarning: Undefined array key 1 in <main> on line 1\nstr"
     );
 }
 
@@ -501,6 +504,27 @@ var_dump(@(new SilentOffsets)[0]);
 "
         ),
         "NULL\n"
+    );
+}
+
+#[test]
+fn missing_array_keys_warn_while_silent_fetches_remain_silent() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+var_dump($values[0]);
+var_dump($values[-1]);
+var_dump($values['name']);
+var_dump($values['1']);
+var_dump(isset($values['missing']));
+var_dump(empty($values['missing']));
+var_dump(@$values['suppressed']);
+set_error_handler(function($code, $message) { echo 'handled:', $code, ':', $message, PHP_EOL; return true; });
+var_dump($values['handled']);
+"
+        ),
+        "\nWarning: Undefined array key 0 in <main> on line 3\nNULL\n\nWarning: Undefined array key -1 in <main> on line 4\nNULL\n\nWarning: Undefined array key \"name\" in <main> on line 5\nNULL\n\nWarning: Undefined array key 1 in <main> on line 6\nNULL\nbool(false)\nbool(true)\nNULL\nhandled:2:Undefined array key \"handled\"\nNULL\n"
     );
 }
 

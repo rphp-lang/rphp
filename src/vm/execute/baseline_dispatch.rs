@@ -2988,8 +2988,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let Some(arr) = arr_val.as_array() {
-                    let fetched = match value_to_array_key_ref(idx_val)? {
-                        ArrayKeyRef::Int(key) => arr.get_int(key),
+                    let array_key = value_to_array_key_ref(idx_val)?;
+                    let fetched = match &array_key {
+                        ArrayKeyRef::Int(key) => arr.get_int(*key),
                         ArrayKeyRef::String(key) => {
                             let cache_ip = unsafe {
                                 (opline as *const Instruction)
@@ -3006,6 +3007,35 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     };
+                    if fetched.is_none()
+                        && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
+                    {
+                        let key = match array_key {
+                            ArrayKeyRef::Int(key) => key.to_string(),
+                            ArrayKeyRef::String(key) => format!("\"{key}\""),
+                        };
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!("Undefined array key {key}"),
+                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                     let val = if opline._pad & FETCH_DIM_ISSET != 0 {
                         Value::bool(fetched.is_some_and(|value| {
                             !matches!(value.value_type(), ValueType::Null | ValueType::Undef)
