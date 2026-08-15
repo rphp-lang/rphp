@@ -449,7 +449,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // $x .= expr: in-place string append
                 // COW: if dest is sole owner, push_str in place (no allocation).
                 // If shared, as_string_mut() detaches first.
-                let rhs = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                // Snapshot an exact self-source before taking the mutable
+                // destination. Besides preserving the original RHS, this
+                // makes `$x .= $x` obey Rust's aliasing rules while the string
+                // COW detach grows the destination.
+                let self_source =
+                    opline.op1_type == opline.op2_type && opline.op1 == opline.op2;
+                let self_rhs;
+                // SAFETY: operand slots are initialized for this instruction;
+                // an exact self-source is cloned before the destination is
+                // mutably accessed, and a distinct slot stays live meanwhile.
+                let rhs = unsafe {
+                    let rhs_ptr = (*frame).get_op_ptr(
+                        opline.op2 as u32,
+                        opline.op2_type,
+                        op_array,
+                    );
+                    self_rhs = self_source.then(|| (&*rhs_ptr).clone());
+                    self_rhs.as_ref().unwrap_or(&*rhs_ptr)
+                };
                 let dest = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let dest_ref = unsafe { &mut *dest };
                 if dest_ref.value_type() == ValueType::String {
