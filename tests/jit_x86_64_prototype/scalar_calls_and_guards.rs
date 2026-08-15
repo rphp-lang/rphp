@@ -46,7 +46,7 @@ fn real_php_conditional_calls_enter_standalone_scalar_jit() {
 
 #[test]
 fn real_php_scalar_call_is_composed_into_native_accumulate_loop() {
-    let source = "<?php function calculate(int $value): int { return ($value * 2) + 1; } $n = 100000; $sum = 0; for ($i = 0; $i < $n; $i++) { $sum += calculate($i); } echo $i . ':' . $sum;";
+    let source = "<?php function calculate(int $value): int { return ($value * 2) + 1; } function runScalarCall() { $n = 100000; $sum = 0; for ($i = 0; $i < $n; $i++) { $sum += calculate($i); } echo $i . ':' . $sum; } runScalarCall();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -66,7 +66,11 @@ fn real_php_scalar_call_is_composed_into_native_accumulate_loop() {
         "100000:10000000000"
     );
 
-    let plan = main
+    let plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runScalarCall"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -83,7 +87,7 @@ fn real_php_scalar_call_is_composed_into_native_accumulate_loop() {
 
 #[test]
 fn nested_scalar_call_tree_enters_one_native_accumulate_region() {
-    let source = "<?php function addNative(int $left, int $right): int { return $left + $right; } function mulNative(int $left, int $right): int { return $left * $right; } $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += addNative($i + 1, mulNative($i, 2)); } echo $i . ':' . $sum;";
+    let source = "<?php function addNative(int $left, int $right): int { return $left + $right; } function mulNative(int $left, int $right): int { return $left * $right; } function runNestedScalarCall() { $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += addNative($i + 1, mulNative($i, 2)); } echo $i . ':' . $sum; } runNestedScalarCall();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -103,7 +107,11 @@ fn nested_scalar_call_tree_enters_one_native_accumulate_region() {
         "100000:14999950000"
     );
 
-    let plan = main
+    let plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runNestedScalarCall"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()
@@ -120,13 +128,19 @@ fn nested_scalar_call_tree_enters_one_native_accumulate_region() {
 
 #[test]
 fn nested_scalar_method_tree_enters_one_native_accumulate_region() {
-    let source = "<?php class MathTree { public function add($left, $right) { return $left + $right; } public function mul($left, $right) { return $left * $right; } } $math = new MathTree(); $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $math->add($i, $math->mul($i, 2)); } echo $i . ':' . $sum;";
+    let source = "<?php class MathTree { public function add($left, $right) { return $left + $right; } public function mul($left, $right) { return $left * $right; } } function runNestedScalarMethod() { $math = new MathTree(); $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $math->add($i, $math->mul($i, 2)); } echo $i . ':' . $sum; } runNestedScalarMethod();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }
@@ -138,7 +152,11 @@ fn nested_scalar_method_tree_enters_one_native_accumulate_region() {
         "100000:14999850000"
     );
 
-    let plan = main
+    let plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runNestedScalarMethod"))
+        .map(|(_, function)| function)
+        .unwrap()
         .op_array
         .block_plans
         .iter()

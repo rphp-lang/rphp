@@ -1791,10 +1791,11 @@ fn erased_runtime_keeps_unbounded_variadic_arguments_erased_to_mixed() {
     let output = common::run_php(
         r#"<?php
 function first<T>(T ...$values): T { return $values[0]; }
+function accept<T>(T ...$values): void {}
 $closure = function<T>(T ...$values): T { return $values[0]; };
 echo first::<int>("erased", 2);
 echo $closure::<int>(" closure", 3);
-first::<int>(named: "accepted");
+accept::<int>(named: "accepted");
 echo " named";
 "#,
     );

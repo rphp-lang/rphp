@@ -2440,8 +2440,26 @@ impl Compiler {
         // property defaults can reference constants declared later (forward refs).
         self.prescan_constants(stmts);
 
+        let mut runtime_reachable = true;
         for stmt in stmts {
-            self.compile_stmt(stmt)?;
+            if runtime_reachable {
+                self.compile_stmt(stmt)?;
+                runtime_reachable = !self.statement_statically_returns(stmt);
+            } else if matches!(
+                stmt,
+                Stmt::Function { .. }
+                    | Stmt::Class { .. }
+                    | Stmt::Interface { .. }
+                    | Stmt::Trait { .. }
+                    | Stmt::Enum { .. }
+            ) {
+                // PHP registers unconditional top-level declarations even
+                // when an earlier return makes their source position
+                // unreachable. Conditional declarations stay runtime-bound
+                // and must not be collected from dead code (Composer's
+                // version polyfills rely on this distinction).
+                self.compile_stmt(stmt)?;
+            }
         }
         self.finalize_gotos()?;
         // Check for deferred errors from compile_expr
@@ -2581,6 +2599,30 @@ impl Compiler {
             class_defs: self.class_defs,
             generic_metadata,
         })
+    }
+
+    fn statement_statically_returns(&self, statement: &Stmt) -> bool {
+        match statement {
+            Stmt::Return { .. } => true,
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => self
+                .eval_const_expr_in_source(condition, &self.known_constants)
+                .ok()
+                .is_some_and(|value| {
+                    let live_body = if value.is_truthy() {
+                        then_body
+                    } else {
+                        else_body
+                    };
+                    live_body
+                        .iter()
+                        .any(|statement| self.statement_statically_returns(statement))
+                }),
+            _ => false,
+        }
     }
 }
 

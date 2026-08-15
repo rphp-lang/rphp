@@ -1095,6 +1095,22 @@ var_dump(phpversion("missing"), extension_loaded("missing"));
 }
 
 #[test]
+fn constant_version_return_does_not_register_dead_conditional_polyfills() {
+    let output = run_php(
+        r#"<?php
+if (PHP_VERSION_ID >= 80000) {
+    return;
+}
+if (!class_exists('ValueError', false)) {
+    class ValueError extends Error {}
+}
+"#,
+    );
+
+    assert_eq!(output, "");
+}
+
+#[test]
 fn platform_and_versioning_setup_contracts_match_php() {
     let output = run_php(
         r#"<?php
