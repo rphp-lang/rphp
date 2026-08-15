@@ -173,6 +173,26 @@ foreach ([null, true, 12, 's'] as $value) {
 }
 
 #[test]
+fn scalar_property_increment_and_decrement_throw_without_mutating_receiver() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([null, true, 12, 's'] as $value) {
+    try { ++$value->{7}; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    try { $value->{7}++; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    try { --$value->{7}; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    try { $value->{7}--; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    var_dump($value);
+}
+$object = (object) ['stored' => 1];
+var_dump(++$object->stored, $object->stored++, $object->stored);
+"#
+        ),
+        "Attempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nAttempt to increment/decrement property \"7\" on null\nNULL\nAttempt to increment/decrement property \"7\" on bool\nAttempt to increment/decrement property \"7\" on bool\nAttempt to increment/decrement property \"7\" on bool\nAttempt to increment/decrement property \"7\" on bool\nbool(true)\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nAttempt to increment/decrement property \"7\" on int\nint(12)\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nAttempt to increment/decrement property \"7\" on string\nstring(1) \"s\"\nint(2)\nint(2)\nint(3)\n"
+    );
+}
+
+#[test]
 fn recursive_get_is_guarded_per_object_and_property() {
     assert_eq!(
         run_php(

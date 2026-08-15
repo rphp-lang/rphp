@@ -30,11 +30,11 @@ use crate::vm::instruction::{
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
     CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_SILENT,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_MODIFY,
-    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
-    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
-    OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME,
-    STATIC_PROP_DYNAMIC_OWNER,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC,
+    FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
+    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
+    NEW_FLAG_UNPACKED_ARGUMENTS, OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
 };
 use crate::vm::opcode::OpCode;
 
@@ -4131,6 +4131,15 @@ impl Compiler {
                             return (null, OpType::Const);
                         }
                     };
+                if matches!(&writeback, ForeachArrayWriteback::ObjectProperty { .. })
+                    && let Some(fetch) = self.instructions.iter_mut().rev().find(|instruction| {
+                        instruction.opcode == OpCode::FetchObjR
+                            && instruction.result == current
+                            && instruction.result_type == current_type
+                    })
+                {
+                    fetch._pad |= FETCH_OBJ_INCDEC;
+                }
                 let original = self.alloc_tmp();
                 let mut preserve = Instruction::new(OpCode::AssignCv);
                 preserve.op1 = original;
@@ -4200,6 +4209,15 @@ impl Compiler {
                             return (null, OpType::Const);
                         }
                     };
+                if matches!(&writeback, ForeachArrayWriteback::ObjectProperty { .. })
+                    && let Some(fetch) = self.instructions.iter_mut().rev().find(|instruction| {
+                        instruction.opcode == OpCode::FetchObjR
+                            && instruction.result == left
+                            && instruction.result_type == left_type
+                    })
+                {
+                    fetch._pad |= FETCH_OBJ_INCDEC;
+                }
                 let one = self.add_literal(Value::long(1));
                 let result = self.alloc_tmp();
                 let mut operation = Instruction::new(if matches!(expr, Expr::PreIncTarget(_)) {
