@@ -2604,6 +2604,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         ("Stringable", vec![]),
         ("Serializable", vec![]),
         ("JsonSerializable", vec![]),
+        ("UnitEnum", vec![]),
+        ("BackedEnum", vec!["UnitEnum".to_string()]),
         ("SessionHandlerInterface", vec![]),
         ("SessionUpdateTimestampHandlerInterface", vec![]),
     ] {

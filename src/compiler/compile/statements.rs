@@ -3545,6 +3545,7 @@ impl Compiler {
             Stmt::Enum {
                 name,
                 backing_type,
+                implements,
                 cases,
                 constants,
                 methods,
@@ -3553,6 +3554,62 @@ impl Compiler {
                 // Compile enum as a class. Each case becomes a static property
                 // holding a singleton object with `name` (and optionally `value`) properties.
                 let is_backed = backing_type.is_some();
+                let mut resolved_implements = Vec::with_capacity(implements.len() + 2);
+                let mut inherited_interfaces = std::collections::HashSet::new();
+                for interface in implements {
+                    let resolved = self.resolve_name(&interface.name);
+                    for inherited in self.compiled_interface_closure(&resolved) {
+                        if inherited.eq_ignore_ascii_case("UnitEnum")
+                            || inherited.eq_ignore_ascii_case("BackedEnum")
+                        {
+                            return Err(format!(
+                                "Enum {name} cannot implement previously implemented interface {inherited}"
+                            ));
+                        }
+                        if inherited.eq_ignore_ascii_case("Serializable") {
+                            return Err(format!(
+                                "Enum {name} cannot implement the Serializable interface"
+                            ));
+                        }
+                        if inherited.eq_ignore_ascii_case("Throwable") {
+                            return Err(format!(
+                                "Enum {name} cannot implement interface Throwable"
+                            ));
+                        }
+                        if !inherited_interfaces.insert(inherited.to_ascii_lowercase()) {
+                            return Err(format!(
+                                "Enum {name} cannot implement previously implemented interface {inherited}"
+                            ));
+                        }
+                    }
+                    resolved_implements.push(resolved);
+                }
+
+                // Enum case values may reference constants inherited from an
+                // implemented interface through `self::CONST`.
+                for interface in &resolved_implements {
+                    for inherited in self.compiled_interface_closure(interface) {
+                        let prefix = format!("{inherited}::");
+                        let constants: Vec<_> = self
+                            .known_constants
+                            .iter()
+                            .filter_map(|(key, value)| {
+                                key.strip_prefix(&prefix)
+                                    .map(|constant| (constant.to_string(), value.clone()))
+                            })
+                            .collect();
+                        for (constant, value) in constants {
+                            self.known_constants
+                                .insert(format!("self::{constant}"), value.clone());
+                            self.known_constants
+                                .insert(format!("{resolved_enum}::{constant}"), value);
+                        }
+                    }
+                }
+                resolved_implements.push("UnitEnum".to_string());
+                if is_backed {
+                    resolved_implements.push("BackedEnum".to_string());
+                }
 
                 // Compile methods
                 let mut compiled_methods = Vec::new();
@@ -3692,7 +3749,7 @@ impl Compiler {
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
                     parent: None,
-                    implements: vec![],
+                    implements: resolved_implements,
                     is_interface: false,
                     is_abstract: false,
                     is_final: true, // enums are implicitly final
