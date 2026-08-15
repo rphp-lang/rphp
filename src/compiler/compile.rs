@@ -29,8 +29,8 @@ use crate::vm::instruction::{
     ASSIGN_CV_REBIND, ASSIGN_DIM_REFERENCE, ASSIGN_OBJ_MODIFY, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_SILENT,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND,
+    CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
+    FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND,
     FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
@@ -2386,6 +2386,34 @@ impl Compiler {
         builtin_ref_args(name)
     }
 
+    /// PHP permits the result of a user function to be used as a temporary
+    /// array write target, while results of internal functions and arbitrary
+    /// temporary expressions remain invalid write contexts.
+    fn is_known_user_function_call(&self, expression: &Expr) -> bool {
+        let Expr::FunctionCall { name, .. } = expression else {
+            return false;
+        };
+        let resolved = self.resolve_function_name(name);
+        self.functions
+            .iter()
+            .any(|(function_name, _)| function_name.eq_ignore_ascii_case(&resolved))
+            || self
+                .known_ref_args
+                .keys()
+                .any(|function_name| function_name.eq_ignore_ascii_case(&resolved))
+    }
+
+    fn mark_trailing_mutable_dimension_fetches(&mut self) {
+        for instruction in self
+            .instructions
+            .iter_mut()
+            .rev()
+            .take_while(|instruction| instruction.opcode == OpCode::FetchDimR)
+        {
+            instruction._pad |= FETCH_DIM_MUTABLE;
+        }
+    }
+
     /// Build a snapshot of all currently known function ref_args
     /// (own functions + inherited known_ref_args) to pass to child compilers.
     fn build_known_ref_args(&self) -> HashMap<String, u64> {
@@ -4116,6 +4144,12 @@ impl Compiler {
                             )
                         }
                         _ => {
+                            let mut root = target.as_ref();
+                            while let Expr::ArrayAccess { array, .. } = root {
+                                root = array;
+                            }
+                            let defer_temporary_array_fetches =
+                                self.is_known_user_function_call(root);
                             let (left, left_type, writeback) =
                                 match self.compile_foreach_reference_source(target, false) {
                                     Ok(source) => source,
@@ -4125,7 +4159,26 @@ impl Compiler {
                                         return (null, OpType::Const);
                                     }
                                 };
+                            if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
+                                self.mark_trailing_mutable_dimension_fetches();
+                            }
+                            let mut deferred_fetches = Vec::new();
+                            if defer_temporary_array_fetches
+                                && matches!(&writeback, ForeachArrayWriteback::Array(_))
+                            {
+                                while self.instructions.last().is_some_and(|instruction| {
+                                    instruction.opcode == OpCode::FetchDimR
+                                }) {
+                                    deferred_fetches.push(
+                                        self.instructions
+                                            .pop()
+                                            .expect("checked trailing dimension fetch"),
+                                    );
+                                }
+                                deferred_fetches.reverse();
+                            }
                             let (right, right_type) = self.compile_expr(expr);
+                            self.instructions.extend(deferred_fetches);
                             (left, left_type, writeback, right, right_type)
                         }
                     }
@@ -4217,6 +4270,9 @@ impl Compiler {
                 {
                     fetch._pad |= FETCH_OBJ_INCDEC;
                 }
+                if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
+                    self.mark_trailing_mutable_dimension_fetches();
+                }
                 let original = self.alloc_tmp();
                 let mut preserve = Instruction::new(OpCode::AssignCv);
                 preserve.op1 = original;
@@ -4294,6 +4350,9 @@ impl Compiler {
                     })
                 {
                     fetch._pad |= FETCH_OBJ_INCDEC;
+                }
+                if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
+                    self.mark_trailing_mutable_dimension_fetches();
                 }
                 let one = self.add_literal(Value::long(1));
                 let result = self.alloc_tmp();

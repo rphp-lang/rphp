@@ -263,3 +263,24 @@ echo $left['shared'];
         "shared=changed|2=two|0=zero|new=value|left"
     );
 }
+
+#[test]
+fn user_function_array_results_are_mutable_temporaries_without_writeback() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function($code, $message) { echo "warning:$message\n"; return true; });
+function temporary_array_result() { echo "temporary\n"; return null; }
+function temporary_array_value() { echo "value\n"; return 9; }
+temporary_array_result()[0] = temporary_array_value();
+temporary_array_result()[0][1] = temporary_array_value();
+temporary_array_result()[0]++;
+temporary_array_result()[0][1]++;
+temporary_array_result()[0] += temporary_array_value();
+temporary_array_result()[0][1] += temporary_array_value();
+var_dump(temporary_array_result());
+"#,
+        ),
+        "temporary\nvalue\ntemporary\nvalue\ntemporary\nwarning:Undefined array key 0\ntemporary\nwarning:Undefined array key 0\nwarning:Undefined array key 1\ntemporary\nvalue\nwarning:Undefined array key 0\ntemporary\nvalue\nwarning:Undefined array key 0\nwarning:Undefined array key 1\ntemporary\nNULL\n"
+    );
+}
