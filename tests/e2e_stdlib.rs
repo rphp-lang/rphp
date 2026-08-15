@@ -472,6 +472,62 @@ fn output_buffer_level_starts_at_zero() {
 }
 
 #[test]
+fn output_buffers_nest_and_return_raw_contents() {
+    assert_eq!(
+        run_php(
+            "<?php ob_start(); echo 'A'; ob_start(); echo 'B'; $inner = ob_get_clean(); echo 'C'; $outer = ob_get_clean(); echo $inner, '|', $outer, '|', ob_get_level();"
+        ),
+        "B|AC|0"
+    );
+}
+
+#[test]
+fn output_buffer_callbacks_observe_start_clean_flush_and_final_phases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function decorate($contents, $phase) { return '['.$phase.':'.$contents.']'; }
+ob_start('decorate');
+echo 'A';
+ob_flush();
+echo 'B';
+ob_clean();
+echo 'C';
+ob_end_flush();
+"#,
+        ),
+        "[5:A][8:C]"
+    );
+}
+
+#[test]
+fn output_buffer_method_callback_flushes_at_request_end() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BufferOwner {
+    public function __construct() { ob_start([$this, 'decorate']); }
+    public function decorate($contents) { return strtoupper($contents); }
+}
+new BufferOwner();
+echo 'success';
+"#,
+        ),
+        "SUCCESS"
+    );
+}
+
+#[test]
+fn output_buffer_get_clean_returns_contents_when_flags_prevent_removal() {
+    assert_eq!(
+        run_php(
+            "<?php ob_start(); ob_start(null, 0, 0); echo 'x'; $value = ob_get_clean(); echo '|', $value, '|', ob_get_level();"
+        ),
+        "x|x|2"
+    );
+}
+
+#[test]
 fn get_debug_type_reports_scalar_and_object_names() {
     assert_eq!(
         run_php(

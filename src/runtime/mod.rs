@@ -202,6 +202,13 @@ pub(crate) struct AutoloadState {
     pub(crate) base_directory: Option<std::rc::Rc<str>>,
 }
 
+pub(crate) struct OutputBuffer {
+    pub(crate) data: Vec<u8>,
+    pub(crate) handler: Option<Value>,
+    pub(crate) flags: i64,
+    pub(crate) started: bool,
+}
+
 /// Minimal ExecutorGlobals for vertical slice.
 /// Will grow as we implement more features.
 pub struct ExecutorGlobals {
@@ -255,6 +262,7 @@ pub struct ExecutorGlobals {
     pub method_declaring_class: HashMap<*const FunctionCommon, String>,
     /// Output buffer — collected output for testing, or stdout
     output: std::cell::RefCell<Box<dyn Write>>,
+    output_buffers: std::cell::RefCell<Vec<OutputBuffer>>,
     /// Temporary buffer for named variadic arguments.
     /// Key = call frame pointer as usize, value = vec of (name, value) pairs.
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
@@ -466,6 +474,7 @@ impl ExecutorGlobals {
             method_declaring_class: HashMap::new(),
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
+            output_buffers: std::cell::RefCell::new(Vec::new()),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
             function_arguments: HashMap::new(),
@@ -543,6 +552,7 @@ impl ExecutorGlobals {
             method_declaring_class: HashMap::new(),
 
             output: std::cell::RefCell::new(output),
+            output_buffers: std::cell::RefCell::new(Vec::new()),
             pending_named_variadic: HashMap::new(),
             pending_closure_captures: HashMap::new(),
             function_arguments: HashMap::new(),
@@ -3026,7 +3036,39 @@ impl ExecutorGlobals {
     }
 
     pub fn write_output(&self, data: &[u8]) {
+        if let Some(buffer) = self.output_buffers.borrow_mut().last_mut() {
+            buffer.data.extend_from_slice(data);
+            return;
+        }
         self.output.borrow_mut().write_all(data).unwrap();
+    }
+
+    pub(crate) fn push_output_buffer(&self, handler: Option<Value>, flags: i64) {
+        self.output_buffers.borrow_mut().push(OutputBuffer {
+            data: Vec::new(),
+            handler,
+            flags,
+            started: false,
+        });
+    }
+
+    pub(crate) fn pop_output_buffer(&self) -> Option<OutputBuffer> {
+        self.output_buffers.borrow_mut().pop()
+    }
+
+    pub(crate) fn restore_output_buffer(&self, buffer: OutputBuffer) {
+        self.output_buffers.borrow_mut().push(buffer);
+    }
+
+    pub(crate) fn output_buffer_level(&self) -> usize {
+        self.output_buffers.borrow().len()
+    }
+
+    pub(crate) fn output_buffer_contents(&self) -> Option<Vec<u8>> {
+        self.output_buffers
+            .borrow()
+            .last()
+            .map(|buffer| buffer.data.clone())
     }
 }
 
