@@ -2734,7 +2734,8 @@ impl Compiler {
                     }
                 }
             }
-            Stmt::Const { name, value } => {
+            Stmt::Const { declarations } => {
+                for (name, value) in declarations {
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
                 // Also record known compile-time constants for property default resolution.
@@ -2761,6 +2762,7 @@ impl Compiler {
                 // extended_value = 1 means "define mode" (store constant)
                 instr.extended_value = 1;
                 self.instructions.push(instr);
+                }
             }
             Stmt::ListAssign { targets, expr } => {
                 // Compile the RHS expression

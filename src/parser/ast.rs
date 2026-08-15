@@ -772,9 +772,8 @@ pub enum Stmt {
         imports: Vec<(UseKind, String, String)>, // (kind, fully_qualified, alias)
     },
     Const {
-        // const FOO = expr;
-        name: String,
-        value: Expr,
+        // const FOO = expr, BAR = expr;
+        declarations: Vec<(String, Expr)>,
     },
     ListAssign {
         // list($a, $b) = expr; or [$a, $b] = expr;
@@ -815,8 +814,10 @@ impl Stmt {
             | Stmt::ArrayPush { expr, .. }
             | Stmt::Throw { expr, .. }
             | Stmt::ExprStmt(expr)
-            | Stmt::Include { path: expr, .. }
-            | Stmt::Const { value: expr, .. } => expr.contains_yield(),
+            | Stmt::Include { path: expr, .. } => expr.contains_yield(),
+            Stmt::Const { declarations } => declarations
+                .iter()
+                .any(|(_, expression)| expression.contains_yield()),
             Stmt::CoalesceAssign { target, expr }
             | Stmt::CompoundAssign { target, expr, .. }
             | Stmt::ArrayAppend { target, expr }
