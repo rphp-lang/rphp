@@ -47,13 +47,18 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `6c1d43f` against
-php-src 8.2.33 `651db3e`: 1,179 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with five exact additions and no lost pass relative to
-`7675f09`. Static local `=&` now binds both CV names to one stable reference
-cell; writes go through the cell, while later reference assignment rebinds the
-destination name. Undefined/self sources, unset, `$this`, l-value expression
-use, array copy-on-write and retained destructuring input are covered.
+The current pinned PHP 8.2 differential baseline is RPHP `5196535` against
+php-src 8.2.33 `651db3e`: 1,188 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with nine exact additions and no lost pass relative to
+`6c1d43f`. Array-element `=&` now follows the general mutable-l-value path,
+binds the destination to the canonical nested cell and writes rebuilt
+containers back through property, global and nested array roots. Rebinding or
+unsetting the last external alias removes the visible reference identity while
+a live nested alias retains PHP's `var_dump()` marker. Static local `=&` binds
+both CV names to one stable reference cell; writes go through the cell, while
+later reference assignment rebinds the destination name. Undefined/self
+sources, unset, `$this`, l-value expression use, array copy-on-write and
+retained destructuring input are covered.
 Variable variables and runtime-named symbol-table operations also
 cover reads, writes, silent probes, unset, coalesce/mutation writeback,
 references, dynamic globals, destructuring, callable postfixes and dynamic
@@ -70,8 +75,7 @@ through cold, cached, deleted-cache, malformed-cache and concurrent publication
 transitions, including exact health and missing-route results.
 Constructor/precompiled/generator call edges, complete by-reference returns,
 indirect `ArrayAccess` and `WeakMap` appends, symbol-table introspection,
-array-element reference rebind, foreach reference/COW writeback, complex
-interpolation, delayed class
+foreach reference/COW writeback, complex interpolation, delayed class
 linking/autoload validation and other visible failure clusters remain
 boundaries; the broader adoption goal remains active until the selected PHP
 8.2 contract corpus converges.
