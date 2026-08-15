@@ -130,6 +130,29 @@ var_dump($int->handled);
 }
 
 #[test]
+fn scalar_property_assignment_throws_after_rhs_evaluation_without_mutating_receiver() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function assignment_value() { echo "rhs\n"; return 9; }
+foreach ([null, false, 12, 's'] as $value) {
+    try {
+        $value->{7} = assignment_value();
+    } catch (Error $error) {
+        echo $error->getMessage(), "\n";
+    }
+    var_dump($value);
+}
+$object = new stdClass();
+$object->stored = assignment_value();
+var_dump($object->stored);
+"#
+        ),
+        "rhs\nAttempt to assign property \"7\" on null\nNULL\nrhs\nAttempt to assign property \"7\" on bool\nbool(false)\nrhs\nAttempt to assign property \"7\" on int\nint(12)\nrhs\nAttempt to assign property \"7\" on string\nstring(1) \"s\"\nrhs\nint(9)\n"
+    );
+}
+
+#[test]
 fn recursive_get_is_guarded_per_object_and_property() {
     assert_eq!(
         run_php(

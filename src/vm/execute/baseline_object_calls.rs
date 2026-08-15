@@ -1217,7 +1217,7 @@ fn op_assign_obj_prop<'a>(
         (prop_name, val, obj)
     };
     let mut assigned = val.clone();
-    let name = prop_name.as_str().unwrap_or("").to_string();
+    let name = prop_name.echo_to_string();
 
     if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
@@ -1435,7 +1435,15 @@ fn op_assign_obj_prop<'a>(
             }
         }
     } else {
-        return Err(VmError::Fatal("Attempt to assign property on non-object".into()));
+        return Ok(object_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!(
+                "Attempt to assign property \"{name}\" on {}",
+                obj.type_name()
+            ),
+        ));
     }
     Ok(ColdResult::Done)
 }
