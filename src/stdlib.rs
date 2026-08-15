@@ -813,6 +813,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "method"
     );
     reg!(
+        "property_exists",
+        fn_property_exists,
+        2,
+        2,
+        "object_or_class",
+        "property"
+    );
+    reg!(
         "is_a",
         fn_is_a,
         3,
@@ -5564,6 +5572,54 @@ fn fn_method_exists(
     // resolution deliberately uses the stricter callable-only helper below.
     let found = method_declared_in_class_hierarchy(eg, &class_name, &method_name);
     ret!(rv, Value::bool(found));
+}
+
+fn property_declared_in_class(eg: &ExecutorGlobals, class_name: &str, property_name: &str) -> bool {
+    find_class_case_insensitive(eg, class_name).is_some_and(|class| {
+        class
+            .properties
+            .iter()
+            .chain(&class.static_properties)
+            .any(|property| property.name == property_name)
+    })
+}
+
+fn fn_property_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let target = arg!(ed, 0);
+    let property_name = arg_str!(ed, 1);
+
+    if let Some(object) = target.as_object() {
+        let found = property_declared_in_class(eg, &object.class_name, &property_name)
+            || object.contains_property(&property_name);
+        ret!(rv, Value::bool(found));
+    }
+    if target.value_type() == ValueType::Closure {
+        ret!(rv, Value::bool(false));
+    }
+    let Some(class_name) = target.as_str() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "property_exists(): Argument #1 ($object_or_class) must be of type object|string, {} given",
+                target.type_name()
+            ),
+        ));
+        return Ok(());
+    };
+    if !autoload::ensure_symbol_loaded(eg, class_name)? {
+        if eg.exception.is_none() {
+            ret!(rv, Value::bool(false));
+        }
+        return Ok(());
+    }
+    ret!(
+        rv,
+        Value::bool(property_declared_in_class(eg, class_name, &property_name))
+    );
 }
 
 fn class_relation_operands(

@@ -616,6 +616,32 @@ var_dump(class_alias('MissingOriginal', 'NeverCreated', false));
 }
 
 #[test]
+fn property_exists_autoloads_class_strings_once_and_observes_private_and_static_declarations() {
+    let dir = TempPhpDir::new();
+    let class_file = dir.write(
+        "LazyPropertyProbe.php",
+        "<?php class LazyPropertyProbe { private $hidden; protected static $shared; }",
+    );
+    let source = format!(
+        r#"<?php
+function property_loader($name) {{
+    echo "load:$name|";
+    if ($name === 'LazyPropertyProbe') {{ require '{class_file}'; }}
+}}
+spl_autoload_register('property_loader');
+var_dump(property_exists('LazyPropertyProbe', 'hidden'));
+var_dump(property_exists('lazypropertyprobe', 'shared'));
+var_dump(property_exists('MissingPropertyProbe', 'anything'));
+"#
+    );
+
+    assert_eq!(
+        run_php(&source),
+        "load:LazyPropertyProbe|bool(true)\nbool(true)\nload:MissingPropertyProbe|bool(false)\n"
+    );
+}
+
+#[test]
 fn class_alias_preserves_interface_trait_and_enum_kinds() {
     let dir = TempPhpDir::new();
     let implementation_file = dir.write(
