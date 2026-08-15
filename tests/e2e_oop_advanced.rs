@@ -395,3 +395,35 @@ fn enum_rejects_trait_properties_and_forbidden_magic_methods() {
         assert!(format!("{error:?}").contains(expected));
     }
 }
+
+#[test]
+fn enum_cases_returns_declaration_order_and_overrides_trait_method() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait EmptyCases {
+    public static function cases(): array { return []; }
+}
+enum Suit {
+    use EmptyCases;
+    case Hearts;
+    case Diamonds;
+    const First = self::Hearts;
+}
+foreach (Suit::cases() as $case) {
+    echo $case->name, ":", $case === Suit::{$case->name} ? "same" : "copy", "\n";
+}
+echo Suit::First === Suit::Hearts ? "alias\n" : "copy\n";
+"#
+        ),
+        "Hearts:same\nDiamonds:same\nalias\n"
+    );
+}
+
+#[test]
+fn enum_rejects_an_explicit_cases_method() {
+    let error = run_php_expect_error(
+        "<?php enum Suit { public static function cases(): array { return []; } }",
+    );
+    assert!(format!("{error:?}").contains("Cannot redeclare Suit::cases()"));
+}
