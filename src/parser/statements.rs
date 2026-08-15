@@ -7,6 +7,27 @@ impl Parser {
     const DEDICATED_STACK_NESTING: usize = 16;
     const DEDICATED_STACK_SIZE: usize = 64 * 1024 * 1024;
 
+    fn parse_foreach_destructure(&mut self) -> Result<Option<Vec<ListTarget>>, String> {
+        let end = if matches!(self.peek(), Token::LBracket(_)) {
+            self.advance();
+            Token::RBracket
+        } else if matches!(self.peek(), Token::Identifier(ref name, _) if name == "list")
+            && matches!(self.peek_at(1), Token::LParen(_))
+        {
+            self.advance();
+            self.expect_lparen()?;
+            Token::RParen
+        } else {
+            return Ok(None);
+        };
+        let targets = self.parse_list_targets(&end)?;
+        self.expect(&end)?;
+        if targets.is_empty() {
+            return Err("Cannot use empty list".to_string());
+        }
+        Ok(Some(targets))
+    }
+
     pub fn new(tokens: Vec<Token>) -> Self {
         Self {
             tokens,
@@ -722,13 +743,13 @@ impl Parser {
                 } else {
                     false
                 };
-                if matches!(self.peek(), Token::LBracket(_)) {
+                if let Some(targets) = self.parse_foreach_destructure()? {
                     if first_by_ref {
                         return Err("Foreach destructuring target cannot be a reference".into());
                     }
-                    self.advance();
-                    let targets = self.parse_list_targets(&Token::RBracket)?;
-                    self.expect(&Token::RBracket)?;
+                    if self.peek() == Token::DoubleArrow {
+                        return Err("Cannot use list as key element".to_string());
+                    }
                     self.expect(&Token::RParen)?;
                     let body = self.parse_block_or_stmt()?;
                    return Ok(Stmt::Foreach {
@@ -752,15 +773,12 @@ impl Parser {
                     } else {
                         false
                     };
-                    let value = if matches!(self.peek(), Token::LBracket(_)) {
+                    let value = if let Some(targets) = self.parse_foreach_destructure()? {
                         if by_ref {
                             return Err(
                                 "Foreach destructuring target cannot be a reference".into()
                             );
                         }
-                        self.advance();
-                        let targets = self.parse_list_targets(&Token::RBracket)?;
-                       self.expect(&Token::RBracket)?;
                        ForeachTarget::Destructure(targets)
                    } else {
                         let value_expr = self.parse_expr()?;
