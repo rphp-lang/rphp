@@ -200,14 +200,22 @@ fn missing_long_projection_preserves_canonical_null_arithmetic() {
             r#"<?php
 $json = '{"other":10}';
 $sum = 0;
+$GLOBALS['warnings'] = 0;
+set_error_handler(function($code, $message) {
+    if ($code === E_WARNING && $message === 'Undefined array key "value"') {
+        $GLOBALS['warnings']++;
+        return true;
+    }
+    return false;
+});
 for ($i = 0; $i < 100; $i++) {
     $row = json_decode($json, true);
     $sum = $sum + $row['value'];
 }
-echo $sum;
+echo $sum . '|' . $GLOBALS['warnings'];
 "#,
         ),
-        "0"
+        "0|100"
     );
 }
 
