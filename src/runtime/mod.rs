@@ -1832,6 +1832,63 @@ impl ExecutorGlobals {
         self.class_by_id(class_id)?.properties.get(property_slot)
     }
 
+    /// Visible declared instance-property slots in PHP object iteration order.
+    /// Ancestor declarations precede child declarations, while a private
+    /// property visible to its owner masks another declaration with the same
+    /// public name without moving that array/iteration position.
+    pub(crate) fn visible_instance_property_slots(
+        &self,
+        class_id: u32,
+        caller_class: Option<&str>,
+    ) -> Vec<usize> {
+        let Some(class) = self.class_by_id(class_id) else {
+            return Vec::new();
+        };
+        let mut lineage = Vec::new();
+        let mut current = Some(class.name.as_str());
+        while let Some(class_name) = current {
+            let Some(definition) = self.find_class(class_name) else {
+                break;
+            };
+            lineage.push(definition.name.as_str());
+            current = definition.parent.as_deref();
+        }
+        lineage.reverse();
+
+        let mut candidates = (0..class.properties.len()).collect::<Vec<_>>();
+        candidates.sort_by_key(|slot| {
+            let property = &class.properties[*slot];
+            lineage
+                .iter()
+                .position(|owner| owner.eq_ignore_ascii_case(&property.declaring_class))
+                .unwrap_or(lineage.len())
+        });
+
+        let mut visible = Vec::<(String, usize)>::new();
+        let mut positions = std::collections::HashMap::<String, usize>::new();
+        let mut private_names = std::collections::HashSet::<String>::new();
+        for slot in candidates {
+            let property = &class.properties[slot];
+            if !self.check_visibility(caller_class, &property.declaring_class, property.visibility)
+            {
+                continue;
+            }
+            let is_private = property.visibility == Visibility::Private;
+            if is_private || !private_names.contains(&property.name) {
+                if let Some(position) = positions.get(&property.name).copied() {
+                    visible[position].1 = slot;
+                } else {
+                    positions.insert(property.name.clone(), visible.len());
+                    visible.push((property.name.clone(), slot));
+                }
+            }
+            if is_private {
+                private_names.insert(property.name.clone());
+            }
+        }
+        visible.into_iter().map(|(_, slot)| slot).collect()
+    }
+
     /// Resolve one class-local declaration index to its canonical mutable
     /// static-storage slot. This is used only on an inline-cache miss.
     #[inline]

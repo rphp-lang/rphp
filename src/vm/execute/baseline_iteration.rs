@@ -582,6 +582,62 @@ fn clone_foreach_value<const BY_REFERENCE_LOOP: bool>(value: &Value) -> Value {
 }
 
 #[inline]
+fn set_foreach_object_entry(array: &mut PhpArray, name: &str, value: Value) {
+    if let Some(key) = canonical_decimal_array_key(name) {
+        array.set_int(key, value);
+    } else {
+        array.set_str(name, value);
+    }
+}
+
+fn materialize_foreach_object(
+    value: &Value,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Value {
+    let object = value
+        .as_object()
+        .expect("object foreach materialization requires an object");
+    let caller_class = get_caller_class(frame, eg);
+    let dynamic_len = object
+        .dynamic_properties
+        .as_ref()
+        .map_or(0, |properties| properties.len());
+    let mut array = PhpArray::with_hash_capacity(object.property_values.len() + dynamic_len);
+    for slot in eg.visible_instance_property_slots(object.class_id, caller_class.as_deref()) {
+        let property = &object.property_values[slot];
+        if property.is_undef() {
+            continue;
+        }
+        let definition = eg
+            .instance_property_definition(object.class_id, slot)
+            .expect("visible property slot must retain its definition");
+        set_foreach_object_entry(&mut array, &definition.name, property.clone());
+    }
+    object.for_each_dynamic_property(|name, property| {
+        if !property.is_undef() {
+            set_foreach_object_entry(&mut array, name, property.clone());
+        }
+    });
+    Value::array(array)
+}
+
+fn promote_foreach_property_reference(property: &mut Value) -> Value {
+    if property.is_owned_reference() {
+        return property.clone_owned_reference_alias();
+    }
+    let current = std::mem::replace(property, Value::undef());
+    let current = if current.is_reference() {
+        current.dereferenced().clone()
+    } else {
+        current
+    };
+    let binding = Value::owned_reference(current);
+    *property = binding.clone_owned_reference_alias();
+    binding
+}
+
+#[inline]
 fn flush_foreach_reference_value(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
@@ -609,6 +665,11 @@ fn flush_foreach_reference_value(
         let value = (&*(*frame).get_op_ptr(value_cv, OpType::Cv, op_array)).clone();
         let array_ptr = (*frame).get_op_mut(array_operand as u32, array_type);
         let array = &mut *array_ptr;
+        if let Some(object) = array.as_object()
+            && object.class_name.as_ref() != "Generator"
+        {
+            return Ok(());
+        }
         let Some(array) = array.as_array_mut() else {
             return Err(VmError::Fatal(
                 "Foreach by-reference source is no longer an array".into(),
@@ -723,9 +784,29 @@ fn op_foreach_init<'a>(
                 .then(|| object.get_property("__rphp_iterator_values").cloned())
                 .flatten()
         });
-        let iterable = iterator_values.as_ref().unwrap_or(arr_val);
+        let object_values = if iterator_values.is_none() && arr_val.as_object().is_some() {
+            let init_ip = unsafe {
+                (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+            };
+            let by_reference = op_array
+                .instructions
+                .get(init_ip + 1)
+                .is_some_and(|next| next.opcode == OpCode::ForeachNextRef);
+            Some(if by_reference {
+                arr_val.clone()
+            } else {
+                materialize_foreach_object(arr_val, eg, frame)
+            })
+        } else {
+            None
+        };
+        let iterable = iterator_values
+            .as_ref()
+            .or(object_values.as_ref())
+            .unwrap_or(arr_val);
         let is_empty = match iterable.as_array() {
             Some(arr) => arr.is_empty(),
+            None if iterable.value_type() == ValueType::Object => false,
             None => {
                 eg.write_output(b"\nWarning: foreach() argument must be of type array|object, ");
                 let type_name = match arr_val.value_type() {
@@ -874,6 +955,89 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     } else {
                         assign_foreach_cv(frame, val_cv, val.clone());
                     }
+                }
+                let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
+                unsafe {
+                    frame_result_set(
+                        frame,
+                        pos_ptr,
+                        opline.op2_type,
+                        Value::long((pos + 1) as i64),
+                    )
+                };
+                true
+            } else {
+                false
+            }
+        } else if BY_REFERENCE_LOOP && arr_val.value_type() == ValueType::Object {
+            let caller_class = get_caller_class(frame, eg);
+            let class_id = arr_val
+                .as_object()
+                .map(|object| object.class_id)
+                .unwrap_or(0);
+            let slots = {
+                let object = arr_val.as_object().unwrap();
+                eg.visible_instance_property_slots(class_id, caller_class.as_deref())
+                    .into_iter()
+                    .filter(|slot| !object.property_values[*slot].is_undef())
+                    .collect::<Vec<_>>()
+            };
+            let dynamic_names = {
+                let object = arr_val.as_object().unwrap();
+                let mut names = Vec::new();
+                object.for_each_dynamic_property(|name, property| {
+                    if !property.is_undef() {
+                        names.push(name.to_string());
+                    }
+                });
+                names
+            };
+            if pos < slots.len() + dynamic_names.len() {
+                let (name, value) = if pos < slots.len() {
+                    let slot = slots[pos];
+                    let definition = eg
+                        .instance_property_definition(class_id, slot)
+                        .expect("visible property slot must retain its definition");
+                    if definition.is_readonly {
+                        let error = make_error_value(
+                            "Error",
+                            &format!(
+                                "Cannot acquire reference to readonly property {}::${}",
+                                definition.declaring_class, definition.name
+                            ),
+                        );
+                        return Ok(match throw_in_frame(eg, frame, error) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                        });
+                    }
+                    let name = definition.name.clone();
+                    let mut object = arr_val.as_object_mut().unwrap();
+                    let value = promote_foreach_property_reference(
+                        object
+                            .get_property_slot_mut(slot)
+                            .expect("visible property slot must remain addressable"),
+                    );
+                    (name, value)
+                } else {
+                    let name = dynamic_names[pos - slots.len()].clone();
+                    let mut object = arr_val.as_object_mut().unwrap();
+                    let value = promote_foreach_property_reference(
+                        object
+                            .get_property_mut(&name)
+                            .expect("dynamic property must remain addressable"),
+                    );
+                    (name, value)
+                };
+                bind_foreach_value_cv(frame, val_cv, value);
+                if key_encoded > 0 {
+                    let key_cv = key_encoded - 1;
+                    let key = canonical_decimal_array_key(&name)
+                        .map(Value::long)
+                        .unwrap_or_else(|| Value::string(name));
+                    assign_foreach_cv(frame, key_cv, key);
                 }
                 let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
                 unsafe {

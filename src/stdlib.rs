@@ -5782,28 +5782,7 @@ fn fn_get_object_vars(
         .as_ref()
         .map_or(0, |properties| properties.len());
     let mut result = PhpArray::with_hash_capacity(object.property_values.len() + dynamic_len);
-    let mut lineage = Vec::new();
-    let mut current = Some(object.class_name.to_string());
-    while let Some(class_name) = current {
-        let Some(class) = find_class_case_insensitive(eg, &class_name) else {
-            break;
-        };
-        lineage.push(class.name.clone());
-        current = class.parent.clone();
-    }
-    lineage.reverse();
-    let mut slots = (0..object.property_values.len()).collect::<Vec<_>>();
-    slots.sort_by_key(|slot| {
-        eg.instance_property_definition(object.class_id, *slot)
-            .and_then(|definition| {
-                lineage.iter().position(|class_name| {
-                    class_name.eq_ignore_ascii_case(&definition.declaring_class)
-                })
-            })
-            .unwrap_or(lineage.len())
-    });
-    let mut private_names = std::collections::HashSet::new();
-    for slot in slots {
+    for slot in eg.visible_instance_property_slots(object.class_id, caller_class.as_deref()) {
         let value = &object.property_values[slot];
         if value.is_undef() {
             continue;
@@ -5811,20 +5790,7 @@ fn fn_get_object_vars(
         let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
             continue;
         };
-        if method_visible_from_scope(
-            eg,
-            definition.visibility,
-            &definition.declaring_class,
-            caller_class.as_deref(),
-        ) {
-            let is_private = definition.visibility == Visibility::Private;
-            if is_private || !private_names.contains(&definition.name) {
-                set_object_var(&mut result, &definition.name, clone_object_var(value));
-            }
-            if is_private {
-                private_names.insert(definition.name.clone());
-            }
-        }
+        set_object_var(&mut result, &definition.name, clone_object_var(value));
     }
     object.for_each_dynamic_property(|name, value| {
         if !value.is_undef() {
