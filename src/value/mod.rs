@@ -836,6 +836,25 @@ impl PhpObject {
     }
 
     #[inline]
+    pub(crate) fn get_dynamic_property_mut(&mut self, key: &str) -> Option<&mut Value> {
+        self.dynamic_properties.as_mut()?.get_mut(key)
+    }
+
+    #[inline]
+    pub(crate) fn set_dynamic_property(&mut self, key: &str, value: Value) {
+        self.dynamic_properties
+            .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(1)))
+            .insert(key, value);
+    }
+
+    #[inline]
+    pub(crate) fn remove_dynamic_property(&mut self, key: &str) -> bool {
+        self.dynamic_properties
+            .as_mut()
+            .is_some_and(|properties| properties.remove(key))
+    }
+
+    #[inline]
     pub(crate) fn get_dynamic_property_with_position(
         &self,
         key: &str,

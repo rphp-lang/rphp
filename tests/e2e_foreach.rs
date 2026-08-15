@@ -894,3 +894,35 @@ readonly class ReadonlyObjectForeach {
         )
     );
 }
+
+#[test]
+fn inherited_private_property_and_dynamic_shadow_keep_distinct_storage() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentPrivateCollision {
+    private $value = 'parent';
+    public function inspect(): void {
+        echo get_object_vars($this)['value'], '|';
+        foreach ($this as &$item) $item .= '!';
+        unset($item);
+        echo $this->value, '|';
+    }
+}
+#[AllowDynamicProperties]
+class ChildPrivateCollision extends ParentPrivateCollision {}
+$object = new ChildPrivateCollision;
+$object->value = 'dynamic';
+echo $object->value, '|', get_object_vars($object)['value'], '|';
+$object->inspect();
+echo $object->value, '|', isset($object->value) ? 'set' : 'unset', '|';
+unset($object->value);
+echo isset($object->value) ? 'set' : 'unset', '|';
+$alias =& $object->value;
+$alias = 'reference';
+echo $object->value;
+"#,
+        ),
+        "dynamic|dynamic|parent|parent!|dynamic|set|unset|reference"
+    );
+}
