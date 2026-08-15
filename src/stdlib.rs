@@ -1395,6 +1395,9 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("ini_get", fn_ini_get, 1, 1, "option");
     reg!("gc_collect_cycles", fn_gc_collect_cycles, 0, 0);
+    reg!("gc_enabled", fn_gc_enabled, 0, 0);
+    reg!("gc_enable", fn_gc_enable, 0, 0);
+    reg!("gc_disable", fn_gc_disable, 0, 0);
     reg!("sleep", fn_sleep, 1, 1, "seconds");
     reg!("usleep", fn_usleep, 1, 1, "microseconds");
 
@@ -11853,13 +11856,42 @@ fn fn_header(
 fn fn_ini_get(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let option = arg_str!(ed, 0);
     if option.eq_ignore_ascii_case("display_errors") {
         ret!(rv, Value::string("1"));
     }
+    if option.eq_ignore_ascii_case("zend.enable_gc") {
+        ret!(rv, Value::string(if eg.gc_enabled { "1" } else { "0" }));
+    }
     ret!(rv, Value::bool(false));
+}
+
+fn fn_gc_enabled(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::bool(eg.gc_enabled));
+}
+
+fn fn_gc_enable(
+    _ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    eg.gc_enabled = true;
+    Ok(())
+}
+
+fn fn_gc_disable(
+    _ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    eg.gc_enabled = false;
+    Ok(())
 }
 
 /// RPHP uses reference-counted values and currently has no separate Zend-style
