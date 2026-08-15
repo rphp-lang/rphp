@@ -1002,6 +1002,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "options",
         "limit"
     );
+    reg!(
+        "debug_print_backtrace",
+        fn_debug_print_backtrace,
+        2,
+        0,
+        "options",
+        "limit"
+    );
 
     // --- Callable functions ---
     reg_var!("call_user_func", fn_call_user_func, 1, "callback");
@@ -6801,7 +6809,9 @@ pub(crate) unsafe fn collect_debug_backtrace(
         (*ed).prev_execute_data
     };
     while !frame.is_null() && (limit == 0 || trace.len() < limit) {
-        if include_creation_frame && (*frame).prev_execute_data.is_null() {
+        // The top-level script is represented by an executable frame in RPHP,
+        // but PHP traces stop at the last function/method called from it.
+        if (*frame).prev_execute_data.is_null() {
             break;
         }
         let function = Function::from_common_ptr((*frame).func);
@@ -6832,28 +6842,26 @@ pub(crate) unsafe fn collect_debug_backtrace(
         };
         let common = &*(*frame).func;
         let mut entry = PhpArray::new();
-        if include_creation_frame {
-            let caller = (*frame).prev_execute_data;
-            if !caller.is_null() && !(*caller).func.is_null() {
-                let caller_function = Function::from_common_ptr((*caller).func);
-                if caller_function.fn_type() == FunctionType::User {
-                    let caller_op_array = &caller_function.as_user().op_array;
-                    if !caller_op_array.source_file.is_empty()
-                        && !caller_op_array.instructions.is_empty()
+        let caller = (*frame).prev_execute_data;
+        if !caller.is_null() && !(*caller).func.is_null() {
+            let caller_function = Function::from_common_ptr((*caller).func);
+            if caller_function.fn_type() == FunctionType::User {
+                let caller_op_array = &caller_function.as_user().op_array;
+                if !caller_op_array.source_file.is_empty()
+                    && !caller_op_array.instructions.is_empty()
+                {
+                    let next = (*caller)
+                        .opline
+                        .offset_from(caller_op_array.instructions.as_ptr());
+                    if let Ok(next) = usize::try_from(next)
+                        && let Some(call_index) = next.checked_sub(1)
+                        && let Some(line) = caller_op_array.source_line(call_index)
                     {
-                        let next = (*caller)
-                            .opline
-                            .offset_from(caller_op_array.instructions.as_ptr());
-                        if let Ok(next) = usize::try_from(next)
-                            && let Some(call_index) = next.checked_sub(1)
-                            && let Some(line) = caller_op_array.source_line(call_index)
-                        {
-                            entry.set_str(
-                                "file",
-                                Value::shared_string(caller_op_array.source_file.clone()),
-                            );
-                            entry.set_str("line", Value::long(line as i64));
-                        }
+                        entry.set_str(
+                            "file",
+                            Value::shared_string(caller_op_array.source_file.clone()),
+                        );
+                        entry.set_str("line", Value::long(line as i64));
                     }
                 }
             }
@@ -6922,6 +6930,24 @@ fn fn_debug_backtrace(
     // predecessor chain stay live until this handler returns.
     let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg, false) };
     ret!(rv, Value::array(trace));
+}
+
+fn fn_debug_print_backtrace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let options = arg_opt!(ed, 0).map_or(0, Value::to_long_val);
+    let limit = arg_opt!(ed, 1)
+        .map(Value::to_long_val)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0);
+    // SAFETY: the internal activation and its synchronous predecessor chain
+    // remain live until this handler returns.
+    let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg, false) };
+    let output = crate::vm::trace::format_debug_print_backtrace(&trace);
+    eg.write_output(output.as_bytes());
+    ret!(rv, Value::null());
 }
 
 // ============================================================================
