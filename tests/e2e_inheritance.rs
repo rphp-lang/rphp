@@ -101,6 +101,31 @@ echo $right->instanceDispatch();
 }
 
 #[test]
+fn get_called_class_reuses_late_static_identity_across_forwarding_callbacks_and_aliases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CalledBase {
+    public static function direct() { echo get_called_class(), "\n"; }
+    public static function forwarded() { static::direct(); }
+    public function instance() { echo get_called_class(), "\n"; }
+}
+class CalledChild extends CalledBase {}
+class_alias("CalledBase", "CalledAlias");
+CalledBase::direct();
+CalledChild::direct();
+CalledChild::forwarded();
+call_user_func([CalledChild::class, "direct"]);
+(new CalledChild)->instance();
+CalledAlias::direct();
+try { get_called_class(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        "CalledBase\nCalledChild\nCalledChild\nCalledChild\nCalledChild\nCalledBase\nget_called_class() must be called from within a class\n"
+    );
+}
+
+#[test]
 fn parent_instance_call_forwards_this_receiver() {
     assert_eq!(
         run_php(
