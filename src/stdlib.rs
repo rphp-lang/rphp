@@ -722,6 +722,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         "object_or_class"
     );
+    reg!("get_class_vars", fn_get_class_vars, 1, 1, "class");
     reg!(
         "get_parent_class",
         fn_get_parent_class,
@@ -5683,6 +5684,57 @@ fn fn_get_class_methods(
     let mut result = PhpArray::with_packed_capacity(names.len());
     for name in names {
         result.push(Value::string(name));
+    }
+    ret!(rv, Value::array(result));
+}
+
+fn fn_get_class_vars(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let target = arg!(ed, 0);
+    let Some(class_name) = target.as_str() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "get_class_vars(): Argument #1 ($class) must be a valid class name, {} given",
+                target.type_name()
+            ),
+        ));
+        return Ok(());
+    };
+    if !autoload::ensure_symbol_loaded(eg, class_name)? {
+        if eg.exception.is_none() {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "get_class_vars(): Argument #1 ($class) must be a valid class name, {} given",
+                    class_name
+                ),
+            ));
+        }
+        return Ok(());
+    }
+
+    let caller_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
+    let Some(class) = find_class_case_insensitive(eg, class_name) else {
+        return Ok(());
+    };
+    let mut result =
+        PhpArray::with_hash_capacity(class.properties.len() + class.static_properties.len());
+    for property in class.properties.iter().chain(&class.static_properties) {
+        if method_visible_from_scope(
+            eg,
+            property.visibility,
+            &property.declaring_class,
+            caller_class.as_deref(),
+        ) {
+            result.set_str(
+                &property.name,
+                property.default.clone().unwrap_or_else(Value::null),
+            );
+        }
     }
     ret!(rv, Value::array(result));
 }

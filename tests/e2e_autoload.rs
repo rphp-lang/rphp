@@ -993,3 +993,30 @@ var_dump(get_class_methods($object));
         )
     );
 }
+
+#[test]
+fn get_class_vars_autoloads_class_strings_once() {
+    let dir = TempPhpDir::new();
+    let class_file = dir.write(
+        "AutoloadVarsInventory.php",
+        "<?php class AutoloadVarsInventory { public $instance = 1; public static $static = 2; }",
+    );
+    let source = format!(
+        r#"<?php
+spl_autoload_register(function ($name) {{
+    echo "load:$name|";
+    if ($name === 'AutoloadVarsInventory') {{ require '{class_file}'; }}
+}});
+var_export(get_class_vars('AutoloadVarsInventory')); echo "\n";
+var_export(get_class_vars('autoloadvarsinventory')); echo "\n";
+"#
+    );
+
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "load:AutoloadVarsInventory|array (\n  'instance' => 1,\n  'static' => 2,\n)\n",
+            "array (\n  'instance' => 1,\n  'static' => 2,\n)\n",
+        )
+    );
+}
