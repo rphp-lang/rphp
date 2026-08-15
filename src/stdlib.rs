@@ -716,6 +716,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("get_class", fn_get_class, 1, 0, "object");
     reg!("get_called_class", fn_get_called_class, 0, 0);
     reg!(
+        "get_class_methods",
+        fn_get_class_methods,
+        1,
+        1,
+        "object_or_class"
+    );
+    reg!(
         "get_parent_class",
         fn_get_parent_class,
         1,
@@ -5525,6 +5532,169 @@ fn fn_get_called_class(
         return Ok(());
     };
     ret!(rv, Value::string(class_name));
+}
+
+fn method_visible_from_scope(
+    eg: &ExecutorGlobals,
+    visibility: Visibility,
+    declaring_class: &str,
+    caller_class: Option<&str>,
+) -> bool {
+    match visibility {
+        Visibility::Public => true,
+        Visibility::Private => {
+            caller_class.is_some_and(|caller| caller.eq_ignore_ascii_case(declaring_class))
+        }
+        Visibility::Protected => caller_class.is_some_and(|caller| {
+            caller.eq_ignore_ascii_case(declaring_class)
+                || eg.class_is_a(caller, declaring_class)
+                || eg.class_is_a(declaring_class, caller)
+        }),
+    }
+}
+
+fn collect_composed_trait_methods(
+    eg: &ExecutorGlobals,
+    trait_name: &str,
+    adaptation_owner: &crate::compiler::compile::ClassDef,
+    consuming_class: &str,
+    caller_class: Option<&str>,
+    seen: &mut std::collections::HashSet<String>,
+    methods: &mut Vec<String>,
+) {
+    let Some(trait_def) = find_class_case_insensitive(eg, trait_name) else {
+        return;
+    };
+    for (name, visibility, _, _, _) in &trait_def.methods {
+        for adaptation in adaptation_owner.trait_aliases.iter().filter(|adaptation| {
+            adaptation.alias.is_some()
+                && adaptation.method.eq_ignore_ascii_case(name)
+                && adaptation
+                    .trait_name
+                    .as_deref()
+                    .is_none_or(|source| source.eq_ignore_ascii_case(trait_name))
+        }) {
+            let alias = adaptation.alias.as_deref().unwrap_or(name);
+            let alias_visibility = adaptation.visibility.unwrap_or(*visibility);
+            if seen.insert(alias.to_ascii_lowercase())
+                && method_visible_from_scope(eg, alias_visibility, consuming_class, caller_class)
+            {
+                methods.push(alias.to_string());
+            }
+        }
+        let effective_visibility = adaptation_owner
+            .trait_aliases
+            .iter()
+            .find(|adaptation| {
+                adaptation.alias.is_none() && adaptation.method.eq_ignore_ascii_case(name)
+            })
+            .and_then(|adaptation| adaptation.visibility)
+            .unwrap_or(*visibility);
+        if seen.insert(name.to_ascii_lowercase())
+            && method_visible_from_scope(eg, effective_visibility, consuming_class, caller_class)
+        {
+            methods.push(name.clone());
+        }
+    }
+    for nested_trait in &trait_def.uses {
+        collect_composed_trait_methods(
+            eg,
+            nested_trait,
+            trait_def,
+            consuming_class,
+            caller_class,
+            seen,
+            methods,
+        );
+    }
+}
+
+fn collect_visible_class_methods(
+    eg: &ExecutorGlobals,
+    class_name: &str,
+    caller_class: Option<&str>,
+    seen: &mut std::collections::HashSet<String>,
+    methods: &mut Vec<String>,
+) {
+    let Some(class) = find_class_case_insensitive(eg, class_name) else {
+        return;
+    };
+    for (name, visibility, _, _, _) in &class.methods {
+        if seen.insert(name.to_ascii_lowercase())
+            && method_visible_from_scope(eg, *visibility, &class.name, caller_class)
+        {
+            methods.push(name.clone());
+        }
+    }
+    if let Some(parent) = &class.parent {
+        collect_visible_class_methods(eg, parent, caller_class, seen, methods);
+    }
+    for trait_name in &class.uses {
+        collect_composed_trait_methods(
+            eg,
+            trait_name,
+            class,
+            &class.name,
+            caller_class,
+            seen,
+            methods,
+        );
+    }
+    for interface in &class.implements {
+        collect_visible_class_methods(eg, interface, caller_class, seen, methods);
+    }
+}
+
+fn fn_get_class_methods(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let target = arg!(ed, 0);
+    let class_name = if let Some(object) = target.as_object() {
+        object.class_name.to_string()
+    } else if target.value_type() == ValueType::Closure {
+        "Closure".to_string()
+    } else if let Some(class_name) = target.as_str() {
+        if !autoload::ensure_symbol_loaded(eg, class_name)? {
+            if eg.exception.is_none() {
+                invalid_class_methods_argument(eg, target);
+            }
+            return Ok(());
+        }
+        class_name
+            .strip_prefix('\\')
+            .unwrap_or(class_name)
+            .to_string()
+    } else {
+        invalid_class_methods_argument(eg, target);
+        return Ok(());
+    };
+
+    let caller_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
+    let mut names = Vec::new();
+    collect_visible_class_methods(
+        eg,
+        &class_name,
+        caller_class.as_deref(),
+        &mut std::collections::HashSet::new(),
+        &mut names,
+    );
+    let mut result = PhpArray::with_packed_capacity(names.len());
+    for name in names {
+        result.push(Value::string(name));
+    }
+    ret!(rv, Value::array(result));
+}
+
+fn invalid_class_methods_argument(eg: &mut ExecutorGlobals, value: &Value) {
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, {} given",
+            value.type_name()
+        ),
+    ));
 }
 
 fn invalid_parent_class_argument(eg: &mut ExecutorGlobals, value: &Value) {

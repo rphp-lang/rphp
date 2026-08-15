@@ -163,6 +163,53 @@ foreach (["MissingParentProbe", "", [], 1, null] as $invalid) {
 }
 
 #[test]
+fn get_class_methods_filters_effective_methods_by_lexical_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait MethodInventoryTrait {
+    private function hidden() {}
+    protected function guarded() {}
+    public function open() {}
+}
+class MethodInventoryParent {
+    private function parentPrivate() {}
+    protected function parentProtected() {}
+    public function inherited() {}
+    public function shadow() {}
+}
+class MethodInventoryChild extends MethodInventoryParent {
+    use MethodInventoryTrait {
+        open as protected aliasOpen;
+        guarded as public aliasGuarded;
+    }
+    public function own() {}
+    public function shadow() {}
+    public function inspect() { var_dump(get_class_methods(self::class)); }
+}
+var_dump(get_class_methods("MethodInventoryChild"));
+(new MethodInventoryChild)->inspect();
+class_alias("MethodInventoryChild", "MethodInventoryAlias");
+var_dump(get_class_methods("MethodInventoryAlias"));
+foreach (["MissingMethodInventory", "", [], 1, null] as $invalid) {
+    try { get_class_methods($invalid); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "array(6) {\n  [0]=>\n  string(3) \"own\"\n  [1]=>\n  string(6) \"shadow\"\n  [2]=>\n  string(7) \"inspect\"\n  [3]=>\n  string(9) \"inherited\"\n  [4]=>\n  string(12) \"aliasGuarded\"\n  [5]=>\n  string(4) \"open\"\n}\n",
+            "array(10) {\n  [0]=>\n  string(3) \"own\"\n  [1]=>\n  string(6) \"shadow\"\n  [2]=>\n  string(7) \"inspect\"\n  [3]=>\n  string(15) \"parentProtected\"\n  [4]=>\n  string(9) \"inherited\"\n  [5]=>\n  string(6) \"hidden\"\n  [6]=>\n  string(12) \"aliasGuarded\"\n  [7]=>\n  string(7) \"guarded\"\n  [8]=>\n  string(9) \"aliasOpen\"\n  [9]=>\n  string(4) \"open\"\n}\n",
+            "array(6) {\n  [0]=>\n  string(3) \"own\"\n  [1]=>\n  string(6) \"shadow\"\n  [2]=>\n  string(7) \"inspect\"\n  [3]=>\n  string(9) \"inherited\"\n  [4]=>\n  string(12) \"aliasGuarded\"\n  [5]=>\n  string(4) \"open\"\n}\n",
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given\n",
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given\n",
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, array given\n",
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n",
+            "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, null given\n",
+        )
+    );
+}
+
+#[test]
 fn parent_instance_call_forwards_this_receiver() {
     assert_eq!(
         run_php(
