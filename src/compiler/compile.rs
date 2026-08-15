@@ -2218,15 +2218,15 @@ impl Compiler {
     ) {
         for stmt in stmts {
             match stmt {
-                Stmt::Const { name, value } => {
-                    // Qualify constant name with namespace prefix
-                    let fqn = match ns {
-                        Some(prefix) => format!("{}\\{}", prefix, name),
-                        None => name.clone(),
-                    };
-                    if !known.contains_key(&fqn) {
-                        if let Ok(val) =
-                            Self::eval_const_expr_with_context(value, known, file_context)
+                Stmt::Const { declarations } => {
+                    for (name, value) in declarations {
+                        let fqn = match ns {
+                            Some(prefix) => format!("{}\\{}", prefix, name),
+                            None => name.clone(),
+                        };
+                        if !known.contains_key(&fqn)
+                            && let Ok(val) =
+                                Self::eval_const_expr_with_context(value, known, file_context)
                         {
                             known.insert(fqn, val);
                         }

@@ -1261,3 +1261,11 @@ fn included_property_default_resolves_an_imported_class_constant() {
     std::fs::remove_dir_all(directory).unwrap();
     assert_eq!(out, "info");
 }
+
+#[test]
+fn grouped_global_constants_are_defined_left_to_right() {
+    assert_eq!(
+        run_php("<?php const FIRST = 2, SECOND = FIRST + 3, THIRD = SECOND * 2; echo THIRD;"),
+        "10"
+    );
+}

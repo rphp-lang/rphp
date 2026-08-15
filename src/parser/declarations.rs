@@ -20,6 +20,43 @@ impl Default for MemberModifiers {
 }
 
 impl Parser {
+    fn parse_property_declaration(
+        &mut self,
+        modifiers: &MemberModifiers,
+    ) -> Result<Vec<ClassProperty>, String> {
+        if modifiers.is_abstract {
+            return Err("Properties cannot be declared abstract".into());
+        }
+        let type_hint = self.try_parse_type_hint()?;
+        let mut properties = Vec::new();
+        loop {
+            let name = match self.advance() {
+                Token::Variable(name, _) => name,
+                other => return Err(format!("Expected property variable, got {other:?}")),
+            };
+            let default = if self.peek() == Token::Assign {
+                self.advance();
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            properties.push(ClassProperty {
+                visibility: modifiers.visibility,
+                name,
+                type_hint: type_hint.clone(),
+                default,
+                is_static: modifiers.is_static,
+                is_readonly: modifiers.is_readonly,
+            });
+            if self.peek() != Token::Comma {
+                break;
+            }
+            self.advance();
+        }
+        self.expect(&Token::Semicolon)?;
+        Ok(properties)
+    }
+
     fn parse_anonymous_class_body(
         &mut self,
     ) -> Result<(Vec<ClassProperty>, Vec<ClassConstant>, Vec<ClassMethod>), String> {
@@ -68,29 +105,7 @@ impl Parser {
             } else if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
-                if modifiers.is_abstract {
-                    return Err("Properties cannot be declared abstract".into());
-                }
-                let type_hint = self.try_parse_type_hint()?;
-                let name = match self.advance() {
-                    Token::Variable(name, _) => name,
-                    token => return Err(format!("Expected property variable, got {token:?}")),
-                };
-                let default = if self.peek() == Token::Assign {
-                    self.advance();
-                    Some(self.parse_expr()?)
-                } else {
-                    None
-                };
-                self.expect(&Token::Semicolon)?;
-                properties.push(ClassProperty {
-                    visibility: modifiers.visibility,
-                    name,
-                    type_hint,
-                    default,
-                    is_static: modifiers.is_static,
-                    is_readonly: modifiers.is_readonly,
-                });
+                properties.extend(self.parse_property_declaration(&modifiers)?);
             } else {
                 return Err(format!(
                     "Unexpected token in anonymous class body: {:?}",
@@ -335,29 +350,7 @@ impl Parser {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
-                if modifiers.is_abstract {
-                    return Err("Properties cannot be declared abstract".into());
-                }
-                let type_hint = self.try_parse_type_hint()?;
-                let prop_name = match self.advance() {
-                    Token::Variable(n, _) => n,
-                    other => return Err(format!("Expected property variable, got {:?}", other)),
-                };
-                let default = if self.peek() == Token::Assign {
-                    self.advance();
-                    Some(self.parse_expr()?)
-                } else {
-                    None
-                };
-                self.expect(&Token::Semicolon)?;
-                properties.push(ClassProperty {
-                    visibility: modifiers.visibility,
-                    name: prop_name,
-                    type_hint,
-                    default,
-                    is_static: modifiers.is_static,
-                    is_readonly: modifiers.is_readonly,
-                });
+                properties.extend(self.parse_property_declaration(&modifiers)?);
             } else {
                 return Err(format!("Unexpected token in class body: {:?}", self.peek()));
             }
@@ -501,29 +494,7 @@ impl Parser {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
-                if modifiers.is_abstract {
-                    return Err("Properties cannot be declared abstract".into());
-                }
-                let type_hint = self.try_parse_type_hint()?;
-                let prop_name = match self.advance() {
-                    Token::Variable(n, _) => n,
-                    other => return Err(format!("Expected property variable, got {:?}", other)),
-                };
-                let default = if self.peek() == Token::Assign {
-                    self.advance();
-                    Some(self.parse_expr()?)
-                } else {
-                    None
-                };
-                self.expect(&Token::Semicolon)?;
-                properties.push(ClassProperty {
-                    visibility: modifiers.visibility,
-                    name: prop_name,
-                    type_hint,
-                    default,
-                    is_static: modifiers.is_static,
-                    is_readonly: modifiers.is_readonly,
-                });
+                properties.extend(self.parse_property_declaration(&modifiers)?);
             } else {
                 return Err(format!("Unexpected token in trait body: {:?}", self.peek()));
             }

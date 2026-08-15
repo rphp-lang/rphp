@@ -44,3 +44,25 @@ fn typed_by_reference_parameter_checks_the_referenced_value() {
         "42"
     );
 }
+
+#[test]
+fn grouped_properties_share_type_modifiers_and_keep_individual_defaults() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait Coordinates { public int $x = 1, $y, $z = 3; }
+class Point { use Coordinates; private static ?string $a = null, $b = "b"; }
+$anonymous = new class { public int $x = 4, $y = 5; };
+$point = new Point;
+echo $point->x, ":", $point->z, ":", $anonymous->x, ":", $anonymous->y;
+"#
+        ),
+        "1:3:4:5"
+    );
+}
+
+#[test]
+fn grouped_property_cannot_repeat_a_type_after_the_comma() {
+    let error = run_php_expect_error("<?php class Bad { public $a, int $b; }");
+    assert!(format!("{error:?}").contains("Expected property variable"));
+}
