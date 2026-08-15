@@ -1,7 +1,6 @@
 # Layered execution optimization plan
 
-Status: Layer 1 dual-host candidate verified over `385dc1c`, 2026-08-15;
-integration handoff pending
+Status: Layer 1 accepted and integrated over `385dc1c`, 2026-08-15
 
 This document orders execution work as one cumulative optimization stack. It
 exists to prevent an empty coverage cell or an old benchmark from being
@@ -70,8 +69,9 @@ the bounded native JIT and retains explicit typed-only and runtime-disabled
 lanes. The table below preserves that selection snapshot so its decision can
 be audited rather than silently replacing historical evidence.
 
-The implementation was finally rebased over clean `main` commit `385dc1c` and
-verified as source candidate `0f8b5b9` on physical ARM64 and x86-64. Both
+The implementation was finally rebased over clean `main` commit `385dc1c`,
+verified as source candidate `0f8b5b9` on physical ARM64 and x86-64, and
+accepted by the integrating agent after the full joint gate. Both
 accepted host runs used 101 alternating observations for the direct-call
 target, independent holdout, typed controls and order/ledger/routing controls.
 The report also retains the complete rejected battery-powered ARM64
@@ -119,6 +119,7 @@ cost.
 | Value-only `foreach` accumulation | Packed and ordered-hash Long iteration retains iterator and accumulator state in one guarded typed runner. | [Dispatch analysis, Phase 2p](performance-dispatch-analysis.md#phase-2p-result-guarded-value-only-foreach-accumulation) |
 | String execution | Borrowed immutable String facts, dynamic-key retention and chunked append kernels avoid repeated general `Value` work in admitted shapes. | [Dispatch analysis](performance-dispatch-analysis.md), [combined execution log](roadmap-performance-jit-compatibility.md) |
 | Closure ownership | Published closures share one immutable payload and capture environment while preserving identity, binding and reference-capture semantics. | [Closure ownership](performance-closure-ownership.md) |
+| Guarded direct user/closure calls | Exact immutable closure-property and dead-alias wrapper calls use the shared scalar call ABI inside typed/native regions, with capture/identity guards and canonical side exits. | [Direct-call regions](performance-direct-call-regions.md) |
 | Declared-object lifecycle | Literal class resolution is cached, small declared-property storage is reused and proven nonescaping read-only objects can remain virtual. | [Declared storage reuse](performance-declared-object-lifecycle.md), [literal `new`](performance-literal-newobj-resolution.md), [virtual reads](performance-virtual-declared-object-reads.md) |
 | Call/return aggregate virtualization | The proven order-shaped constructor/method/small-array graph can remain virtual in baseline, typed and native lanes, with a bounded resolution cache. | [Virtual call aggregate](performance-virtual-call-aggregate.md), [resolved aggregate cache](performance-resolved-virtual-aggregate-cache.md) |
 | Collection, callback, JSON and regex programs | Several pure callback pipelines, invariant JSON projections and bounded regex consumers already have specialized typed/native programs. Treat them as migration inputs, not proof of general call-graph coverage. | [Combined execution log](roadmap-performance-jit-compatibility.md) |
@@ -156,7 +157,7 @@ Exit gate:
 
 ### Layer 1 — general direct-call regions, starting with immutable closures
 
-Status: **dual-host candidate verified for integration; Grade A evidence**
+Status: **accepted and integrated; Grade A evidence**
 
 Extend the existing typed call vocabulary so a stable direct user-function or
 closure target can participate in a region without constructing a canonical
@@ -193,13 +194,13 @@ ceiling. Detailed semantics, accepted and rejected distributions, code-size
 cost, reproducibility metadata and limitations are in
 [the direct-call checkpoint](performance-direct-call-regions.md).
 
-The integration gate must merge this shared compiler/runtime checkpoint before
-Layer 2 implementation begins. Layer 2 may consume its call ABI; it must not
-copy the closure recognizer or add another call engine.
+Layer 1 is now part of the shared compiler/runtime baseline. Layer 2 may consume
+its call ABI; it must not copy the closure recognizer or add another call
+engine.
 
 ### Layer 2 — general virtual heap values and materialization across calls
 
-Status: **next post-integration admission layer; Grade B architectural evidence,
+Status: **next admission layer; Grade B architectural evidence,
 fresh execution-weighted target still required**
 
 Replace the current collection of narrow object/array proofs with one typed
@@ -414,8 +415,8 @@ the existing one-percent acyclic controls.
 
 ## Next decision checkpoint
 
-After the integrating agent accepts Layer 1, the next bounded goal is a cheap
-Layer 0/2 evidence checkpoint rather than another implementation guess:
+With Layer 1 accepted, the next bounded goal is a cheap Layer 0/2 evidence
+checkpoint rather than another implementation guess:
 
 1. regenerate the full execution scorecard from the newly integrated main on
    ARM64 and locked physical x86-64;

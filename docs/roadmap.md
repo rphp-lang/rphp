@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-08-13
+Status: active coordination map, 2026-08-15
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -24,8 +24,8 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | Symfony S3: finish the general PHP semantics needed for an RPHP cold kernel/cache build and prove the generated artifacts against reference PHP. |
-| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Profile the current green baseline, inventory baseline/typed-region/JIT coverage and select the next general region or simplification from measured evidence. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | Complete the active array-reference/l-value rebind checkpoint, then close the general return-by-reference call alias gap while retaining the pinned Symfony S3 gate. |
+| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Regenerate the post-Layer-1 execution-weighted scorecard, then admit or reject one representative non-order cross-call virtual-value graph from dual-host owner/allocation evidence. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
 diagnostic observation or favorable but unverified benchmark remains work in

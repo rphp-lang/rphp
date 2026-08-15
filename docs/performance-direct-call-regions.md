@@ -1,7 +1,6 @@
 # Guarded direct-call regions
 
-Status: refreshed dual-host candidate verified; integrating-agent handoff
-pending
+Status: accepted and integrated on `main`, 2026-08-15
 
 ## Checkpoint contract
 
@@ -13,6 +12,10 @@ pending
 - **Measured candidate:** clean `codex/perf-direct-call-regions` source commit
   `0f8b5b9cc66d8602d5d988abe3ea9040c7b22a1b`. Documentation-only commits
   after that source commit do not change the measured binary.
+- **Integration:** the integrating agent accepted the measured checkpoint after
+  the full joint gate. A separate follow-up commit, `4660315`, fixes a
+  pre-existing wide-`__invoke` frame-initialization failure found by the gate;
+  it does not widen or change the measured direct-call region.
 - **Scope:** an exact positional by-value wrapper whose callable is either one
   immutable receiver property or a proven-dead local alias of the first public
   argument. The leaf closure has a stable user-function identity, no binding
@@ -290,12 +293,13 @@ full matrix and release benchmark lifecycle.
 
 ## Ownership and handoff
 
-The implementation touches shared compiler/runtime files, including
+The accepted implementation touches shared compiler/runtime files, including
 `src/compiler/mod.rs`, `src/vm/function.rs`, `src/vm/planner.rs`,
 `src/vm/quick.rs`, `src/vm/quick_long_region_plan.rs` and the quick/native
 execution adapters. Compatibility owns the separate return-by-reference alias
-semantic gap. The performance branch remains the only branch this agent may
-push; final merge order and the joint gate belong to the integrator.
+semantic gap. The integrating agent completed the joint gate and made these
+files part of the shared `main` baseline; later work must rebase before taking
+new ownership.
 
 Public-data hygiene is clean: no private hostname, address, username,
 credential, private filesystem path or raw remote log is stored in tracked

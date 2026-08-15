@@ -240,9 +240,11 @@ A milestone may advance only when:
 
 ## Current ordering
 
-1. Freeze the current scorecard and regenerate the typed/JIT coverage matrix.
-2. Profile the representative corpus and choose the largest general uncovered
-   region or baseline structural cost.
+1. Regenerate the post-Layer-1 scorecard and typed/JIT coverage matrix on the
+   exact integrated baseline.
+2. Profile a representative non-order DTO or small-array cross-call graph and
+   admit Layer 2 only when dual-host owner/allocation evidence shows a material
+   remaining cost.
 3. Deliver one complete baseline → typed IR → exact exit → ARM64/x86-64 vertical
    slice where applicable.
 4. Remove the superseded special mechanism and remeasure after convergence.
@@ -312,6 +314,23 @@ rejected variants and limitations are in
 [`performance-default-native-jit.md`](performance-default-native-jit.md).
 Future compatibility gates must treat `quick-loops,jit-prototype` as the
 ordinary feature matrix and spell typed-only controls explicitly.
+
+Completion checkpoint (2026-08-15): Layer 1 guarded direct-call regions are
+accepted. An exact immutable closure property or proven-dead callable alias can
+enter the existing scalar typed/native call ABI after guards for function
+identity, capture layout and values, binding, scope, references and argument
+types. Unsupported shapes and every failed guard resume the canonical call
+boundary; return-by-reference signatures remain excluded and their general
+alias semantics stay Compatibility-owned. The closure target improves by
+99.315% on ARM64 and 99.325% on physical x86-64, while the independent holdout
+improves by 99.123% and 99.607%. Target frame pushes fall from 500,004 to 70,
+the region has zero side exits, and all accepted typed/order/ledger/routing
+controls stay within the one-percent ceiling. Detailed protocol, distributions,
+structural counters and limits are in
+[`performance-direct-call-regions.md`](performance-direct-call-regions.md).
+The next goal is the post-Layer-1 Layer 0/2 evidence checkpoint; it must admit
+or reject a representative non-order virtual-value graph before any Layer 2
+implementation begins.
 
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.
