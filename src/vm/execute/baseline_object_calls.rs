@@ -688,6 +688,17 @@ fn op_fetch_obj_r_slow<'a>(
             .as_str()
             .map(str::to_string)
             .unwrap_or_else(|| prop_name.echo_to_string());
+        if opline._pad & FETCH_OBJ_MODIFY != 0 {
+            return Ok(object_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!(
+                    "Attempt to modify property \"{name}\" on {}",
+                    obj_val.type_name()
+                ),
+            ));
+        }
         report_php_warning(
             eg,
             frame,
@@ -1045,12 +1056,12 @@ fn op_unset_obj<'a>(
 
 include!("instance_property_cache.rs");
 
-fn op_bind_obj_prop_ref(
+fn op_bind_obj_prop_ref<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: all three operand slots are compiler-owned by the active frame.
     // The receiver is cloned before its CV can be replaced, and the owned
     // reference cell keeps the property target stable across object growth.
@@ -1061,17 +1072,23 @@ fn op_bind_obj_prop_ref(
             op_array,
         ))
             .clone();
-        let name = (&*(*frame).get_op_ptr(
+        let name_value = &*(*frame).get_op_ptr(
             opline.op2 as u32,
             opline.op2_type,
             op_array,
-        ))
-            .as_str()
-            .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?
-            .to_string();
-        let object = receiver
-            .as_object()
-            .ok_or_else(|| VmError::Fatal("Attempt to bind property on non-object".into()))?;
+        );
+        let name = name_value.echo_to_string();
+        let Some(object) = receiver.as_object() else {
+            return Ok(object_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!(
+                    "Attempt to modify property \"{name}\" on {}",
+                    receiver.dereferenced().type_name()
+                ),
+            ));
+        };
         let class_name = object.class_name.to_string();
         drop(object);
 
@@ -1140,7 +1157,7 @@ fn op_bind_obj_prop_ref(
         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
         frame_slot_set(frame, destination, binding);
     }
-    Ok(())
+    Ok(ColdResult::Done)
 }
 
 fn op_bind_array_dim_ref(
@@ -1435,12 +1452,17 @@ fn op_assign_obj_prop<'a>(
             }
         }
     } else {
+        let action = if opline._pad & ASSIGN_OBJ_MODIFY != 0 {
+            "modify"
+        } else {
+            "assign"
+        };
         return Ok(object_property_throw(
             eg,
             frame,
             "Error",
             format!(
-                "Attempt to assign property \"{name}\" on {}",
+                "Attempt to {action} property \"{name}\" on {}",
                 obj.type_name()
             ),
         ));

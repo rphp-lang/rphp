@@ -26,12 +26,12 @@ use crate::value::{
 };
 use crate::vm::instruction::{
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION,
-    ASSIGN_CV_REBIND, ASSIGN_DIM_REFERENCE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    ASSIGN_CV_REBIND, ASSIGN_DIM_REFERENCE, ASSIGN_OBJ_MODIFY, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
     CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_SILENT,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_SILENT,
-    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_MODIFY,
+    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME,
     STATIC_PROP_DYNAMIC_OWNER,
@@ -3421,6 +3421,111 @@ impl Compiler {
         result
     }
 
+    /// Compile the receiver chain of a property write. Intermediate property
+    /// reads are mutable l-values: PHP throws `Attempt to modify property`
+    /// when any receiver in the chain is null or scalar.
+    fn compile_property_modify_base(&mut self, expr: &Expr) -> (u16, OpType) {
+        match expr {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line,
+            } => {
+                let (object, object_type) = self.compile_property_modify_base(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_MODIFY;
+                self.push_instruction_at_line(fetch, *line);
+                (result, OpType::Tmp)
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line,
+            } => {
+                let (object, object_type) = self.compile_property_modify_base(object);
+                let (property, property_type) = self.compile_expr(property);
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = property_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_MODIFY;
+                self.push_instruction_at_line(fetch, *line);
+                (result, OpType::Tmp)
+            }
+            _ => self.compile_expr(expr),
+        }
+    }
+
+    /// Prepare a mutable receiver chain while deferring the property fetches
+    /// until the assignment value has been evaluated. PHP evaluates the base
+    /// and dynamic names first, then the RHS, and only then reports that an
+    /// intermediate scalar property cannot be modified.
+    fn prepare_property_modify_base(
+        &mut self,
+        expr: &Expr,
+    ) -> (u16, OpType, Vec<(Instruction, usize)>) {
+        match expr {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line,
+            } => {
+                let (object, object_type, mut deferred) = self.prepare_property_modify_base(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_MODIFY;
+                deferred.push((fetch, *line));
+                (result, OpType::Tmp, deferred)
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line,
+            } => {
+                let (object, object_type, mut deferred) = self.prepare_property_modify_base(object);
+                let (property, property_type) = self.compile_expr(property);
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = property_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_MODIFY;
+                deferred.push((fetch, *line));
+                (result, OpType::Tmp, deferred)
+            }
+            _ => {
+                let (operand, operand_type) = self.compile_expr(expr);
+                (operand, operand_type, Vec::new())
+            }
+        }
+    }
+
     /// Compile expression. Returns (operand_index, OpType).
     fn compile_isset_object_base(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
@@ -6110,7 +6215,7 @@ impl Compiler {
                         nullsafe: false,
                         ..
                     } => {
-                        let (object, object_type) = self.compile_expr(object);
+                        let (object, object_type) = self.compile_property_modify_base(object);
                         let property = self.add_literal(Value::string(property.clone()));
                         let mut bind = Instruction::new(OpCode::BindObjPropRef);
                         bind.op1 = object;
@@ -6128,7 +6233,7 @@ impl Compiler {
                         nullsafe: false,
                         ..
                     } => {
-                        let (object, object_type) = self.compile_expr(object);
+                        let (object, object_type) = self.compile_property_modify_base(object);
                         let (property, property_type) = self.compile_expr(property);
                         let mut bind = Instruction::new(OpCode::BindObjPropRef);
                         bind.op1 = object;
@@ -7088,7 +7193,7 @@ impl Compiler {
                             nullsafe: false,
                             ..
                         } => {
-                            let (object, object_type) = self.compile_expr(object);
+                            let (object, object_type) = self.compile_property_modify_base(object);
                             let property = self.add_literal(Value::string(property.clone()));
                             let mut assign = Instruction::new(OpCode::AssignObjProp);
                             assign.op1 = object;
@@ -7105,7 +7210,7 @@ impl Compiler {
                             nullsafe: false,
                             ..
                         } => {
-                            let (object, object_type) = self.compile_expr(object);
+                            let (object, object_type) = self.compile_property_modify_base(object);
                             let (property, property_type) = self.compile_expr(property);
                             let mut assign = Instruction::new(OpCode::AssignObjProp);
                             assign.op1 = object;

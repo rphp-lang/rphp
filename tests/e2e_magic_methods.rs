@@ -153,6 +153,26 @@ var_dump($object->stored);
 }
 
 #[test]
+fn scalar_property_modification_throws_for_references_and_nested_writes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function modification_value() { echo "rhs\n"; return 9; }
+foreach ([null, true, 12, 's'] as $value) {
+    $source = 1;
+    try { $value->{7} =& $source; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    try { $destination =& $value->{7}; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    try { $value->{7}[0] = modification_value(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    try { $value->{7}->nested = modification_value(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    var_dump($value);
+}
+"#
+        ),
+        "Attempt to modify property \"7\" on null\nAttempt to modify property \"7\" on null\nrhs\nAttempt to modify property \"7\" on null\nrhs\nAttempt to modify property \"7\" on null\nNULL\nAttempt to modify property \"7\" on bool\nAttempt to modify property \"7\" on bool\nrhs\nAttempt to modify property \"7\" on bool\nrhs\nAttempt to modify property \"7\" on bool\nbool(true)\nAttempt to modify property \"7\" on int\nAttempt to modify property \"7\" on int\nrhs\nAttempt to modify property \"7\" on int\nrhs\nAttempt to modify property \"7\" on int\nint(12)\nAttempt to modify property \"7\" on string\nAttempt to modify property \"7\" on string\nrhs\nAttempt to modify property \"7\" on string\nrhs\nAttempt to modify property \"7\" on string\nstring(1) \"s\"\n"
+    );
+}
+
+#[test]
 fn recursive_get_is_guarded_per_object_and_property() {
     assert_eq!(
         run_php(

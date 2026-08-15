@@ -3562,7 +3562,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             },
 
             OpCode::BindObjPropRef => {
-                op_bind_obj_prop_ref(eg, frame, op_array, opline)?;
+                match op_bind_obj_prop_ref(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::BindArrayDimRef => {
@@ -3839,7 +3850,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         php_obj.set_property(&storage_key, Value::array(new_arr));
                     }
                 } else {
-                    return Err(VmError::Fatal("Attempt to assign property on non-object".into()));
+                    let error = make_error_value(
+                        "Error",
+                        &format!(
+                            "Attempt to modify property \"{prop_name}\" on {}",
+                            obj.dereferenced().type_name()
+                        ),
+                    );
+                    match throw_in_frame(eg, frame, error) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue;
+                        }
+                        ThrowResult::Unhandled(exception) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    }
                 }
             }
 
