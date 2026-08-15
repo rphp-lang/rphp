@@ -476,3 +476,24 @@ foreach ([
         "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n"
     );
 }
+
+#[test]
+fn enum_virtual_properties_are_typed_and_readonly() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum Unit { case Ready; }
+enum Code: int { case Ready = 2; }
+$unitName = new ReflectionProperty(Unit::class, "name");
+$codeName = new ReflectionProperty(Code::class, "name");
+$codeValue = new ReflectionProperty(Code::class, "value");
+echo $unitName->getType()->getName(), ":", $unitName->isReadOnly() ? "ro" : "rw", "\n";
+echo $codeName->getType()->getName(), ":", $codeValue->getType()->getName(), ":",
+     $codeValue->isReadOnly() ? "ro" : "rw", "\n";
+try { Code::Ready->value = 3; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+echo Code::Ready->value;
+"#
+        ),
+        "string:ro\nstring:int:ro\nCannot modify readonly property Code::$value\n2"
+    );
+}

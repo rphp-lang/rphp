@@ -3895,6 +3895,28 @@ impl Compiler {
 
                 let compiled_constants =
                     self.compile_class_constants(&resolved_enum, None, constants)?;
+                let mut enum_properties = vec![PropertyDefinition::declared(
+                    "name".to_string(),
+                    None,
+                    Visibility::Public,
+                    resolved_enum.clone(),
+                    crate::vm::function::ParamTypeHint::String,
+                    true,
+                    false,
+                )];
+                let mut enum_readonly_props = vec!["name".to_string()];
+                if let Some(backing_type) = backing_type {
+                    enum_properties.push(PropertyDefinition::declared(
+                        "value".to_string(),
+                        None,
+                        Visibility::Public,
+                        resolved_enum.clone(),
+                        self.convert_type_hint(&Some(backing_type.clone())),
+                        true,
+                        false,
+                    ));
+                    enum_readonly_props.push("value".to_string());
+                }
                 let resolved_uses = uses
                     .iter()
                     .map(|used_trait| self.resolve_name(&used_trait.name))
@@ -3925,12 +3947,12 @@ impl Compiler {
                     is_enum: true,
                     uses: resolved_uses,
                     trait_aliases: resolved_trait_aliases,
-                    properties: vec![],
+                    properties: enum_properties,
                     static_properties: compiled_props,
                     constants: compiled_constants,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
-                    readonly_props: vec![],
+                    readonly_props: enum_readonly_props,
                     methods: compiled_methods,
                     abstract_methods: vec![],
                     class_id: 0,
