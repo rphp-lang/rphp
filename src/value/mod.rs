@@ -3728,6 +3728,11 @@ pub struct Value {
     _not_send: PhantomData<*mut ()>,
 }
 
+struct OwnedReference {
+    value: UnsafeCell<Value>,
+    internal_aliases: Cell<usize>,
+}
+
 const _: [(); 16] = [(); std::mem::size_of::<Value>()];
 
 #[repr(C)]
@@ -3760,6 +3765,11 @@ impl Value {
     /// A later declaration of the same static in that frame may replace the
     /// first initializer; aliases and recursive frames must not inherit it.
     const LOCAL_STATIC_INITIALIZER_FLAG: u32 = 1 << 9;
+    /// Marks a compiler-only reference handle that has no PHP-visible storage
+    /// location. Its Rc owner keeps the target alive but must not make
+    /// `var_dump()` display a reference wrapper after the last source alias is
+    /// unset.
+    const INTERNAL_REFERENCE_ALIAS_FLAG: u32 = 1 << 10;
 
     #[inline]
     pub fn undef() -> Self {
@@ -4621,7 +4631,10 @@ impl Value {
     /// live while any owned reference handle can reach it.
     #[inline]
     pub(crate) fn owned_reference(value: Value) -> Self {
-        let target = Rc::new(UnsafeCell::new(value));
+        let target = Rc::new(OwnedReference {
+            value: UnsafeCell::new(value),
+            internal_aliases: Cell::new(0),
+        });
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(target) as *mut u8,
@@ -4666,20 +4679,33 @@ impl Value {
             },
             // The local-static initializer marker belongs to one frame slot,
             // not to the shared PHP reference cell or any aliases of it.
-            type_info: self.type_info & !Self::LOCAL_STATIC_INITIALIZER_FLAG,
+            type_info: self.type_info
+                & !(Self::LOCAL_STATIC_INITIALIZER_FLAG | Self::INTERNAL_REFERENCE_ALIAS_FLAG),
             _not_send: PhantomData,
         }
     }
 
     /// Temporarily reconstruct the existing Rc owner without consuming it.
     #[inline]
-    fn owned_reference_rc(&self) -> std::mem::ManuallyDrop<Rc<UnsafeCell<Value>>> {
+    fn owned_reference_rc(&self) -> std::mem::ManuallyDrop<Rc<OwnedReference>> {
         debug_assert!(self.is_owned_reference());
-        // SAFETY: owned-reference construction stores exactly this raw Rc
-        // pointer, and ManuallyDrop leaves the existing strong owner intact.
-        unsafe {
-            std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const UnsafeCell<Value>))
+        // SAFETY: `owned_reference()` stores exactly an `Rc<OwnedReference>`
+        // raw pointer, and ManuallyDrop leaves its existing strong owner intact.
+        unsafe { std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const OwnedReference)) }
+    }
+
+    /// Exclude one compiler-owned CV from PHP-visible reference cardinality.
+    #[inline]
+    pub(crate) fn mark_internal_reference_alias(&mut self) {
+        debug_assert!(self.is_owned_reference());
+        if self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG != 0 {
+            return;
         }
+        let reference = self.owned_reference_rc();
+        let internal_aliases = reference.internal_aliases.get();
+        debug_assert!(internal_aliases < usize::MAX);
+        reference.internal_aliases.set(internal_aliases + 1);
+        self.type_info |= Self::INTERNAL_REFERENCE_ALIAS_FLAG;
     }
 
     /// Whether this request-owned reference cell is still reachable through
@@ -4694,7 +4720,14 @@ impl Value {
         if !self.is_owned_reference() {
             return false;
         }
-        Rc::strong_count(&self.owned_reference_rc()) > 1
+        let reference = self.owned_reference_rc();
+        let strong_count = Rc::strong_count(&reference);
+        let internal_aliases = reference.internal_aliases.get();
+        debug_assert!(internal_aliases <= strong_count);
+        if internal_aliases > strong_count {
+            return true;
+        }
+        strong_count - internal_aliases > 1
     }
 
     /// Clone a lexical capture while retaining explicit PHP reference
@@ -4777,7 +4810,7 @@ impl Value {
     #[inline]
     pub unsafe fn as_ref_ptr(&self) -> *mut Value {
         if self.is_owned_reference() {
-            (*(self.data.ptr as *const UnsafeCell<Value>)).get()
+            (*(self.data.ptr as *const OwnedReference)).value.get()
         } else {
             self.data.ptr as *mut Value
         }
@@ -4959,7 +4992,15 @@ impl Drop for Value {
                 // SAFETY: owned references store the raw pointer produced by
                 // `Rc::into_raw`; each owned alias increments the same count.
                 unsafe {
-                    Rc::decrement_strong_count(self.data.ptr as *const UnsafeCell<Value>);
+                    if self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG != 0 {
+                        let reference = &*(self.data.ptr as *const OwnedReference);
+                        let internal_aliases = reference.internal_aliases.get();
+                        debug_assert!(internal_aliases > 0);
+                        if internal_aliases > 0 {
+                            reference.internal_aliases.set(internal_aliases - 1);
+                        }
+                    }
+                    Rc::decrement_strong_count(self.data.ptr as *const OwnedReference);
                 }
             }
             // Borrowed references do not own their frame-slot target.

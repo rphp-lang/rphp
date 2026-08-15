@@ -300,7 +300,7 @@ fn op_dynamic_variable<'a>(
             }
         }
         OpCode::BindDynamicVarRef => {
-            let binding = if let Some(cv) = direct_cv {
+            let mut binding = if let Some(cv) = direct_cv {
                 unsafe {
                     let slot = (*owner).cv_mut(cv);
                     if slot.is_owned_reference() {
@@ -340,6 +340,9 @@ fn op_dynamic_variable<'a>(
                 globals_set(variables, &name, binding.clone_owned_reference_alias());
                 binding
             };
+            if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                binding.mark_internal_reference_alias();
+            }
             let destination = unsafe {
                 (*frame).get_op_mut(opline.result as u32, opline.result_type)
             };

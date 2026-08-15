@@ -32,7 +32,8 @@ use crate::vm::instruction::{
     CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT,
     FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
-    OpType, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER,
 };
 use crate::vm::opcode::OpCode;
 
@@ -6006,7 +6007,7 @@ impl Compiler {
                             return (destination, OpType::Cv);
                         }
                         if let Err(error) =
-                            self.compile_array_element_reference_binding(target, destination)
+                            self.compile_array_element_reference_binding(target, destination, false)
                         {
                             self.deferred_error = Some(error);
                             let null = self.add_literal(Value::null());

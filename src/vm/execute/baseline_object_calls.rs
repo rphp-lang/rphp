@@ -1075,7 +1075,7 @@ fn op_bind_obj_prop_ref(
             effective_caller,
         );
         let mut object = receiver.as_object_mut().unwrap();
-        let binding = if let Some(property) = object.get_property_mut(&key) {
+        let mut binding = if let Some(property) = object.get_property_mut(&key) {
             if property.is_owned_reference() {
                 property.clone_owned_reference_alias()
             } else {
@@ -1095,6 +1095,10 @@ fn op_bind_obj_prop_ref(
             binding
         };
         drop(object);
+
+        if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+            binding.mark_internal_reference_alias();
+        }
 
         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
         frame_slot_set(frame, destination, binding);
@@ -1128,7 +1132,7 @@ fn op_bind_array_dim_ref(
             array.set(key.clone(), Value::null());
         }
         let element = array.get_key_mut(&key).unwrap();
-        let binding = if element.is_owned_reference() {
+        let mut binding = if element.is_owned_reference() {
             element.clone_owned_reference_alias()
         } else {
             let current = std::mem::replace(element, Value::undef());
@@ -1141,6 +1145,9 @@ fn op_bind_array_dim_ref(
             *element = binding.clone_owned_reference_alias();
             binding
         };
+        if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+            binding.mark_internal_reference_alias();
+        }
         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
         frame_slot_set(frame, destination, binding);
     }

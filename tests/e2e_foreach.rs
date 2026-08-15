@@ -358,6 +358,27 @@ echo $outside, '|', $items[0];
 }
 
 #[test]
+fn compiler_append_reference_cvs_do_not_create_visible_aliases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function setReference(&$value) {
+    $value = 1;
+}
+
+$flat = [];
+setReference($flat[]);
+var_dump($flat);
+
+$nested = [];
+setReference($nested[][0]);
+var_dump($nested);"#
+        ),
+        "array(1) {\n  [0]=>\n  int(1)\n}\narray(1) {\n  [0]=>\n  array(1) {\n    [0]=>\n    int(1)\n  }\n}\n"
+    );
+}
+
+#[test]
 fn by_reference_foreach_rebinds_lazy_listener_captures() {
     assert_eq!(
         run_php(

@@ -6615,27 +6615,23 @@ fn var_dump_value_inner(
                     .unwrap_or("");
                 format!("{}enum({}::{})\n", prefix, object.class_name, case)
             } else {
-                let mut properties = Vec::new();
-                object.for_each_property(|name, value| {
-                    properties.push((name.to_string(), value.clone()));
-                });
+                let mut property_count = 0;
+                object.for_each_property(|_, _| property_count += 1);
                 let mut out = format!(
                     "{}object({})#1 ({}) {{\n",
-                    prefix,
-                    object.class_name,
-                    properties.len()
+                    prefix, object.class_name, property_count
                 );
-                for (name, value) in properties {
+                object.for_each_property(|name, value| {
                     out.push_str(&format!("{}  [\"{}\"]=>\n", prefix, name));
                     out.push_str(&var_dump_value_inner(
-                        &value,
+                        value,
                         indent + 1,
                         eg,
                         true,
                         visited_arrays,
                         visited_objects,
                     ));
-                }
+                });
                 out.push_str(&format!("{}}}\n", prefix));
                 out
             };

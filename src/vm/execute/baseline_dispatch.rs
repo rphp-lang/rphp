@@ -3213,7 +3213,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // existing reference here would replace the caller's value
                     // and leave this local bound to the old cell.
                     let target = (*frame).cv_mut(opline.result as u32) as *mut Value;
-                    frame_slot_set(frame, target, Value::owned_reference(Value::null()));
+                    let mut binding = Value::owned_reference(Value::null());
+                    if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                        binding.mark_internal_reference_alias();
+                    }
+                    frame_slot_set(frame, target, binding);
                     array.push((*target).clone_owned_reference_alias());
                 }
             }

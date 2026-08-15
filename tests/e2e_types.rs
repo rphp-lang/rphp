@@ -357,6 +357,70 @@ var_dump($array, $value);"#
 }
 
 #[test]
+fn object_property_reference_cells_are_visible_to_var_dump() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = 11;
+$object = new stdClass();
+$object->property =& $value;
+var_dump($object);"#
+        ),
+        "object(stdClass)#1 (1) {\n  [\"property\"]=>\n  &int(11)\n}\n"
+    );
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferenceBox {
+    public $property;
+}
+$value = 12;
+$object = new ReferenceBox();
+$object->property =& $value;
+var_dump($object);"#
+        ),
+        "object(ReferenceBox)#1 (1) {\n  [\"property\"]=>\n  &int(12)\n}\n"
+    );
+}
+
+#[test]
+fn compiler_reference_cvs_do_not_create_visible_aliases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$source = [1];
+$destination = [];
+$destination[0] =& $source[0];
+unset($source);
+$holder = (object) ['property' => 2];
+$destination[1] =& $holder->property;
+unset($holder->property);
+$property = 'property';
+$dynamicHolder = (object) ['property' => 3];
+$destination[2] =& $dynamicHolder->{$property};
+unset($dynamicHolder->{$property});
+$variableName = 'dynamicSource';
+$dynamicSource = 4;
+$destination[3] =& $$variableName;
+unset($dynamicSource);
+var_dump($destination);"#
+        ),
+        "array(4) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n  [3]=>\n  int(4)\n}\n"
+    );
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = 13;
+$object = new stdClass();
+$object->property =& $value;
+unset($value);
+var_dump($object);"#
+        ),
+        "object(stdClass)#1 (1) {\n  [\"property\"]=>\n  int(13)\n}\n"
+    );
+}
+
+#[test]
 fn destructuring_reads_a_retained_rhs_while_writing_through_an_alias() {
     assert_eq!(
         run_php(

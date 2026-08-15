@@ -94,6 +94,7 @@ impl Compiler {
         &mut self,
         source: &Expr,
         destination: u16,
+        internal_result: bool,
     ) -> Result<(), String> {
         let mut root = source;
         let mut reversed_indices = Vec::new();
@@ -112,6 +113,9 @@ impl Compiler {
         bind.op2_type = key_type;
         bind.result = destination;
         bind.result_type = OpType::Cv;
+        if internal_result {
+            bind._pad |= REFERENCE_RESULT_INTERNAL;
+        }
         self.instructions.push(bind);
         self.rebuild_mutable_array_path(&path);
         self.write_back_mutable_array_root(&path);
@@ -138,6 +142,7 @@ impl Compiler {
         bind_append.op1_type = array_type;
         bind_append.result = appended;
         bind_append.result_type = OpType::Cv;
+        bind_append._pad |= REFERENCE_RESULT_INTERNAL;
         self.instructions.push(bind_append);
 
         // Publish the appended reference cell before the call. The cell then
@@ -155,6 +160,7 @@ impl Compiler {
             bind_dimension.op2_type = key_type;
             bind_dimension.result = child;
             bind_dimension.result_type = OpType::Cv;
+            bind_dimension._pad |= REFERENCE_RESULT_INTERNAL;
             self.instructions.push(bind_dimension);
             current = child;
         }
@@ -179,6 +185,7 @@ impl Compiler {
                 bind.op1_type = key_type;
                 bind.result = destination;
                 bind.result_type = OpType::Cv;
+                bind._pad |= REFERENCE_RESULT_INTERNAL;
                 self.push_instruction_at_line(bind, *line);
             }
             Expr::PropertyAccess {
@@ -195,6 +202,7 @@ impl Compiler {
                 bind.op2_type = OpType::Const;
                 bind.result = destination;
                 bind.result_type = OpType::Cv;
+                bind._pad |= REFERENCE_RESULT_INTERNAL;
                 self.instructions.push(bind);
             }
             Expr::DynamicPropertyAccess {
@@ -211,10 +219,11 @@ impl Compiler {
                 bind.op2_type = property_type;
                 bind.result = destination;
                 bind.result_type = OpType::Cv;
+                bind._pad |= REFERENCE_RESULT_INTERNAL;
                 self.instructions.push(bind);
             }
             Expr::ArrayAccess { .. } => {
-                self.compile_array_element_reference_binding(source, destination)?;
+                self.compile_array_element_reference_binding(source, destination, true)?;
             }
             _ => return Err("Array reference element must contain a mutable l-value".into()),
         }
@@ -1011,6 +1020,7 @@ impl Compiler {
         if let Expr::Globals { line } = source {
             return Err(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
         }
+        let source_is_internal = !matches!(source, Expr::Variable { .. });
         let source = self.compile_array_element_reference_source(source)?;
 
         if let Expr::ArrayAccess { array, index } = target
@@ -1059,6 +1069,9 @@ impl Compiler {
                 bind.op2_type = OpType::Const;
                 bind.result = source;
                 bind.result_type = OpType::Cv;
+                if source_is_internal {
+                    bind._pad |= REFERENCE_RESULT_INTERNAL;
+                }
                 self.instructions.push(bind);
             }
             Expr::DynamicPropertyAccess {
@@ -1084,6 +1097,9 @@ impl Compiler {
                 bind.op2_type = property_type;
                 bind.result = source;
                 bind.result_type = OpType::Cv;
+                if source_is_internal {
+                    bind._pad |= REFERENCE_RESULT_INTERNAL;
+                }
                 self.instructions.push(bind);
             }
             Expr::ArrayAccess { .. } => {
@@ -1115,6 +1131,9 @@ impl Compiler {
                 bind.op2_type = key_type;
                 bind.result = source;
                 bind.result_type = OpType::Cv;
+                if source_is_internal {
+                    bind._pad |= REFERENCE_RESULT_INTERNAL;
+                }
                 self.instructions.push(bind);
 
                 self.rebuild_mutable_array_path(&path);
