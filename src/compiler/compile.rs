@@ -2487,13 +2487,12 @@ impl Compiler {
 
         // Main script: collect all CVs for syncing to eg.globals before function calls.
         // These go into main_scope_vars (separate from explicit `global` bindings).
-        let mut main_scope_vars: Vec<(u32, String)> = Vec::new();
-        for (name, &cv_idx) in &self.cv_table {
-            if !name.starts_with('\0') {
-                main_scope_vars.push((cv_idx, name.clone()));
-            }
-        }
         let all_cvs = self.all_cvs();
+        let main_scope_vars = all_cvs
+            .iter()
+            .filter(|(_, name)| !name.starts_with('\0'))
+            .cloned()
+            .collect();
 
         let cache = (0..self.instructions.len())
             .map(|_| InlineCache::empty())
@@ -6987,12 +6986,15 @@ impl Compiler {
         Ok(())
     }
 
-    /// Build list of all CVs from cv_table.
+    /// Build CV metadata in allocation order rather than randomized map order.
     fn all_cvs(&self) -> Vec<(u32, String)> {
-        self.cv_table
+        let mut cvs: Vec<_> = self
+            .cv_table
             .iter()
             .map(|(name, &idx)| (idx, name.clone()))
-            .collect()
+            .collect();
+        cvs.sort_unstable_by_key(|(idx, _)| *idx);
+        cvs
     }
 
     /// Controls how a positional argument's Send opcode is chosen.

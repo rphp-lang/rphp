@@ -76,6 +76,21 @@ fn compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
     known
 }
 
+/// Clone one variable binding across the synchronous include/eval scope
+/// bridge. Ordinary `Value::clone()` intentionally reads through references,
+/// while a shared PHP symbol table must retain the reference cell itself.
+fn clone_scope_binding(value: &Value) -> Value {
+    if value.is_owned_reference() {
+        value.clone_owned_reference_alias()
+    } else if value.is_reference() {
+        // SAFETY: include/eval execution and writeback finish before the caller
+        // frame can be released, so a borrowed frame-cell alias stays live.
+        Value::reference(unsafe { value.as_ref_ptr() })
+    } else {
+        value.clone()
+    }
+}
+
 /// Compile, register and execute one PHP source unit. Includes and eval use the
 /// same scope bridge, declaration registration and exception propagation; the
 /// caller supplies their distinct source identity and implicit return value.
@@ -262,13 +277,13 @@ fn execute_source_unit(
                 .chain(included_global_vars.iter())
                 .any(|(_, global_name)| global_name == var_name);
             if !explicitly_global {
-                globals_backup
-                    .entry(var_name.clone())
-                    .or_insert_with(|| eg.globals.get(var_name).cloned());
+                globals_backup.entry(var_name.clone()).or_insert_with(|| {
+                    eg.globals.get(var_name).map(clone_scope_binding)
+                });
             }
         }
     }
-    if let Some((frame, op_array)) = caller {
+    if let Some((frame, _)) = caller {
         for (cv_idx, var_name) in &scope_vars {
             if included_global_vars
                 .iter()
@@ -276,10 +291,7 @@ fn execute_source_unit(
             {
                 continue;
             }
-            let val = unsafe {
-                let cv_ptr = (*frame).get_op_ptr(*cv_idx, OpType::Cv, op_array);
-                (*cv_ptr).clone()
-            };
+            let val = unsafe { clone_scope_binding((*frame).cv(*cv_idx)) };
             globals_set(&mut eg.globals, var_name, val);
         }
     }
@@ -307,8 +319,8 @@ fn execute_source_unit(
     if caller.is_some() {
         for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
             if let Some(val) = eg.globals.get(var_name) {
-                let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
-                unsafe { frame_slot_set(inc_frame, cv_ptr, val.clone()) };
+                let cv_ptr = unsafe { (*inc_frame).cv_mut(*cv_idx) as *mut Value };
+                unsafe { frame_slot_set(inc_frame, cv_ptr, clone_scope_binding(val)) };
             }
         }
     }
@@ -325,8 +337,8 @@ fn execute_source_unit(
             &inc_op_array.main_scope_vars
         };
         for (cv_idx, var_name) in inc_scope {
-            let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
-            let val = unsafe { (*cv_ptr).clone() };
+            let cv_ptr = unsafe { (*inc_frame).cv_mut(*cv_idx) as *mut Value };
+            let val = unsafe { clone_scope_binding(&*cv_ptr) };
             globals_set(&mut eg.globals, var_name, val);
         }
     }
@@ -338,8 +350,8 @@ fn execute_source_unit(
     if let Some((frame, _)) = caller {
         for (cv_idx, var_name) in &scope_vars {
             if let Some(val) = eg.globals.get(var_name) {
-                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                unsafe { frame_slot_set(frame, cv_ptr, val.clone()) };
+                let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
+                unsafe { frame_slot_set(frame, cv_ptr, clone_scope_binding(val)) };
             }
         }
     }

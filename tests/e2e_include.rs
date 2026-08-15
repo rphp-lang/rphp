@@ -79,6 +79,52 @@ echo '|', $outer;
 }
 
 #[test]
+fn eval_scope_preserves_reference_assignment_unset_and_rebinding() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function probe_eval_scope() {
+    $array = [1, 2];
+    $arrayAlias =& $array;
+    foreach ($array as $value) {
+        eval('array_pop($array);');
+    }
+    echo count($array), ':', count($arrayAlias), '|';
+
+    $left = 1;
+    $alias =& $left;
+    eval('$left = 7; $alias = 8;');
+    echo $left, ':', $alias, '|';
+
+    eval('unset($left);');
+    echo isset($left) ? 'set' : 'unset', ':', $alias, '|';
+
+    $target = 2;
+    eval('$left =& $target; $left = 9;');
+    echo $left, ':', $target, ':', $alias;
+}
+probe_eval_scope();
+"#,
+        ),
+        "0:0|8:8|unset:8|9:9:8"
+    );
+}
+
+#[test]
+fn include_scope_preserves_reference_assignment_unset_and_rebinding() {
+    let (_dir, path) = write_temp_php(
+        "reference_scope.php",
+        "<?php $left = 7; $right = 8; unset($drop); $rebound =& $target; $rebound = 9;",
+    );
+    let source = format!(
+        "<?php function probe_include_scope($path) {{ $left = 1; $right =& $left; $drop =& $left; $target = 2; include $path; echo $left, ':', $right, ':', isset($drop) ? 'set' : 'unset', ':', $target, ':', $rebound; }} probe_include_scope('{}');",
+        path
+    );
+
+    assert_eq!(run_php(&source), "8:8:unset:9:9");
+}
+
+#[test]
 fn eval_inherits_this_and_lexical_class_scope() {
     assert_eq!(
         run_php(
