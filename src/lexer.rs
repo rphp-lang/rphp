@@ -8,60 +8,62 @@ pub enum Token {
     Echo {
         line: usize,
     }, // echo
-    Function,    // function
-    Return,      // return
-    If,          // if
-    Else,        // else
-    While,       // while
-    For,         // for
-    ElseIf,      // elseif
-    Do,          // do
-    Break,       // break
-    Continue,    // continue
-    Switch,      // switch
-    Case,        // case
-    Default,     // default
-    Null,        // null
-    True,        // true
-    False,       // false
-    ArrayKw,     // array
-    Foreach,     // foreach
-    As,          // as
-    Isset,       // isset
-    Empty,       // empty
-    Unset,       // unset
-    Match,       // match
-    Try,         // try
-    Catch,       // catch
-    Finally,     // finally
-    Throw(u32),  // throw with source line
-    Class,       // class
-    New(u32),    // new with source line
-    Public,      // public
-    Protected,   // protected
-    Private,     // private
+    Function, // function
+    Return {
+        line: usize,
+    }, // return
+    If,       // if
+    Else,     // else
+    While,    // while
+    For,      // for
+    ElseIf,   // elseif
+    Do,       // do
+    Break,    // break
+    Continue, // continue
+    Switch,   // switch
+    Case,     // case
+    Default,  // default
+    Null,     // null
+    True,     // true
+    False,    // false
+    ArrayKw,  // array
+    Foreach,  // foreach
+    As,       // as
+    Isset,    // isset
+    Empty,    // empty
+    Unset,    // unset
+    Match,    // match
+    Try,      // try
+    Catch,    // catch
+    Finally,  // finally
+    Throw(u32), // throw with source line
+    Class,    // class
+    New(u32), // new with source line
+    Public,   // public
+    Protected, // protected
+    Private,  // private
     This(usize), // $this with source line (handled as special variable)
-    Extends,     // extends
-    Static,      // static
-    Instanceof,  // instanceof
-    Const,       // const
-    Interface,   // interface
-    Trait,       // trait
-    Implements,  // implements
-    Abstract,    // abstract
-    Declare,     // declare
-    Final,       // final
-    Enum,        // enum
-    Namespace,   // namespace
-    Backslash,   // \ (namespace separator)
-    Yield,       // yield
-    From,        // from (used after yield)
-    Print,       // print
-    Global,      // global
-    Clone,       // clone
-    Include,     // include
+    Extends,  // extends
+    Static,   // static
+    Instanceof, // instanceof
+    Const,    // const
+    Interface, // interface
+    Trait,    // trait
+    Implements, // implements
+    Abstract, // abstract
+    Declare,  // declare
+    Final,    // final
+    Enum,     // enum
+    Namespace, // namespace
+    Backslash, // \ (namespace separator)
+    Yield,    // yield
+    From,     // from (used after yield)
+    Print,    // print
+    Global,   // global
+    Clone,    // clone
+    Include,  // include
     IncludeOnce, // include_once
-    Require,     // require
+    Require,  // require
     RequireOnce, // require_once
     Goto {
         /// Preserve the lexeme because `goto` is also legal as a contextual
@@ -558,7 +560,7 @@ impl<'a> Lexer<'a> {
                             tokens.push(Token::Echo { line });
                         }
                         "function" => tokens.push(Token::Function),
-                        "return" => tokens.push(Token::Return),
+                        "return" => tokens.push(Token::Return { line }),
                         "if" => tokens.push(Token::If),
                         "else" => tokens.push(Token::Else),
                         "elseif" => tokens.push(Token::ElseIf),

@@ -178,6 +178,16 @@ impl Compiler {
 
         let destination = self.resolve_cv(&format!("\0array_reference_{}", self.next_cv));
         match source {
+            Expr::ArrayAccess { array, index } if matches!(array.as_ref(), Expr::Globals { .. }) => {
+                let (key, key_type) = self.compile_expr(index);
+                let mut bind = Instruction::new(OpCode::BindGlobalRef);
+                bind.op1 = key;
+                bind.op1_type = key_type;
+                bind.result = destination;
+                bind.result_type = OpType::Cv;
+                bind._pad |= REFERENCE_RESULT_INTERNAL;
+                self.instructions.push(bind);
+            }
             Expr::DynamicVariable { name, line } => {
                 let (key, key_type) = self.compile_expr(name);
                 let mut bind = Instruction::new(OpCode::BindDynamicVarRef);
@@ -1720,12 +1730,25 @@ impl Compiler {
                     .extend(nested_generic_declarations);
                 self.functions.push((resolved_name, user_func));
             }
-            Stmt::Return(expr) => {
+            Stmt::Return { expr, line } => {
                 let (op, op_type, has_explicit_value) = if let Some(e) = expr {
                     let (o, t) = if self.returns_reference_context
-                        && let Expr::Variable { name, .. } = e
+                        && matches!(
+                            e,
+                            Expr::Variable { .. }
+                                | Expr::DynamicVariable { .. }
+                                | Expr::PropertyAccess {
+                                    nullsafe: false,
+                                    ..
+                                }
+                                | Expr::DynamicPropertyAccess {
+                                    nullsafe: false,
+                                    ..
+                                }
+                                | Expr::ArrayAccess { .. }
+                        )
                     {
-                        (self.resolve_cv(name), OpType::Cv)
+                        (self.compile_array_element_reference_source(e)?, OpType::Cv)
                     } else {
                         self.compile_expr(e)
                     };
@@ -1739,7 +1762,7 @@ impl Compiler {
                 ret.op1_type = op_type;
                 // extended_value=1 means explicit "return expr;", 0 means bare "return;"
                 ret.extended_value = if has_explicit_value { 1 } else { 0 };
-                self.instructions.push(ret);
+                self.push_instruction_at_line(ret, *line);
             }
             Stmt::ExprStmt(expr) => {
                 // Compile expression for side effects (e.g. function call), discard result

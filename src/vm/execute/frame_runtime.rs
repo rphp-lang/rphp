@@ -430,6 +430,46 @@ unsafe fn materialize_reference_alias(frame: *mut ExecuteData, ptr: *mut Value) 
     binding
 }
 
+/// Materialize the value crossing a user-function return boundary. The raw
+/// frame access is kept in one place so reference-return handling does not
+/// spread additional unsafe regions through the dispatch loop.
+#[inline(always)]
+fn prepare_user_return_value(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    returns_reference: bool,
+) -> (Value, bool) {
+    // SAFETY: dispatch supplies the live frame and its current instruction;
+    // the compiler has validated the operand kind and slot index.
+    unsafe {
+        if !returns_reference {
+            let ptr = (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+            return ((&*ptr).dereferenced().clone(), false);
+        }
+        if opline.op1_type == OpType::Const {
+            let ptr = (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+            return (
+                Value::owned_reference((&*ptr).dereferenced().clone()),
+                true,
+            );
+        }
+        let ptr = if opline.op1_type == OpType::Cv {
+            (*frame).cv_mut(opline.op1 as u32) as *mut Value
+        } else {
+            (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
+        };
+        if opline.op1_type == OpType::Cv || (&*ptr).is_reference() {
+            (materialize_reference_alias(frame, ptr), false)
+        } else {
+            (
+                Value::owned_reference((&*ptr).dereferenced().clone()),
+                true,
+            )
+        }
+    }
+}
+
 /// Copy a scalar argument operand directly into a pending call frame.
 #[inline(always)]
 unsafe fn try_copy_scalar_arg(

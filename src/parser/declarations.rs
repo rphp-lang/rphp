@@ -979,7 +979,10 @@ impl Parser {
         let mut free_vars = Vec::new();
         Self::collect_free_vars(&expr, &param_names, &mut free_vars);
 
-        let body = vec![Stmt::Return(Some(expr))];
+        let body = vec![Stmt::Return {
+            expr: Some(expr),
+            line: 0,
+        }];
         Ok(Expr::Closure {
             is_static,
             returns_by_ref,

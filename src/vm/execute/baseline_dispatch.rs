@@ -312,7 +312,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // when it previously pointed at another reference
                         // cell. The source is promoted once and both CVs retain
                         // aliases to that stable request-owned cell.
-                        let source = (*frame).cv_mut(opline.op1 as u32) as *mut Value;
+                        let source = if opline.op1_type == OpType::Cv {
+                            (*frame).cv_mut(opline.op1 as u32) as *mut Value
+                        } else {
+                            (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
+                        };
+                        if opline.op1_type != OpType::Cv && !(&*source).is_reference() {
+                            report_php_notice(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "Only variables should be assigned by reference",
+                            )?;
+                        }
                         let binding = materialize_reference_alias(frame, source);
                         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
                         frame_slot_set(frame, destination, binding);
@@ -444,6 +457,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Echo => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let val = val.dereferenced();
                 if val.value_type() == ValueType::Undef {
                     if opline.op1_type == OpType::Cv && opline.extended_value != 0 {
                         if let Some((_, name)) = op_array
@@ -589,6 +603,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let base = frame as *const Value;
                 let op1 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
+                let op1 = op1.dereferenced();
+                let op2 = op2.dereferenced();
                 if let (Some(l1), Some(l2)) =
                     (op1.to_arithmetic_long(), op2.to_arithmetic_long())
                 {
@@ -647,6 +663,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let cv_ptr = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
                 let op1 = cv_ptr.dereferenced();
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
+                let op2 = op2.dereferenced();
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                 if let (Some(l1), Some(l2)) =
                     (op1.to_arithmetic_long(), op2.to_arithmetic_long())
@@ -926,6 +943,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::Add => {
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let op1 = op1.dereferenced();
+                let op2 = op2.dereferenced();
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let (Some(l1), Some(l2)) =
@@ -3408,7 +3427,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::AssignObjProp => {
                 // ── Cache-hit fast path for public, non-enum, non-readonly properties ──
-                let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                // SAFETY: the validated operand belongs to the live frame; the
+                // borrowed value is consumed before the frame can advance.
+                let obj_val = unsafe {
+                    (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+                        .dereferenced()
+                };
                 if obj_val.value_type() == ValueType::Object {
                     let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
                     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
@@ -4560,8 +4584,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         for (cv_idx, var_name) in vars_to_check {
                             if eg.dirty_globals.contains(var_name) {
                                 if let Some(val) = eg.globals.get(var_name) {
-                                    let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                                    unsafe { slot_set(cv_ptr, val.clone()) };
+                                    let value = if val.is_owned_reference() {
+                                        val.clone_owned_reference_alias()
+                                    } else {
+                                        val.clone()
+                                    };
+                                    // SAFETY: global metadata stores validated CV indices for this frame.
+                                    let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
+                                    unsafe { frame_slot_set(frame, cv_ptr, value) };
                                 }
                             }
                         }
@@ -4578,8 +4608,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // caller's "after return" handler when it actually consumes the dirty set.
                 if !op_array.global_vars.is_empty() {
                     for (cv_idx, var_name) in &op_array.global_vars {
-                        let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                        let val = unsafe { (*cv_ptr).clone() };
+                        // SAFETY: global metadata stores validated CV indices for this frame.
+                        let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
+                        let val = unsafe {
+                            if (*cv_ptr).is_owned_reference() {
+                                (*cv_ptr).clone_owned_reference_alias()
+                            } else {
+                                (*cv_ptr).clone()
+                            }
+                        };
                         globals_set(&mut eg.globals, var_name, val);
                         eg.dirty_globals.insert(var_name.clone());
                     }
@@ -4645,6 +4682,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 let retval = unsafe {
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
+                                let retval = retval.dereferenced();
                                 let ret_callee_class = eg.declaring_class_of(unsafe { (*frame).func });
                                 if !check_return_type_hint(
                                     retval,
@@ -4692,12 +4730,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if let Some(finally_ip) = need_finally {
                     // Write return value now (so it's available after finally)
                     if opline.op1_type != OpType::Unused {
-                        let retval = unsafe {
-                            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                        };
+                        // SAFETY: Return executes with a live frame and its caller-provided slot.
                         let return_target = unsafe { (*frame).return_value };
                         if !return_target.is_null() {
-                            unsafe { frame_return_set(frame, return_target, retval.clone()) };
+                            let (retval, warn_non_variable) = prepare_user_return_value(
+                                frame,
+                                op_array,
+                                opline,
+                                func_common_ret.sig.returns_reference,
+                            );
+                            if warn_non_variable {
+                                report_php_notice(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    "Only variable references should be returned by reference",
+                                )?;
+                            }
+                            unsafe { frame_return_set(frame, return_target, retval) };
                         }
                     }
                     // Jump to finally; after finally ends, the pending return
@@ -4751,12 +4802,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 if opline.op1_type != OpType::Unused {
-                    let retval = unsafe {
-                        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                    };
+                    // SAFETY: Return executes with a live frame and its caller-provided slot.
                     let return_target = unsafe { (*frame).return_value };
                     if !return_target.is_null() {
-                        unsafe { frame_return_set(frame, return_target, retval.clone()) };
+                        let (retval, warn_non_variable) = prepare_user_return_value(
+                            frame,
+                            op_array,
+                            opline,
+                            func_common_ret.sig.returns_reference,
+                        );
+                        if warn_non_variable {
+                            report_php_notice(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "Only variable references should be returned by reference",
+                            )?;
+                        }
+                        unsafe { frame_return_set(frame, return_target, retval) };
                     }
                 }
 
@@ -4791,8 +4855,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     for (cv_idx, var_name) in vars_to_check {
                         if eg.dirty_globals.contains(var_name) {
                             if let Some(val) = eg.globals.get(var_name) {
-                                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                                unsafe { slot_set(cv_ptr, val.clone()) };
+                                let value = if val.is_owned_reference() {
+                                    val.clone_owned_reference_alias()
+                                } else {
+                                    val.clone()
+                                };
+                                // SAFETY: global metadata stores validated CV indices for this frame.
+                                let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
+                                unsafe { frame_slot_set(frame, cv_ptr, value) };
                             }
                         }
                     }

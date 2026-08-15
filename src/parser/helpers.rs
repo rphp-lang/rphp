@@ -84,7 +84,7 @@ impl Parser {
             Token::Function => Some("function".to_string()),
             Token::Class => Some("class".to_string()),
             Token::New(_) => Some("new".to_string()),
-            Token::Return => Some("return".to_string()),
+            Token::Return { .. } => Some("return".to_string()),
             Token::Echo { .. } => Some("echo".to_string()),
             Token::If => Some("if".to_string()),
             Token::Else => Some("else".to_string()),

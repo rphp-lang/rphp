@@ -6016,16 +6016,24 @@ impl Compiler {
                         (destination, OpType::Cv)
                     }
                     _ => {
-                        // Reference-returning calls and plain variable aliases
-                        // retain their previous value-copy fallback until their
-                        // lvalue identity is available to the compiler.
+                        // A call result may carry the stable reference cell of
+                        // a function declared with `function &name()`. Bind the
+                        // destination to that result instead of degrading the
+                        // `=&` expression to an ordinary value assignment.
                         let (source, source_type) = self.compile_expr(target);
-                        let mut assign = Instruction::new(OpCode::AssignCv);
-                        assign.op1 = destination;
-                        assign.op1_type = OpType::Cv;
-                        assign.op2 = source;
-                        assign.op2_type = source_type;
-                        self.instructions.push(assign);
+                        let mut bind = Instruction::new(OpCode::BindCvRef);
+                        bind.op1 = source;
+                        bind.op1_type = source_type;
+                        bind.result = destination;
+                        bind.result_type = OpType::Cv;
+                        let line = match target.as_ref() {
+                            Expr::FunctionCall { line, .. }
+                            | Expr::MethodCall { line, .. }
+                            | Expr::StaticCall { line, .. }
+                            | Expr::DynamicCall { line, .. } => *line,
+                            _ => 0,
+                        };
+                        self.push_instruction_at_line(bind, line);
                         (destination, OpType::Cv)
                     }
                 }
