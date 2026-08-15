@@ -1095,6 +1095,63 @@ var_dump(phpversion("missing"), extension_loaded("missing"));
 }
 
 #[test]
+fn platform_and_versioning_setup_contracts_match_php() {
+    let output = run_php(
+        r#"<?php
+echo PHP_OS_FAMILY, "|", PHP_OS, "|";
+var_dump(PHP_DEBUG);
+var_dump(version_compare(PHP_VERSION, '8.1', '<'));
+var_dump(version_compare('1.0-dev', '1.0a1'));
+var_dump(version_compare('1.0RC1', '1.0rc1', 'eq'));
+var_dump(version_compare('1.0', '1.0pl1', '<'));
+var_dump(setlocale(LC_ALL, 'invalid'));
+var_dump(setlocale(LC_NUMERIC, 'C'));
+var_dump(gc_collect_cycles());
+"#,
+    );
+
+    let expected_os = if cfg!(windows) {
+        "Windows|WINNT|"
+    } else if cfg!(target_os = "macos") {
+        "Darwin|Darwin|"
+    } else if cfg!(target_os = "freebsd") {
+        "BSD|FreeBSD|"
+    } else if cfg!(target_os = "openbsd") {
+        "BSD|OpenBSD|"
+    } else if cfg!(target_os = "netbsd") {
+        "BSD|NetBSD|"
+    } else if cfg!(target_os = "dragonfly") {
+        "BSD|DragonFlyBSD|"
+    } else if cfg!(target_os = "solaris") {
+        "Solaris|SunOS|"
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
+        "Linux|Linux|"
+    } else {
+        "Unknown|Unknown|"
+    };
+    assert_eq!(
+        output,
+        format!(
+            "{expected_os}bool(false)\nbool(false)\nint(-1)\nbool(true)\nbool(true)\nbool(false)\nstring(1) \"C\"\nint(0)\n"
+        )
+    );
+}
+
+#[test]
+fn numeric_separators_follow_php_lexing_rules() {
+    let output = run_php(
+        r#"<?php
+$sum = 0;
+foreach ([1_000, 0xA_B, 0b1_01, 0o1_7] as $value) {
+    $sum += $value;
+}
+echo $sum;
+"#,
+    );
+    assert_eq!(output, "1191");
+}
+
+#[test]
 fn source_magic_constants_are_available_in_declaration_defaults() {
     let out = run_php_with_source_context(
         r#"<?php

@@ -27,6 +27,45 @@ pub const PHP_COMPAT_MAJOR_VERSION: i64 = 8;
 pub const PHP_COMPAT_MINOR_VERSION: i64 = 2;
 pub const PHP_COMPAT_RELEASE_VERSION: i64 = 0;
 
+fn php_os_family() -> &'static str {
+    if cfg!(windows) {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "Darwin"
+    } else if cfg!(any(
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )) {
+        "BSD"
+    } else if cfg!(target_os = "solaris") {
+        "Solaris"
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
+        "Linux"
+    } else {
+        "Unknown"
+    }
+}
+
+fn php_os_name() -> &'static str {
+    if cfg!(windows) {
+        "WINNT"
+    } else if cfg!(target_os = "freebsd") {
+        "FreeBSD"
+    } else if cfg!(target_os = "openbsd") {
+        "OpenBSD"
+    } else if cfg!(target_os = "netbsd") {
+        "NetBSD"
+    } else if cfg!(target_os = "dragonfly") {
+        "DragonFlyBSD"
+    } else if cfg!(target_os = "solaris") {
+        "SunOS"
+    } else {
+        php_os_family()
+    }
+}
+
 /// Resolve a PHP built-in constant by name.
 /// Single source of truth — used by both compiler (property defaults) and runtime (FetchConst).
 pub fn builtin_constant(name: &str) -> Option<value::Value> {
@@ -58,6 +97,8 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "PHP_VERSION_ID" => Some(value::Value::long(PHP_COMPAT_VERSION_ID)),
         "PHP_VERSION" => Some(value::Value::string(PHP_COMPAT_VERSION)),
         "PHP_SAPI" => Some(value::Value::string("cli")),
+        "PHP_DEBUG" => Some(value::Value::bool(false)),
+        "PHP_OS_FAMILY" => Some(value::Value::string(php_os_family())),
 
         // System
         "PHP_EOL" => Some(value::Value::string("\n".to_string())),
@@ -66,13 +107,13 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
             if cfg!(windows) {
                 match name {
                     "DIRECTORY_SEPARATOR" => Some(value::Value::string("\\".to_string())),
-                    "PHP_OS" => Some(value::Value::string("WINNT".to_string())),
+                    "PHP_OS" => Some(value::Value::string(php_os_name())),
                     _ => None,
                 }
             } else {
                 match name {
                     "DIRECTORY_SEPARATOR" => Some(value::Value::string("/".to_string())),
-                    "PHP_OS" => Some(value::Value::string("Darwin".to_string())),
+                    "PHP_OS" => Some(value::Value::string(php_os_name())),
                     _ => None,
                 }
             }
@@ -84,6 +125,16 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
                 Some(value::Value::string(":".to_string()))
             }
         }
+
+        // Locale categories use the POSIX values exposed by PHP on Unix.
+        // The current locale implementation admits only the portable C/POSIX locale.
+        "LC_CTYPE" => Some(value::Value::long(0)),
+        "LC_NUMERIC" => Some(value::Value::long(1)),
+        "LC_TIME" => Some(value::Value::long(2)),
+        "LC_COLLATE" => Some(value::Value::long(3)),
+        "LC_MONETARY" => Some(value::Value::long(4)),
+        "LC_MESSAGES" => Some(value::Value::long(5)),
+        "LC_ALL" => Some(value::Value::long(6)),
 
         // Sorting
         "SORT_REGULAR" => Some(value::Value::long(0)),

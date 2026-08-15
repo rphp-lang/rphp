@@ -1306,6 +1306,16 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("php_uname", fn_php_uname, 1, 0, "mode");
     reg!("php_sapi_name", fn_php_sapi_name, 0, 0);
     reg!("phpversion", fn_phpversion, 1, 0, "extension");
+    reg!(
+        "version_compare",
+        fn_version_compare,
+        3,
+        2,
+        "version1",
+        "version2",
+        "operator"
+    );
+    reg_var!("setlocale", fn_setlocale, 2, "category", "locales");
     reg!("extension_loaded", fn_extension_loaded, 1, 1, "extension");
     reg!("headers_sent", fn_headers_sent, 2, 0, "filename", "line");
     reg!(
@@ -1318,6 +1328,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "response_code"
     );
     reg!("ini_get", fn_ini_get, 1, 1, "option");
+    reg!("gc_collect_cycles", fn_gc_collect_cycles, 0, 0);
     reg!("sleep", fn_sleep, 1, 1, "seconds");
     reg!("usleep", fn_usleep, 1, 1, "microseconds");
 
@@ -10731,6 +10742,152 @@ fn fn_phpversion(
     ret!(rv, Value::string(crate::PHP_COMPAT_VERSION));
 }
 
+fn normalize_version(version: &str) -> Vec<String> {
+    let mut normalized = String::with_capacity(version.len() * 2);
+    let mut previous: Option<char> = None;
+    for mut ch in version.chars() {
+        if matches!(ch, '-' | '_' | '+') {
+            ch = '.';
+        }
+        if let Some(prev) = previous {
+            if ch != '.' && prev != '.' && ch.is_ascii_digit() != prev.is_ascii_digit() {
+                normalized.push('.');
+            }
+        }
+        if ch == '.' {
+            if !normalized.ends_with('.') {
+                normalized.push('.');
+            }
+        } else {
+            normalized.push(ch);
+        }
+        previous = Some(ch);
+    }
+    normalized
+        .trim_matches('.')
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn version_special_rank(part: &str) -> i8 {
+    match part.to_ascii_lowercase().as_str() {
+        "dev" => -6,
+        "alpha" | "a" => -5,
+        "beta" | "b" => -4,
+        "rc" => -3,
+        "#" => 0,
+        "pl" | "p" => 1,
+        _ => -7,
+    }
+}
+
+fn compare_numeric_version_parts(left: &str, right: &str) -> std::cmp::Ordering {
+    let left = left.trim_start_matches('0');
+    let right = right.trim_start_matches('0');
+    left.len()
+        .cmp(&right.len())
+        .then_with(|| left.as_bytes().cmp(right.as_bytes()))
+}
+
+fn compare_version_parts(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
+    let left = left.unwrap_or("0");
+    let right = right.unwrap_or("0");
+    match (
+        left.bytes().all(|byte| byte.is_ascii_digit()),
+        right.bytes().all(|byte| byte.is_ascii_digit()),
+    ) {
+        (true, true) => compare_numeric_version_parts(left, right),
+        (true, false) => version_special_rank("#").cmp(&version_special_rank(right)),
+        (false, true) => version_special_rank(left).cmp(&version_special_rank("#")),
+        (false, false) => version_special_rank(left).cmp(&version_special_rank(right)),
+    }
+}
+
+fn php_version_compare(left: &str, right: &str) -> std::cmp::Ordering {
+    let left = normalize_version(left);
+    let right = normalize_version(right);
+    let count = left.len().max(right.len());
+    for index in 0..count {
+        let ordering = compare_version_parts(
+            left.get(index).map(String::as_str),
+            right.get(index).map(String::as_str),
+        );
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn fn_version_compare(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let left = arg_str!(ed, 0);
+    let right = arg_str!(ed, 1);
+    let ordering = php_version_compare(&left, &right);
+    let Some(operator) = arg_opt!(ed, 2) else {
+        let result = match ordering {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        };
+        ret!(rv, Value::long(result));
+    };
+    let operator = operator.echo_to_string();
+    let result = match operator.as_str() {
+        "<" | "lt" => ordering.is_lt(),
+        "<=" | "le" => ordering.is_le(),
+        ">" | "gt" => ordering.is_gt(),
+        ">=" | "ge" => ordering.is_ge(),
+        "=" | "==" | "eq" => ordering.is_eq(),
+        "!=" | "<>" | "ne" => ordering.is_ne(),
+        _ => {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "version_compare(): Argument #3 ($operator) must be a valid comparison operator",
+            ));
+            ret!(rv, Value::null());
+        }
+    };
+    ret!(rv, Value::bool(result));
+}
+
+/// Portable locale subset. Unsupported host locales return false, allowing
+/// callers and PHPT setup sections to detect the unavailable capability.
+fn fn_setlocale(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let requested = arg!(ed, 1);
+    if let Some(locales) = requested.as_array() {
+        for (_, locale) in locales.iter() {
+            let locale = locale.echo_to_string();
+            if locale == "C" || locale.eq_ignore_ascii_case("POSIX") {
+                ret!(rv, Value::string("C"));
+            }
+        }
+    } else {
+        let locale = requested.echo_to_string();
+        if locale == "C" || locale.eq_ignore_ascii_case("POSIX") {
+            ret!(rv, Value::string("C"));
+        }
+    }
+    if let Some(locales) = arg!(ed, 2).as_array() {
+        for (_, locale) in locales.iter() {
+            let locale = locale.echo_to_string();
+            if locale == "C" || locale.eq_ignore_ascii_case("POSIX") {
+                ret!(rv, Value::string("C"));
+            }
+        }
+    }
+    ret!(rv, Value::bool(false));
+}
+
 /// RPHP does not advertise an extension until its compatibility contract is
 /// separately admitted. Composer can therefore reject unsupported packages
 /// instead of selecting code for a partially implemented extension.
@@ -10771,6 +10928,17 @@ fn fn_ini_get(
         ret!(rv, Value::string("1"));
     }
     ret!(rv, Value::bool(false));
+}
+
+/// RPHP uses reference-counted values and currently has no separate Zend-style
+/// cycle collector queue. Expose the observable no-cycles result instead of
+/// rejecting portable cleanup code that invokes the collector explicitly.
+fn fn_gc_collect_cycles(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::long(0));
 }
 
 /// PHP_INT_SIZE, PHP_INT_MAX etc. are handled as constants.
