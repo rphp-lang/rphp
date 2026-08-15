@@ -453,6 +453,25 @@ echo $s;
 }
 
 #[test]
+fn test_string_self_concat_snapshots_rhs_before_mutation() {
+    assert_eq!(
+        run_php(
+            "<?php
+$value = 'ab';
+$copy = $value;
+for ($i = 0; $i < 22; ++$i) {
+    $value .= $value;
+}
+$number = 12;
+$number .= $number;
+echo strlen($value), '|', $copy, '|', $number;
+"
+        ),
+        "8388608|ab|1212"
+    );
+}
+
+#[test]
 fn test_string_cow_return_and_second_consumer() {
     // Function returns a string, two callers get it — independent copies.
     assert_eq!(
