@@ -1557,6 +1557,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "preg_replace" | "preg_replace_callback" => 0b1_0000, // arg 4 (&$count)
         "str_replace" => 0b1000,                  // arg 3 (&$count)
         "parse_str" => 0b10,                      // arg 1 (&$result)
+        "extract" => 0b1,                         // arg 0 (&$array for EXTR_REFS)
         _ => 0,
     }
 }

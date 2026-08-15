@@ -991,6 +991,47 @@ echo $normal['mask'];
 }
 
 #[test]
+fn extract_updates_the_caller_scope_with_flags_references_and_atomic_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function probeExtractScope() {
+    $existing = 'old';
+    $input = ['a' => 1, 'existing' => 'new', 7 => 3];
+    echo extract($input, EXTR_SKIP), ":$a:$existing|";
+    echo extract($input, EXTR_PREFIX_INVALID, 'p'), ":$p_7|";
+
+    $refs = ['x' => 1];
+    extract($refs, EXTR_REFS);
+    $x = 9;
+    echo $refs['x'], '|';
+
+    try {
+        extract(['this' => 42, 'late' => 24]);
+    } catch (Error $error) {
+        echo $error->getMessage(), ':', isset($late) ? 'partial' : 'atomic', '|';
+    }
+
+    $dynamic = 'extract';
+    try {
+        $dynamic(['z' => 1]);
+    } catch (Error $error) {
+        echo $error->getMessage(), '|';
+    }
+
+    $name = 'runtime';
+    $$name = 5;
+    $vars = get_defined_vars();
+    echo $vars['existing'], ':', $vars['runtime'];
+}
+probeExtractScope();
+"#
+        ),
+        "1:1:old|3:3|9|Cannot re-assign $this:atomic|Cannot call extract() dynamically|new:5"
+    );
+}
+
+#[test]
 fn pathinfo_supports_component_flags_used_by_source_loaders() {
     assert_eq!(
         run_php(

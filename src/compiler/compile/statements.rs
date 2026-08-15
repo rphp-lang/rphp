@@ -2406,7 +2406,10 @@ impl Compiler {
                                 *line,
                             ));
                         }
-                        Expr::Variable { name, .. } => {
+                        Expr::Variable { name, line } => {
+                            if name == "this" {
+                                return Err(self.goto_error("Cannot unset $this", *line));
+                            }
                             let cv_idx = self.resolve_cv(name);
                             self.definitely_defined_cvs.remove(&cv_idx);
                             let undef_idx = self.add_literal(Value::undef());

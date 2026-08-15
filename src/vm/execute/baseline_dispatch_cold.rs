@@ -177,6 +177,150 @@ fn dynamic_scope_is_global(frame: *mut ExecuteData) -> bool {
     unsafe { !frame.is_null() && (*frame).prev_execute_data.is_null() }
 }
 
+enum CallerScopeOperation<'a> {
+    Read(&'a str),
+    Write(&'a str, Value),
+    Snapshot,
+}
+
+enum CallerScopeResult {
+    Value(Option<Value>),
+    Written(bool),
+    Variables(PhpArray),
+}
+
+/// Execute every caller-symbol-table operation behind one audited raw-frame
+/// boundary. The caller frame and its dynamic-scope owner remain live for the
+/// synchronous internal call; all_cvs proves CV indices and frame_slot_set
+/// maintains heap ownership metadata for writes.
+fn caller_scope_operation(
+    eg: &mut ExecutorGlobals,
+    internal_frame: *mut ExecuteData,
+    operation: CallerScopeOperation<'_>,
+) -> CallerScopeResult {
+    // SAFETY: the invariant above covers every dereference in this block. No
+    // frame pointer or borrowed slot escapes the operation.
+    unsafe {
+        let caller = (*internal_frame).prev_execute_data;
+        if caller.is_null() {
+            return match operation {
+                CallerScopeOperation::Read(_) => CallerScopeResult::Value(None),
+                CallerScopeOperation::Write(name, _) => {
+                    CallerScopeResult::Written(name != "this")
+                }
+                CallerScopeOperation::Snapshot => {
+                    CallerScopeResult::Variables(PhpArray::new())
+                }
+            };
+        }
+        let owner = dynamic_scope_frame(eg, caller);
+        match operation {
+            CallerScopeOperation::Read(name) => {
+                let value = if let Some(cv) = dynamic_scope_cv(owner, name) {
+                    let value = &*(*owner).get_op_ptr(cv, OpType::Cv, (*owner).op_array());
+                    (!value.is_undef()).then(|| value.clone())
+                } else if dynamic_scope_is_global(owner) {
+                    eg.globals
+                        .get(name)
+                        .filter(|value| !value.is_undef())
+                        .cloned()
+                } else {
+                    eg.dynamic_variables
+                        .get(&(owner as usize))
+                        .and_then(|variables| variables.get(name))
+                        .filter(|value| !value.is_undef())
+                        .cloned()
+                };
+                CallerScopeResult::Value(value)
+            }
+            CallerScopeOperation::Write(name, value) => {
+                if name == "this" {
+                    return CallerScopeResult::Written(false);
+                }
+                if let Some(cv) = dynamic_scope_cv(owner, name) {
+                    frame_slot_set(owner, (*owner).cv_mut(cv), value);
+                } else if dynamic_scope_is_global(owner) {
+                    globals_assign(&mut eg.globals, name, value);
+                    eg.dirty_globals.insert(name.to_string());
+                } else {
+                    globals_assign(
+                        eg.dynamic_variables.entry(owner as usize).or_default(),
+                        name,
+                        value,
+                    );
+                }
+                CallerScopeResult::Written(true)
+            }
+            CallerScopeOperation::Snapshot => {
+                let mut result = PhpArray::new();
+                let op_array = (*owner).op_array();
+                for (cv, name) in &op_array.all_cvs {
+                    let value = &*(*owner).get_op_ptr(*cv, OpType::Cv, op_array);
+                    if !value.is_undef() {
+                        result.set_str(name, value.clone());
+                    }
+                }
+                let extra = if dynamic_scope_is_global(owner) {
+                    Some(&eg.globals)
+                } else {
+                    eg.dynamic_variables.get(&(owner as usize))
+                };
+                if let Some(extra) = extra {
+                    for (name, value) in extra {
+                        if !value.is_undef() && result.get_str(name).is_none() {
+                            result.set_str(name, value.clone());
+                        }
+                    }
+                }
+                CallerScopeResult::Variables(result)
+            }
+        }
+    }
+}
+
+pub(crate) fn caller_scope_variable(
+    eg: &mut ExecutorGlobals,
+    internal_frame: *mut ExecuteData,
+    name: &str,
+) -> Option<Value> {
+    let CallerScopeResult::Value(value) = caller_scope_operation(
+        eg,
+        internal_frame,
+        CallerScopeOperation::Read(name),
+    ) else {
+        unreachable!();
+    };
+    value
+}
+
+pub(crate) fn set_caller_scope_variable(
+    eg: &mut ExecutorGlobals,
+    internal_frame: *mut ExecuteData,
+    name: &str,
+    value: Value,
+) -> bool {
+    let CallerScopeResult::Written(written) = caller_scope_operation(
+        eg,
+        internal_frame,
+        CallerScopeOperation::Write(name, value),
+    ) else {
+        unreachable!();
+    };
+    written
+}
+
+pub(crate) fn caller_scope_variables(
+    eg: &mut ExecutorGlobals,
+    internal_frame: *mut ExecuteData,
+) -> PhpArray {
+    let CallerScopeResult::Variables(variables) =
+        caller_scope_operation(eg, internal_frame, CallerScopeOperation::Snapshot)
+    else {
+        unreachable!();
+    };
+    variables
+}
+
 #[inline(never)]
 fn op_dynamic_variable<'a>(
     eg: &mut ExecutorGlobals,
