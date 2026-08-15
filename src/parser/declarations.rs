@@ -1146,7 +1146,7 @@ impl Parser {
                     Self::collect_free_vars(&elem.value, bound, out);
                 }
             }
-            Expr::ArrayAccess { array, index } => {
+            Expr::ArrayAccess { array, index, .. } => {
                 Self::collect_free_vars(array, bound, out);
                 Self::collect_free_vars(index, bound, out);
             }

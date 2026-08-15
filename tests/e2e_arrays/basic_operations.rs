@@ -444,6 +444,27 @@ fn test_e2e_string_negative_offset() {
     assert_eq!(run_php("<?php $s = 'hello'; echo $s[-1];"), "o");
 }
 
+#[test]
+fn string_offset_miss_warns_at_access_and_isset_stays_silent() {
+    assert_eq!(
+        run_php(
+            "<?php
+$value = 'abc';
+var_dump($value[3]);
+var_dump($value[-4]);
+var_dump(isset($value[3]));
+var_dump(@$value[4]);
+var_dump($value[-1]);
+set_error_handler(function($code, $message) { echo 'handled:', $code, ':', $message, PHP_EOL; return true; });
+var_dump($value[8]);
+$empty = '';
+var_dump(isset($empty[0][0]));
+"
+        ),
+        "\nWarning: Uninitialized string offset 3 in <main> on line 3\nstring(0) \"\"\n\nWarning: Uninitialized string offset -4 in <main> on line 4\nstring(0) \"\"\nbool(false)\nstring(0) \"\"\nstring(1) \"c\"\nhandled:2:Uninitialized string offset 8\nstring(0) \"\"\nbool(false)\n"
+    );
+}
+
 // === Inspired by PHP test suite ===
 
 #[test]

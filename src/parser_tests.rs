@@ -71,6 +71,7 @@ fn test_parse_null_coalescing_assignments() {
                         line: 1,
                     }),
                     index: Box::new(Expr::Integer(1)),
+                    line: 1,
                 },
                 expr: Expr::StringLiteral("fallback".into()),
             },

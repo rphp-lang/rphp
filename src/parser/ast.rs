@@ -130,6 +130,7 @@ pub enum Expr {
         // $a[0], $a['key']
         array: Box<Expr>,
         index: Box<Expr>,
+        line: usize,
     },
     /// A positional call argument ending in `[]`. The compiler may bind the
     /// appended slot only when the statically resolved parameter is by
@@ -377,7 +378,7 @@ impl Expr {
                     .is_some_and(Expr::contains_yield)
                     || element.value.contains_yield()
             }),
-            Expr::ArrayAccess { array, index } => {
+            Expr::ArrayAccess { array, index, .. } => {
                 array.contains_yield() || index.contains_yield()
             }
             Expr::ArrayAppendArgument { target, .. } => target.contains_yield(),

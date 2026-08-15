@@ -924,7 +924,7 @@ impl Parser {
 
     fn split_array_access(mut expr: Expr) -> (Expr, Vec<Expr>) {
         let mut indices = Vec::new();
-        while let Expr::ArrayAccess { array, index } = expr {
+        while let Expr::ArrayAccess { array, index, .. } = expr {
             indices.push(*index);
             expr = *array;
         }

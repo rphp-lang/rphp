@@ -3030,7 +3030,30 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else if pos < bytes.len() {
                             // Single byte as a string
                             Value::string(String::from(bytes[pos] as char))
+                        } else if opline._pad & FETCH_DIM_SILENT != 0 {
+                            Value::string("")
                         } else {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!("Uninitialized string offset {idx}"),
+                                opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                            )?;
+                            if let Some(exception) = eg.exception.take() {
+                                match throw_in_frame(eg, frame, exception) {
+                                    ThrowResult::Handled(new_frame, new_op_array) => {
+                                        frame = new_frame;
+                                        op_array = new_op_array;
+                                        continue 'vm;
+                                    }
+                                    ThrowResult::Unhandled(exception) => {
+                                        eg.exception = Some(exception);
+                                        return Ok(());
+                                    }
+                                }
+                            }
                             Value::string("")
                         };
                         write_fetch_dim_result(frame, result_ptr, val);

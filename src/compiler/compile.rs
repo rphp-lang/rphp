@@ -29,8 +29,9 @@ use crate::vm::instruction::{
     ASSIGN_CV_REBIND, ASSIGN_DIM_REFERENCE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ISSET, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT,
-    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_SILENT,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME,
     STATIC_PROP_DYNAMIC_OWNER,
@@ -1576,7 +1577,7 @@ impl Compiler {
                         .is_none_or(Self::is_compile_time_class_constant_name)
                     && Self::is_compile_time_class_constant_name(&element.value)
             }),
-            Expr::ArrayAccess { array, index } => {
+            Expr::ArrayAccess { array, index, .. } => {
                 Self::is_compile_time_class_constant_name(array)
                     && Self::is_compile_time_class_constant_name(index)
             }
@@ -2689,7 +2690,7 @@ impl Compiler {
                     self.collect_class_name_literals(&element.value, known);
                 }
             }
-            Expr::ArrayAccess { array, index } => {
+            Expr::ArrayAccess { array, index, .. } => {
                 self.collect_class_name_literals(array, known);
                 self.collect_class_name_literals(index, known);
             }
@@ -2939,7 +2940,7 @@ impl Compiler {
                 }
                 Ok(Value::array(arr))
             }
-            Expr::ArrayAccess { array, index } => {
+            Expr::ArrayAccess { array, index, .. } => {
                 let array = Self::eval_const_expr_with_context(array, known, file_context)?;
                 let index = Self::eval_const_expr_with_context(index, known, file_context)?;
                 let array = array
@@ -3490,7 +3491,7 @@ impl Compiler {
                 self.instructions.push(fetch);
                 (result, OpType::Tmp)
             }
-            Expr::ArrayAccess { array, index } => {
+            Expr::ArrayAccess { array, index, .. } => {
                 if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
@@ -3513,6 +3514,7 @@ impl Compiler {
                 fetch.op2_type = index_type;
                 fetch.result = result;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_DIM_SILENT;
                 self.instructions.push(fetch);
                 (result, OpType::Tmp)
             }
@@ -3552,7 +3554,7 @@ impl Compiler {
                 self.instructions.push(isset);
                 (result, OpType::Tmp)
             }
-            Expr::ArrayAccess { array, index } => {
+            Expr::ArrayAccess { array, index, .. } => {
                 if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
@@ -4683,7 +4685,7 @@ impl Compiler {
 
                 (arr_tmp, OpType::Tmp)
             }
-            Expr::ArrayAccess { array, index } => {
+            Expr::ArrayAccess { array, index, line } => {
                 if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
@@ -4705,7 +4707,7 @@ impl Compiler {
                 fetch.op2 = idx_op;
                 fetch.result_type = OpType::Tmp;
                 fetch.result = tmp;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::DynamicClassConstant {
@@ -4820,6 +4822,10 @@ impl Compiler {
                         instruction._pad |= CALL_FLAG_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::FetchCvR {
                         instruction._pad |= crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS;
+                    } else if instruction.opcode == OpCode::FetchDimR
+                        && instruction._pad & FETCH_DIM_ISSET == 0
+                    {
+                        instruction._pad |= FETCH_DIM_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::FetchDynamicVar
                         && instruction._pad & FETCH_DIM_ISSET == 0
                     {
@@ -6123,7 +6129,7 @@ impl Compiler {
                         self.instructions.push(bind);
                         (destination, OpType::Cv)
                     }
-                    Expr::ArrayAccess { array, index } => {
+                    Expr::ArrayAccess { array, index, .. } => {
                         if matches!(array.as_ref(), Expr::Globals { .. }) {
                             let (key, key_type) = self.compile_expr(index);
                             let mut bind = Instruction::new(OpCode::BindGlobalRef);
@@ -6654,7 +6660,7 @@ impl Compiler {
     ) {
         for (i, arg) in args.iter().enumerate() {
             match arg {
-                CallArg::Positional(Expr::ArrayAccess { array, index })
+                CallArg::Positional(Expr::ArrayAccess { array, index, .. })
                     if matches!(array.as_ref(), Expr::ArrayAppendArgument { .. })
                         && (i >= 64 || ref_args & (1u64 << i) == 0) =>
                 {
@@ -7132,7 +7138,7 @@ impl Compiler {
                         Expr::ArrayAccess { .. } => {
                             let mut root = target;
                             let mut reversed_indices = Vec::new();
-                            while let Expr::ArrayAccess { array, index } = root {
+                            while let Expr::ArrayAccess { array, index, .. } = root {
                                 reversed_indices.push(index.as_ref().clone());
                                 root = array.as_ref();
                             }
