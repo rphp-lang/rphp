@@ -1,327 +1,273 @@
 # Execution coverage scorecard
 
-Status: measured at `0659191621748143ae258e36a4e20890b83451cf`, 2026-08-13
+Status: measured on clean integrated `main` commit
+`be7615240ccd1249211e4f92052df33b9e7f8f71`, 2026-08-15
 
-This report freezes the current baseline, typed-region and native-JIT evidence
-for the representative corpus and its independent routing holdout. It is a
-selection checkpoint: it identifies the next general optimization boundary but
-does not implement that optimization.
+This is the current selection scorecard for the representative corpus,
+independent holdouts and focused execution controls. It replaces the stale
+pre-Layer-1 selection at `0659191`; historical checkpoint reports remain the
+record of the conditions under which earlier optimizations were accepted.
 
 ## Checkpoint contract
 
-- **Outcome:** one reproducible scorecard, one capability matrix and one
-  evidence-ranked next execution checkpoint.
-- **Baseline:** clean detached worktree at `0659191` before report work. The
-  measured canonical lane uses the default `max-perf` binary with
-  `RPHP_DISABLE_QUICK_LOOPS=1`, keeping toolchain, code layout and unrelated
-  runtime fast paths equal to the typed lane.
-- **Proof:** exact output comparison across three RPHP lanes and PHP with and
-  without tracing JIT; 15 retained, order-rotated internal-time samples per
-  lane; `vm-stats` coverage; and two-second CPU samples after scaling only the
-  streamed iteration count.
-- **Acceptance:** every output agrees; coverage counters reconcile; the chosen
-  gap is general, structurally selected and reproduced outside the design
-  corpus; no runtime or semantic source is changed.
-- **Stop rule:** do not select a new recognizer or optimize an anonymous native
-  address without an operation-level coverage counter and an independent
-  workload that reproduces the boundary.
+- **Outcome:** regenerate the complete execution-weighted scorecard after
+  Layer 1 and either identify a material non-order virtual-heap graph for
+  Layer 2 or reject that layer for this cycle.
+- **Baseline:** exact clean integrated commit `be76152`; no production source
+  changes were made during selection.
+- **Proof:** identical outputs across canonical, typed, default-JIT, PHP
+  no-JIT and PHP tracing-JIT lanes; 15 retained order-rotated samples per lane;
+  one RSS observation and one separate `vm-stats` execution per RPHP lane; and
+  a fresh ARM64 process profile of the highest-weight rejected shape.
+- **Acceptance:** both architectures must agree on the owner/allocation and
+  admission result. A Layer 2 slice requires a representative non-order graph
+  with material hot owners and an independent materialization holdout.
+- **Stop rule:** do not manufacture a DTO microbenchmark to force Layer 2
+  admission. If the existing corpus has no material non-order owner cost,
+  reject Layer 2 and rank the next observed execution gap instead.
 
 ## Environment and method
 
-Measurements used an Apple M4 MacBook Air (`Mac16,13`, 24 GB), macOS 26.5.2,
-ARM64, Rust/Cargo 1.93.1, and Homebrew PHP 8.5.9. RPHP builds used the
-`max-perf` profile, fat LTO, one codegen unit and
-`RUSTFLAGS=-C target-cpu=native`. The canonical and typed binaries used the
-default `quick-loops` feature; canonical execution disabled its planner at
-runtime. The native binary added `jit-prototype`. Diagnostic counters came
-from separate `vm-stats` builds and were never used for timing.
+ARM64 used an Apple M4 MacBook Air with 24 GB memory, macOS 26.5.2,
+Rust 1.93.1 and PHP 8.5.9. The accepted run started and remained on AC power
+with Low Power Mode disabled. An escalated process audit immediately before
+timing found no competing Cargo, Rust, RPHP, PHP, scorecard or framework-gate
+process.
 
-PHP no-JIT used `php -n`. PHP JIT loaded
-`/opt/homebrew/etc/php/8.5/php.ini` with no additional ini files, then set
-`opcache.enable_cli=1`, a 100 MB JIT buffer and tracing mode.
-`opcache_get_status(false)` confirmed that PHP JIT was on. Both PHP lanes
-loaded the same compiled module set: bcmath, bz2, calendar, Core, ctype, curl,
-date, dba, dom, exif, FFI, fileinfo, filter, ftp, gd, gettext, gmp, hash,
-iconv, intl, json, ldap, lexbor, libxml, mbstring, mysqli, mysqlnd, odbc,
-openssl, pcntl, pcre, PDO, pdo_dblib, pdo_mysql, PDO_ODBC, pdo_pgsql,
-pdo_sqlite, pgsql, Phar, posix, random, readline, Reflection, session, shmop,
-SimpleXML, snmp, soap, sockets, sodium, SPL, sqlite3, standard, sysvmsg,
-sysvsem, sysvshm, tidy, tokenizer, uri, xml, xmlreader, xmlwriter, XSL,
-Zend OPcache, zip and zlib.
+x86-64 used a physical AMD Ryzen 9 7950X with 31,985,372 KiB memory,
+Linux 7.0.0-28 on Ubuntu 24.04, Rust 1.93.1 and PHP 8.4.24. The host reported
+the `performance` governor and CPUs 0-31 available to the process. Source sync,
+builds, timing, diagnostics and cleanup all ran under the project's one
+non-blocking exclusive benchmark lock. No affinity override was applied by the
+scorecard runner.
 
-The timed value comes from `microtime(true)` inside each PHP workload, so it
-excludes parsing and process startup. It does include each fresh process's
-in-workload region admission and native/PHP JIT compilation. The warm-up policy
-is one untimed output-validation execution per mode and workload; no warmed
-process is reused for a measured sample. Each row retains all 15 samples with
-no outlier removal. The five execution modes rotate their order each round.
-The spread is nearest-rank p10–p90. Before timing, all five modes were required
-to produce the same result. Workloads use only the fixed inputs declared in
-their named repository source files.
+Both hosts used `max-perf`, fat LTO, one codegen unit and
+`RUSTFLAGS=-C target-cpu=native`. The canonical and typed binaries contain the
+same `quick-loops` code; the canonical lane sets
+`RPHP_DISABLE_QUICK_LOOPS=1`. The default-JIT lane adds the ordinary bounded
+native JIT. Separate `vm-stats` builds were never timed.
 
-The repository workload ABI currently exposes elapsed seconds through
-`microtime(true)`, which is precise wall time but not monotonic. The narrow
-distributions and large coverage deltas make it adequate for this selection
-checkpoint, but it does not close roadmap gate M0; a release gate must migrate
-the common timer to `hrtime(true)` or an equivalent monotonic clock and rerun
-both architectures.
+The measured value is the workload's internal `microtime(true)` interval. It
+excludes parsing and process startup but includes fresh-process region
+admission and native/PHP JIT compilation. Each workload had one untimed
+five-lane output validation, followed by 15 samples per lane. Lane order
+rotated every round, every sample was retained, no outlier was removed and the
+reported spread is nearest-rank p10-p90. PHP tracing JIT activation was
+verified before timing. The exact loaded PHP module sets are retained in the
+raw metadata; PHP no-JIT and tracing-JIT module sets differ by host and are
+controls, not interchangeable RPHP baselines.
 
-The diagnostic `vm-stats` build is not timed. CPU sampling uses the same
-workload source streamed to RPHP with only its final iteration argument scaled
-long enough to collect samples; no workload file or runtime source is changed.
-Runs were sequential, with no CPU affinity, timeout or explicit power-mode
-override. Low Power Mode was off during the completion audit. Peak RSS is one
-fresh-process diagnostic observation per lane, not a timing distribution.
-An audit smoke that timed immediately after four release builds was thermally
-distorted and is excluded from every timing table. The reproduction runner now
-keeps instrumented builds after all timing and declares a 60-second post-build
-cooldown.
+Each accepted host artifact contains exactly:
 
-The private x86-64 benchmark host was not configured in this task. Current
-x86-64 source and focused tests are inventoried below, but x86-64 runtime and
-performance cells remain explicitly pending a fresh host run.
+- 1,200 timing rows: 16 workloads x 5 lanes x 15 samples;
+- 80 summary rows and no missing or duplicate lane;
+- 48 single-observation RSS rows: 16 workloads x 3 RPHP lanes; and
+- 48 instrumented RPHP lanes containing 2,412 `vm-stats` rows.
 
-Exact validated result payloads (the elapsed suffix is excluded):
+Both runners exited zero. Every validation and measured execution produced the
+same payload in all five lanes; the runner would stop at the first mismatch.
+The accepted raw artifacts remain outside the repository for integration
+audit. Their SHA-256 digests are
+`60e304649689010dc47c0772e3f014b53ae9065af9ab6facdc2333e4d07b43fc`
+on ARM64 and
+`6661a33db02bdc70418da7a5dd13e2dae3ef1674f01aea94b98c1467f71aa3be`
+on x86-64.
 
-| Workload | Expected payload |
-| --- | --- |
-| Order pipeline and typed variant | `9895778000,1327440292,11223218292,210000` |
-| Ledger pipeline and typed variant | `500000,7981250000,280500000,182500` |
-| Routing holdout | `290394364,154183816,54660174,384960,192495,64134,108411` |
+### Infrastructure-only runs
+
+These runs are not mixed into any accepted distribution:
+
+- An initial sandboxed ARM64 invocation completed all 1,200 timing rows and 80
+  summaries, then `/usr/bin/time -l` exited one while reading
+  `kern.clockrate` (`Operation not permitted`). It contains no RSS or
+  `vm-stats` rows and remains provisional. The complete protocol was rerun in
+  one invocation outside the sandbox instead of attaching later diagnostics.
+- The first remote setup shell had no Cargo in its non-login `PATH`; it built
+  nothing and timed nothing. A second archive-only setup completed two builds
+  but stopped before cooldown and timing because the runner correctly required
+  Git metadata for commit/clean-tree validation. The accepted x86 run used a
+  Git bundle and a clean detached `be76152` checkout under the same lock.
 
 ## Current performance scorecard
 
-Times are median milliseconds with p10–p90 in parentheses.
+Times are median in-workload milliseconds with p10-p90 in parentheses. They
+apply only to the named workloads and environments.
 
-| Workload | Canonical/quick-off | Typed region | ARM64 JIT | PHP no JIT | PHP tracing JIT | Typed gain | JIT gain over typed |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Order pipeline | 226.954 (224.345–229.658) | 65.160 (64.710–65.860) | 4.164 (4.102–4.281) | 93.556 (92.200–94.364) | 55.696 (55.156–56.991) | 3.48x | 15.65x |
-| Typed order pipeline | 264.372 (260.637–270.863) | 85.341 (84.641–86.903) | 4.188 (4.146–4.487) | 97.628 (96.446–98.957) | 57.597 (57.259–59.532) | 3.10x | 20.38x |
-| Ledger pipeline | 51.355 (50.187–52.498) | 23.836 (23.167–24.135) | 2.396 (2.281–2.561) | 29.619 (29.080–30.131) | 9.717 (9.440–9.958) | 2.15x | 9.95x |
-| Typed ledger pipeline | 51.768 (50.463–52.244) | 23.843 (23.543–24.452) | 2.359 (2.255–2.611) | 30.686 (29.931–31.630) | 10.245 (9.816–10.503) | 2.17x | 10.11x |
-| Routing holdout | 193.593 (191.417–199.267) | 64.995 (63.584–65.160) | 6.477 (6.183–7.104) | 68.703 (67.344–70.508) | 29.283 (28.678–31.278) | 2.98x | 10.03x |
+### ARM64
 
-These numbers cover only the named supported workloads under the stated
-configuration. They are not a claim about PHP applications generally.
+| Workload | Canonical | Typed | Default JIT | PHP no JIT | PHP tracing JIT |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Order corpus | 99.863 (98.278-101.917) | 63.496 (62.297-63.923) | 4.014 (3.967-4.122) | 90.724 (89.775-94.182) | 53.582 (53.102-53.923) |
+| Typed order corpus | 121.108 (117.337-123.470) | 83.326 (82.594-85.845) | 4.170 (4.069-4.841) | 95.990 (94.082-99.959) | 55.870 (55.266-58.412) |
+| Ledger corpus | 50.720 (49.857-51.922) | 22.217 (22.010-22.422) | 2.250 (2.230-2.316) | 28.144 (27.865-28.639) | 9.387 (9.153-9.627) |
+| Typed ledger corpus | 50.873 (50.344-51.164) | 22.351 (21.893-22.659) | 2.235 (2.225-2.284) | 29.119 (28.810-29.457) | 9.555 (9.420-9.712) |
+| Routing holdout | 191.762 (185.335-194.954) | 61.804 (61.359-61.967) | 6.158 (6.072-6.259) | 66.424 (65.625-67.070) | 28.036 (27.614-28.428) |
+| Dynamic String read | 69.111 (68.009-70.515) | 69.419 (67.671-69.815) | 67.813 (66.681-68.769) | 8.999 (8.693-9.219) | 3.181 (3.158-3.225) |
+| Dynamic String CV read | 74.133 (72.964-74.826) | 74.204 (72.684-75.217) | 72.497 (71.576-73.101) | 9.090 (8.901-9.433) | 3.361 (3.289-3.403) |
+| Mixed String update | 183.181 (180.857-185.226) | 182.105 (179.626-187.290) | 181.017 (179.430-187.569) | 28.734 (28.425-29.281) | 10.059 (9.897-10.268) |
+| Packed value `foreach` | 13.278 (13.140-13.609) | 13.333 (13.012-13.598) | 13.290 (13.049-13.418) | 1.555 (1.546-1.576) | 0.757 (0.736-0.781) |
+| Hash value `foreach` | 13.440 (12.909-13.851) | 13.621 (13.296-14.109) | 13.513 (13.196-13.798) | 1.606 (1.590-1.620) | 0.817 (0.795-0.836) |
+| String append | 2.525 (2.478-2.594) | 0.310 (0.308-0.322) | 0.314 (0.305-0.318) | 1.265 (1.256-1.285) | 0.953 (0.929-0.972) |
+| Packed array build/read | 21.051 (20.686-22.268) | 2.897 (2.841-3.043) | 2.780 (2.741-2.984) | 4.060 (3.954-4.372) | 2.495 (2.437-2.708) |
+| Closure copy/invoke | 45.956 (44.958-46.649) | 46.024 (45.057-46.668) | 0.314 (0.309-0.317) | 9.975 (9.739-10.424) | 4.083 (4.026-4.201) |
+| Closure service holdout | 83.774 (82.990-84.511) | 84.058 (82.836-86.400) | 0.741 (0.733-0.822) | 18.267 (17.955-18.492) | 8.395 (8.331-8.505) |
+| Closure storage | 5.404 (5.305-5.486) | 5.551 (5.382-5.615) | 5.568 (5.498-5.643) | 1.603 (1.557-1.643) | 1.348 (1.295-1.422) |
+| Declared-object lifecycle | 101.722 (100.061-102.560) | 5.556 (5.211-5.778) | 0.568 (0.564-0.588) | 20.505 (20.008-20.733) | 14.297 (14.016-14.897) |
 
-## Runtime traffic, footprint and build envelope
+### Physical x86-64
 
-The following diagnostic counters are from separate `vm-stats` candidates.
-Each cell is `frame-slot writes / Value clones / Value drops` for one complete
-workload. They count runtime operations, not allocated bytes.
+| Workload | Canonical | Typed | Default JIT | PHP no JIT | PHP tracing JIT |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Order corpus | 128.927 (122.159-131.866) | 67.878 (65.423-69.056) | 4.117 (4.079-4.169) | 98.663 (95.994-110.840) | 53.868 (52.674-54.747) |
+| Typed order corpus | 151.904 (149.579-154.406) | 91.218 (89.688-92.291) | 4.162 (4.112-4.201) | 101.306 (99.740-105.061) | 55.532 (54.973-57.149) |
+| Ledger corpus | 61.726 (61.239-63.568) | 26.081 (25.516-26.701) | 2.037 (2.017-2.077) | 38.131 (37.651-39.096) | 9.024 (8.881-9.199) |
+| Typed ledger corpus | 62.957 (61.297-66.053) | 26.047 (25.856-26.291) | 2.044 (2.028-2.060) | 38.508 (37.610-39.645) | 9.017 (8.701-9.077) |
+| Routing holdout | 209.251 (204.457-212.699) | 65.950 (65.363-66.515) | 7.264 (7.218-7.360) | 84.729 (83.639-86.066) | 26.118 (25.809-26.759) |
+| Dynamic String read | 88.858 (86.878-89.590) | 87.879 (86.263-90.037) | 90.017 (89.077-90.628) | 12.244 (12.026-12.423) | 3.908 (3.480-4.366) |
+| Dynamic String CV read | 95.514 (93.149-96.608) | 96.086 (92.322-96.833) | 95.480 (94.522-96.791) | 12.634 (12.439-13.182) | 3.957 (3.679-4.296) |
+| Mixed String update | 206.241 (202.317-210.377) | 205.890 (203.192-211.033) | 213.687 (210.325-216.503) | 37.604 (37.004-38.022) | 12.758 (12.456-12.937) |
+| Packed value `foreach` | 18.403 (18.152-18.703) | 18.540 (18.015-18.771) | 18.548 (18.084-18.896) | 2.297 (2.224-2.348) | 0.947 (0.915-0.967) |
+| Hash value `foreach` | 18.594 (18.286-19.018) | 18.718 (18.454-18.905) | 18.613 (18.345-19.072) | 2.255 (2.203-2.294) | 1.011 (0.990-1.031) |
+| String append | 3.633 (3.456-3.735) | 0.664 (0.637-0.692) | 0.643 (0.628-0.672) | 1.907 (1.844-1.927) | 1.459 (1.392-1.515) |
+| Packed array build/read | 28.215 (27.375-28.979) | 5.480 (5.274-5.706) | 5.425 (5.269-5.610) | 8.622 (8.477-8.825) | 5.541 (5.249-5.633) |
+| Closure copy/invoke | 56.398 (55.490-57.450) | 56.177 (55.463-56.828) | 0.399 (0.387-0.410) | 10.051 (9.789-10.274) | 4.774 (4.699-4.835) |
+| Closure service holdout | 106.006 (104.939-108.443) | 105.857 (104.826-106.832) | 0.439 (0.410-0.448) | 23.409 (22.659-23.537) | 6.431 (6.268-6.489) |
+| Closure storage | 7.676 (7.445-7.820) | 8.198 (7.876-8.339) | 7.896 (7.595-8.077) | 3.915 (3.729-4.101) | 3.213 (3.055-3.496) |
+| Declared-object lifecycle | 118.137 (117.017-119.268) | 9.014 (8.814-9.189) | 1.063 (1.039-1.078) | 24.984 (24.362-26.336) | 18.170 (17.776-18.496) |
 
-| Workload | Canonical/quick-off | Typed region | ARM64 JIT |
-| --- | ---: | ---: | ---: |
-| Order pipeline | 3,710,022 / 8,710,191 / 9,500,052 | 93 / 273 / 204 | 93 / 273 / 204 |
-| Typed order pipeline | 3,710,022 / 8,710,191 / 9,500,052 | 93 / 273 / 204 | 93 / 273 / 204 |
-| Ledger pipeline | 2,182,520 / 2,182,687 / 500,046 | 152 / 319 / 79 | 152 / 319 / 79 |
-| Typed ledger pipeline | 2,182,520 / 2,182,687 / 500,046 | 152 / 319 / 79 | 152 / 319 / 79 |
-| Routing holdout | 4,608,425 / 7,391,779 / 4,283,244 | 218 / 515 / 253 | 218 / 515 / 253 |
+## Execution-weighted structure
 
-Frame creation and cleanup remain cold and identical across lanes: 9 calls for
-the order pair, 7 for the ledger pair and 6 for routing. The large canonical
-traffic reduction therefore reconciles with typed-region completion rather
-than hiding a changed call count.
+The following complete-run JIT-lane counters are identical on ARM64 and
+x86-64. Owner counts include cold runtime arrays; they are not allocated per
+iteration unless explicitly stated.
 
-One uninstrumented fresh-process peak-RSS observation, in MiB:
+| Workload | Array owners | Declared-object owners | Frame pushes | Optimized iterations | Native mappings | Dominant rejected backedges |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Order corpus | 9 | 4 | 9 | 499,967 | 1 | 0 |
+| Typed order corpus | 9 | 4 | 9 | 499,967 | 1 | 0 |
+| Ledger corpus | 8 | 2 | 7 | 499,967 | 1 | 0 |
+| Typed ledger corpus | 8 | 2 | 7 | 499,967 | 1 | 0 |
+| Routing holdout | 10 | 2 | 6 | 749,967 | 1 | 0 |
+| Dynamic String read | 8 | 0 | 3 | 0 | 0 | 1,000,000 `array_shape` |
+| Dynamic String CV read | 8 | 0 | 3 | 0 | 0 | 1,000,000 `array_shape` |
+| Mixed String update | 8 | 1 | 4 | 0 | 0 | 1,000,000 `array_shape` |
+| Packed value `foreach` | 8 | 0 | 3 | 499,967 | 0 | 500,000 `array_shape` |
+| Hash value `foreach` | 8 | 0 | 4 | 0 | 0 | 500,001 `array_shape` |
+| Closure copy/invoke | 7 | 0 | 70 | 249,967 | 1 | 0 |
+| Closure service holdout | 7 | 1 | 71 | 749,967 | 1 | 0 |
+| Declared-object lifecycle | 7 | 33 | 4 | 999,967 | 1 | 0 |
 
-| Workload | Canonical/quick-off | Typed region | ARM64 JIT |
-| --- | ---: | ---: | ---: |
-| Order pipeline | 4.672 | 4.891 | 5.266 |
-| Typed order pipeline | 4.719 | 4.875 | 5.250 |
-| Ledger pipeline | 4.578 | 4.766 | 5.047 |
-| Typed ledger pipeline | 4.531 | 4.766 | 5.016 |
-| Routing holdout | 4.625 | 4.828 | 5.234 |
+The order graph is already virtual in the canonical, typed and native lanes.
+The ledger and routing arrays are created once after their hot loop; their
+8-10 complete-process array owners are cold, not a cross-call allocation
+stream. The closure holdout returns a scalar. The declared-object lifecycle
+microbenchmark is a same-function create/read/discard shape already reduced
+from 1,000,000 canonical owners to 33 typed/native owners. No non-order corpus
+or independent holdout therefore exposes a new material DTO/small-array owner
+cost across calls.
 
-From empty task-scoped targets, the completion-audit smoke build took 53 s for
-typed and 61 s for JIT. Their stripped-on-disk `rphp` binaries were respectively
-4,287,312 and 4,517,344 bytes; enabling JIT adds 230,032 bytes (5.37%). These
-single cold-build observations include dependencies and are an envelope, not a
-compile-time performance claim. Generated-region code/cache bytes, allocator
-calls and COW detachments are not exposed by current telemetry; those cells are
-**unmeasured, not zero**, and must be instrumented before a checkpoint makes a
-claim about them.
+Layer 2 is rejected for this cycle. The result does not claim that general
+virtual heap values lack value; it says the current representative workloads
+do not pay the required new cost, so implementation would be benchmark-led
+rather than evidence-led.
 
-## Execution-weighted coverage
+## Highest current execution gap
 
-Every corpus/holdout workload has one hot backward loop. All five are admitted
-as the common `typed_ops_loop`, enter it once after 33 baseline backedges,
-complete without a guard failure or deoptimization, and execute it natively on
-ARM64 without a side exit.
+The current top gap is loss of dynamic String-key array-region admission in
+the exact file-entry workloads:
 
-| Workload | Hot loop candidates | Typed admissions/executions | Optimized iterations | ARM64 native executions | Native side exits | Rejected hot backedge executions | Straight candidates rejected at `no_typed_span` |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Order pipeline | 1 | 1 / 1 | 499,967 | 1 | 0 | 0 | 4 |
-| Typed order pipeline | 1 | 1 / 1 | 499,967 | 1 | 0 | 0 | 4 |
-| Ledger pipeline | 1 | 1 / 1 | 499,967 | 1 | 0 | 0 | 4 |
-| Typed ledger pipeline | 1 | 1 / 1 | 499,967 | 1 | 0 | 0 | 4 |
-| Routing holdout | 1 | 1 / 1 | 749,967 | 1 | 0 | 0 | 13 |
+- both independent read controls and the mixed method/update control reject
+  one million backedges as `array_shape` on both hosts;
+- all three execute zero optimized iterations and create zero native mappings;
+- the mixed update is the largest row at 181.017 ms on ARM64 and 213.687 ms on
+  x86-64; and
+- the two read controls independently reproduce the same structural boundary
+  at 67.813/72.497 ms on ARM64 and 90.017/95.480 ms on x86-64.
 
-The straight candidates are static sites outside the admitted closed loop; no
-runtime-weighted rejected backedge is attributed to them. They are not the
-next hot coverage gap.
+The focused in-memory native tests still encode the previously accepted
+read-only and mutable String-key contracts. The benchmark sources are unchanged
+from those accepted checkpoints, but the exact CLI/file-entry shapes are no
+longer admitted on `be76152`. Historical candidate medians were approximately
+1-2.5 ms; current medians are 52-85x higher. Those old numbers demonstrate
+leverage and a likely coverage regression, not a valid current A/B claim.
 
-## Baseline / typed-region / JIT capability matrix
+A fresh ARM64 profile scaled only the mixed workload iteration bound. Of 2,347
+top-of-stack samples, 885 (37.7%) were directly in canonical `execute_ex`.
+Bitmap cleanup/update contributed 201 samples, with visible array COW/clone,
+dynamic key conversion and String lookup work. No generated-code mapping was
+present. The raw sample was removed after this path-only summary because it
+contained local paths and executable addresses.
 
-`fresh` means exercised by this scorecard on ARM64. `tree` means the current IR,
-lowering and focused exact-exit tests exist in the tree but this checkpoint did
-not execute that cell. `pending` means a required current host run is missing.
+Value-only `foreach` is lower priority. It records roughly half the rejected
+backedges and measures only 13.3-18.7 ms. The packed control also completes a
+separate 499,967-iteration build loop, so its rejection count is not one
+uniform uncovered program. Restore/generalize the higher-weight dynamic String
+family first, then regenerate the scorecard before reconsidering `foreach`.
 
-| General capability | Baseline tests | Typed IR | Typed executor | ARM64 JIT | x86-64 JIT | Exact-exit tests | Corpus/holdout evidence |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Long arithmetic, loop branches and checked recurrence | tree | fresh | fresh | fresh | tree; host pending | tree | all five |
-| Scalar calls, monomorphic methods and declared properties | tree | fresh | fresh | fresh | tree; host pending | tree | all five |
-| Virtual constructor → object/array consumer pipeline | tree | fresh | fresh | fresh | tree; host pending | tree | order pair |
-| Mixed dynamic-String hash read/modify/write | tree | fresh | fresh | fresh | tree; host pending | tree | routing holdout; isolated control |
-| Read-only dynamic-String hash lookup | tree | fresh | fresh | **missing** | **missing** | typed tree | isolated controls only |
-| Integer-index array read and structural write | tree | tree | tree | tree | tree; host pending | tree | benchmark matrix only |
-| Packed/hash `foreach` Long/property accumulation | tree | tree | tree | missing | missing | typed tree | benchmark matrix only |
-| Array append and String append | tree | tree | tree | missing | missing | typed tree | benchmark matrix only |
-| Exact Double calls, methods, branches and loops | tree | tree | tree | tree | tree; host pending | tree | benchmark matrix only |
-| Invariant JSON projections and callback pipelines | tree | tree | tree | tree | tree; host pending | tree | benchmark matrix only |
+## Capability matrix
 
-The baseline configuration itself has one current build defect:
-`cargo build --profile max-perf --no-default-features` fails because
-`IntIndexValue::clear_cached_long` is conditionally absent while a canonical
-mutation caller remains compiled. The quick-off lane above is therefore the
-same-binary canonical comparison, not proof that the standalone no-default
-feature gate is green. Fixing that feature-boundary error belongs in a separate
-owned correctness checkpoint because `src/value/mod.rs` is shared runtime
-state.
+| General capability | Typed executor | ARM64 native | x86-64 native | Current evidence |
+| --- | --- | --- | --- | --- |
+| Scalar arithmetic, branches and exact calls | fresh | fresh | fresh | order, ledger, routing |
+| Direct immutable closure/property calls | fresh | fresh | fresh | target plus independent service holdout |
+| Existing order virtual aggregate | fresh | fresh | fresh | 9 arrays/4 objects, one mapping |
+| Declared-object same-function virtualization | fresh | fresh | fresh | 1,000,000 to 33 owners |
+| Dynamic String-key reads and mutable update | tree tests | **missing in file-entry scorecard** | **missing in file-entry scorecard** | three one-million-backedge `array_shape` rows |
+| Value-only `foreach` | partial current coverage | missing for rejected iterator loop | missing for rejected iterator loop | lower-weight packed/hash controls |
+| General non-order virtual heap values across calls | no selected graph | no selected graph | no selected graph | Layer 2 rejected this cycle |
 
-## Profiles
+## Resource and build envelope
 
-The canonical lane is dispatcher-bound: `execute_ex` accounts for 24–30% of
-self samples in the order pair, 60–62% in the ledger pair and 45% in the
-routing holdout. The typed lane moves that cost into the common region
-executor: `run_quick_long_ops_loop` accounts for 25–34% in the order pair,
-98% in the ledger pair and 79% in routing. Order additionally spends 14–34% in
-the object Long/array plan evaluators; the typed order variant exposes another
-12% in class-contract checks.
+Cold accepted scorecard builds took 39/41 seconds on ARM64 and 43/45 seconds
+on x86-64 for typed/default-JIT respectively. Binary sizes were
+4,574,128/4,823,328 bytes on ARM64 and 5,357,216/5,669,728 bytes on x86-64.
+The default JIT therefore adds 249,200 bytes on ARM64 and 312,512 bytes on
+x86-64 under these exact profiles.
 
-Profiles used macOS `/usr/bin/sample` for two seconds. Source was sent through
-standard input after a `perl -0pe` substitution changed only the final
-iteration argument: 10x for canonical and typed profiles, 20x for the canonical
-ledger profile, and 1000x for native profiles. This made each process live long
-enough to sample without editing a workload. The raw files are intentionally
-not retained because they contain local paths and executable addresses.
-
-In the ARM64 JIT lane, 92.2–95.7% of all samples land inside anonymous
-executable-memory addresses belonging to the generated region. That agrees
-with the native-entry counters and the 10–20x typed-to-JIT improvement. It also
-means that a later instruction-scheduling optimization needs native operation
-mapping or perf-map-style symbolization; Rust helper names cannot identify it.
-
-## Gap ranking
-
-The corpus and holdout themselves contain no rejected hot backedge: all five
-measured loops are already native. The next checkpoint therefore comes from
-the highest-confidence general empty cell, not from raw static candidate count.
-
-- Read-only dynamic-String lookup has two fresh 15-sample controls. Both enter
-  and complete typed execution, both fail native admission, and the JIT build
-  is slightly slower than the typed build. The adjacent update form proves a
-  10x-plus native opportunity through the same hash substrate.
-- Value-only `foreach` is also not native, but the accepted repository record
-  already reduced packed iteration from 11.51 ms to 0.759 ms and hash
-  iteration from 14.83 ms to 4.075 ms in the typed executor. Its remaining hash
-  delta tracked 40-byte RPHP entries versus 32-byte Zend buckets, so another
-  dispatch lowering does not address the measured dominant cost.
-- String append and packed array append already use dedicated chunked typed
-  kernels. Their remaining work mutates capacity and COW state; selecting them
-  without allocator/COW counters would violate the measurement stop rule. A
-  documented 200-million-append String control also did not reproduce a
-  steady-state kernel regression.
-- The 92–96% anonymous native samples in the five main workloads cannot rank a
-  native instruction change until generated operations are symbolized.
-
-This ranking rejects the other visible cells for this checkpoint; it does not
-declare them permanently low priority.
+The 48 RSS rows per host are one fresh-process diagnostic observation per RPHP
+lane, not a distribution. For the selected dynamic String family, observations
+range from 4.36-4.80 MiB on ARM64 and 6.32-6.83 MiB on x86-64. They show no
+unbounded footprint event and are not used to claim a memory improvement.
+Generated-code cache bytes, allocator calls and COW detachments remain
+unmeasured rather than zero.
 
 ## Selected next checkpoint
 
-The largest actionable general coverage gap is **read-only dynamic-String hash
-lookup in a native typed region**.
+The next goal is **evidence-bounded restoration and generalization of existing
+dynamic String-key read/update region coverage**, not Layer 2 implementation.
 
-Two independent one-million-iteration controls are already admitted and
-completed by `typed_ops_loop`, but record no native execution:
+1. Bisect the structural admission change between the accepted native
+   String-read checkpoint (`a8a7ac2`) and integrated `be76152` using the exact
+   file-entry controls, while retaining the focused no-`microtime` tests as a
+   comparison.
+2. Explain why CLI/file-entry read and mutable-update loops reach
+   `array_shape` although their operation-level tests retain the established
+   typed/native contract.
+3. Add a file-entry regression that fails on the first lost general boundary;
+   do not recognize benchmark names, variable names, literal keys or timing
+   wrappers.
+4. If restoration is semantically valid, require one common typed proof,
+   exact canonical fallback/side exits, both native backends, one million
+   admitted iterations and one native mapping for the target and both read
+   holdouts.
+5. Rerun the full dual-host scorecard and keep corpus/holdout regressions below
+   one percent. If the rejection is required by newer PHP semantics, preserve
+   canonical execution and select a different measured gap instead of weakening
+   the guard.
 
-| Control | Typed median (p10–p90) | JIT-build median (p10–p90) | PHP no-JIT median (p10–p90) |
-| --- | ---: | ---: | ---: |
-| Literal-selected changing String key | 12.016 ms (11.505–12.465) | 12.638 ms (12.125–13.157) | 9.531 ms (9.105–10.062) |
-| Immutable-CV-selected changing String key | 11.583 ms (11.247–11.753) | 12.083 ms (11.723–12.287) | 9.639 ms (9.422–9.942) |
-
-The cause is structural and visible in `native_mixed_kernel`: a
-`FetchArrayLong` with `QuickArrayIndex::ValueSlot` lowers to native `HashLoad`
-only when `array_update_fusions[plan_index]` proves an immediately following
-arithmetic plus `StoreArrayLong`. A read-only fetch hits that unconditional
-fusion requirement and the native builder returns `None`. The nearby mixed
-read/modify/write control does enter one native region with zero side exits and
-measures 2.412 ms versus 26.743 ms in the typed executor, proving that the
-shared String-token, hash context and both backends already have the required
-native lookup substrate.
-
-The next optimization checkpoint should therefore:
-
-1. lower a standalone read-only `FetchArrayLong(ValueSlot)` through the same
-   bounded String-token and `HashLoad` context without requiring a store;
-2. prove it first through the common typed operation and exact missing/non-Long
-   side exit, with no allocation or repeated effect;
-3. add ARM64 and x86-64 backend/runtime tests from the same native operation;
-4. demonstrate native entry and zero side exits on both changing-key controls;
-5. expose bounded generated-code/cache size plus allocation or COW-detachment
-   evidence for the new lookup context, treating absent counters as unknown;
-6. retain the mixed update, corpus and routing-holdout outputs and keep their
-   medians inside the one-percent regression gate; and
-7. reject the slice if lookup-only native execution does not beat the typed
-   executor credibly on both architectures or if context setup outweighs the
-   loop benefit.
-
-This is a coverage extension, not a benchmark recognizer: admission depends on
-the existing typed `ValueSlot` key, immutable guarded array and exact fetch
-contract, never on key text, variable names or workload identity.
-
-Completion note (2026-08-13): this selected checkpoint is now implemented and
-verified on ARM64 and physical x86-64. Both isolated controls enter one native
-`typed_ops_loop` with zero side exits, exact fallback tests cover invalid
-tokens plus missing/non-Long/referenced entries, and the target and regression
-distributions pass the dual-architecture gate. The historical selection table
-above remains frozen at its named baseline; the current capability row,
-methodology and full evidence are recorded in
-[`performance-native-string-hash-read.md`](performance-native-string-hash-read.md).
-
-Follow-up completion note (2026-08-13): a fresh dual-architecture scorecard
-and profile selected geometric capacity growth inside the already-admitted
-packed-array append kernel as the next baseline structural cost. A bounded,
-packed-only reserve now improves `bench_array.php` by 4.96% on ARM64 and 0.57%
-on physical x86-64 while the application corpora, independent routing holdout
-and String/scalar controls remain below the one-percent regression ceiling.
-The exact integrated baseline, semantic envelope, rejected code-layout
-variants and complete distributions are recorded in
-[`performance-packed-array-reserve.md`](performance-packed-array-reserve.md).
-
-Ownership completion note (2026-08-13): the next M1/M5 measurement found that
-copying a closure-valued `Value` allocated and cloned its immutable payload and
-capture vector. Sharing one owner improves the 250,000-copy target by 22.69%
-on ARM64 and 8.84% on physical x86-64, reduces retained-copy peak RSS by 72.23%
-and 74.29%, and keeps both application corpora plus the independent routing
-holdout below the one-percent regression ceiling after confirmation. The exact
-baseline, allocation counters, lifecycle envelope and distributions are in
-[`performance-closure-ownership.md`](performance-closure-ownership.md).
+This selection checkpoint intentionally does not implement that goal.
 
 ## Reproduction
 
-Run the complete timing and telemetry scorecard, including the structural
-selection controls, with:
+On a clean checkout of `be76152`:
 
 ```sh
-RPHP_SCORECARD_RUNS=15 benches/run_execution_scorecard.sh
+RPHP_SCORECARD_RUNS=15 RPHP_SCORECARD_COOLDOWN_SECONDS=60 \
+    ./benches/run_execution_scorecard.sh
 ```
 
-The runner invokes the mandatory cleanup hook before and after the cycle,
-builds separate task-scoped typed, JIT and stats candidates under the temporary
-directory, waits 60 seconds after the two production builds, validates outputs,
-prints every retained sample, records peak RSS, and only then builds and runs
-the instrumented coverage lanes. Raw macOS `sample` files are deliberately
-untracked because they contain local paths and addresses; only the redacted
-aggregate evidence above belongs in the public repository.
+The x86 run must use a real Git checkout rather than a source-only archive,
+because the runner records `git rev-parse HEAD` and rejects a dirty tree. Run
+the complete source sync, build, scorecard, diagnostics and cleanup inside the
+project's exclusive benchmark lock. Raw samples, host connectivity, local
+paths and executable addresses stay outside the repository.

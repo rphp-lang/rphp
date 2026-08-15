@@ -1,6 +1,7 @@
 # Layered execution optimization plan
 
-Status: Layer 1 accepted and integrated over `385dc1c`, 2026-08-15
+Status: Layer 1 integrated; post-Layer-1 Layer 2 selection rejected on
+`be76152`, 2026-08-15
 
 This document orders execution work as one cumulative optimization stack. It
 exists to prevent an empty coverage cell or an old benchmark from being
@@ -76,34 +77,34 @@ accepted host runs used 101 alternating observations for the direct-call
 target, independent holdout, typed controls and order/ledger/routing controls.
 The report also retains the complete rejected battery-powered ARM64
 distributions that preceded the stable AC run. The full result is recorded in
-[the direct-call checkpoint](performance-direct-call-regions.md). A fresh full
-scorecard is the first prerequisite before selecting a Layer 2 implementation
-slice; old selection rows are not treated as current post-Layer-1 costs.
+[the direct-call checkpoint](performance-direct-call-regions.md).
 
-The current ARM64 selection rows are median in-workload milliseconds:
+The mandatory full post-Layer-1 scorecard is now complete on clean integrated
+commit `be76152`. Each host retained 1,200 timing rows, 80 distributions, 48
+RSS observations and 48 instrumented lanes; all outputs agreed. The complete
+method and distributions are in the
+[current execution scorecard](execution-scorecard.md).
 
-| Workload | Canonical | Typed | Default JIT | PHP no JIT | Interpretation |
-| --- | ---: | ---: | ---: | ---: | --- |
-| Order corpus | 102.179 | 63.907 | 4.224 | 94.450 | The hot loop is already one native `typed_ops_loop`; only nine physical frame lifecycles remain. |
-| Typed order corpus | 121.100 | 84.401 | 4.239 | 98.142 | Same native coverage and aggregate ownership result as the untyped source. |
-| Typed ledger corpus | 51.551 | 25.887 | 2.407 | 33.004 | The hot loop is native with zero side exits; only seven frame lifecycles remain. |
-| Routing holdout | 184.708 | 64.446 | 6.616 | 68.972 | The hot loop is native with zero side exits; only six frame lifecycles remain. |
-| Dynamic String-key read | 44.953 | 12.454 | 1.608 | 9.311 | The previously missing read-only hash lowering is complete and profitable. |
-| Packed value `foreach` | 10.914 | 0.381 | 0.392 | 1.689 | The typed runner already removes the loop cost; missing native mapping is not a current target. |
-| Hash value `foreach` | 11.112 | 0.462 | 0.525 | 1.643 | Same conclusion; historical residual cost was entry density, not dispatch. |
-| String append | 1.968 | 0.327 | 0.324 | 1.312 | The chunked typed kernel is already effective. |
-| Packed array build/read | 18.614 | 3.190 | 3.194 | 4.538 | The typed kernel and bounded reserve are already effective; JIT parity alone is not a goal. |
-| Closure copy and invoke | 46.115 | 48.576 | 49.527 | 11.787 | Largest visible uncovered execution boundary, but currently only isolated evidence. |
-| Declared-object lifecycle | 111.466 | 6.679 | 0.638 | 24.134 | Resolution, storage reuse and nonescaping read virtualization are already layered. |
+The current default-JIT selection medians are:
 
-The closure target supplies the clearest remaining counted gap. One execution
-performs 500,004 frame pushes, 500,004 frame cleanups and 1,250,008 frame-slot
-writes. Its only hot loop is rejected as `direct_call_shape`, accounting for
-250,000 rejected backedge executions. The closure owner itself is no longer
-the problem: the accepted ownership checkpoint reduced the target to one
-payload and one capture-storage allocation. This makes direct call/capture
-execution a plausible next layer, but the absence of a representative
-closure-heavy holdout keeps it at Grade C until Layer 1 admission is complete.
+| Workload | ARM64 | x86-64 | Current structural result |
+| --- | ---: | ---: | --- |
+| Order corpus | 4.014 ms | 4.117 ms | One native region; 9 arrays and 4 objects for the complete process. |
+| Ledger corpus | 2.250 ms | 2.037 ms | One native region; output array is created once after the loop. |
+| Routing holdout | 6.158 ms | 7.264 ms | One native region; result array is created once after the loop. |
+| Closure copy/invoke | 0.314 ms | 0.399 ms | Layer 1 is active: one native region and only 70 frame pushes. |
+| Closure service holdout | 0.741 ms | 0.439 ms | Independent Layer 1 holdout; one mapping and zero rejected backedges. |
+| Dynamic String-key read | 67.813 ms | 90.017 ms | 1,000,000 `array_shape` rejections and no mapping. |
+| Dynamic String-key CV read | 72.497 ms | 95.480 ms | Independent reproduction of the same lost admission. |
+| Mixed String-key update | 181.017 ms | 213.687 ms | Highest-weight row; 1,000,000 `array_shape` rejections and no mapping. |
+| Packed/hash value `foreach` | 13.290/13.513 ms | 18.548/18.613 ms | Roughly 500,000 rejected iterator backedges each; lower weight. |
+
+No representative non-order graph allocates a DTO or small array per hot
+iteration across calls. Layer 2 is therefore rejected for this cycle. The
+highest current execution gap is instead restoration/generalization of the
+already-established dynamic String read/update contract for exact file-entry
+workloads. Historical focused tests still retain that operation-level contract;
+the current scorecard proves that production-shaped admission has been lost.
 
 ## Completed foundation: do not reimplement
 
@@ -115,8 +116,8 @@ cost.
 | --- | --- | --- |
 | Scalar and control-flow regions | Checked Long and exact Double arithmetic, recurrences, branches, scalar functions and guarded monomorphic methods execute through typed plans with exact exits. | [Dispatch analysis](performance-dispatch-analysis.md), [combined execution log](roadmap-performance-jit-compatibility.md) |
 | Dual-architecture native execution | Shared typed regions lower to ARM64 and x86-64; default production admission is bounded, W^X, observable and exactly falls back to typed execution. | [Default native JIT](performance-default-native-jit.md) |
-| Packed/hash array reads and writes | Integer and dynamic String-key reads, guarded structural writes, update fusion, materialized accumulation and bounded packed reserve are present. | [Native String hash read](performance-native-string-hash-read.md), [packed reserve](performance-packed-array-reserve.md) |
-| Value-only `foreach` accumulation | Packed and ordered-hash Long iteration retains iterator and accumulator state in one guarded typed runner. | [Dispatch analysis, Phase 2p](performance-dispatch-analysis.md#phase-2p-result-guarded-value-only-foreach-accumulation) |
+| Packed/hash array reads and writes | Integer and dynamic String-key contracts, guarded structural writes, update fusion, materialized accumulation and bounded packed reserve are present. The current file-entry scorecard exposes an `array_shape` admission regression that must be restored before widening the contract. | [Native String hash read](performance-native-string-hash-read.md), [current scorecard](execution-scorecard.md) |
+| Value-only `foreach` accumulation | Packed and ordered-hash Long iteration has an established typed runner, but the current exact benchmark files reject the iterator loop as `array_shape`. Its measured cost is lower than the dynamic String family and remains second in the restoration queue. | [Dispatch analysis, Phase 2p](performance-dispatch-analysis.md#phase-2p-result-guarded-value-only-foreach-accumulation), [current scorecard](execution-scorecard.md) |
 | String execution | Borrowed immutable String facts, dynamic-key retention and chunked append kernels avoid repeated general `Value` work in admitted shapes. | [Dispatch analysis](performance-dispatch-analysis.md), [combined execution log](roadmap-performance-jit-compatibility.md) |
 | Closure ownership | Published closures share one immutable payload and capture environment while preserving identity, binding and reference-capture semantics. | [Closure ownership](performance-closure-ownership.md) |
 | Guarded direct user/closure calls | Exact immutable closure-property and dead-alias wrapper calls use the shared scalar call ABI inside typed/native regions, with capture/identity guards and canonical side exits. | [Direct-call regions](performance-direct-call-regions.md) |
@@ -135,7 +136,8 @@ layers over one semantic contract, not competing fast paths.
 
 ### Layer 0 — refresh measurement and operation visibility
 
-Status: **mandatory before every selection; Grade B snapshot is current**
+Status: **mandatory before every selection; current dual-host snapshot is
+Grade A**
 
 Keep the scorecard reproducible on both hosts and attach execution weights to
 admission gaps, allocations, frame traffic, clones/drops, COW detachments and
@@ -200,8 +202,8 @@ engine.
 
 ### Layer 2 — general virtual heap values and materialization across calls
 
-Status: **next admission layer; Grade B architectural evidence,
-fresh execution-weighted target still required**
+Status: **rejected for the current cycle; Grade D until a representative new
+graph pays a material hot owner cost**
 
 Replace the current collection of narrow object/array proofs with one typed
 virtual-value vocabulary describing small declared objects, packed/associative
@@ -222,6 +224,15 @@ Acceptance requires fewer named owners/allocations on the target, exact
 materialization tests at every escape, common typed and dual-backend operations,
 and removal or narrowing of a superseded order/object recognizer. If no new
 corpus graph allocates materially, do not widen the existing proof.
+
+The `be76152` dual-host scorecard exercised that stop rule. Order is already
+virtual; ledger and routing create their result arrays once after the hot loop;
+the closure holdout returns a scalar; and the remaining declared-object
+lifecycle control is a same-function microbenchmark already reduced from one
+million owners to 33. No benchmark will be invented to reverse this rejection.
+Reopen Layer 2 only when a future compatibility or corpus expansion introduces
+a representative non-order cross-call graph with measured hot owners and an
+independent materialization branch.
 
 Expected leverage: high because prior object and aggregate layers delivered
 large dual-host wins. Cost and correctness risk are high, so the layer advances
@@ -415,27 +426,29 @@ the existing one-percent acyclic controls.
 
 ## Next decision checkpoint
 
-With Layer 1 accepted, the next bounded goal is a cheap Layer 0/2 evidence
-checkpoint rather than another implementation guess:
+The next bounded goal is evidence-bounded restoration and generalization of
+existing dynamic String-key array-region coverage:
 
-1. regenerate the full execution scorecard from the newly integrated main on
-   ARM64 and locked physical x86-64;
-2. find a representative graph not already owned by the order aggregate proof,
-   where a small DTO or array is created in one function, consumed across a
-   second call and then discarded;
-3. count owners, allocations, frame traffic and materialization/escape sites,
-   and add an independent branch that forces late materialization;
-4. define one virtual-value vocabulary and exact materialization boundary that
-   can represent both the new graph and the existing order proof;
-5. implement a small dual-backend vertical slice only if both hosts retain a
-   material execution-weighted allocation cost; otherwise record the rejection
-   and select the next measured graph.
+1. bisect the structural admission change between accepted native String-read
+   commit `a8a7ac2` and integrated `be76152` using the exact file-entry read,
+   CV-read and mixed-update controls;
+2. explain why those sources reach one million `array_shape` rejections while
+   the focused operation-level tests retain the established contract;
+3. add one general file-entry regression without recognizing timing wrappers,
+   benchmark names, variable names or literal key contents;
+4. only if restoration is semantically valid, require common typed admission,
+   one native mapping, exact side exits and dual-backend evidence for the mixed
+   target and both independent read controls; and
+5. rerun the complete scorecard and keep every corpus/holdout regression below
+   one percent. If newer PHP semantics require the rejection, keep canonical
+   execution and select another measured gap rather than weakening the guard.
 
-This sequence layers virtual heap values on the now-verified direct-call ABI.
-Layers 7a/7b remain the process-resident and cross-process program caches for
-long-lived workers, and Layer 8 remains the non-moving candidate-driven cycle
-collector required for a stable-RSS production server. Neither is replaced or
-implicitly completed by call or virtual-value work.
+Value-only `foreach` is the next array-shape candidate only after this higher
+execution-weight family is resolved and the scorecard is regenerated. Layer 2
+remains deferred until a real corpus pays its required owner cost. Layers 7a/7b
+remain the process-resident and cross-process program caches for long-lived
+workers, and Layer 8 remains the non-moving candidate-driven cycle collector
+required for a stable-RSS production server.
 
 ## Maintenance
 
