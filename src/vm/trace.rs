@@ -56,9 +56,9 @@ fn append_trace_argument(output: &mut String, value: &Value) {
     }
 }
 
-/// Render a stored Throwable trace. The final `{main}` sentinel is not part of
-/// `getTrace()` itself but is always appended to Zend's string representation.
-pub(crate) fn format_throwable_trace(trace: &PhpArray) -> String {
+/// Render the shared PHP call-frame shape, with the caller deciding whether
+/// the Throwable-only `{main}` sentinel belongs in the result.
+fn format_trace(trace: &PhpArray, append_main: bool) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     for (_, value) in trace.iter() {
@@ -105,9 +105,26 @@ pub(crate) fn format_throwable_trace(trace: &PhpArray) -> String {
         output.push(')');
         index += 1;
     }
-    if !output.is_empty() {
+    if append_main {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        let _ = write!(output, "#{index} {{main}}");
+    } else if !output.is_empty() {
         output.push('\n');
     }
-    let _ = write!(output, "#{index} {{main}}");
     output
+}
+
+/// Render the live trace printed by `debug_print_backtrace()`. Unlike a
+/// Throwable string, this contains only actual frames and ends each with a
+/// newline; calling it directly from the main script therefore prints nothing.
+pub(crate) fn format_debug_print_backtrace(trace: &PhpArray) -> String {
+    format_trace(trace, false)
+}
+
+/// Render a stored Throwable trace. The final `{main}` sentinel is not part of
+/// `getTrace()` itself but is always appended to Zend's string representation.
+pub(crate) fn format_throwable_trace(trace: &PhpArray) -> String {
+    format_trace(trace, true)
 }

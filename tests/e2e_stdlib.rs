@@ -1,6 +1,6 @@
 /// E2E tests: stdlib functions — count, strlen, array_*, string functions, math, type checks.
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 
 #[test]
 fn addcslashes_preserves_php_reference_escaping_rules() {
@@ -61,11 +61,12 @@ fn debug_backtrace_reports_callers_arguments_limits_and_method_receivers() {
 function traceOuter($value) { traceInner($value); }
 function traceInner($value) {
     $trace = debug_backtrace();
-    echo $trace[0]['function'], ':', $trace[0]['args'][0], ':';
+    echo count($trace), ':', $trace[0]['function'], ':', $trace[0]['args'][0], ':';
     echo $trace[1]['function'], ':', $trace[1]['args'][0], '|';
     $limited = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1);
     echo count($limited), ':', isset($limited[0]['args']) ? 'args' : 'ignored';
 }
+
 class TraceReceiver {
     public function probe() {
         $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT, 1);
@@ -76,7 +77,31 @@ traceOuter('payload');
 (new TraceReceiver())->probe();
 "#,
         ),
-        "traceInner:payload:traceOuter:payload|1:ignored|TraceReceiver:probe:->TraceReceiver"
+        "2:traceInner:payload:traceOuter:payload|1:ignored|TraceReceiver:probe:->TraceReceiver"
+    );
+}
+
+#[test]
+fn debug_print_backtrace_formats_locations_arguments_limits_and_main() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nfunction outer($value) { inner($value); }\nfunction inner($value) { debug_print_backtrace(); }\nouter('payload');",
+            "/app/trace.php",
+            "/app",
+        ),
+        "#0 /app/trace.php(2): inner('payload')\n#1 /app/trace.php(4): outer('payload')\n"
+    );
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nfunction outer($value) { inner($value); }\nfunction inner($value) { debug_print_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1); }\nouter('payload');",
+            "/app/trace.php",
+            "/app",
+        ),
+        "#0 /app/trace.php(2): inner()\n"
+    );
+    assert_eq!(
+        run_php("<?php var_dump(debug_print_backtrace());"),
+        "NULL\n"
     );
 }
 
