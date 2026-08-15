@@ -989,7 +989,24 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "destination",
         "additional_headers"
     );
+    reg!(
+        "ob_start",
+        fn_ob_start,
+        3,
+        0,
+        "callback",
+        "chunk_size",
+        "flags"
+    );
     reg!("ob_get_level", fn_ob_get_level, 0, 0);
+    reg!("ob_get_contents", fn_ob_get_contents, 0, 0);
+    reg!("ob_get_length", fn_ob_get_length, 0, 0);
+    reg!("ob_get_clean", fn_ob_get_clean, 0, 0);
+    reg!("ob_get_flush", fn_ob_get_flush, 0, 0);
+    reg!("ob_clean", fn_ob_clean, 0, 0);
+    reg!("ob_flush", fn_ob_flush, 0, 0);
+    reg!("ob_end_clean", fn_ob_end_clean, 0, 0);
+    reg!("ob_end_flush", fn_ob_end_flush, 0, 0);
     reg!("gc_mem_caches", fn_gc_mem_caches, 0, 0);
     reg!("func_num_args", fn_func_num_args, 0, 0);
     reg!("func_get_arg", fn_func_get_arg, 1, 1, "position");
@@ -6689,14 +6706,237 @@ fn fn_error_log(
     ret!(rv, Value::bool(true));
 }
 
-/// No output buffer is active until the buffering API itself is implemented.
-/// Exposing the observable level lets request kernels record their entry state.
+const OUTPUT_HANDLER_START: i64 = 1;
+const OUTPUT_HANDLER_CLEAN: i64 = 2;
+const OUTPUT_HANDLER_FLUSH: i64 = 4;
+const OUTPUT_HANDLER_FINAL: i64 = 8;
+const OUTPUT_HANDLER_CLEANABLE: i64 = 16;
+const OUTPUT_HANDLER_FLUSHABLE: i64 = 32;
+const OUTPUT_HANDLER_REMOVABLE: i64 = 64;
+const OUTPUT_HANDLER_DEFAULT_FLAGS: i64 =
+    OUTPUT_HANDLER_CLEANABLE | OUTPUT_HANDLER_FLUSHABLE | OUTPUT_HANDLER_REMOVABLE;
+
+fn fn_ob_start(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let handler = arg_opt!(ed, 0).cloned().and_then(|callback| {
+        (!matches!(callback.value_type(), ValueType::Null | ValueType::False)).then_some(callback)
+    });
+    if handler
+        .as_ref()
+        .is_some_and(|callback| resolve_callback_at_callsite(callback, eg, ed).is_none())
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "ob_start(): Argument #1 ($callback) must be a valid callback",
+        ));
+        return Ok(());
+    }
+    // Keep accepting PHP's chunk-size argument. Automatic chunk flushing is
+    // deliberately deferred; explicit operations and request teardown are exact.
+    let _chunk_size = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
+    let flags = arg_opt!(ed, 2).map_or(OUTPUT_HANDLER_DEFAULT_FLAGS, Value::to_long_val);
+    eg.push_output_buffer(handler, flags);
+    ret!(rv, Value::bool(true));
+}
+
 fn fn_ob_get_level(
     _ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::long(0));
+    ret!(rv, Value::long(eg.output_buffer_level() as i64));
+}
+
+fn fn_ob_get_contents(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(contents) = eg.output_buffer_contents() else {
+        ret!(rv, Value::bool(false));
+    };
+    ret!(rv, Value::string(bytes_to_php_string(&contents)));
+}
+
+fn fn_ob_get_length(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(contents) = eg.output_buffer_contents() else {
+        ret!(rv, Value::bool(false));
+    };
+    ret!(rv, Value::long(contents.len() as i64));
+}
+
+fn transform_output_buffer(
+    eg: &mut ExecutorGlobals,
+    buffer: &mut crate::runtime::OutputBuffer,
+    operation: i64,
+    caller: Option<*mut ExecuteData>,
+) -> Result<Vec<u8>, VmError> {
+    let raw = std::mem::take(&mut buffer.data);
+    let mode = operation
+        | if buffer.started {
+            0
+        } else {
+            OUTPUT_HANDLER_START
+        };
+    buffer.started = true;
+    let Some(callback) = buffer.handler.as_ref() else {
+        return Ok(raw);
+    };
+    let resolved = caller
+        .and_then(|ed| resolve_callback_at_callsite(callback, eg, ed))
+        .or_else(|| resolve_callback_with_cache(callback, eg, None, None));
+    let Some(resolved) = resolved else {
+        return Ok(raw);
+    };
+    let arguments = [Value::string(bytes_to_php_string(&raw)), Value::long(mode)];
+    let transformed = call_resolved_with_values(eg, &resolved, &arguments)?;
+    if transformed.value_type() == ValueType::False {
+        Ok(raw)
+    } else {
+        Ok(transformed.echo_to_string().into_bytes())
+    }
+}
+
+fn clean_output_buffer(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    remove: bool,
+) -> Result<Option<Vec<u8>>, VmError> {
+    let Some(mut buffer) = eg.pop_output_buffer() else {
+        return Ok(None);
+    };
+    let required = OUTPUT_HANDLER_CLEANABLE | if remove { OUTPUT_HANDLER_REMOVABLE } else { 0 };
+    if buffer.flags & required != required {
+        eg.restore_output_buffer(buffer);
+        return Ok(None);
+    }
+    let raw = buffer.data.clone();
+    let operation = OUTPUT_HANDLER_CLEAN | if remove { OUTPUT_HANDLER_FINAL } else { 0 };
+    let result = transform_output_buffer(eg, &mut buffer, operation, Some(ed));
+    if !remove {
+        eg.restore_output_buffer(buffer);
+    }
+    result.map(|_| Some(raw))
+}
+
+fn flush_output_buffer(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    remove: bool,
+) -> Result<Option<Vec<u8>>, VmError> {
+    let Some(mut buffer) = eg.pop_output_buffer() else {
+        return Ok(None);
+    };
+    let required = OUTPUT_HANDLER_FLUSHABLE | if remove { OUTPUT_HANDLER_REMOVABLE } else { 0 };
+    if buffer.flags & required != required {
+        eg.restore_output_buffer(buffer);
+        return Ok(None);
+    }
+    let raw = buffer.data.clone();
+    let operation = if remove {
+        OUTPUT_HANDLER_FINAL
+    } else {
+        OUTPUT_HANDLER_FLUSH
+    };
+    let transformed = transform_output_buffer(eg, &mut buffer, operation, Some(ed));
+    match transformed {
+        Ok(output) => {
+            eg.write_output(&output);
+            if !remove {
+                eg.restore_output_buffer(buffer);
+            }
+            Ok(Some(raw))
+        }
+        Err(error) => {
+            if !remove {
+                eg.restore_output_buffer(buffer);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn fn_ob_get_clean(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(raw) = eg.output_buffer_contents() else {
+        ret!(rv, Value::bool(false));
+    };
+    let _ = clean_output_buffer(eg, ed, true)?;
+    ret!(rv, Value::string(bytes_to_php_string(&raw)));
+}
+
+fn fn_ob_get_flush(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(raw) = eg.output_buffer_contents() else {
+        ret!(rv, Value::bool(false));
+    };
+    let _ = flush_output_buffer(eg, ed, true)?;
+    ret!(rv, Value::string(bytes_to_php_string(&raw)));
+}
+
+fn fn_ob_clean(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(clean_output_buffer(eg, ed, false)?.is_some())
+    );
+}
+
+fn fn_ob_flush(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(flush_output_buffer(eg, ed, false)?.is_some())
+    );
+}
+
+fn fn_ob_end_clean(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(clean_output_buffer(eg, ed, true)?.is_some())
+    );
+}
+
+fn fn_ob_end_flush(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(flush_output_buffer(eg, ed, true)?.is_some())
+    );
+}
+
+pub(crate) fn flush_all_output_buffers(eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    while let Some(mut buffer) = eg.pop_output_buffer() {
+        let output = transform_output_buffer(eg, &mut buffer, OUTPUT_HANDLER_FINAL, None)?;
+        eg.write_output(&output);
+    }
+    Ok(())
 }
 
 fn fn_gc_mem_caches(

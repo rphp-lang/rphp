@@ -27,6 +27,8 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     unsafe { cleanup_frame_slots(frame) };
     pop_vm_call_frame(eg, frame);
 
+    crate::stdlib::flush_all_output_buffers(eg)?;
+
     // Check for uncaught exception that propagated through execute_ex
     if let Some(exc) = eg.exception.take() {
         let (class_name, message, located_trace) = if let Some(obj) = exc.as_object() {
