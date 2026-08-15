@@ -564,6 +564,16 @@ impl<'a> Lexer<'a> {
                         tokens.push(Token::Goto { name: ident, line });
                         continue;
                     }
+                    if !is_member_name && ident.eq_ignore_ascii_case("array") {
+                        let next_non_whitespace = self.src[self.pos..]
+                            .iter()
+                            .copied()
+                            .find(|byte| !byte.is_ascii_whitespace());
+                        if next_non_whitespace == Some(b'(') {
+                            tokens.push(Token::ArrayKw);
+                            continue;
+                        }
+                    }
                     match ident.as_str() {
                         "echo" => {
                             tokens.push(Token::Echo { line });
@@ -1317,5 +1327,16 @@ mod tests {
         assert!(tokens.contains(&Token::Integer(511)));
         assert!(tokens.contains(&Token::Integer(16)));
         assert!(Lexer::new("<?php echo 0o8;").tokenize().is_err());
+    }
+
+    #[test]
+    fn long_array_constructor_is_ascii_case_insensitive() {
+        let tokens = Lexer::new("<?php ArRaY (true); $object->ArRaY();")
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.contains(&Token::ArrayKw));
+        assert!(tokens.contains(&Token::True));
+        assert!(tokens.contains(&Token::Identifier("ArRaY".into(), 1)));
     }
 }
