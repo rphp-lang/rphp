@@ -2455,9 +2455,17 @@ fn op_fetch_const(
         let name_val =
             unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
         let name = name_val.as_str().unwrap_or("");
-        let value = eg
-            .find_constant(name)
-            .ok_or_else(|| VmError::Fatal(format!("Undefined constant \"{}\"", name)))?;
+        let mut value = eg.find_constant(name);
+        if value.is_none() && opline.extended_value == 2 {
+            // SAFETY: the compiler emits operand 2 as an in-bounds constant
+            // literal exactly when the namespace-fallback marker is set.
+            let fallback = unsafe {
+                &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+            };
+            value = eg.find_constant(fallback.as_str().unwrap_or(""));
+        }
+        let value =
+            value.ok_or_else(|| VmError::Fatal(format!("Undefined constant \"{}\"", name)))?;
         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
         unsafe { frame_result_set(frame, result_ptr, opline.result_type, value) };
     }
