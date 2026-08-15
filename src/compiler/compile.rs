@@ -3934,7 +3934,7 @@ impl Compiler {
                     )
                 } else {
                     let (left, left_type, writeback) =
-                        match self.compile_foreach_reference_source(target) {
+                        match self.compile_foreach_reference_source(target, false) {
                             Ok(source) => source,
                             Err(error) => {
                                 self.deferred_error = Some(error);
@@ -4015,7 +4015,7 @@ impl Compiler {
             }
             Expr::PostIncTarget(target) | Expr::PostDecTarget(target) => {
                 let (current, current_type, writeback) =
-                    match self.compile_foreach_reference_source(target) {
+                    match self.compile_foreach_reference_source(target, false) {
                         Ok(source) => source,
                         Err(error) => {
                             self.deferred_error = Some(error);
@@ -4084,7 +4084,7 @@ impl Compiler {
             }
             Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => {
                 let (left, left_type, writeback) =
-                    match self.compile_foreach_reference_source(target) {
+                    match self.compile_foreach_reference_source(target, false) {
                         Ok(source) => source,
                         Err(error) => {
                             self.deferred_error = Some(error);
@@ -4522,7 +4522,7 @@ impl Compiler {
                                 CallArg::Positional(expr)
                                     if index < 64 && ref_args & (1u64 << index) != 0 =>
                                 {
-                                    match self.compile_foreach_reference_source(expr) {
+                                    match self.compile_foreach_reference_source(expr, false) {
                                         Ok((op, op_type, writeback)) => {
                                             reference_writebacks.push((writeback, op, op_type));
                                             (op, op_type, None)
@@ -6203,7 +6203,7 @@ impl Compiler {
                     None
                 };
                 let mutable_source = if direct_cv.is_none() {
-                    match self.compile_foreach_reference_source(target) {
+                    match self.compile_foreach_reference_source(target, true) {
                         Ok(source) => Some(source),
                         Err(error) => {
                             self.deferred_error = Some(error);
@@ -7189,7 +7189,7 @@ impl Compiler {
                         self.definitely_defined_cvs.insert(cv);
                     } else {
                         let (target, target_type, writeback) =
-                            self.compile_foreach_reference_source(target)?;
+                            self.compile_foreach_reference_source(target, true)?;
                         let mut append = Instruction::new(OpCode::ArrayPushOp);
                         append.op1 = target;
                         append.op1_type = target_type;

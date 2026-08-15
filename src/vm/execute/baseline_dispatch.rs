@@ -3076,13 +3076,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         "offsetGet"
                     };
+                    let suppressed = opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0;
+                    if suppressed {
+                        eg.begin_error_suppression(frame as usize);
+                    }
                     let value = crate::stdlib::call_object_protocol_method(
                         eg,
                         &receiver,
                         "ArrayAccess",
                         method,
                         std::slice::from_ref(&key),
-                    )?
+                    );
+                    if suppressed {
+                        eg.end_error_suppression(frame as usize);
+                    }
+                    let value = value?
                     .ok_or_else(|| {
                         let class_name = receiver
                             .as_object()
@@ -3107,6 +3115,34 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     write_fetch_dim_result(frame, result_ptr, value);
                 } else {
+                    if arr_val.value_type() != ValueType::Undef
+                        && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
+                    {
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "Trying to access array offset on value of type {}",
+                                arr_val.type_name()
+                            ),
+                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                     write_fetch_dim_result(
                         frame,
                         result_ptr,

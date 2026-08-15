@@ -103,7 +103,7 @@ impl Compiler {
             root = array.as_ref();
         }
         reversed_indices.reverse();
-        let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
+        let path = self.compile_mutable_array_path(root, &reversed_indices, true)?;
         let &(container, container_type) = path.containers.last().unwrap();
         let &(key, key_type) = path.keys.last().unwrap();
         let mut bind = Instruction::new(OpCode::BindArrayDimRef);
@@ -131,7 +131,7 @@ impl Compiler {
         target: &Expr,
         indices: &[Expr],
     ) -> Result<(u16, OpType), String> {
-        let (array, array_type, writeback) = self.compile_foreach_reference_source(target)?;
+        let (array, array_type, writeback) = self.compile_foreach_reference_source(target, true)?;
         let keys: Vec<(u16, OpType)> = indices
             .iter()
             .map(|index| self.compile_expr(index))
@@ -243,6 +243,7 @@ impl Compiler {
     pub(super) fn compile_foreach_reference_source(
         &mut self,
         source: &Expr,
+        silent_fetch: bool,
     ) -> Result<(u16, OpType, ForeachArrayWriteback), String> {
         match source {
             Expr::CompileError { message, line } => Err(self.goto_error(message, *line)),
@@ -262,6 +263,9 @@ impl Compiler {
                 fetch.op1_type = key_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                if silent_fetch {
+                    fetch._pad |= FETCH_DYNAMIC_SILENT;
+                }
                 self.push_instruction_at_line(fetch, *line);
                 Ok((
                     current,
@@ -288,6 +292,9 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                if silent_fetch {
+                    fetch._pad |= FETCH_OBJ_SILENT;
+                }
                 self.instructions.push(fetch);
                 Ok((
                     current,
@@ -315,6 +322,9 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                if silent_fetch {
+                    fetch._pad |= FETCH_OBJ_SILENT;
+                }
                 self.instructions.push(fetch);
                 Ok((
                     current,
@@ -352,6 +362,9 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                if silent_fetch {
+                    fetch._pad |= FETCH_OBJ_SILENT;
+                }
                 if dynamic_owner {
                     fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
                 }
@@ -406,7 +419,8 @@ impl Compiler {
                         ForeachArrayWriteback::Variable(current),
                     ));
                 }
-                let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
+                let path =
+                    self.compile_mutable_array_path(root, &reversed_indices, silent_fetch)?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
                 let current = self.alloc_tmp();
@@ -417,6 +431,9 @@ impl Compiler {
                 fetch.op2_type = key_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                if silent_fetch {
+                    fetch._pad |= FETCH_DIM_SILENT;
+                }
                 self.instructions.push(fetch);
                 Ok((
                     current,
@@ -689,6 +706,7 @@ impl Compiler {
                     fetch.op2_type = key_type;
                     fetch.result = current;
                     fetch.result_type = OpType::Tmp;
+                    fetch._pad |= FETCH_DIM_SILENT;
                     self.instructions.push(fetch);
                     (current, OpType::Tmp, CoalesceWrite::Array(path))
                 }
@@ -927,7 +945,7 @@ impl Compiler {
                 WriteTarget::Array(self.compile_mutable_array_path(
                     root,
                     &reversed_indices,
-                    false,
+                    true,
                 )?)
             }
             _ => return Err("Invalid assignment target".into()),
@@ -1120,7 +1138,7 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
-                let path = self.compile_mutable_array_path(root, &reversed_indices, false)?;
+                let path = self.compile_mutable_array_path(root, &reversed_indices, true)?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
 
@@ -1336,6 +1354,9 @@ impl Compiler {
             fetch.op2_type = key_type;
             fetch.result = child;
             fetch.result_type = OpType::Tmp;
+            if silent_root_fetch {
+                fetch._pad |= FETCH_DIM_SILENT;
+            }
             self.instructions.push(fetch);
             containers.push((child, OpType::Tmp));
         }
@@ -1531,7 +1552,7 @@ impl Compiler {
                     )
                 } else {
                     let (left, left_type, writeback) =
-                        self.compile_foreach_reference_source(target)?;
+                        self.compile_foreach_reference_source(target, false)?;
                     let (right, right_type) = self.compile_expr(expr);
                     (left, left_type, writeback, right, right_type)
                 };
@@ -2131,7 +2152,7 @@ impl Compiler {
                 indices,
                 expr,
             } => {
-                let path = self.compile_mutable_array_path(root, indices, false)?;
+                let path = self.compile_mutable_array_path(root, indices, true)?;
 
                 let (value, value_type) = self.compile_expr(expr);
                 let &(leaf, leaf_type) = path.containers.last().unwrap();
@@ -2166,7 +2187,7 @@ impl Compiler {
             }
             Stmt::ArrayAppend { target, expr } => {
                 let (array, array_type, writeback) =
-                    self.compile_foreach_reference_source(target)?;
+                    self.compile_foreach_reference_source(target, true)?;
                 let (value, value_type) = self.compile_expr(expr);
                 let mut append = Instruction::new(OpCode::ArrayPushOp);
                 append.op1 = array;
@@ -2178,7 +2199,7 @@ impl Compiler {
             }
             Stmt::BindArrayAppendReference { var, target } => {
                 let (array, array_type, writeback) =
-                    self.compile_foreach_reference_source(target)?;
+                    self.compile_foreach_reference_source(target, true)?;
                 let cv = self.resolve_cv(var);
                 let mut bind = Instruction::new(OpCode::BindArrayAppendRef);
                 bind.op1 = array;
@@ -2198,7 +2219,7 @@ impl Compiler {
                 // Compile array expression
                 let (arr_op, arr_type, reference_writeback) = if *by_ref {
                     let (op, op_type, writeback) =
-                        self.compile_foreach_reference_source(array)?;
+                        self.compile_foreach_reference_source(array, false)?;
                     (op, op_type, Some(writeback))
                 } else {
                     let (op, op_type) = self.compile_expr(array);
@@ -2402,7 +2423,7 @@ impl Compiler {
                                 self.instructions.push(unset);
                                 continue;
                             }
-                            let path = self.compile_mutable_array_path(root, &indices, false)?;
+                            let path = self.compile_mutable_array_path(root, &indices, true)?;
                             let &(leaf, leaf_type) = path.containers.last().unwrap();
                             let &(key, key_type) = path.keys.last().unwrap();
                             let mut unset = Instruction::new(OpCode::UnsetDim);
