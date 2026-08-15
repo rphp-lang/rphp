@@ -465,6 +465,45 @@ var_dump(isset($empty[0][0]));
     );
 }
 
+#[test]
+fn scalar_offset_reads_warn_while_isset_and_suppression_stay_silent() {
+    assert_eq!(
+        run_php(
+            "<?php
+$integer = 1;
+var_dump($integer[0]);
+$boolean = true;
+var_dump($boolean['key']);
+$null = null;
+var_dump($null[0]);
+var_dump(isset($integer[0]));
+var_dump(@$boolean[0]);
+set_error_handler(function($code, $message) { echo 'handled:', $code, ':', $message, PHP_EOL; return true; });
+var_dump($null[1]);
+"
+        ),
+        "\nWarning: Trying to access array offset on value of type int in <main> on line 3\nNULL\n\nWarning: Trying to access array offset on value of type bool in <main> on line 5\nNULL\n\nWarning: Trying to access array offset on value of type null in <main> on line 7\nNULL\nbool(false)\nNULL\nhandled:2:Trying to access array offset on value of type null\nNULL\n"
+    );
+}
+
+#[test]
+fn suppressed_array_access_keeps_offset_get_diagnostics_silent() {
+    assert_eq!(
+        run_php(
+            "<?php
+class SilentOffsets implements ArrayAccess {
+    public function offsetGet($offset): mixed { $value = null; return $value[0]; }
+    public function offsetSet($offset, $value): void {}
+    public function offsetUnset($offset): void {}
+    public function offsetExists($offset): bool { return true; }
+}
+var_dump(@(new SilentOffsets)[0]);
+"
+        ),
+        "NULL\n"
+    );
+}
+
 // === Inspired by PHP test suite ===
 
 #[test]
