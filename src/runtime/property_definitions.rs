@@ -12,12 +12,7 @@ fn inherit_property_definitions(
     let mut inherited = Vec::new();
     for property in parent {
         if child_names.contains(property.name.as_str()) {
-            if property.visibility == Visibility::Private
-                && child.iter().any(|child_property| {
-                    child_property.name == property.name
-                        && child_property.visibility == Visibility::Private
-                })
-            {
+            if property.visibility == Visibility::Private {
                 inherited.push(property.clone());
             }
         } else {
@@ -46,10 +41,6 @@ fn inherit_static_property_definitions(
     for (index, property) in parent.iter().enumerate() {
         let keep = if child_names.contains(property.name.as_str()) {
             property.visibility == Visibility::Private
-                && child.iter().any(|child_property| {
-                    child_property.name == property.name
-                        && child_property.visibility == Visibility::Private
-                })
         } else {
             true
         };
