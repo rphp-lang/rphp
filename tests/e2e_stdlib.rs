@@ -496,6 +496,44 @@ foreach (["strncmp", "strncasecmp"] as $function) {
 }
 
 #[test]
+fn property_exists_sees_declared_static_inherited_trait_and_dynamic_properties() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait TraitProperty { private $traitPrivate; }
+class PropertyParent { private $parentPrivate; protected static $parentStatic; }
+class PropertyChild extends PropertyParent { use TraitProperty; public int $uninitialized; }
+$object = new PropertyChild;
+$object->dynamic = 1;
+foreach (["parentPrivate", "parentStatic", "traitPrivate", "uninitialized", "dynamic", "missing"] as $name) {
+    var_dump(property_exists($object, $name));
+}
+unset($object->dynamic);
+var_dump(property_exists($object, "dynamic"));
+foreach (["parentPrivate", "parentStatic", "traitPrivate", "uninitialized", "missing"] as $name) {
+    var_dump(property_exists("PropertyChild", $name));
+}
+var_dump(property_exists(function () {}, "anything"));
+foreach ([[], 1, 3.5, true, null] as $invalid) {
+    try { property_exists($invalid, "anything"); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        concat!(
+            "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\n",
+            "bool(false)\n",
+            "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\n",
+            "bool(false)\n",
+            "property_exists(): Argument #1 ($object_or_class) must be of type object|string, array given\n",
+            "property_exists(): Argument #1 ($object_or_class) must be of type object|string, int given\n",
+            "property_exists(): Argument #1 ($object_or_class) must be of type object|string, float given\n",
+            "property_exists(): Argument #1 ($object_or_class) must be of type object|string, bool given\n",
+            "property_exists(): Argument #1 ($object_or_class) must be of type object|string, null given\n",
+        )
+    );
+}
+
+#[test]
 fn incremental_xxh128_hash_matches_one_shot_hash() {
     assert_eq!(
         run_php(
