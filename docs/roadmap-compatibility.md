@@ -47,10 +47,14 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is RPHP `5196535` against
-php-src 8.2.33 `651db3e`: 1,188 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with nine exact additions and no lost pass relative to
-`6c1d43f`. Array-element `=&` now follows the general mutable-l-value path,
+The current pinned PHP 8.2 differential baseline is RPHP `85b6503` against
+php-src 8.2.33 `651db3e`: 1,189 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with one exact addition and no lost pass relative to
+`5196535`. Object `var_dump()` observes property reference cells without an
+ordinary clone that dereferences them. Compiler-only array, property, dynamic-
+variable, append and nested-append CVs are excluded from PHP-visible alias
+cardinality, so they cannot retain a false `&` marker after the last visible
+location is unset. Array-element `=&` follows the general mutable-l-value path,
 binds the destination to the canonical nested cell and writes rebuilt
 containers back through property, global and nested array roots. Rebinding or
 unsetting the last external alias removes the visible reference identity while
