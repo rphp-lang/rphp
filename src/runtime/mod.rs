@@ -372,6 +372,10 @@ pub struct ExecutorGlobals {
     static_property_slots_by_class: Vec<Box<[u32]>>,
     #[cfg(feature = "php-generics-reified")]
     static_generic_property_contracts: Vec<Box<StaticGenericPropertyContract>>,
+    /// Observable request-local state for PHP's cycle-collector controls.
+    /// RPHP does not yet maintain a separate cycle queue, so this flag affects
+    /// the control API without changing reference-counted value reclamation.
+    pub(crate) gc_enabled: bool,
 }
 
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
@@ -496,6 +500,7 @@ impl ExecutorGlobals {
             static_property_slots_by_class: vec![Box::new([])],
             #[cfg(feature = "php-generics-reified")]
             static_generic_property_contracts: Vec::new(),
+            gc_enabled: true,
         }
     }
 
@@ -574,6 +579,7 @@ impl ExecutorGlobals {
             static_property_slots_by_class: vec![Box::new([])],
             #[cfg(feature = "php-generics-reified")]
             static_generic_property_contracts: Vec::new(),
+            gc_enabled: true,
         }
     }
 

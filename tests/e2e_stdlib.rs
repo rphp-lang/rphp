@@ -964,6 +964,16 @@ fn gc_mem_caches_reports_no_zend_allocator_cache_and_supports_namespace_fallback
 }
 
 #[test]
+fn gc_controls_expose_request_local_state_through_ini_get() {
+    assert_eq!(
+        run_php(
+            "<?php var_dump(gc_enabled()); gc_disable(); var_dump(gc_enabled()); echo ini_get('zend.enable_gc'); gc_enable(); var_dump(gc_enabled()); echo ini_get('zend.enable_gc');"
+        ),
+        "bool(true)\nbool(false)\n0bool(true)\n1"
+    );
+}
+
+#[test]
 fn pathinfo_supports_component_flags_used_by_source_loaders() {
     assert_eq!(
         run_php(
