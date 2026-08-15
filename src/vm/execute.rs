@@ -300,6 +300,26 @@ fn late_static_call_class_id(eg: &ExecutorGlobals, frame: *mut ExecuteData) -> u
     recover_late_static_call_class_id(eg, frame)
 }
 
+/// Resolve the late-called class of the user frame that invoked an internal
+/// function. This reuses the canonical direct/forwarding/callback/generator
+/// recovery path instead of giving individual builtins a second LSB model.
+pub(crate) fn called_class_name_for_internal_call<'a>(
+    eg: &'a ExecutorGlobals,
+    internal_frame: *mut ExecuteData,
+) -> Option<&'a str> {
+    if internal_frame.is_null() {
+        return None;
+    }
+    // SAFETY: an internal handler receives its own live frame; its saved caller
+    // remains live for the duration of the handler invocation.
+    let caller = unsafe { (*internal_frame).prev_execute_data };
+    if caller.is_null() {
+        return None;
+    }
+    let class_id = late_static_call_class_id(eg, caller);
+    eg.class_by_id(class_id).map(|class| class.name.as_str())
+}
+
 #[inline(always)]
 fn frame_embedded_late_static_class_id(frame: *mut ExecuteData) -> u32 {
     // SAFETY: every caller has already established a live VM frame for the

@@ -714,6 +714,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Reflection / class introspection ---
     reg!("get_class", fn_get_class, 1, 0, "object");
+    reg!("get_called_class", fn_get_called_class, 0, 0);
     reg!("get_included_files", fn_get_included_files, 0, 0);
     reg!("get_required_files", fn_get_included_files, 0, 0);
     reg!("get_declared_classes", fn_get_declared_classes, 0, 0);
@@ -5502,6 +5503,21 @@ fn fn_get_class(
         ret!(rv, Value::string(obj.class_name.as_ref()));
     }
     ret!(rv, Value::bool(false));
+}
+
+fn fn_get_called_class(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(class_name) = crate::vm::execute::called_class_name_for_internal_call(eg, ed) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "get_called_class() must be called from within a class",
+        ));
+        return Ok(());
+    };
+    ret!(rv, Value::string(class_name));
 }
 
 fn declared_names_value(names: Vec<String>) -> Value {
