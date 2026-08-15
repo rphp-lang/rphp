@@ -3615,9 +3615,46 @@ impl Compiler {
                     resolved_implements.push("BackedEnum".to_string());
                 }
 
+                if methods
+                    .iter()
+                    .any(|method| method.name.eq_ignore_ascii_case("cases"))
+                {
+                    return Err(format!("Cannot redeclare {name}::cases()"));
+                }
+                let mut enum_methods = methods.clone();
+                enum_methods.push(crate::parser::ClassMethod {
+                    visibility: Visibility::Public,
+                    name: "cases".to_string(),
+                    params: vec![],
+                    body: vec![Stmt::Return {
+                        expr: Some(Expr::ArrayLiteral(
+                            cases
+                                .iter()
+                                .map(|(case, _)| crate::parser::ArrayElement {
+                                    key: None,
+                                    value: Expr::ClassConstant {
+                                        class_name: "self".to_string(),
+                                        constant: case.clone(),
+                                    },
+                                    unpack: false,
+                                    unpack_line: None,
+                                    by_reference: false,
+                                })
+                                .collect(),
+                        )),
+                        line: 0,
+                    }],
+                    is_static: true,
+                    is_final: false,
+                    is_abstract: false,
+                    returns_by_ref: false,
+                    return_type: None,
+                    generic_params: vec![],
+                });
+
                 // Compile methods
                 let mut compiled_methods = Vec::new();
-                for method in methods {
+                for method in &enum_methods {
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_enum, method.name),
@@ -3817,6 +3854,12 @@ impl Compiler {
 
         let mut known = self.known_constants.clone();
         known.insert("self::class".into(), Value::string(owner.to_string()));
+        let owner_prefix = format!("{owner}::");
+        for (name, value) in &self.known_constants {
+            if let Some(constant) = name.strip_prefix(&owner_prefix) {
+                known.insert(format!("self::{constant}"), value.clone());
+            }
+        }
         if let Some(parent) = parent {
             known.insert("parent::class".into(), Value::string(parent.to_string()));
             let prefix = format!("{}::", parent);
