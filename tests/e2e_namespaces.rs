@@ -281,6 +281,47 @@ namespace App\Controllers {
     assert_eq!(out, "Widget");
 }
 
+#[test]
+fn bracketed_global_namespace_restores_global_resolution() {
+    let out = run_php(
+        r#"<?php
+namespace Library {
+    function value() { return "namespaced"; }
+}
+namespace {
+    function value() { return "global"; }
+    echo value(), "|", \Library\value(), "|", __NAMESPACE__;
+}
+"#,
+    );
+    assert_eq!(out, "global|namespaced|");
+}
+
+#[test]
+fn constant_imports_are_case_sensitive_and_separate_from_other_imports() {
+    let out = run_php(
+        r#"<?php
+namespace Library {
+    const VALUE = 41;
+    const value = 42;
+}
+namespace Application {
+    const LOCAL = 1;
+    use const Library\VALUE as IMPORTED;
+    use const Library\value as imported;
+    echo IMPORTED, "|", imported, "|", LOCAL, "|";
+}
+namespace {
+    const FALLBACK = 43;
+}
+namespace Consumer {
+    echo FALLBACK;
+}
+"#,
+    );
+    assert_eq!(out, "41|42|1|43");
+}
+
 // ─── Namespace with interfaces/traits ─────────────────────────────
 
 #[test]

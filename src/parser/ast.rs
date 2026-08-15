@@ -587,6 +587,7 @@ pub struct Param {
 pub enum UseKind {
     Class,
     Function,
+    Const,
 }
 
 #[derive(Debug, Clone, PartialEq)]

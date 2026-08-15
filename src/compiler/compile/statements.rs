@@ -2704,15 +2704,18 @@ impl Compiler {
                 let prev_ns = self.current_namespace.clone();
                 let prev_use_map = self.use_map.clone();
                 let prev_function_use_map = self.function_use_map.clone();
-                self.current_namespace = Some(name.clone());
+                let prev_constant_use_map = self.constant_use_map.clone();
+                self.current_namespace = (!name.is_empty()).then_some(name.clone());
                 self.use_map.clear();
                 self.function_use_map.clear();
+                self.constant_use_map.clear();
                 for stmt in body {
                     self.compile_stmt(stmt)?;
                 }
                 self.current_namespace = prev_ns;
                 self.use_map = prev_use_map;
                 self.function_use_map = prev_function_use_map;
+                self.constant_use_map = prev_constant_use_map;
             }
             Stmt::UseDecl { kind, imports } => {
                 for (fqn, alias) in imports {
@@ -2725,6 +2728,9 @@ impl Compiler {
                             self.function_use_map
                                 .insert(alias.to_ascii_lowercase(), fqn);
                         }
+                        UseKind::Const => {
+                            self.constant_use_map.insert(alias.clone(), fqn);
+                        }
                     }
                 }
             }
@@ -2732,16 +2738,21 @@ impl Compiler {
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
                 // Also record known compile-time constants for property default resolution.
+                let declaration_name = self
+                    .current_namespace
+                    .as_ref()
+                    .map_or_else(|| name.clone(), |namespace| format!("{namespace}\\{name}"));
                 let compile_time = self
                     .eval_const_expr_in_source(value, &self.known_constants)
                     .ok();
                 let (val_op, val_type) = if let Some(ct_val) = compile_time {
-                    self.known_constants.insert(name.clone(), ct_val.clone());
+                    self.known_constants
+                        .insert(declaration_name.clone(), ct_val.clone());
                     (self.add_literal(ct_val), OpType::Const)
                 } else {
                     self.compile_constant_expression(value)
                 };
-                let name_idx = self.add_literal(Value::string(name.clone()));
+                let name_idx = self.add_literal(Value::string(declaration_name));
                 let mut instr = Instruction::new(OpCode::FetchConst);
                 instr.op1 = name_idx;
                 instr.op1_type = OpType::Const;

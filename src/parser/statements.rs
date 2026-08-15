@@ -166,7 +166,14 @@ impl Parser {
             }
             Token::Namespace => {
                 self.advance(); // consume 'namespace'
-                let name = self.parse_qualified_name()?;
+                // The bracketed global namespace has no name: `namespace { ... }`.
+                // Keep the empty spelling in the AST so compilation can restore
+                // global resolution while retaining the namespace block boundary.
+                let name = if self.peek() == Token::LBrace {
+                    String::new()
+                } else {
+                    self.parse_qualified_name()?
+                };
                 if self.peek() == Token::LBrace {
                     // Braced namespace: namespace App\Models { ... }
                     self.advance(); // consume '{'
@@ -193,6 +200,9 @@ impl Parser {
                 let kind = if self.peek() == Token::Function {
                     self.advance();
                     UseKind::Function
+                } else if self.peek() == Token::Const {
+                    self.advance();
+                    UseKind::Const
                 } else {
                     UseKind::Class
                 };

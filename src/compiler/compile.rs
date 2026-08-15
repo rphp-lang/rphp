@@ -1470,6 +1470,8 @@ pub struct Compiler {
     use_map: HashMap<String, String>,
     /// Function imports have a distinct, case-insensitive alias namespace.
     function_use_map: HashMap<String, String>,
+    /// Constant imports have a distinct, case-sensitive alias namespace.
+    constant_use_map: HashMap<String, String>,
     /// Lexical class targets used only by generic owner metadata. Static-call
     /// bytecode keeps the original pseudo name for PHP forwarding semantics.
     lexical_static_class: Option<String>,
@@ -1608,6 +1610,7 @@ impl Compiler {
             current_namespace: None,
             use_map: HashMap::new(),
             function_use_map: HashMap::new(),
+            constant_use_map: HashMap::new(),
             lexical_static_class: None,
             lexical_static_parent: None,
             dynamic_static_scope: false,
@@ -1699,6 +1702,7 @@ impl Compiler {
         child.current_namespace = self.current_namespace.clone();
         child.use_map = self.use_map.clone();
         child.function_use_map = self.function_use_map.clone();
+        child.constant_use_map = self.constant_use_map.clone();
         child.lexical_static_class = self.lexical_static_class.clone();
         child.lexical_static_parent = self.lexical_static_parent.clone();
         child.dynamic_static_scope = self.dynamic_static_scope;
@@ -2228,7 +2232,12 @@ impl Compiler {
                     }
                 }
                 Stmt::Namespace { name, body } => {
-                    Self::prescan_constants_pass(body, Some(name), known, file_context);
+                    Self::prescan_constants_pass(
+                        body,
+                        (!name.is_empty()).then_some(name.as_str()),
+                        known,
+                        file_context,
+                    );
                 }
                 _ => {}
             }
@@ -2291,6 +2300,24 @@ impl Compiler {
             return format!("{namespace}\\{name}");
         }
         name.to_string()
+    }
+
+    fn resolve_constant_name(&self, name: &str) -> (String, Option<String>) {
+        if let Some(fully_qualified) = name.strip_prefix('\\') {
+            return (fully_qualified.to_string(), None);
+        }
+        if !name.contains('\\')
+            && let Some(imported) = self.constant_use_map.get(name)
+        {
+            return (imported.clone(), None);
+        }
+        if let Some(namespace) = &self.current_namespace {
+            return (
+                format!("{namespace}\\{name}"),
+                (!name.contains('\\')).then_some(name.to_string()),
+            );
+        }
+        (name.to_string(), None)
     }
 
     fn has_function_import(&self, name: &str) -> bool {
@@ -2522,6 +2549,21 @@ impl Compiler {
             for (name, value) in known {
                 if let Some(constant) = name.strip_prefix(&prefix) {
                     imported.insert(format!("{alias}::{constant}"), value.clone());
+                }
+            }
+        }
+        for (alias, constant_name) in &self.constant_use_map {
+            if let Some(value) = known.get(constant_name) {
+                imported.insert(alias.clone(), value.clone());
+            }
+        }
+        if let Some(namespace) = &self.current_namespace {
+            let prefix = format!("{namespace}\\");
+            for (name, value) in known {
+                if let Some(local_name) = name.strip_prefix(&prefix)
+                    && !local_name.contains('\\')
+                {
+                    imported.insert(local_name.to_string(), value.clone());
                 }
             }
         }
@@ -6188,16 +6230,21 @@ impl Compiler {
             }
             Expr::Constant(name) => {
                 // Fetch a named constant at runtime
-                let runtime_name = name.strip_prefix('\\').unwrap_or(name);
-                let name_idx = self.add_literal(Value::string(runtime_name.to_string()));
+                let (runtime_name, fallback) = self.resolve_constant_name(name);
+                let name_idx = self.add_literal(Value::string(runtime_name));
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::FetchConst);
                 instr.op1 = name_idx;
                 instr.op1_type = OpType::Const;
+                // extended_value = 0 means exact read; 2 enables the PHP
+                // unqualified-constant fallback from namespace to global.
+                if let Some(fallback) = fallback {
+                    instr.op2 = self.add_literal(Value::string(fallback));
+                    instr.op2_type = OpType::Const;
+                    instr.extended_value = 2;
+                }
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
-                // extended_value = 0 means "read mode" (fetch constant)
-                instr.extended_value = 0;
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
