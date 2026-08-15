@@ -152,6 +152,11 @@ pub const FETCH_DIM_ERROR_SUPPRESS: u16 = 1 << 1;
 /// emit the standalone read warning.
 pub const FETCH_DIM_SILENT: u16 = 1 << 2;
 
+/// `FetchDimR` reads an array element that will be written back by a mutation.
+/// Null is treated as an empty array, so a missing key uses the undefined-key
+/// diagnostic instead of the ordinary scalar-offset warning.
+pub const FETCH_DIM_MUTABLE: u16 = 1 << 3;
+
 /// `FetchDynamicVar` reads the symbol-table entry without reporting an
 /// undefined-variable diagnostic. Unlike `FETCH_DIM_ISSET`, the fetched value
 /// is preserved; this is required by `??=` and by mutations rooted at a

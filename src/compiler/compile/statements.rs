@@ -1350,6 +1350,11 @@ impl Compiler {
                     indices,
                 )
             }
+            expression if self.is_known_user_function_call(expression) => (
+                self.compile_expr(expression),
+                ArrayRootWriteback::None,
+                indices,
+            ),
             _ => return Err("Unsupported array mutation target".into()),
         };
         let keys: Vec<(u16, OpType)> = path_indices
