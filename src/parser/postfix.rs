@@ -192,6 +192,7 @@ impl Parser {
         let (member, member_line) = match self.advance() {
             Token::Identifier(name, line) => (name, Some(line)),
             Token::Class => ("class".to_string(), None),
+            Token::From => ("from".to_string(), None),
             other => return Err(format!("Expected member name after ::, got {:?}", other)),
         };
         let generic_args = self.parse_optional_turbofish()?;

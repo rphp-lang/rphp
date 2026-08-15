@@ -957,8 +957,10 @@ impl Parser {
                     Ok(Expr::Constant(name))
                 }
             }
-            Token::Identifier(_, _) => {
-                let name = if self.peek_at(1) == Token::Backslash {
+            Token::Identifier(_, _) | Token::From => {
+                let name = if matches!(self.peek(), Token::Identifier(_, _))
+                    && self.peek_at(1) == Token::Backslash
+                {
                     // Qualified name: App\Models\User
                     self.parse_qualified_name()?
                 } else {
@@ -967,6 +969,7 @@ impl Parser {
                             self.last_primary_line = Some(line);
                             n
                         }
+                        Token::From => "from".to_string(),
                         _ => unreachable!(),
                     }
                 };
