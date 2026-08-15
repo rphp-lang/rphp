@@ -2252,6 +2252,12 @@ impl Compiler {
     /// - Unqualified names in a namespace get the namespace prefix
     /// - Names already containing \ (relative qualified) get namespace prefix
     fn resolve_name(&self, name: &str) -> String {
+        if let Some(relative) = name.strip_prefix("namespace\\") {
+            return self
+                .current_namespace
+                .as_ref()
+                .map_or_else(|| relative.to_string(), |ns| format!("{ns}\\{relative}"));
+        }
         // Fully qualified: strip leading backslash
         if name.starts_with('\\') {
             return name[1..].to_string();
@@ -2278,6 +2284,12 @@ impl Compiler {
     /// Resolve a source-level function name. Function imports are separate
     /// from class aliases and apply only to unqualified calls.
     fn resolve_function_name(&self, name: &str) -> String {
+        if let Some(relative) = name.strip_prefix("namespace\\") {
+            return self
+                .current_namespace
+                .as_ref()
+                .map_or_else(|| relative.to_string(), |ns| format!("{ns}\\{relative}"));
+        }
         if let Some(fully_qualified) = name.strip_prefix('\\') {
             return fully_qualified.to_string();
         }
@@ -2303,6 +2315,13 @@ impl Compiler {
     }
 
     fn resolve_constant_name(&self, name: &str) -> (String, Option<String>) {
+        if let Some(relative) = name.strip_prefix("namespace\\") {
+            let resolved = self
+                .current_namespace
+                .as_ref()
+                .map_or_else(|| relative.to_string(), |ns| format!("{ns}\\{relative}"));
+            return (resolved, None);
+        }
         if let Some(fully_qualified) = name.strip_prefix('\\') {
             return (fully_qualified.to_string(), None);
         }
@@ -2564,6 +2583,13 @@ impl Compiler {
                     && !local_name.contains('\\')
                 {
                     imported.insert(local_name.to_string(), value.clone());
+                    imported.insert(format!("namespace\\{local_name}"), value.clone());
+                }
+            }
+        } else {
+            for (name, value) in known {
+                if !name.contains('\\') && !name.contains("::") {
+                    imported.insert(format!("namespace\\{name}"), value.clone());
                 }
             }
         }

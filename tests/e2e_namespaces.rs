@@ -566,3 +566,21 @@ try {
     );
     assert_eq!(out, "caught");
 }
+
+#[test]
+fn namespace_relative_names() {
+    let out = run_php(
+        r#"<?php
+namespace Demo;
+const VALUE = "constant";
+function value() { return "function"; }
+class Box { const VALUE = "class"; }
+function accepts(namespace\Box $box) { return $box::VALUE; }
+echo namespace\VALUE, "\n";
+echo namespace\value(), "\n";
+echo namespace\Box::VALUE, "\n";
+echo namespace\accepts(new namespace\Box()), "\n";
+"#,
+    );
+    assert_eq!(out, "constant\nfunction\nclass\nclass\n");
+}
