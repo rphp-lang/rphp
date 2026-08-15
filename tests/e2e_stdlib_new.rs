@@ -448,6 +448,21 @@ fn test_vsprintf_reuses_array_values_without_changing_format_semantics() {
 }
 
 #[test]
+fn printf_and_vprintf_write_formatted_output_and_return_byte_lengths() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$first = printf("[%s:%d:%%]", "ž", 7);
+echo '|', $first, '|';
+$second = vprintf("[%s:%x]", ["kůň", 255]);
+echo '|', $second;
+"#,
+        ),
+        "[ž:7:%]|8|[kůň:ff]|10"
+    );
+}
+
+#[test]
 fn user_sorts_preserve_keys_and_compare_values_or_keys() {
     assert_eq!(
         run_php(

@@ -664,6 +664,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("chr", fn_chr, 1, 1, "codepoint");
     reg_var!("sprintf", fn_sprintf, 1, "format");
     reg!("vsprintf", fn_vsprintf, 2, 2, "format", "values");
+    reg_var!("printf", fn_printf, 1, "format");
+    reg!("vprintf", fn_vprintf, 2, 2, "format", "values");
 
     // --- Regex functions ---
     reg_ref!(
@@ -5200,6 +5202,34 @@ fn fn_vsprintf(
     let args = arg!(ed, 1).as_array();
     let result = format_sprintf_values(&fmt, args.as_deref());
     ret!(rv, Value::string(result));
+}
+
+fn fn_printf(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let fmt = arg_str!(ed, 0);
+    let args = arg!(ed, 1).as_array();
+    let result = format_sprintf_values(&fmt, args.as_deref());
+    let bytes = result.as_bytes();
+    let length = bytes.len() as i64;
+    eg.write_output(bytes);
+    ret!(rv, Value::long(length));
+}
+
+fn fn_vprintf(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let fmt = arg_str!(ed, 0);
+    let args = arg!(ed, 1).as_array();
+    let result = format_sprintf_values(&fmt, args.as_deref());
+    let bytes = result.as_bytes();
+    let length = bytes.len() as i64;
+    eg.write_output(bytes);
+    ret!(rv, Value::long(length));
 }
 
 fn format_sprintf_values(fmt: &str, args: Option<&PhpArray>) -> String {
