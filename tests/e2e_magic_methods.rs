@@ -289,3 +289,35 @@ echo $hi("World");
         "Hello World"
     );
 }
+
+#[test]
+fn wide_invokable_frame_initializes_hidden_receiver_before_overwrite_tracking() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class WideInvoker {
+    public function __invoke(string $value = "default", string $suffix = ""): string {
+        $v00 = 0; $v01 = 1; $v02 = 2; $v03 = 3; $v04 = 4;
+        $v05 = 5; $v06 = 6; $v07 = 7; $v08 = 8; $v09 = 9;
+        $v10 = 10; $v11 = 11; $v12 = 12; $v13 = 13; $v14 = 14;
+        $v15 = 15; $v16 = 16; $v17 = 17; $v18 = 18; $v19 = 19;
+        $v20 = 20; $v21 = 21; $v22 = 22; $v23 = 23; $v24 = 24;
+        $v25 = 25; $v26 = 26; $v27 = 27; $v28 = 28; $v29 = 29;
+        $v30 = 30; $v31 = 31; $v32 = 32; $v33 = 33; $v34 = 34;
+        $v35 = 35; $v36 = 36; $v37 = 37; $v38 = 38; $v39 = 39;
+        $v40 = 40; $v41 = 41; $v42 = 42; $v43 = 43; $v44 = 44;
+        $v45 = 45; $v46 = 46; $v47 = 47; $v48 = 48; $v49 = 49;
+        $v50 = 50; $v51 = 51; $v52 = 52; $v53 = 53; $v54 = 54;
+        $v55 = 55; $v56 = 56; $v57 = 57; $v58 = 58; $v59 = 59;
+        $v60 = 60; $v61 = 61; $v62 = 62; $v63 = 63; $v64 = 64;
+        return $value . $suffix . ':' . $v64;
+    }
+}
+$invoke = new WideInvoker();
+echo $invoke(), '|', $invoke('positional'), '|', $invoke(value: 'named'), '|';
+echo $invoke('mixed', suffix: '-named');
+"#
+        ),
+        "default:64|positional:64|named:64|mixed-named:64"
+    );
+}

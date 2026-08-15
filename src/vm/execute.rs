@@ -2114,10 +2114,27 @@ fn execute_full_call<'a>(
             for i in (0..num).rev() {
                 let val = unsafe { (*call).cv(i).clone_closure_capture() };
                 let dst = unsafe { (*call).cv_mut(i + 1) };
-                unsafe { frame_slot_set(call, dst as *mut Value, val) };
+                // SAFETY: CVs below `num` contain the sent positional prefix.
+                // CV `num` is the single new destination and must be initialized;
+                // lower destinations are initialized values being overwritten.
+                unsafe {
+                    if i + 1 == num {
+                        frame_slot_init(call, dst as *mut Value, val);
+                    } else {
+                        frame_slot_set(call, dst as *mut Value, val);
+                    }
+                }
             }
             let this_slot = unsafe { (*call).cv_mut(0) };
-            unsafe { frame_slot_set(call, this_slot as *mut Value, this_val) };
+            // SAFETY: a zero-argument frame has not written CV 0; otherwise it
+            // contains the first positional value and is an overwrite target.
+            unsafe {
+                if num == 0 {
+                    frame_slot_init(call, this_slot as *mut Value, this_val);
+                } else {
+                    frame_slot_set(call, this_slot as *mut Value, this_val);
+                }
+            }
         }
     }
 

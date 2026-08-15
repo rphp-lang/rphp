@@ -359,10 +359,18 @@ fn prepare_named_call_frame(
             for index in (0..positional).rev() {
                 let value = (*call).cv(index).clone_closure_capture();
                 let destination = (*call).cv_mut(index + 1) as *mut Value;
-                frame_slot_set(call, destination, value);
+                if index + 1 == positional {
+                    frame_slot_init(call, destination, value);
+                } else {
+                    frame_slot_set(call, destination, value);
+                }
             }
             let this_slot = (*call).cv_mut(0) as *mut Value;
-            frame_slot_set(call, this_slot, this_val);
+            if positional == 0 {
+                frame_slot_init(call, this_slot, this_val);
+            } else {
+                frame_slot_set(call, this_slot, this_val);
+            }
         }
         // Keep the call on the full DoFcall path. Undef records that `$this`
         // has already been installed and the positional prefix already moved.
