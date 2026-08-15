@@ -650,6 +650,20 @@ impl Parser {
         } else {
             None
         };
+        let implements = if self.peek() == Token::Implements {
+            self.advance();
+            let mut interfaces = Vec::new();
+            loop {
+                interfaces.push(self.parse_generic_ancestor()?);
+                if self.peek() != Token::Comma {
+                    break;
+                }
+                self.advance();
+            }
+            interfaces
+        } else {
+            Vec::new()
+        };
         self.expect(&Token::LBrace)?;
 
         let mut cases = Vec::new();
@@ -725,6 +739,7 @@ impl Parser {
         Ok(Stmt::Enum {
             name,
             backing_type,
+            implements,
             cases,
             constants,
             methods,

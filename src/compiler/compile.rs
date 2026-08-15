@@ -2340,6 +2340,27 @@ impl Compiler {
         (name.to_string(), None)
     }
 
+    fn compiled_interface_closure(&self, root: &str) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut stack = vec![root.to_string()];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(name) = stack.pop() {
+            let key = name.to_ascii_lowercase();
+            if !seen.insert(key) {
+                continue;
+            }
+            result.push(name.clone());
+            if let Some(definition) = self
+                .class_defs
+                .iter()
+                .find(|definition| definition.name.eq_ignore_ascii_case(&name))
+            {
+                stack.extend(definition.implements.iter().cloned());
+            }
+        }
+        result
+    }
+
     fn has_function_import(&self, name: &str) -> bool {
         !name.contains('\\')
             && self

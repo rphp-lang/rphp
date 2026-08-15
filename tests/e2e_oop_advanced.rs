@@ -315,9 +315,45 @@ try {
 } catch (Error $e) {
     echo "caught";
 }
+
 echo Suit::Hearts->value;
 "#
         ),
         "caughtH"
     );
+}
+
+#[test]
+fn test_enum_implements_interfaces_and_inherits_constants() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface Labelled {
+    const PREFIX = "item:";
+    public function label(): string;
+}
+enum Item: string implements Labelled {
+    case One = "one";
+    public function label(): string { return self::PREFIX . $this->value; }
+}
+echo Item::One->label(), "\n";
+var_dump(Item::One instanceof Labelled);
+var_dump(Item::One instanceof UnitEnum);
+var_dump(Item::One instanceof BackedEnum);
+"#
+        ),
+        "item:one\nbool(true)\nbool(true)\nbool(true)\n"
+    );
+}
+
+#[test]
+fn test_enum_rejects_explicit_implicit_and_serializable_interfaces() {
+    for source in [
+        "<?php enum Bad implements UnitEnum {}",
+        "<?php enum Bad: int implements BackedEnum {}",
+        "<?php enum Bad implements Serializable {}",
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(format!("{error:?}").contains("cannot implement"));
+    }
 }
