@@ -125,6 +125,10 @@ pub const FETCH_OBJ_ERROR_SUPPRESS: u16 = 1 << 1;
 /// error instead of behaving like an ordinary property read.
 pub const FETCH_OBJ_MODIFY: u16 = 1 << 2;
 
+/// `FetchObjR` is the terminal target of property increment/decrement. A null
+/// or scalar receiver throws PHP's dedicated inc/dec error.
+pub const FETCH_OBJ_INCDEC: u16 = 1 << 3;
+
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;

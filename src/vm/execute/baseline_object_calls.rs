@@ -656,6 +656,28 @@ fn try_cached_fetch_obj_r(
     finish_cached_fetch_obj_r(frame, op_array, opline, property_ptr)
 }
 
+#[cold]
+#[inline(never)]
+fn scalar_property_write_fetch_throw<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    name: &str,
+    receiver_type: &str,
+    flags: u16,
+) -> ColdResult<'a> {
+    let action = if flags & FETCH_OBJ_INCDEC != 0 {
+        "increment/decrement"
+    } else {
+        "modify"
+    };
+    object_property_throw(
+        eg,
+        frame,
+        "Error",
+        format!("Attempt to {action} property \"{name}\" on {receiver_type}"),
+    )
+}
+
 #[inline(never)]
 fn op_fetch_obj_r_slow<'a>(
     eg: &mut ExecutorGlobals,
@@ -688,15 +710,14 @@ fn op_fetch_obj_r_slow<'a>(
             .as_str()
             .map(str::to_string)
             .unwrap_or_else(|| prop_name.echo_to_string());
-        if opline._pad & FETCH_OBJ_MODIFY != 0 {
-            return Ok(object_property_throw(
+        let write_flags = opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC);
+        if write_flags != 0 {
+            return Ok(scalar_property_write_fetch_throw(
                 eg,
                 frame,
-                "Error",
-                format!(
-                    "Attempt to modify property \"{name}\" on {}",
-                    obj_val.type_name()
-                ),
+                &name,
+                obj_val.type_name(),
+                write_flags,
             ));
         }
         report_php_warning(
