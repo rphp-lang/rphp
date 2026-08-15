@@ -120,6 +120,15 @@ pub const FETCH_OBJ_SILENT: u16 = 1;
 /// User handlers still receive the warning with the suppressed error level.
 pub const FETCH_OBJ_ERROR_SUPPRESS: u16 = 1 << 1;
 
+/// `FetchObjR` is traversing an intermediate property in a mutable l-value.
+/// A null or scalar receiver therefore throws PHP's catchable modification
+/// error instead of behaving like an ordinary property read.
+pub const FETCH_OBJ_MODIFY: u16 = 1 << 2;
+
+/// `AssignObjProp` is materializing a reference binding, which uses PHP's
+/// modification diagnostic for a null or scalar receiver.
+pub const ASSIGN_OBJ_MODIFY: u16 = 1;
+
 /// `FetchDimR` is the terminal probe of `isset($container[$offset])`. Arrays
 /// can answer directly; ArrayAccess objects dispatch `offsetExists()` instead
 /// of invoking `offsetGet()` and potentially observing or throwing on a miss.

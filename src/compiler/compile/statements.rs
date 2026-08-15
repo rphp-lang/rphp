@@ -204,7 +204,7 @@ impl Compiler {
                 nullsafe: false,
                 ..
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = self.compile_property_modify_base(object);
                 let property = self.add_literal(Value::string(property.clone()));
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
                 bind.op1 = object;
@@ -222,7 +222,7 @@ impl Compiler {
                 nullsafe: false,
                 ..
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = self.compile_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
                 bind.op1 = object;
@@ -285,7 +285,7 @@ impl Compiler {
                 nullsafe: false,
                 ..
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = self.compile_property_modify_base(object);
                 let property = self.add_literal(Value::string(property.clone()));
                 let current = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -316,7 +316,7 @@ impl Compiler {
                 nullsafe: false,
                 ..
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = self.compile_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
                 let current = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -582,7 +582,7 @@ impl Compiler {
                 nullsafe: false,
                 ..
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = self.compile_property_modify_base(object);
                 let property = self.add_literal(Value::string(property.clone()));
                 let current = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -611,7 +611,7 @@ impl Compiler {
                 nullsafe: false,
                 ..
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = self.compile_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
                 let current = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -1097,6 +1097,7 @@ impl Compiler {
                 assign.op2_type = OpType::Const;
                 assign.result = source;
                 assign.result_type = OpType::Cv;
+                assign._pad |= ASSIGN_OBJ_MODIFY;
                 self.instructions.push(assign);
 
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
@@ -1117,7 +1118,7 @@ impl Compiler {
                 nullsafe: false,
                 ..
             } => {
-                let (object, object_type) = self.compile_expr(object);
+                let (object, object_type) = self.compile_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                 assign.op1 = object;
@@ -1126,6 +1127,7 @@ impl Compiler {
                 assign.op2_type = property_type;
                 assign.result = source;
                 assign.result_type = OpType::Cv;
+                assign._pad |= ASSIGN_OBJ_MODIFY;
                 self.instructions.push(assign);
 
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
@@ -1432,6 +1434,7 @@ impl Compiler {
                 instruction.op1_type = object_type;
                 instruction.op2 = property;
                 instruction.op2_type = property_type;
+                instruction._pad |= ASSIGN_OBJ_MODIFY;
                 instruction
             }
             ArrayRootWriteback::Static {
@@ -2646,8 +2649,12 @@ impl Compiler {
                 property,
                 expr,
             } => {
-                let (obj_op, obj_type) = self.compile_expr(object);
+                let (obj_op, obj_type, deferred_fetches) =
+                    self.prepare_property_modify_base(object);
                 let (val_op, val_type) = self.compile_expr(expr);
+                for (fetch, line) in deferred_fetches {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 let prop_idx = self.add_literal(Value::string(property.clone()));
 
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
@@ -2688,9 +2695,13 @@ impl Compiler {
                 index,
                 expr,
             } => {
-                let (obj_op, obj_type) = self.compile_expr(object);
+                let (obj_op, obj_type, deferred_fetches) =
+                    self.prepare_property_modify_base(object);
                 let (idx_op, idx_type) = self.compile_expr(index);
                 let (val_op, val_type) = self.compile_expr(expr);
+                for (fetch, line) in deferred_fetches {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 let prop_idx = self.add_literal(Value::string(property.clone()));
 
                 let mut instr = Instruction::new(OpCode::AssignObjDim);
