@@ -2717,8 +2717,8 @@ impl Compiler {
                 self.function_use_map = prev_function_use_map;
                 self.constant_use_map = prev_constant_use_map;
             }
-            Stmt::UseDecl { kind, imports } => {
-                for (fqn, alias) in imports {
+            Stmt::UseDecl { imports } => {
+                for (kind, fqn, alias) in imports {
                     let fqn = fqn.strip_prefix('\\').unwrap_or(fqn).to_string();
                     match kind {
                         UseKind::Class => {
