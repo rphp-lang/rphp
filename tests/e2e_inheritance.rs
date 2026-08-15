@@ -172,12 +172,14 @@ trait MethodInventoryTrait {
     protected function guarded() {}
     public function open() {}
 }
+
 class MethodInventoryParent {
     private function parentPrivate() {}
     protected function parentProtected() {}
     public function inherited() {}
     public function shadow() {}
 }
+
 class MethodInventoryChild extends MethodInventoryParent {
     use MethodInventoryTrait {
         open as protected aliasOpen;
@@ -205,6 +207,44 @@ foreach (["MissingMethodInventory", "", [], 1, null] as $invalid) {
             "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, array given\n",
             "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n",
             "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, null given\n",
+        )
+    );
+}
+
+#[test]
+fn get_class_vars_returns_visible_declaration_defaults() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class VarsParent {
+    public $pub = 1;
+    protected $prot = 2;
+    private $priv = 3;
+    public static int $typed;
+    public static $changed = 4;
+}
+class VarsChild extends VarsParent {
+    public $child = 5;
+    private static $secret = 6;
+    public function inspect() {
+        var_export(get_class_vars(self::class)); echo "\n";
+        var_export(get_class_vars(VarsParent::class)); echo "\n";
+    }
+}
+VarsParent::$changed = 99;
+var_export(get_class_vars('VarsChild')); echo "\n";
+(new VarsChild)->inspect();
+class_alias(VarsChild::class, 'VarsAlias');
+var_export(get_class_vars('\\VarsAlias')); echo "\n";
+try { get_class_vars('MissingVars'); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "array (\n  'child' => 5,\n  'pub' => 1,\n  'typed' => NULL,\n  'changed' => 4,\n)\n",
+            "array (\n  'child' => 5,\n  'pub' => 1,\n  'prot' => 2,\n  'secret' => 6,\n  'typed' => NULL,\n  'changed' => 4,\n)\n",
+            "array (\n  'pub' => 1,\n  'prot' => 2,\n  'typed' => NULL,\n  'changed' => 4,\n)\n",
+            "array (\n  'child' => 5,\n  'pub' => 1,\n  'typed' => NULL,\n  'changed' => 4,\n)\n",
+            "get_class_vars(): Argument #1 ($class) must be a valid class name, MissingVars given\n",
         )
     );
 }
