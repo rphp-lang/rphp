@@ -3548,6 +3548,8 @@ impl Compiler {
                 name,
                 backing_type,
                 implements,
+                uses,
+                trait_aliases,
                 cases,
                 constants,
                 methods,
@@ -3746,6 +3748,22 @@ impl Compiler {
 
                 let compiled_constants =
                     self.compile_class_constants(&resolved_enum, None, constants)?;
+                let resolved_uses = uses
+                    .iter()
+                    .map(|used_trait| self.resolve_name(&used_trait.name))
+                    .collect();
+                let resolved_trait_aliases = trait_aliases
+                    .iter()
+                    .map(|adaptation| TraitMethodAlias {
+                        trait_name: adaptation
+                            .trait_name
+                            .as_ref()
+                            .map(|name| self.resolve_name(name)),
+                        method: adaptation.method.clone(),
+                        alias: adaptation.alias.clone(),
+                        visibility: adaptation.visibility,
+                    })
+                    .collect();
                 self.class_defs.push(ClassDef {
                     name: resolved_enum,
                     source_file: (!self.source_file.is_empty())
@@ -3758,8 +3776,8 @@ impl Compiler {
                     is_readonly: false,
                     is_trait: false,
                     is_enum: true,
-                    uses: vec![],
-                    trait_aliases: vec![],
+                    uses: resolved_uses,
+                    trait_aliases: resolved_trait_aliases,
                     properties: vec![],
                     static_properties: compiled_props,
                     constants: compiled_constants,

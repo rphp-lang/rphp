@@ -640,12 +640,67 @@ impl Parser {
         let mut cases = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
+        let mut uses = Vec::new();
+        let mut trait_aliases = Vec::new();
 
         let prev_in_class = self.in_class_body;
         self.in_class_body = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
-            if self.peek() == Token::Case {
+            if self.peek() == Token::Use {
+                self.advance();
+                loop {
+                    uses.push(self.parse_generic_ancestor()?);
+                    if self.peek() != Token::Comma {
+                        break;
+                    }
+                    self.advance();
+                }
+                if self.peek() == Token::LBrace {
+                    self.advance();
+                    while self.peek() != Token::RBrace && !self.at_eof() {
+                        let first = self.parse_qualified_name()?;
+                        let (trait_name, method) = if self.peek() == Token::DoubleColon {
+                            self.advance();
+                            let token = self.advance();
+                            let method = Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                                format!("Expected trait method name, got {token:?}")
+                            })?;
+                            (Some(first), method)
+                        } else {
+                            (None, first)
+                        };
+                        self.expect(&Token::As)?;
+                        let visibility = match self.peek() {
+                            Token::Public => Some(Visibility::Public),
+                            Token::Protected => Some(Visibility::Protected),
+                            Token::Private => Some(Visibility::Private),
+                            _ => None,
+                        };
+                        if visibility.is_some() {
+                            self.advance();
+                        }
+                        let alias = if self.peek() == Token::Semicolon {
+                            None
+                        } else {
+                            let token = self.advance();
+                            Some(Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                                format!("Expected trait method alias, got {token:?}")
+                            })?)
+                        };
+                        self.expect(&Token::Semicolon)?;
+                        trait_aliases.push(TraitAlias {
+                            trait_name,
+                            method,
+                            alias,
+                            visibility,
+                        });
+                    }
+                    self.expect(&Token::RBrace)?;
+                } else {
+                    self.expect(&Token::Semicolon)?;
+                }
+            } else if self.peek() == Token::Case {
                 self.advance(); // consume 'case'
                 let case_name = match self.advance() {
                     Token::Identifier(n, _) => n,
@@ -711,6 +766,8 @@ impl Parser {
             name,
             backing_type,
             implements,
+            uses,
+            trait_aliases,
             cases,
             constants,
             methods,

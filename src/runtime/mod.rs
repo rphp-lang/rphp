@@ -1404,6 +1404,15 @@ impl ExecutorGlobals {
         let id = self.next_class_id;
         self.next_class_id += 1;
         class_def.class_id = id;
+        if class_def.is_enum {
+            for definition in &class_def.static_properties {
+                if let Some(value) = &definition.default
+                    && let Some(mut case) = value.as_object_mut()
+                {
+                    case.class_id = id;
+                }
+            }
+        }
         let own_property_names = class_def
             .properties
             .iter()
@@ -1516,6 +1525,33 @@ impl ExecutorGlobals {
         let mut composed_static_trait_names = std::collections::HashSet::new();
         for trait_name in &trait_names {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
+                if class_def.is_enum {
+                    if !trait_def.properties.is_empty() || !trait_def.static_properties.is_empty() {
+                        return Err(format!("Enum {class_name} cannot include properties"));
+                    }
+                    const FORBIDDEN_ENUM_MAGIC_METHODS: &[&str] = &[
+                        "__construct",
+                        "__destruct",
+                        "__clone",
+                        "__get",
+                        "__set",
+                        "__unset",
+                        "__isset",
+                        "__sleep",
+                        "__wakeup",
+                        "__serialize",
+                        "__unserialize",
+                    ];
+                    if let Some((method, ..)) = trait_def.methods.iter().find(|(method, ..)| {
+                        FORBIDDEN_ENUM_MAGIC_METHODS
+                            .iter()
+                            .any(|forbidden| method.eq_ignore_ascii_case(forbidden))
+                    }) {
+                        return Err(format!(
+                            "Enum {class_name} cannot include magic method {method}"
+                        ));
+                    }
+                }
                 merge_trait_constant_definitions(
                     &class_name,
                     trait_name,
