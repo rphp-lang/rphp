@@ -579,7 +579,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             | OpCode::Sub_LongLong
             | OpCode::Mul_LongLong
             | OpCode::Mod_LongLong
-            | OpCode::BitwiseXor_LongLong => {
+            | OpCode::BitwiseXor_LongLong
+            | OpCode::BitwiseAnd_LongLong
+            | OpCode::BitwiseOr_LongLong => {
                 let left = unsafe {
                     &*proven_scalar_op_ptr(frame, op_array, opline.op1, opline.op1_type)
                 };
@@ -633,6 +635,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     OpCode::BitwiseXor_LongLong => unsafe {
                         frame_tmp_set_long(frame, result_ptr, lhs ^ rhs)
+                    },
+                    OpCode::BitwiseAnd_LongLong => unsafe {
+                        frame_tmp_set_long(frame, result_ptr, lhs & rhs)
+                    },
+                    OpCode::BitwiseOr_LongLong => unsafe {
+                        frame_tmp_set_long(frame, result_ptr, lhs | rhs)
                     },
                     _ => unreachable!(),
                 }
@@ -1162,34 +1170,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
-            OpCode::BitwiseAnd => {
+            OpCode::BitwiseAnd | OpCode::BitwiseOr | OpCode::BitwiseXor => {
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-
-                let l1 = op1.to_long_val();
-                let l2 = op2.to_long_val();
-                unsafe { frame_tmp_set_long(frame, result_ptr, l1 & l2) };
-            }
-
-            OpCode::BitwiseOr => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-
-                let l1 = op1.to_long_val();
-                let l2 = op2.to_long_val();
-                unsafe { frame_tmp_set_long(frame, result_ptr, l1 | l2) };
-            }
-
-            OpCode::BitwiseXor => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-
-                let l1 = op1.to_long_val();
-                let l2 = op2.to_long_val();
-                unsafe { frame_tmp_set_long(frame, result_ptr, l1 ^ l2) };
+                unsafe {
+                    if op1.value_type() == ValueType::Long && op2.value_type() == ValueType::Long {
+                        let left = op1.raw_long();
+                        let right = op2.raw_long();
+                        let value = match opline.opcode {
+                            OpCode::BitwiseAnd => left & right,
+                            OpCode::BitwiseOr => left | right,
+                            OpCode::BitwiseXor => left ^ right,
+                            _ => unreachable!(),
+                        };
+                        frame_tmp_set_long(frame, result_ptr, value);
+                    } else {
+                        let value = bitwise_binary_value(op1, op2, opline.opcode);
+                        frame_tmp_set(frame, result_ptr, value);
+                    }
+                }
             }
 
             OpCode::ShiftLeft => {
@@ -1215,8 +1215,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::BitwiseNot => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                let l = val.to_long_val();
-                unsafe { frame_tmp_set_long(frame, result_ptr, !l) };
+                let value = bitwise_not_value(val);
+                unsafe { frame_tmp_set(frame, result_ptr, value) };
             }
 
             OpCode::IsEqual | OpCode::IsNotEqual | OpCode::IsSmaller | OpCode::IsSmallerOrEqual => {
@@ -5184,4 +5184,45 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         // Use local opline_ptr to avoid redundant memory load of (*frame).opline.
         unsafe { (*frame).opline = opline_ptr.add(1); }
     }
+}
+
+#[cold]
+#[inline(never)]
+fn bitwise_binary_value(left: &Value, right: &Value, opcode: OpCode) -> Value {
+    if let (Some(left), Some(right)) =
+        (left.dereferenced().as_str(), right.dereferenced().as_str())
+    {
+        let (operation, preserve_longer_tail): (fn(u8, u8) -> u8, bool) = match opcode {
+            OpCode::BitwiseAnd => (|left, right| left & right, false),
+            OpCode::BitwiseOr => (|left, right| left | right, true),
+            OpCode::BitwiseXor => (|left, right| left ^ right, false),
+            _ => unreachable!("non-bitwise opcode in bitwise fallback"),
+        };
+        return Value::string(crate::value::php_byte_string_binary(
+            left,
+            right,
+            operation,
+            preserve_longer_tail,
+        ));
+    }
+    let left = left.to_long_val();
+    let right = right.to_long_val();
+    Value::long(match opcode {
+        OpCode::BitwiseAnd => left & right,
+        OpCode::BitwiseOr => left | right,
+        OpCode::BitwiseXor => left ^ right,
+        _ => unreachable!("non-bitwise opcode in bitwise fallback"),
+    })
+}
+
+#[cold]
+#[inline(never)]
+fn bitwise_not_value(value: &Value) -> Value {
+    if let Some(string) = value.dereferenced().as_str() {
+        let bytes = crate::value::php_byte_string_bytes(string);
+        return Value::string(crate::value::php_byte_string_from_bytes(
+            bytes.into_iter().map(|byte| !byte),
+        ));
+    }
+    Value::long(!value.to_long_val())
 }

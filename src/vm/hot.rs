@@ -810,7 +810,9 @@ pub fn execute_hot_frame(
             | OpCode::Sub_LongLong
             | OpCode::Mul_LongLong
             | OpCode::Mod_LongLong
-            | OpCode::BitwiseXor_LongLong => {
+            | OpCode::BitwiseXor_LongLong
+            | OpCode::BitwiseAnd_LongLong
+            | OpCode::BitwiseOr_LongLong => {
                 let operand = |op_type: OpType, slot: u16| -> Option<*const Value> {
                     match op_type {
                         OpType::Cv => Some(unsafe { (*frame).cv(slot as u32) as *const Value }),
@@ -867,6 +869,12 @@ pub fn execute_hot_frame(
                     }
                     OpCode::BitwiseXor_LongLong => unsafe {
                         Value::write_long(result_ptr, left ^ right)
+                    },
+                    OpCode::BitwiseAnd_LongLong => unsafe {
+                        Value::write_long(result_ptr, left & right)
+                    },
+                    OpCode::BitwiseOr_LongLong => unsafe {
+                        Value::write_long(result_ptr, left | right)
                     },
                     _ => unreachable!(),
                 }

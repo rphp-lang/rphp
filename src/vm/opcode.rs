@@ -293,4 +293,6 @@ pub enum OpCode {
     Echo_String = 221,
     Echo_Long = 222,
     BitwiseXor_LongLong = 223,
+    BitwiseAnd_LongLong = 224,
+    BitwiseOr_LongLong = 225,
 }

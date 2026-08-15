@@ -486,6 +486,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- String functions ---
     reg_direct!("strlen", fn_strlen, direct_strlen, 1, 1, "string");
+    reg!("bin2hex", fn_bin2hex, 1, 1, "string");
+    reg!("hex2bin", fn_hex2bin, 1, 1, "string");
     // S3 exposes xxh128, including the raw-output path used by Symfony's
     // deterministic service identifiers. The wider algorithm catalogue stays
     // explicit compatibility work rather than returning invented digests.
@@ -5178,6 +5180,60 @@ fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
 fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let code = (arg_long!(ed, 0) & 0xFF) as u8;
     ret!(rv, Value::string(String::from(code as char)));
+}
+
+fn fn_bin2hex(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let input = arg_str!(ed, 0);
+    let bytes = php_string_to_bytes(&input);
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    ret!(rv, Value::string(output));
+}
+
+fn fn_hex2bin(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let input = arg_str!(ed, 0);
+    let bytes = input.as_bytes();
+    let invalid_message = if bytes.len() % 2 != 0 {
+        Some("hex2bin(): Hexadecimal input string must have an even length")
+    } else if bytes.iter().any(|byte| !byte.is_ascii_hexdigit()) {
+        Some("hex2bin(): Input string must be hexadecimal string")
+    } else {
+        None
+    };
+    if let Some(message) = invalid_message {
+        let _ = dispatch_php_error(eg, ed, 2, message, "", 0)?;
+        ret!(rv, Value::bool(false));
+    }
+
+    let mut output = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let high = decode_hex_nibble(pair[0]);
+        let low = decode_hex_nibble(pair[1]);
+        output.push((high << 4) | low);
+    }
+    ret!(rv, Value::string(bytes_to_php_string(&output)));
+}
+
+#[inline]
+fn decode_hex_nibble(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => unreachable!("hex input was validated before decoding"),
+    }
 }
 
 fn fn_sprintf(
