@@ -36,6 +36,7 @@ use crate::vm::opcode::OpCode;
 #[cfg(feature = "include-path")]
 pub(crate) mod include_path;
 mod json_decode;
+mod parse_ini;
 mod reflection;
 mod regex_callback;
 mod serialization;
@@ -1394,6 +1395,24 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "response_code"
     );
     reg!("ini_get", fn_ini_get, 1, 1, "option");
+    reg!(
+        "parse_ini_string",
+        parse_ini::fn_parse_ini_string,
+        3,
+        1,
+        "ini_string",
+        "process_sections",
+        "scanner_mode"
+    );
+    reg!(
+        "parse_ini_file",
+        parse_ini::fn_parse_ini_file,
+        3,
+        1,
+        "filename",
+        "process_sections",
+        "scanner_mode"
+    );
     reg!("gc_collect_cycles", fn_gc_collect_cycles, 0, 0);
     reg!("gc_enabled", fn_gc_enabled, 0, 0);
     reg!("gc_enable", fn_gc_enable, 0, 0);
