@@ -400,6 +400,16 @@ fn test_goto_supports_forward_and_backward_labels() {
     );
 }
 
+#[test]
+fn goto_can_jump_across_a_lexically_earlier_return() {
+    assert_eq!(
+        run_php(
+            "<?php goto start; done: return; try { start: echo '1'; goto middle; try { middle: echo '2'; goto caught; } catch (Exception $error) { caught: echo '3'; goto outer; } } catch (Exception $error) { outer: echo '4'; goto done; }",
+        ),
+        "1234"
+    );
+}
+
 fn compile_error_with_source(source: &str, file: &str) -> String {
     let tokens = rphp::lexer::Lexer::new(source).tokenize().unwrap();
     let statements = rphp::parser::Parser::new(tokens).parse().unwrap();
