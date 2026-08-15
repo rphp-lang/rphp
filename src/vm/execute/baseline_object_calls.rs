@@ -759,11 +759,12 @@ fn op_fetch_obj_r_slow<'a>(
         let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
 
         // Resolve storage key (mangled for private properties)
-        let key = crate::runtime::resolve_property_key(eg, &obj.class_name, name, effective_caller);
+        let mut key = crate::runtime::resolve_property_key(eg, &obj.class_name, name, effective_caller);
 
         // Determine if property is public (for caching)
         let mut is_public = true;
         let mut property_accessible = true;
+        let mut force_dynamic = false;
         // Visibility check
         if let Some((vis, defining_class)) = eg.find_property_visibility(&obj.class_name, name) {
             if vis != Visibility::Public {
@@ -791,7 +792,8 @@ fn op_fetch_obj_r_slow<'a>(
                     && !defining_class.eq_ignore_ascii_case(&obj.class_name)
                     && !own_private;
                 if hidden_parent_private {
-                    property_accessible = false;
+                    key = name.to_string();
+                    force_dynamic = true;
                 } else if !own_private && !caller_has_own {
                     if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
                         let has_getter = eg
@@ -831,13 +833,18 @@ fn op_fetch_obj_r_slow<'a>(
             }
         }
 
-        let declared_slot = property_accessible
+        let declared_slot = (!force_dynamic && property_accessible)
             .then(|| obj.property_slot(&key))
             .flatten();
         let definition = declared_slot.and_then(|slot| {
             eg.instance_property_definition(obj.class_id, slot)
         });
-        let (found_val, dynamic_position) = if !property_accessible {
+        let (found_val, dynamic_position) = if force_dynamic {
+            match obj.get_dynamic_property_with_position(&key) {
+                Some((value, position)) => (Some(value.clone()), position),
+                None => (None, None),
+            }
+        } else if !property_accessible {
             (None, None)
         } else if cache_dynamic_std_class {
             match obj.get_dynamic_property_with_position(&key) {
@@ -992,7 +999,18 @@ fn op_isset_obj<'a>(
             visibility == Visibility::Public
                 || eg.check_visibility(effective_caller, &defining_class, visibility)
         });
-    let property_state = if accessible {
+    let hidden_parent_private = eg
+        .find_property_visibility(&object_ref.class_name, name)
+        .is_some_and(|(visibility, defining_class)| {
+            visibility == Visibility::Private
+                && !defining_class.eq_ignore_ascii_case(&object_ref.class_name)
+                && !eg.check_visibility(effective_caller, &defining_class, visibility)
+        });
+    let property_state = if hidden_parent_private {
+        object_ref
+            .get_dynamic_property_with_position(name)
+            .map(|(value, _)| !value.is_undef() && value.value_type() != ValueType::Null)
+    } else if accessible {
         let key = crate::runtime::resolve_property_key(
             eg,
             &object_ref.class_name,
@@ -1061,17 +1079,36 @@ fn op_unset_obj<'a>(
             visibility == Visibility::Public
                 || eg.check_visibility(effective_caller, &defining_class, visibility)
         });
-    let key = crate::runtime::resolve_property_key(
-        eg,
-        &object_ref.class_name,
-        name,
-        effective_caller,
-    );
-    let removed = accessible && object_ref.contains_property(&key);
+    let hidden_parent_private = eg
+        .find_property_visibility(&object_ref.class_name, name)
+        .is_some_and(|(visibility, defining_class)| {
+            visibility == Visibility::Private
+                && !defining_class.eq_ignore_ascii_case(&object_ref.class_name)
+                && !eg.check_visibility(effective_caller, &defining_class, visibility)
+        });
+    let key = if hidden_parent_private {
+        name.to_string()
+    } else {
+        crate::runtime::resolve_property_key(
+            eg,
+            &object_ref.class_name,
+            name,
+            effective_caller,
+        )
+    };
+    let removed = if hidden_parent_private {
+        object_ref.get_dynamic_property_with_position(&key).is_some()
+    } else {
+        accessible && object_ref.contains_property(&key)
+    };
     drop(object_ref);
 
     if removed {
-        object.as_object_mut().unwrap().unset_property(&key);
+        if hidden_parent_private {
+            object.as_object_mut().unwrap().remove_dynamic_property(&key);
+        } else {
+            object.as_object_mut().unwrap().unset_property(&key);
+        }
         return Ok(ColdResult::Done);
     }
     let _ = call_guarded_property_magic_method(
@@ -1133,19 +1170,26 @@ fn op_bind_obj_prop_ref<'a>(
         let effective_caller = receiver_in_scope
             .then_some(caller_class.as_deref())
             .flatten();
+        let mut force_dynamic = false;
         if let Some((visibility, defining_class)) =
             eg.find_property_visibility(&class_name, &name)
             && visibility != Visibility::Public
             && !eg.check_visibility(effective_caller, &defining_class, visibility)
         {
-            let visibility = match visibility {
-                Visibility::Protected => "protected",
-                Visibility::Private => "private",
-                Visibility::Public => "public",
-            };
-            return Err(VmError::Fatal(format!(
-                "Cannot access {visibility} property {defining_class}::${name}"
-            )));
+            if visibility == Visibility::Private
+                && !defining_class.eq_ignore_ascii_case(&class_name)
+            {
+                force_dynamic = true;
+            } else {
+                let visibility = match visibility {
+                    Visibility::Protected => "protected",
+                    Visibility::Private => "private",
+                    Visibility::Public => "public",
+                };
+                return Err(VmError::Fatal(format!(
+                    "Cannot access {visibility} property {defining_class}::${name}"
+                )));
+            }
         }
         if eg
             .find_class(&class_name)
@@ -1156,14 +1200,23 @@ fn op_bind_obj_prop_ref<'a>(
             )));
         }
 
-        let key = crate::runtime::resolve_property_key(
-            eg,
-            &class_name,
-            &name,
-            effective_caller,
-        );
+        let key = if force_dynamic {
+            name.clone()
+        } else {
+            crate::runtime::resolve_property_key(
+                eg,
+                &class_name,
+                &name,
+                effective_caller,
+            )
+        };
         let mut object = receiver.as_object_mut().unwrap();
-        let mut binding = if let Some(property) = object.get_property_mut(&key) {
+        let property = if force_dynamic {
+            object.get_dynamic_property_mut(&key)
+        } else {
+            object.get_property_mut(&key)
+        };
+        let mut binding = if let Some(property) = property {
             if property.is_owned_reference() {
                 property.clone_owned_reference_alias()
             } else {
@@ -1179,7 +1232,11 @@ fn op_bind_obj_prop_ref<'a>(
             }
         } else {
             let binding = Value::owned_reference(Value::null());
-            object.set_property(&key, binding.clone_owned_reference_alias());
+            if force_dynamic {
+                object.set_dynamic_property(&key, binding.clone_owned_reference_alias());
+            } else {
+                object.set_property(&key, binding.clone_owned_reference_alias());
+            }
             binding
         };
         drop(object);
@@ -1283,6 +1340,7 @@ fn op_assign_obj_prop<'a>(
         // Visibility check — use declaring class, not receiver class
         let mut prop_is_public = true;
         let mut property_accessible = true;
+        let mut force_dynamic = false;
         if let Some((vis, defining_class)) = eg.find_property_visibility(&php_obj.class_name, &name) {
             if vis != Visibility::Public {
                 prop_is_public = false;
@@ -1296,7 +1354,13 @@ fn op_assign_obj_prop<'a>(
                         false
                     }
                 });
-                if !own_private && !caller_has_own {
+                let hidden_parent_private = vis == Visibility::Private
+                    && !defining_class.eq_ignore_ascii_case(&php_obj.class_name)
+                    && !own_private;
+                if hidden_parent_private {
+                    property_accessible = false;
+                    force_dynamic = true;
+                } else if !own_private && !caller_has_own {
                     if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
                         let has_setter = eg
                             .find_function(&format!(
@@ -1377,7 +1441,11 @@ fn op_assign_obj_prop<'a>(
             }
         }
         // Resolve storage key (mangled for private properties)
-        let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
+        let key = if force_dynamic {
+            name.clone()
+        } else {
+            crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller)
+        };
         let declared_slot = property_accessible
             .then(|| php_obj.property_slot(&key))
             .flatten();
@@ -1386,7 +1454,11 @@ fn op_assign_obj_prop<'a>(
         });
         let object_class_id = php_obj.class_id;
         let object_class_name = php_obj.class_name.clone();
-        let prop_exists = property_accessible && php_obj.contains_property(&key);
+        let prop_exists = if force_dynamic {
+            php_obj.get_dynamic_property_with_position(&key).is_some()
+        } else {
+            property_accessible && php_obj.contains_property(&key)
+        };
         drop(php_obj);
         if let Some(definition_ref) = definition {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -1443,8 +1515,11 @@ fn op_assign_obj_prop<'a>(
 
         if prop_exists {
             if let Some(mut php_obj) = obj.as_object_mut() {
-                let property = php_obj
-                    .get_property_mut(&key)
+                let property = if force_dynamic {
+                    php_obj.get_dynamic_property_mut(&key)
+                } else {
+                    php_obj.get_property_mut(&key)
+                }
                     .expect("existing property must remain addressable during assignment");
                 assignment_slot_set(property, assigned);
             }
@@ -1481,7 +1556,11 @@ fn op_assign_obj_prop<'a>(
                 }
                 // No __set — fall back to direct insert
                 if let Some(mut php_obj) = obj.as_object_mut() {
-                    php_obj.set_property(&key, assigned);
+                    if force_dynamic {
+                        php_obj.set_dynamic_property(&key, assigned);
+                    } else {
+                        php_obj.set_property(&key, assigned);
+                    }
                 }
             }
         }

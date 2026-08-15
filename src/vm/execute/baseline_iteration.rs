@@ -604,6 +604,7 @@ fn materialize_foreach_object(
         .as_ref()
         .map_or(0, |properties| properties.len());
     let mut array = PhpArray::with_hash_capacity(object.property_values.len() + dynamic_len);
+    let mut declared_names = std::collections::HashSet::new();
     for slot in eg.visible_instance_property_slots(object.class_id, caller_class.as_deref()) {
         let property = &object.property_values[slot];
         if property.is_undef() {
@@ -612,10 +613,11 @@ fn materialize_foreach_object(
         let definition = eg
             .instance_property_definition(object.class_id, slot)
             .expect("visible property slot must retain its definition");
+        declared_names.insert(definition.name.clone());
         set_foreach_object_entry(&mut array, &definition.name, property.clone());
     }
     object.for_each_dynamic_property(|name, property| {
-        if !property.is_undef() {
+        if !property.is_undef() && !declared_names.contains(name) {
             set_foreach_object_entry(&mut array, name, property.clone());
         }
     });
@@ -984,9 +986,14 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             };
             let dynamic_names = {
                 let object = arr_val.as_object().unwrap();
+                let declared_names = slots
+                    .iter()
+                    .filter_map(|slot| eg.instance_property_definition(class_id, *slot))
+                    .map(|definition| definition.name.as_str())
+                    .collect::<std::collections::HashSet<_>>();
                 let mut names = Vec::new();
                 object.for_each_dynamic_property(|name, property| {
-                    if !property.is_undef() {
+                    if !property.is_undef() && !declared_names.contains(name) {
                         names.push(name.to_string());
                     }
                 });
@@ -1026,7 +1033,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     let mut object = arr_val.as_object_mut().unwrap();
                     let value = promote_foreach_property_reference(
                         object
-                            .get_property_mut(&name)
+                            .get_dynamic_property_mut(&name)
                             .expect("dynamic property must remain addressable"),
                     );
                     (name, value)

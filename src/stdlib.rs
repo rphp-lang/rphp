@@ -5782,6 +5782,7 @@ fn fn_get_object_vars(
         .as_ref()
         .map_or(0, |properties| properties.len());
     let mut result = PhpArray::with_hash_capacity(object.property_values.len() + dynamic_len);
+    let mut declared_names = std::collections::HashSet::new();
     for slot in eg.visible_instance_property_slots(object.class_id, caller_class.as_deref()) {
         let value = &object.property_values[slot];
         if value.is_undef() {
@@ -5790,10 +5791,11 @@ fn fn_get_object_vars(
         let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
             continue;
         };
+        declared_names.insert(definition.name.clone());
         set_object_var(&mut result, &definition.name, clone_object_var(value));
     }
     object.for_each_dynamic_property(|name, value| {
-        if !value.is_undef() {
+        if !value.is_undef() && !declared_names.contains(name) {
             set_object_var(&mut result, name, clone_object_var(value));
         }
     });
