@@ -202,6 +202,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -219,6 +220,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -281,6 +283,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -311,6 +314,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -576,6 +580,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -604,6 +609,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -888,6 +894,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -902,6 +909,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -1078,6 +1086,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -1106,6 +1115,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -1232,6 +1242,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -1262,6 +1273,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
+                ..
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -2439,6 +2451,7 @@ impl Compiler {
                             object,
                             property,
                             nullsafe: false,
+                            ..
                         } => {
                             let (object, object_type) = self.compile_expr(object);
                             let property = self.add_literal(Value::string(property.clone()));
@@ -2453,6 +2466,7 @@ impl Compiler {
                             object,
                             property,
                             nullsafe: false,
+                            ..
                         } => {
                             let (object, object_type) = self.compile_expr(object);
                             let (property, property_type) = self.compile_expr(property);

@@ -30,7 +30,7 @@ use crate::vm::instruction::{
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
     CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_SILENT,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_SILENT,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME,
@@ -3429,6 +3429,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: _,
+                ..
             } => {
                 let (object_op, object_type) = self.compile_isset_object_base(object);
                 let property_op = self.add_literal(Value::string(property.clone()));
@@ -3448,6 +3449,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: _,
+                ..
             } => {
                 let (object_op, object_type) = self.compile_isset_object_base(object);
                 let (property_op, property_type) = self.compile_expr(property);
@@ -3540,6 +3542,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: _,
+                ..
             } => {
                 let (object_op, object_type) = self.compile_isset_object_base(object);
                 let property_op = self.add_literal(Value::string(property.clone()));
@@ -4830,6 +4833,10 @@ impl Compiler {
                         && instruction._pad & FETCH_DIM_ISSET == 0
                     {
                         instruction._pad |= FETCH_DYNAMIC_ERROR_SUPPRESS;
+                    } else if instruction.opcode == OpCode::FetchObjR
+                        && instruction._pad & FETCH_OBJ_SILENT == 0
+                    {
+                        instruction._pad |= FETCH_OBJ_ERROR_SUPPRESS;
                     } else if matches!(instruction.opcode, OpCode::SendVarEx | OpCode::SendNamed)
                         && instruction._pad & crate::vm::instruction::SEND_FLAG_FETCH_CV_R != 0
                     {
@@ -5508,6 +5515,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe,
+                line,
             } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let tmp = self.alloc_tmp();
@@ -5535,7 +5543,7 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
 
                 if let Some(idx) = nullsafe_patch {
                     self.instructions[idx].op2 = self.instructions.len() as u16;
@@ -5547,6 +5555,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe,
+                line,
             } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let tmp = self.alloc_tmp();
@@ -5572,7 +5581,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 if let Some(index) = nullsafe_patch {
                     self.instructions[index].op2 = self.instructions.len() as u16;
                 }
@@ -6099,6 +6108,7 @@ impl Compiler {
                         object,
                         property,
                         nullsafe: false,
+                        ..
                     } => {
                         let (object, object_type) = self.compile_expr(object);
                         let property = self.add_literal(Value::string(property.clone()));
@@ -6116,6 +6126,7 @@ impl Compiler {
                         object,
                         property,
                         nullsafe: false,
+                        ..
                     } => {
                         let (object, object_type) = self.compile_expr(object);
                         let (property, property_type) = self.compile_expr(property);
@@ -7075,6 +7086,7 @@ impl Compiler {
                             object,
                             property,
                             nullsafe: false,
+                            ..
                         } => {
                             let (object, object_type) = self.compile_expr(object);
                             let property = self.add_literal(Value::string(property.clone()));
@@ -7091,6 +7103,7 @@ impl Compiler {
                             object,
                             property,
                             nullsafe: false,
+                            ..
                         } => {
                             let (object, object_type) = self.compile_expr(object);
                             let (property, property_type) = self.compile_expr(property);

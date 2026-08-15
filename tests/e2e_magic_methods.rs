@@ -86,6 +86,26 @@ echo $f->whatever;
 }
 
 #[test]
+fn missing_properties_warn_after_magic_resolution_and_silent_reads_stay_silent() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PlainPropertyBag {}
+$bag = new PlainPropertyBag();
+var_dump($bag->missing);
+var_dump(isset($bag->missing));
+var_dump(@$bag->suppressed);
+set_error_handler(function($code, $message) { echo "handled:$code:$message\n"; return true; });
+var_dump($bag->handled);
+class MagicPropertyBag { public function __get($name) { return "magic:$name"; } }
+var_dump((new MagicPropertyBag())->missing);
+"#
+        ),
+        "\nWarning: Undefined property: PlainPropertyBag::$missing in <main> on line 4\nNULL\nbool(false)\nNULL\nhandled:2:Undefined property: PlainPropertyBag::$handled\nNULL\nstring(13) \"magic:missing\"\n"
+    );
+}
+
+#[test]
 fn recursive_get_is_guarded_per_object_and_property() {
     assert_eq!(
         run_php(
@@ -103,7 +123,7 @@ $object = new RecursiveGet();
 var_dump($object->first);
 "#
         ),
-        "get:first\nNULL\nget:second\nNULL\nNULL\n"
+        "get:first\n\nWarning: Undefined property: RecursiveGet::$first in RecursiveGet::__get on line 6\nNULL\nget:second\nNULL\nNULL\n"
     );
 }
 

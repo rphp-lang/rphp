@@ -865,6 +865,21 @@ fn op_fetch_obj_r_slow<'a>(
                     "Cannot access property starting with \"\\0\"".into(),
                 ));
             } else {
+                let class_name = obj_val
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .unwrap_or_else(|| "object".to_string());
+                report_php_warning(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &format!("Undefined property: {class_name}::${name}"),
+                    opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
+                )?;
+                if let Some(result) = take_magic_exception(eg, frame) {
+                    return Ok(result);
+                }
                 set_result(Value::null());
             }
         }

@@ -1381,6 +1381,7 @@ impl Parser {
                     object,
                     property,
                     nullsafe: false,
+                    ..
                 } => Ok(Stmt::AssignProp {
                     object: *object,
                     property,
@@ -1414,6 +1415,7 @@ impl Parser {
                             object,
                             property,
                             nullsafe: false,
+                            ..
                         } = root
                     {
                         return Ok(Stmt::AssignObjArrayDim {
