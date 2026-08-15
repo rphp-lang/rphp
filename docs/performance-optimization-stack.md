@@ -1,6 +1,6 @@
 # Layered execution optimization plan
 
-Status: Layer 1 dual-host candidate verified over `c646f3b`, 2026-08-14;
+Status: Layer 1 dual-host candidate verified over `385dc1c`, 2026-08-15;
 integration handoff pending
 
 This document orders execution work as one cumulative optimization stack. It
@@ -70,10 +70,12 @@ the bounded native JIT and retains explicit typed-only and runtime-disabled
 lanes. The table below preserves that selection snapshot so its decision can
 be audited rather than silently replacing historical evidence.
 
-The implementation was finally rebased over clean `main` commit `c646f3b` and
-verified as candidate `501892c` on physical ARM64 and x86-64. Both hosts used
-101 alternating observations for the direct-call target, independent holdout,
-typed control and order/ledger/routing controls. The full result is recorded in
+The implementation was finally rebased over clean `main` commit `385dc1c` and
+verified as source candidate `0f8b5b9` on physical ARM64 and x86-64. Both
+accepted host runs used 101 alternating observations for the direct-call
+target, independent holdout, typed controls and order/ledger/routing controls.
+The report also retains the complete rejected battery-powered ARM64
+distributions that preceded the stable AC run. The full result is recorded in
 [the direct-call checkpoint](performance-direct-call-regions.md). A fresh full
 scorecard is the first prerequisite before selecting a Layer 2 implementation
 slice; old selection rows are not treated as current post-Layer-1 costs.
@@ -182,12 +184,13 @@ cases must reject before mutation. Acceptance requires a target win on both
 architectures, reduced frame/slot counts, exact forced exits and neutral
 order/ledger/routing controls.
 
-On ARM64 the target improves by 99.31% and the independent property holdout by
-99.11%; on x86-64 they improve by 99.31% and 99.60%. Frame pushes on the target
-fall from 500,004 to 70 on both hosts, one native region completes with zero
-side exits, and every typed/order/ledger/routing control remains within the
-one-percent regression ceiling. Detailed semantics, distributions, code-size
-cost and limitations are in
+On ARM64 the accepted AC target improves by 99.315% and the independent
+property holdout by 99.123%; on x86-64 they improve by 99.325% and 99.607%.
+Frame pushes on the target fall from 500,004 to 70 on both hosts, one native
+region completes with zero side exits, and every accepted
+typed/order/ledger/routing control remains within the one-percent slowdown
+ceiling. Detailed semantics, accepted and rejected distributions, code-size
+cost, reproducibility metadata and limitations are in
 [the direct-call checkpoint](performance-direct-call-regions.md).
 
 The integration gate must merge this shared compiler/runtime checkpoint before
