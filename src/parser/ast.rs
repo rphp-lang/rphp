@@ -116,6 +116,7 @@ pub enum Expr {
     PreIncTarget(Box<Expr>), // ++self::$value, ++$object->property
     PreDecTarget(Box<Expr>), // --self::$value, --$object->property
     Not(Box<Expr>),        // !expr
+    UnaryPlus(Box<Expr>),  // +$x
     UnaryMinus(Box<Expr>), // -$x
     ErrorSuppress(Box<Expr>), // @expr
     Ternary {
@@ -351,6 +352,7 @@ impl Expr {
             }
             | Expr::Elvis { left, right } => left.contains_yield() || right.contains_yield(),
             Expr::Not(inner)
+            | Expr::UnaryPlus(inner)
             | Expr::UnaryMinus(inner)
             | Expr::ErrorSuppress(inner)
             | Expr::Empty(inner)

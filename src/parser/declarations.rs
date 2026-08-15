@@ -1013,7 +1013,8 @@ impl Parser {
                 Self::collect_free_vars(left, bound, out);
                 Self::collect_free_vars(right, bound, out);
             }
-            Expr::UnaryMinus(inner)
+            Expr::UnaryPlus(inner)
+            | Expr::UnaryMinus(inner)
             | Expr::ErrorSuppress(inner)
             | Expr::Not(inner)
             | Expr::Throw { expr: inner, .. }

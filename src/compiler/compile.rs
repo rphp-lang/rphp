@@ -1563,7 +1563,8 @@ impl Compiler {
                     && Self::is_compile_time_class_constant_name(then_expr)
                     && Self::is_compile_time_class_constant_name(else_expr)
             }
-            Expr::UnaryMinus(inner)
+            Expr::UnaryPlus(inner)
+            | Expr::UnaryMinus(inner)
             | Expr::Not(inner)
             | Expr::BitwiseNot(inner)
             | Expr::Cast { expr: inner, .. } => Self::is_compile_time_class_constant_name(inner),
@@ -2654,7 +2655,8 @@ impl Compiler {
                 self.collect_class_name_literals(then_expr, known);
                 self.collect_class_name_literals(else_expr, known);
             }
-            Expr::UnaryMinus(inner)
+            Expr::UnaryPlus(inner)
+            | Expr::UnaryMinus(inner)
             | Expr::Not(inner)
             | Expr::BitwiseNot(inner)
             | Expr::Cast { expr: inner, .. } => self.collect_class_name_literals(inner, known),
@@ -2808,6 +2810,16 @@ impl Compiler {
             Expr::Not(inner) => Ok(Value::bool(
                 !Self::eval_const_expr_with_context(inner, known, file_context)?.is_truthy(),
             )),
+            Expr::UnaryPlus(inner) => {
+                let value = Self::eval_const_expr_with_context(inner, known, file_context)?;
+                if let Some(number) = value.as_long() {
+                    Ok(Value::long(number))
+                } else if let Some(number) = value.as_double() {
+                    Ok(Value::double(number))
+                } else {
+                    Err("unsupported unary expression".to_string())
+                }
+            }
             Expr::UnaryMinus(inner) => {
                 let value = Self::eval_const_expr_with_context(inner, known, file_context)?;
                 if let Some(number) = value.as_long() {
@@ -4747,6 +4759,33 @@ impl Compiler {
                 instr.op1_type = OpType::Const;
                 instr.op2 = inner_op;
                 instr.op2_type = inner_type;
+                instr.result = tmp;
+                instr.result_type = OpType::Tmp;
+                self.instructions.push(instr);
+                (tmp, OpType::Tmp)
+            }
+            Expr::UnaryPlus(inner) => {
+                match inner.as_ref() {
+                    Expr::Integer(n) => {
+                        let idx = self.add_literal(Value::long(*n));
+                        return (idx, OpType::Const);
+                    }
+                    Expr::Float(f) => {
+                        let idx = self.add_literal(Value::double(*f));
+                        return (idx, OpType::Const);
+                    }
+                    _ => {}
+                }
+                // PHP specifies unary plus through numeric multiplication;
+                // keeping the operand first also preserves its diagnostics.
+                let (inner_op, inner_type) = self.compile_expr(inner);
+                let one_idx = self.add_literal(Value::long(1));
+                let tmp = self.alloc_tmp();
+                let mut instr = Instruction::new(OpCode::Mul);
+                instr.op1 = inner_op;
+                instr.op1_type = inner_type;
+                instr.op2 = one_idx;
+                instr.op2_type = OpType::Const;
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
                 self.instructions.push(instr);

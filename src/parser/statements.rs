@@ -924,6 +924,7 @@ impl Parser {
             | Token::True
             | Token::False
             | Token::Bang
+            | Token::Plus
             | Token::Minus
             | Token::At
             | Token::Tilde

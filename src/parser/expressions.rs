@@ -646,6 +646,11 @@ impl Parser {
                 let expr = self.parse_unary()?;
                 Ok(Expr::UnaryMinus(Box::new(expr)))
             }
+            Token::Plus => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expr::UnaryPlus(Box::new(expr)))
+            }
             Token::At => {
                 self.advance();
                 let expr = self.parse_unary()?;
