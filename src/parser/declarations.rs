@@ -1064,6 +1064,7 @@ impl Parser {
             | Expr::Empty(inner)
             | Expr::Print(inner)
             | Expr::Include { path: inner, .. }
+            | Expr::Eval { source: inner, .. }
             | Expr::BitwiseNot(inner)
             | Expr::DynamicVariable { name: inner, .. } => {
                 Self::collect_free_vars(inner, bound, out);
