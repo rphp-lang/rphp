@@ -2773,16 +2773,24 @@ fn value_to_global_name(val: &Value) -> Result<String, VmError> {
     })
 }
 
-/// PHP == comparison for compound values. Object equality compares class and
-/// property state rather than allocation identity; revisiting an object pair
-/// keeps cyclic graphs finite. Scalar leaves retain PHP's ordinary loose
-/// boolean/numeric behavior.
-pub(crate) fn values_equal(a: &Value, b: &Value) -> bool {
+const MAX_COMPARISON_DEPTH: usize = 512;
+
+#[derive(Default)]
+struct ComparisonContext {
+    active_left: std::collections::HashSet<usize>,
+    active_right: std::collections::HashSet<usize>,
+}
+
+/// PHP == comparison for compound values. Recursive structures raise a
+/// catchable Error through the checked entry point rather than overflowing the
+/// host stack. Scalar leaves retain PHP's ordinary loose behavior.
+pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
     fn equal_inner(
         a: &Value,
         b: &Value,
-        visited_objects: &mut std::collections::HashSet<(usize, usize)>,
-    ) -> bool {
+        context: &mut ComparisonContext,
+        depth: usize,
+    ) -> Result<bool, ()> {
         let a = a.dereferenced();
         let b = b.dereferenced();
 
@@ -2791,10 +2799,10 @@ pub(crate) fn values_equal(a: &Value, b: &Value) -> bool {
             || matches!(a.value_type(), ValueType::Null | ValueType::Undef)
             || matches!(b.value_type(), ValueType::Null | ValueType::Undef)
         {
-            return a.is_truthy() == b.is_truthy();
+            return Ok(a.is_truthy() == b.is_truthy());
         }
 
-        match (a.value_type(), b.value_type()) {
+        Ok(match (a.value_type(), b.value_type()) {
             (ValueType::Long, ValueType::Long) => a.as_long() == b.as_long(),
             (ValueType::Long | ValueType::Double, ValueType::Long | ValueType::Double) => {
                 a.to_double() == b.to_double()
@@ -2808,25 +2816,54 @@ pub(crate) fn values_equal(a: &Value, b: &Value) -> bool {
                 }
             }
             (ValueType::Array, ValueType::Array) => {
+                let left_identity = a.array_identity().unwrap();
+                let right_identity = b.array_identity().unwrap();
+                if left_identity == right_identity {
+                    return Ok(true);
+                }
+                if depth >= MAX_COMPARISON_DEPTH
+                    || !context.active_left.insert(left_identity)
+                    || !context.active_right.insert(right_identity)
+                {
+                    return Err(());
+                }
                 let left = a.as_array().unwrap();
                 let right = b.as_array().unwrap();
-                left.len() == right.len()
-                    && left.iter().all(|(key, value)| {
+                let result = if left.len() != right.len() {
+                    Ok(false)
+                } else {
+                    let mut equal = true;
+                    for (key, value) in left.iter() {
                         let other = match key {
                             ArrayKey::Int(key) => right.get_int(key),
                             ArrayKey::String(key) => right.get_str(&key),
                         };
-                        other.is_some_and(|other| equal_inner(value, other, visited_objects))
-                    })
+                        let Some(other) = other else {
+                            equal = false;
+                            break;
+                        };
+                        if !equal_inner(value, other, context, depth + 1)? {
+                            equal = false;
+                            break;
+                        }
+                    }
+                    Ok(equal)
+                };
+                context.active_left.remove(&left_identity);
+                context.active_right.remove(&right_identity);
+                return result;
             }
             (ValueType::Object, ValueType::Object) => {
                 let left_identity = a.object_identity().unwrap();
                 let right_identity = b.object_identity().unwrap();
                 if left_identity == right_identity {
-                    return true;
+                    return Ok(true);
                 }
-                if !visited_objects.insert((left_identity, right_identity)) {
-                    return true;
+                if depth >= MAX_COMPARISON_DEPTH
+                    || !context.active_left.insert(left_identity)
+                    || !context.active_right.insert(right_identity)
+                {
+                    return Err(());
                 }
 
                 let left = a.as_object().unwrap();
@@ -2837,19 +2874,33 @@ pub(crate) fn values_equal(a: &Value, b: &Value) -> bool {
                     left.class_name.eq_ignore_ascii_case(&right.class_name)
                 };
                 if !same_class {
-                    return false;
+                    context.active_left.remove(&left_identity);
+                    context.active_right.remove(&right_identity);
+                    return Ok(false);
                 }
 
                 let mut left_count = 0usize;
                 let mut properties_equal = true;
+                let mut comparison_error = false;
                 left.for_each_property(|name, value| {
                     left_count += 1;
-                    properties_equal &= right
-                        .get_property(name)
-                        .is_some_and(|other| equal_inner(value, other, visited_objects));
+                    if properties_equal && !comparison_error {
+                        match right.get_property(name) {
+                            Some(other) => match equal_inner(value, other, context, depth + 1) {
+                                Ok(equal) => properties_equal = equal,
+                                Err(()) => comparison_error = true,
+                            },
+                            None => properties_equal = false,
+                        }
+                    }
                 });
                 let mut right_count = 0usize;
                 right.for_each_property(|_, _| right_count += 1);
+                context.active_left.remove(&left_identity);
+                context.active_right.remove(&right_identity);
+                if comparison_error {
+                    return Err(());
+                }
                 properties_equal && left_count == right_count
             }
             (ValueType::Closure, ValueType::Closure) => a
@@ -2858,58 +2909,87 @@ pub(crate) fn values_equal(a: &Value, b: &Value) -> bool {
                 .is_some_and(|(left, right)| left.same_identity(right)),
             (ValueType::Resource, ValueType::Resource) => a.as_resource_id() == b.as_resource_id(),
             _ => false,
-        }
+        })
     }
 
-    equal_inner(a, b, &mut std::collections::HashSet::new())
+    equal_inner(a, b, &mut ComparisonContext::default(), 0)
 }
 
 /// PHP === comparison: same type and same value (recursive for arrays).
-pub(crate) fn values_identical(a: &Value, b: &Value) -> bool {
-    let a = a.dereferenced();
-    let b = b.dereferenced();
-    if matches!(a.value_type(), ValueType::Undef | ValueType::Null)
-        && matches!(b.value_type(), ValueType::Undef | ValueType::Null)
-    {
-        return true;
-    }
-    if a.value_type() != b.value_type() {
-        return false;
-    }
-    match a.value_type() {
-        ValueType::Undef | ValueType::Null => true,
-        ValueType::True | ValueType::False => true,
-        ValueType::Long => a.as_long() == b.as_long(),
-        ValueType::Double => a.as_double() == b.as_double(),
-        ValueType::String => a.as_str() == b.as_str(),
-        ValueType::Array => {
-            let arr_a = a.as_array().unwrap();
-            let arr_b = b.as_array().unwrap();
-            if arr_a.len() != arr_b.len() {
-                return false;
-            }
-            // Same keys in same order, each value ===
-            for ((ka, va), (kb, vb)) in arr_a.iter().zip(arr_b.iter()) {
-                if ka != kb || !values_identical(va, vb) {
-                    return false;
+pub(crate) fn values_identical_checked(a: &Value, b: &Value) -> Result<bool, ()> {
+    fn identical_inner(
+        a: &Value,
+        b: &Value,
+        context: &mut ComparisonContext,
+        depth: usize,
+    ) -> Result<bool, ()> {
+        let a = a.dereferenced();
+        let b = b.dereferenced();
+        if matches!(a.value_type(), ValueType::Undef | ValueType::Null)
+            && matches!(b.value_type(), ValueType::Undef | ValueType::Null)
+        {
+            return Ok(true);
+        }
+        if a.value_type() != b.value_type() {
+            return Ok(false);
+        }
+        Ok(match a.value_type() {
+            ValueType::Undef | ValueType::Null => true,
+            ValueType::True | ValueType::False => true,
+            ValueType::Long => a.as_long() == b.as_long(),
+            ValueType::Double => a.as_double() == b.as_double(),
+            ValueType::String => a.as_str() == b.as_str(),
+            ValueType::Array => {
+                let left_identity = a.array_identity().unwrap();
+                let right_identity = b.array_identity().unwrap();
+                if left_identity == right_identity {
+                    return Ok(true);
                 }
+                if depth >= MAX_COMPARISON_DEPTH
+                    || !context.active_left.insert(left_identity)
+                    || !context.active_right.insert(right_identity)
+                {
+                    return Err(());
+                }
+                let arr_a = a.as_array().unwrap();
+                let arr_b = b.as_array().unwrap();
+                if arr_a.len() != arr_b.len() {
+                    context.active_left.remove(&left_identity);
+                    context.active_right.remove(&right_identity);
+                    return Ok(false);
+                }
+                let mut identical = true;
+                for ((ka, va), (kb, vb)) in arr_a.iter().zip(arr_b.iter()) {
+                    if ka != kb || !identical_inner(va, vb, context, depth + 1)? {
+                        identical = false;
+                        break;
+                    }
+                }
+                context.active_left.remove(&left_identity);
+                context.active_right.remove(&right_identity);
+                identical
             }
-            true
-        }
-        ValueType::Object => {
-            // Objects are identical if they are the same instance (same Rc pointer)
-            let rc_a = a.as_object_rc().unwrap();
-            let rc_b = b.as_object_rc().unwrap();
-            std::rc::Rc::ptr_eq(&rc_a, &rc_b)
-        }
-        ValueType::Closure => {
-            // Closures are PHP objects too. Their immutable payload address is
-            // the request-local object identity retained by Value::clone.
-            std::ptr::eq(a.as_closure().unwrap(), b.as_closure().unwrap())
-        }
-        ValueType::Resource => a.as_resource_id() == b.as_resource_id(),
-        _ => false,
+            ValueType::Object => {
+                // Objects are identical if they are the same instance (same Rc pointer)
+                let rc_a = a.as_object_rc().unwrap();
+                let rc_b = b.as_object_rc().unwrap();
+                std::rc::Rc::ptr_eq(&rc_a, &rc_b)
+            }
+            ValueType::Closure => {
+                // Closures are PHP objects too. Their immutable payload address is
+                // the request-local object identity retained by Value::clone.
+                std::ptr::eq(a.as_closure().unwrap(), b.as_closure().unwrap())
+            }
+            ValueType::Resource => a.as_resource_id() == b.as_resource_id(),
+            _ => false,
+        })
     }
+
+    identical_inner(a, b, &mut ComparisonContext::default(), 0)
+}
+
+pub(crate) fn values_identical(a: &Value, b: &Value) -> bool {
+    values_identical_checked(a, b).unwrap_or(false)
 }
 
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]

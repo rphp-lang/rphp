@@ -1666,7 +1666,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             | (ValueType::Closure, ValueType::Closure)
                     )
                 {
-                    let equal = values_equal(op1, op2);
+                    let Ok(equal) = values_equal_checked(op1, op2) else {
+                        throw_operator!("Error", "Nesting level too deep - recursive dependency?");
+                    };
                     if opline.opcode == OpCode::IsEqual {
                         equal
                     } else {
@@ -1718,7 +1720,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let identical = values_identical(op1, op2);
+                let Ok(identical) = values_identical_checked(op1, op2) else {
+                    throw_operator!("Error", "Nesting level too deep - recursive dependency?");
+                };
 
                 let result = match opline.opcode {
                     OpCode::IsIdentical => identical,

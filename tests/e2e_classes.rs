@@ -13,6 +13,30 @@ fn loose_object_equality_compares_class_and_nested_property_state() {
 }
 
 #[test]
+fn recursive_compound_comparisons_throw_without_losing_self_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$recursive = [&$recursive];
+try { $recursive === [[]]; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { [[]] === $recursive; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+var_dump($recursive === $recursive);
+
+#[AllowDynamicProperties]
+class CyclicComparisonNode {}
+$left = new CyclicComparisonNode();
+$right = new CyclicComparisonNode();
+$left->next = $left;
+$right->next = $right;
+try { $left == $right; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+var_dump($left == $left);
+"#,
+        ),
+        "Nesting level too deep - recursive dependency?\nNesting level too deep - recursive dependency?\nbool(true)\nNesting level too deep - recursive dependency?\nbool(true)\n"
+    );
+}
+
+#[test]
 fn user_destructor_runs_when_a_function_releases_its_last_object_handles() {
     let out = run_php(
         r#"<?php
