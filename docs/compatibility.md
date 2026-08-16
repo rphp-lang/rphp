@@ -7,6 +7,34 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 array-to-string diagnostic checkpoint, based on `b1d35db`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,744 passes,
+2,286 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. Its exact pass-set delta is +5/-0:
+`Zend/tests/assign_concat_array_empty_string.phpt`, `bug37811.phpt`,
+`cast_to_string.phpt`, `settype_string.phpt` and
+`temporary_cleaning_015.phpt`.
+
+Explicit string casts, `strval()`, `settype()`, concatenation and compound
+concatenation now report PHP's `Array to string conversion` warning before
+producing `Array`. Internal conversion preserves PHP's mutation order when a
+user error handler throws. Object conversions share the ordinary `__toString`
+call path, require a string result, and propagate a method exception before
+return-type validation. Cast bytecode now retains its source line. Original
+coverage exercises array and object casts, both internal functions and the
+throwing-handler mutation boundary.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The optional cold-kernel S3 frontier was not
+accepted for this checkpoint: a local rerun blocked on its cache lock and was
+stopped without a result. That manually dispatched frontier remains outside
+the ordinary push CI. Seven five-million-iteration constant-string concat
+release controls measured medians of 0.35 seconds for the preceding binary and
+0.36 seconds for the candidate, with identical output; the difference is within
+the observed 0.34--0.43-second run spread.
+
 The current AMD64 arithmetic-operator-error checkpoint, based on `6402dd1`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,739 passes,
 2,291 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
