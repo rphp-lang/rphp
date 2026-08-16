@@ -64,11 +64,38 @@ fn op_send_named<'a>(
 
         let variadic_index = func_common.sig.param_names.len().saturating_sub(1) as u32;
         let is_ref = func_common.sig.is_param_by_ref(variadic_index);
-        let value = if is_ref && opline.op1_type == OpType::Cv {
+        let value = if is_ref {
             unsafe {
-                let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                let raw_ptr = base.add(opline.op1 as usize);
-                materialize_reference_alias(frame, raw_ptr)
+                if opline._pad & SEND_FLAG_NONREFERENCEABLE != 0 {
+                    let parameter_name = func_common
+                        .sig
+                        .param_names
+                        .get(variadic_index as usize)
+                        .map(String::as_str)
+                        .unwrap_or("unknown");
+                    let function_name =
+                        registered_function_name(eg, func_common as *const FunctionCommon);
+                    let error = make_error_value(
+                        "Error",
+                        &format!(
+                            "{}(): Argument #{} (${}) cannot be passed by reference",
+                            function_name,
+                            variadic_index + 1,
+                            parameter_name
+                        ),
+                    );
+                    return Ok(match cleanup_call_and_throw(eg, frame, call, error) {
+                        ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                    });
+                }
+                if opline.op1_type != OpType::Cv {
+                    snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?
+                } else {
+                    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                    let raw_ptr = base.add(opline.op1 as usize);
+                    materialize_reference_alias(frame, raw_ptr)
+                }
             }
         } else {
             snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?
@@ -110,9 +137,37 @@ fn op_send_named<'a>(
 
                 let is_ref = func_common.sig.is_param_by_ref(idx);
 
-                if is_ref && opline.op1_type == OpType::Cv {
+                if is_ref
+                    && (opline.op1_type == OpType::Cv
+                        || opline._pad & SEND_FLAG_NONREFERENCEABLE != 0)
+                {
                     // By-reference: same logic as SendRef
                     let argument = unsafe {
+                        if opline._pad & SEND_FLAG_NONREFERENCEABLE != 0 {
+                            let parameter_name = func_common
+                                .sig
+                                .param_names
+                                .get(idx as usize)
+                                .map(String::as_str)
+                                .unwrap_or("unknown");
+                            let function_name = registered_function_name(
+                                eg,
+                                func_common as *const FunctionCommon,
+                            );
+                            let error = make_error_value(
+                                "Error",
+                                &format!(
+                                    "{}(): Argument #{} (${}) cannot be passed by reference",
+                                    function_name,
+                                    idx + 1,
+                                    parameter_name
+                                ),
+                            );
+                            return Ok(match cleanup_call_and_throw(eg, frame, call, error) {
+                                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                            });
+                        }
                         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
                         let raw_ptr = base.add(opline.op1 as usize);
                         materialize_reference_alias(frame, raw_ptr)

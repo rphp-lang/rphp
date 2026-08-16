@@ -66,6 +66,12 @@ pub const SEND_FLAG_FETCH_CV_R: u16 = 1 << 1;
 /// reporting mask. A custom handler still runs and observes that mask.
 pub const SEND_FLAG_ERROR_SUPPRESS: u16 = 1 << 2;
 
+/// SendVal/SendNamed flag: the source expression produced a value but PHP
+/// forbids exposing that expression as a reference (notably a nullsafe chain).
+/// Runtime signature resolution raises the ordinary argument Error only when
+/// the selected parameter is actually by-reference.
+pub const SEND_FLAG_NONREFERENCEABLE: u16 = 1 << 3;
+
 /// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
 /// handlers still run and observe the suppressed mask.
 pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;

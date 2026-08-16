@@ -36,7 +36,8 @@ use crate::vm::instruction::{
     FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OpType, REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, UNSET_DIM_NESTED,
+    SEND_FLAG_NONREFERENCEABLE, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -1568,6 +1569,25 @@ fn builtin_ref_args(name: &str) -> u64 {
 }
 
 impl Compiler {
+    fn expression_contains_nullsafe_chain(expr: &Expr) -> bool {
+        match expr {
+            Expr::PropertyAccess {
+                object, nullsafe, ..
+            }
+            | Expr::DynamicPropertyAccess {
+                object, nullsafe, ..
+            }
+            | Expr::MethodCall {
+                object, nullsafe, ..
+            } => *nullsafe || Self::expression_contains_nullsafe_chain(object),
+            Expr::ArrayAccess { array, .. } => Self::expression_contains_nullsafe_chain(array),
+            Expr::DynamicStaticProperty { class, .. } | Expr::DynamicStaticCall { class, .. } => {
+                Self::expression_contains_nullsafe_chain(class)
+            }
+            _ => false,
+        }
+    }
+
     /// PHP treats a braced name produced by a constant expression differently
     /// from a runtime string equal to `class`: the former remains an ordinary
     /// case-sensitive constant lookup, while the latter resolves `::class`.
@@ -7209,7 +7229,12 @@ impl Compiler {
                 }
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
-                    let opcode = Self::positional_opcode(ref_args, i, op_type, use_var_ex);
+                    let nonreferenceable = Self::expression_contains_nullsafe_chain(expr);
+                    let opcode = if nonreferenceable {
+                        OpCode::SendVal
+                    } else {
+                        Self::positional_opcode(ref_args, i, op_type, use_var_ex)
+                    };
                     let mut send = Instruction::new(opcode);
                     send.op1 = op;
                     send.op1_type = op_type;
@@ -7219,6 +7244,10 @@ impl Compiler {
                         send.extended_value = i as u32;
                     }
                     if set_extended_value {
+                        send.extended_value = i as u32;
+                    }
+                    if nonreferenceable {
+                        send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = i as u32;
                     }
                     self.instructions.push(send);
@@ -7259,6 +7288,9 @@ impl Compiler {
                     // initialize only the argument slots that no preceding
                     // positional send could have written.
                     send.extended_value = i as u32;
+                    if Self::expression_contains_nullsafe_chain(value) {
+                        send._pad |= SEND_FLAG_NONREFERENCEABLE;
+                    }
                     self.instructions.push(send);
                 }
             }
@@ -7516,9 +7548,13 @@ impl Compiler {
         for (index, (arg, (op, op_type, name_idx))) in args.iter().zip(compiled_args).enumerate() {
             match arg {
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                    let mut send = Instruction::new(Self::positional_opcode(
-                        ref_args, index, *op_type, use_var_ex,
-                    ));
+                    let nonreferenceable = Self::expression_contains_nullsafe_chain(expr);
+                    let opcode = if nonreferenceable {
+                        OpCode::SendVal
+                    } else {
+                        Self::positional_opcode(ref_args, index, *op_type, use_var_ex)
+                    };
+                    let mut send = Instruction::new(opcode);
                     send.op1 = *op;
                     send.op1_type = *op_type;
                     send.op2 = (index as u32 + cv_offset) as u16;
@@ -7527,6 +7563,10 @@ impl Compiler {
                         send.extended_value = index as u32;
                     }
                     if set_extended_value {
+                        send.extended_value = index as u32;
+                    }
+                    if nonreferenceable {
+                        send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = index as u32;
                     }
                     self.instructions.push(send);
@@ -7538,6 +7578,9 @@ impl Compiler {
                     send.op2 = name_idx.expect("compiled named argument must retain its name");
                     send.op2_type = OpType::Const;
                     send.extended_value = index as u32;
+                    if Self::expression_contains_nullsafe_chain(arg.expr()) {
+                        send._pad |= SEND_FLAG_NONREFERENCEABLE;
+                    }
                     self.instructions.push(send);
                 }
             }
