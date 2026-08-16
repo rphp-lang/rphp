@@ -86,6 +86,13 @@ error for a bare arrow function on the pipe RHS while accepting the explicitly
 parenthesized form. The check runs only during parsing and does not alter the
 runtime call path.
 
+The `547409b` call-type checkpoint adds 11 exact passes with no lost pass:
+1,852 pass, 3,356 fail, 110 skip, one XFAIL, 280 unsupported, zero timeouts and
+zero crashes. Supplied values are type-checked before a later missing argument,
+user-call diagnostics include parameter and caller metadata, and weak scalar
+arguments use the same canonical coercion table as typed writes. Exact compact
+calls are unchanged; the new work stays on mismatched cold call preparation.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
