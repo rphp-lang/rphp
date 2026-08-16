@@ -783,6 +783,36 @@ echo $results;
 // ========== Comparison with concat on right side ==========
 
 #[test]
+fn php_85_pipe_preserves_precedence_chaining_and_evaluation_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function pipeAdd(int $value): int { echo 'A'; return $value + 1; }
+function pipeDouble(int $value): int { echo 'D'; return $value * 2; }
+function choosePipe() { echo 'C'; return 'pipeDouble'; }
+$result = 5 + 2 |> pipeAdd(...) |> (choosePipe());
+echo '|', $result, '|';
+var_dump(5 |> pipeDouble(...) == 10);
+"#,
+        ),
+        "ACD|16|Dbool(true)\n"
+    );
+}
+
+#[test]
+fn php_85_pipe_rejects_a_by_reference_parameter() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function pipeMutate(int &$value): int { return ++$value; }
+try { 5 |> pipeMutate(...); } catch (Error $error) { echo $error->getMessage(); }
+"#,
+        ),
+        "pipemutate(): Argument #1 ($value) cannot be passed by reference"
+    );
+}
+
+#[test]
 fn test_identical_with_concat_rhs() {
     assert_eq!(
         run_php("<?php echo 'xy' === 'x' . 'y' ? 'yes' : 'no';"),

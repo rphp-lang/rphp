@@ -158,6 +158,11 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    Pipe {
+        input: Box<Expr>,
+        callable: Box<Expr>,
+        line: usize,
+    },
     FunctionCall {
         name: String,
         args: Vec<CallArg>,
@@ -490,6 +495,9 @@ impl Expr {
             | Expr::ArrayAppendAssign { target, expr, .. } => {
                 target.contains_yield() || expr.contains_yield()
             }
+            Expr::Pipe {
+                input, callable, ..
+            } => input.contains_yield() || callable.contains_yield(),
             Expr::ListAssign { targets, expr, .. } => {
                 targets.iter().any(ListTarget::contains_yield) || expr.contains_yield()
             }

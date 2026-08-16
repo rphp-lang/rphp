@@ -1056,6 +1056,12 @@ impl Parser {
                 Self::collect_free_vars(left, bound, out);
                 Self::collect_free_vars(right, bound, out);
             }
+            Expr::Pipe {
+                input, callable, ..
+            } => {
+                Self::collect_free_vars(input, bound, out);
+                Self::collect_free_vars(callable, bound, out);
+            }
             Expr::UnaryPlus(inner)
             | Expr::UnaryMinus(inner)
             | Expr::ErrorSuppress(inner)

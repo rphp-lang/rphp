@@ -107,6 +107,7 @@ pub enum Token {
     GreaterEqual,           // >=
     AmpAmp,                 // &&
     PipePipe,               // ||
+    PipeGreater(usize),     // |> (PHP 8.5 pipe operator)
     LogicalXor,             // xor
     Bang,                   // !
     PlusAssign,             // +=
@@ -395,7 +396,14 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'|' => {
-                    if self.peek_next() == Some(b'|') {
+                    if self.peek_next() == Some(b'>') {
+                        let line = 1 + self.src[..self.pos]
+                            .iter()
+                            .filter(|&&byte| byte == b'\n')
+                            .count();
+                        tokens.push(Token::PipeGreater(line));
+                        self.pos += 2;
+                    } else if self.peek_next() == Some(b'|') {
                         tokens.push(Token::PipePipe);
                         self.pos += 2;
                     } else if self.peek_next() == Some(b'=') {
@@ -962,6 +970,16 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn php_85_pipe_is_distinct_from_bitwise_or_and_logical_or() {
+        let tokens = Lexer::new("<?php $value |> trim(...) | 1 || false;")
+            .tokenize()
+            .unwrap();
+        assert!(matches!(tokens[2], Token::PipeGreater(1)));
+        assert!(tokens.iter().any(|token| *token == Token::Pipe));
+        assert!(tokens.iter().any(|token| *token == Token::PipePipe));
+    }
 
     fn echo(line: usize) -> Token {
         Token::Echo { line }

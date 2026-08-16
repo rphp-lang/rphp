@@ -4096,6 +4096,35 @@ impl Compiler {
                 let null = self.add_literal(Value::null());
                 (null, OpType::Const)
             }
+            Expr::Pipe {
+                input,
+                callable,
+                line,
+            } => {
+                // PHP evaluates the complete input before evaluating the
+                // callable expression. SendVal deliberately prevents a pipe
+                // result from satisfying a by-reference parameter.
+                let (input, input_type) = self.compile_expr(input);
+                let (callable, callable_type) = self.compile_expr(callable);
+                let mut init = Instruction::new(OpCode::InitDynamicCall);
+                init.op1 = callable;
+                init.op1_type = callable_type;
+                init.extended_value = 1;
+                self.push_instruction_at_line(init, *line);
+
+                let mut send = Instruction::new(OpCode::SendVal);
+                send.op1 = input;
+                send.op1_type = input_type;
+                send._pad |= SEND_FLAG_NONREFERENCEABLE;
+                self.push_instruction_at_line(send, *line);
+
+                let result = self.alloc_tmp();
+                let mut call = Instruction::new(OpCode::DoFcall);
+                call.result = result;
+                call.result_type = OpType::Tmp;
+                self.push_instruction_at_line(call, *line);
+                (result, OpType::Tmp)
+            }
             Expr::BinaryOp { op, left, right } => {
                 if matches!(op, BinOp::Concat) {
                     return self.compile_concat_chain(left, right);

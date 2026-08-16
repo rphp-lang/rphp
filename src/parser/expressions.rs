@@ -449,7 +449,7 @@ impl Parser {
 
     /// Comparison: ==, !=, <, <=, >, >=, <=>, instanceof
     fn parse_comparison(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_concat()?;
+        let mut left = self.parse_pipe()?;
 
         loop {
             // instanceof has same precedence as comparison operators
@@ -518,8 +518,30 @@ impl Parser {
     /// requiring extra parentheses. Composer's canonical loader relies on
     /// forms such as `false !== $position = strrpos(...)`.
     fn parse_comparison_operand(&mut self) -> Result<Expr, String> {
-        let operand = self.parse_concat()?;
+        let operand = self.parse_pipe()?;
         self.finish_assignment_tail(operand)
+    }
+
+    /// PHP 8.5 pipe: lower precedence than concatenation/addition, higher than
+    /// comparisons, and left-associative. A bare function name denotes that
+    /// callable rather than a constant; all other RHS callable expressions
+    /// retain their ordinary expression semantics.
+    fn parse_pipe(&mut self) -> Result<Expr, String> {
+        let mut input = self.parse_concat()?;
+        while let Token::PipeGreater(line) = self.peek() {
+            let line = line;
+            self.advance();
+            let callable = match self.parse_concat()? {
+                Expr::Constant(name) => Expr::FirstClassFunctionCallable(name),
+                callable => callable,
+            };
+            input = Expr::Pipe {
+                input: Box::new(input),
+                callable: Box::new(callable),
+                line,
+            };
+        }
+        Ok(input)
     }
 
     /// Concat: . (left-associative, lower than additive in PHP 8)
