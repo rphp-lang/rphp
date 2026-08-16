@@ -380,6 +380,14 @@ pub(crate) fn fn_enum_exists(
     symbol_exists_handler(ed, rv, eg, SymbolKind::Enum)
 }
 
+fn report_class_alias_warning(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    message: &str,
+) -> Result<(), VmError> {
+    super::report_internal_diagnostic(eg, ed, 2, "Warning", message).map(|_| ())
+}
+
 pub(crate) fn fn_class_alias(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -394,17 +402,41 @@ pub(crate) fn fn_class_alias(
             if eg.exception.is_some() {
                 return Ok(());
             }
-            eg.write_output(
-                format!("Warning: class_alias(): Class \"{original}\" not found\n").as_bytes(),
-            );
+            report_class_alias_warning(ed, eg, &format!("Class \"{original}\" not found"))?;
             ret!(rv, Value::bool(false));
         }
     }
 
+    let Some(original_definition) = eg.find_class(&original) else {
+        ret!(rv, Value::bool(false));
+    };
+    if eg.class_is_internal(&original) {
+        eg.exception = Some(make_error_value(
+            "ValueError",
+            "class_alias(): Argument #1 ($class) must be a user-defined class name, internal class name given",
+        ));
+        return Ok(());
+    }
+    let declaration_kind = if original_definition.is_interface {
+        "interface"
+    } else if original_definition.is_trait {
+        "trait"
+    } else if original_definition.is_enum {
+        "enum"
+    } else {
+        "class"
+    };
+
     match eg.register_class_alias(&original, &alias) {
         Ok(()) => ret!(rv, Value::bool(true)),
-        Err(message) => {
-            eg.write_output(format!("Warning: class_alias(): {message}\n").as_bytes());
+        Err(_) => {
+            report_class_alias_warning(
+                ed,
+                eg,
+                &format!(
+                    "Cannot declare {declaration_kind} {alias}, because the name is already in use"
+                ),
+            )?;
             ret!(rv, Value::bool(false));
         }
     }

@@ -497,7 +497,7 @@ var_dump(method_exists('MethodOwner', 'missingMethod'));
 
 #[test]
 fn class_alias_reuses_class_identity_methods_and_type_relationships() {
-    let output = run_php(
+    let output = run_php_with_source_context(
         r#"<?php
 class OriginalClass {
     public static function value() { return 'method'; }
@@ -513,6 +513,8 @@ var_dump(method_exists('aliasclass', 'value'));
 var_dump(class_exists('ALIASCLASS', false));
 var_dump(class_alias('OriginalClass', 'aliasclass'));
 "#,
+        "/fixture/class-alias.php",
+        "/fixture",
     );
 
     assert_eq!(
@@ -523,9 +525,28 @@ var_dump(class_alias('OriginalClass', 'aliasclass'));
             "bool(true)\n",
             "method|bool(true)\n",
             "bool(true)\n",
-            "Warning: class_alias(): Cannot declare class aliasclass, because the name is already in use\n",
+            "\nWarning: Cannot declare class aliasclass, because the name is already in use in /fixture/class-alias.php on line 14\n",
             "bool(false)\n"
         )
+    );
+}
+
+#[test]
+fn class_alias_warnings_use_the_handler_and_internal_classes_raise_value_error() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+set_error_handler(function($level, $message, $file, $line) {
+    echo $level, ':', $message, ':', $file, ':', $line, "\n";
+});
+var_dump(class_alias('MissingClass', 'MissingAlias', false));
+try { class_alias(stdClass::class, 'ProjectedStdClass'); }
+catch (ValueError $error) { echo $error->getMessage(); }
+"#,
+            "/fixture/class-alias-errors.php",
+            "/fixture",
+        ),
+        "2:Class \"MissingClass\" not found:/fixture/class-alias-errors.php:5\nbool(false)\nclass_alias(): Argument #1 ($class) must be a user-defined class name, internal class name given"
     );
 }
 
@@ -625,14 +646,14 @@ var_dump(class_alias('MissingOriginal', 'NeverCreated', false));
     );
 
     assert_eq!(
-        run_php(&source),
+        run_php_with_source_context(&source, "/fixture/class-alias-chain.php", "/fixture"),
         concat!(
             "load:AutoloadedOriginal|bool(true)\n",
             "bool(true)\n",
             "loaded|bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
-            "Warning: class_alias(): Class \"MissingOriginal\" not found\n",
+            "\nWarning: Class \"MissingOriginal\" not found in /fixture/class-alias-chain.php on line 15\n",
             "bool(false)\n"
         )
     );
