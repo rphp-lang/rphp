@@ -499,12 +499,17 @@ fn call_guarded_property_magic_method(
     method: &str,
     arguments: &[Value],
 ) -> Result<Option<Value>, VmError> {
-    if property_guard_active(object, name, operation) {
+    // The user method may rebind the CV/global slot from which `object` was
+    // borrowed. Retain the receiver before setting the guard so re-entrant
+    // writes cannot turn the borrowed slot into a scalar underneath the
+    // follow-up call or guard cleanup.
+    let receiver = object.clone();
+    if property_guard_active(&receiver, name, operation) {
         return Ok(None);
     }
-    set_property_guard(object, name, operation, true);
-    let result = call_magic_method(eg, object, method, arguments);
-    set_property_guard(object, name, operation, false);
+    set_property_guard(&receiver, name, operation, true);
+    let result = call_magic_method(eg, &receiver, method, arguments);
+    set_property_guard(&receiver, name, operation, false);
     result
 }
 

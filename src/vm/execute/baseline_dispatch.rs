@@ -355,12 +355,43 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         frame_slot_set(frame, destination, binding);
                     } else {
                         // ASSIGN_CV op1=CV(dest), op2=value, result=optional copy
-                        let val = &*(*frame).get_op_ptr(
-                            opline.op2 as u32,
-                            opline.op2_type,
-                            op_array,
-                        );
-                        let cloned = val.clone();
+                        // Object-producing TMPs are SSA values. When an
+                        // assignment does not publish an expression result,
+                        // transfer that sole bytecode owner into the
+                        // destination instead of retaining a hidden TMP alias
+                        // until frame teardown. Besides avoiding one Rc pair,
+                        // this makes object-store handle lifetime follow PHP
+                        // variables rather than compiler storage.
+                        let movable_source = opline._pad & ASSIGN_CV_MOVE_SOURCE != 0
+                            && opline.result_type == OpType::Unused
+                            && matches!(opline.op2_type, OpType::Tmp | OpType::Var);
+                        let cloned = if movable_source {
+                            let source = (*frame)
+                                .get_op_mut(opline.op2 as u32, opline.op2_type);
+                            let object_without_destructor = if (&*source).value_type()
+                                == ValueType::Object
+                            {
+                                let class_name = (&*source)
+                                    .as_object()
+                                    .map(|object| object.class_name.to_string())
+                                    .unwrap();
+                                eg.find_method_info(&class_name, "__destruct").is_none()
+                            } else {
+                                false
+                            };
+                            if object_without_destructor {
+                                std::mem::replace(&mut *source, Value::undef())
+                            } else {
+                                (&*source).clone()
+                            }
+                        } else {
+                            (&*(*frame).get_op_ptr(
+                                opline.op2 as u32,
+                                opline.op2_type,
+                                op_array,
+                            ))
+                                .clone()
+                        };
                         let rebind_destination = opline._pad & ASSIGN_CV_REBIND != 0;
                         let destination_is_reference = !rebind_destination
                             && opline.op1_type == OpType::Cv

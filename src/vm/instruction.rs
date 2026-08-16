@@ -193,6 +193,11 @@ pub const CALL_USER_FUNC_ARRAY_SOURCE_UNPACK: u16 = 1;
 /// local name while leaving every other alias and the referenced value intact.
 pub const ASSIGN_CV_REBIND: u16 = 1;
 
+/// The compiler proved that an unused TMP/VAR source has no consumers after
+/// this assignment. Object owners may be transferred into the destination so
+/// compiler scratch storage does not extend PHP-visible object lifetime.
+pub const ASSIGN_CV_MOVE_SOURCE: u16 = 1 << 1;
+
 /// AssignDim stores the source l-value's PHP reference cell in the selected
 /// element. Ordinary assignments intentionally dereference their source;
 /// reference assignments must retain the cell so self-referential arrays and

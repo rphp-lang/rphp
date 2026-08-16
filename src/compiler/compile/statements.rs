@@ -63,6 +63,8 @@ enum CoalesceWrite {
 
 pub(super) enum ForeachArrayWriteback {
     Discard,
+    ReleaseInternalCv(u16),
+    ReleaseTemporary(u16),
     Variable(u16),
     DynamicVariable {
         key: u16,
@@ -127,7 +129,7 @@ impl Compiler {
                 return Ok((
                     internal,
                     OpType::Cv,
-                    ForeachArrayWriteback::Discard,
+                    ForeachArrayWriteback::ReleaseInternalCv(internal),
                     false,
                 ));
             }
@@ -169,7 +171,7 @@ impl Compiler {
             Ok((
                 retained,
                 OpType::Tmp,
-                ForeachArrayWriteback::Discard,
+                ForeachArrayWriteback::ReleaseTemporary(retained),
                 false,
             ))
         } else {
@@ -549,6 +551,25 @@ impl Compiler {
     ) {
         match writeback {
             ForeachArrayWriteback::Discard => {}
+            ForeachArrayWriteback::ReleaseInternalCv(cv) => {
+                let undef = self.add_literal(Value::undef());
+                let mut release = Instruction::new(OpCode::AssignCv);
+                release.op1 = cv;
+                release.op1_type = OpType::Cv;
+                release.op2 = undef;
+                release.op2_type = OpType::Const;
+                release._pad |= ASSIGN_CV_REBIND;
+                self.instructions.push(release);
+            }
+            ForeachArrayWriteback::ReleaseTemporary(temporary) => {
+                let undef = self.add_literal(Value::undef());
+                let mut release = Instruction::new(OpCode::AssignCv);
+                release.op1 = temporary;
+                release.op1_type = OpType::Tmp;
+                release.op2 = undef;
+                release.op2_type = OpType::Const;
+                self.instructions.push(release);
+            }
             ForeachArrayWriteback::Variable(cv) => {
                 if array_type == OpType::Cv && array == cv {
                     return;
@@ -1619,6 +1640,7 @@ impl Compiler {
                     assign.op1 = cv_idx;
                     assign.op2_type = op_type;
                     assign.op2 = operand;
+                    assign._pad |= ASSIGN_CV_MOVE_SOURCE;
                     self.instructions.push(assign);
                 }
                 self.definitely_defined_cvs.insert(cv_idx);
@@ -2958,9 +2980,7 @@ impl Compiler {
                     0,
                     diagnose_nonreferenceable,
                 )?;
-                if contains_reference {
-                    self.emit_foreach_reference_source_writeback(writeback, source, source_type);
-                }
+                self.emit_foreach_reference_source_writeback(writeback, source, source_type);
             }
             Stmt::Global(vars) => {
                 for target in vars {

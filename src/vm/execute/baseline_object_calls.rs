@@ -741,6 +741,12 @@ fn op_fetch_obj_r_slow<'a>(
         return Ok(ColdResult::Done);
     }
 
+    // A magic accessor may rebind the CV/global that supplied the receiver.
+    // Keep one opcode-local owner across the complete __isset → __get
+    // sequence so later phases still address the original object.
+    let receiver = obj_val.clone();
+    let obj_val = &receiver;
+
     let name = prop_name.as_str().unwrap_or("");
     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
 

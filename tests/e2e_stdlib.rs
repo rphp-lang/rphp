@@ -850,6 +850,33 @@ var_dump($value);
     );
 }
 
+#[test]
+fn var_dump_tracks_shared_and_recycled_request_local_object_handles() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$first = new stdClass;
+$alias = $first;
+var_dump($first, $alias);
+$first = new stdClass;
+var_dump($first);
+$first = new stdClass;
+var_dump($first);
+unset($first, $alias);
+$reused = new stdClass;
+var_dump($reused);
+"#,
+        ),
+        concat!(
+            "object(stdClass)#1 (0) {\n}\n",
+            "object(stdClass)#1 (0) {\n}\n",
+            "object(stdClass)#2 (0) {\n}\n",
+            "object(stdClass)#3 (0) {\n}\n",
+            "object(stdClass)#1 (0) {\n}\n",
+        )
+    );
+}
+
 // === print_r ===
 
 #[test]
