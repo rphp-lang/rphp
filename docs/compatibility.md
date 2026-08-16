@@ -7,13 +7,20 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 PHP 8.5 contract baseline is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `298e4c7`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,815 pass, 3,390 fail, 110 skip, one is an upstream XFAIL,
-280 are unsupported, one times out and two crash. The headline pass rate is
-34.870%; 82.277% of attempted cases reach runtime. The exact hazards are
-`Zend/tests/gh13178_4.phpt` (timeout), `gh18572.phpt` (crash) and
-`recursive_array_comparison.phpt` (crash).
+The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
+`fcc29c8` and RPHP `79b754f`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,818 pass, 3,389 fail, 110 skip, one is an upstream XFAIL,
+280 are unsupported, one times out and none crash. The headline pass rate is
+34.915%; 82.277% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +3/-0:
+`Zend/tests/bug63882.phpt`, `gh18572.phpt` and
+`recursive_array_comparison.phpt`. The remaining process hazard is
+`Zend/tests/gh13178_4.phpt` (timeout).
+
+Recursive array identity and loose object comparison now track active compound
+values and enforce a bounded comparison depth. Cycles between distinct values
+raise the PHP 8.5-compatible catchable `Error` instead of overflowing the Rust
+stack, while comparing an array or object with itself remains true.
 
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts

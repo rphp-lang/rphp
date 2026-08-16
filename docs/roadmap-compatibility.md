@@ -50,6 +50,13 @@ starts with explicit crash/hang work in `gh18572.phpt`,
 `recursive_array_comparison.phpt` and `gh13178_4.phpt`, followed by the
 highest-fanout front-end and runtime clusters.
 
+The `79b754f` recursive-comparison checkpoint removes both initial crashes and
+adds one adjacent pass without losing an exact pass: 1,818 pass, 3,389 fail,
+110 skip, one XFAIL, 280 unsupported, one timeout and zero crashes. Active
+compound-value tracking converts recursive array/object comparison into the
+PHP 8.5 catchable nesting error while preserving self-identity. The remaining
+process hazard is `gh13178_4.phpt`.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
