@@ -7,7 +7,33 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 property-write-origin checkpoint, based on `43c522d`, runs
+The current AMD64 detached-throwable-trace checkpoint, based on `b8f28d3`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,700 passes,
+2,330 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds two exact passes without losing a previous
+pass: `Zend/tests/bug48248.phpt` and `Zend/tests/bug76025.phpt`. When a detached
+user callback creates a located throwable, its frame is now temporarily
+reconnected to the suspended caller before cleanup so an otherwise empty
+creation trace records both the callback and its real call site. The linkage is
+restored before returning, and an existing non-empty trace from a deeper frame
+remains immutable. This covers magic-property methods and error handlers while
+preserving the detached `Return` boundary. Original E2E coverage checks the
+exact uncaught file, line, method name, argument, call-site frame and `{main}`
+sentinel for an error raised inside `__get`. Five Cargo test configurations,
+all-target and unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass
+on AMD64; the production unsafe inventory remains 1,621 blocks, below the
+1,623 ceiling. The S3 cold-kernel gate was not rerun because this machine has
+no exact PHP 8.2 oracle. Sixty-one alternating release pairs measured
+`bench_callback_array_walk_by_ref.php` at baseline p10/median/p90 of
+0.013402/0.013677/0.014404 seconds and candidate
+0.013379/0.013764/0.014357 seconds (median +0.63 percent), with identical
+checksums; the movement is within the overlapping distribution. Runtime frame,
+object and value layouts are unchanged, and successful callbacks execute only
+one additional not-taken error check. Extending an already non-empty trace
+across multiple detached boundaries, Closure property-inc/dec errors and
+static-property origins remain separate compatibility boundaries.
+
+The preceding AMD64 property-write-origin checkpoint, based on `43c522d`, runs
 the default-feature 4,345-case PHP 8.2.33 corpus and records 1,698 passes,
 2,332 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
 timeouts and zero crashes. It adds three exact passes without losing a

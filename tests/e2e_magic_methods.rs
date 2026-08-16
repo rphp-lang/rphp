@@ -1,5 +1,5 @@
 mod common;
-use common::run_php;
+use common::{run_php, run_php_expect_error_with_source_context};
 
 #[test]
 fn test_tostring_echo() {
@@ -421,6 +421,21 @@ echo $hi("World");
         ),
         "Hello World"
     );
+}
+
+#[test]
+fn detached_magic_method_errors_retain_the_callback_and_call_site_trace() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\nclass MagicTraceBase {\n    public function &__get($name) {\n        return $this->test;\n    }\n}\nclass MagicTraceChild extends MagicTraceBase { private $test; }\n$object = new MagicTraceChild;\nvar_dump($object->test);",
+        "/fixture/magic-trace.php",
+        "/fixture",
+    );
+
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message)
+            if message == "Uncaught Error: Cannot access private property MagicTraceChild::$test in /fixture/magic-trace.php:4\nStack trace:\n#0 /fixture/magic-trace.php(9): MagicTraceBase->__get('test')\n#1 {main}\n  thrown in /fixture/magic-trace.php on line 4"
+    ));
 }
 
 #[test]

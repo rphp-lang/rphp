@@ -673,8 +673,55 @@ where
     let callback_threw = eg.exception.is_some();
 
     // Always restore and pop the callback frame, including fatal/error paths.
-    eg.current_execute_data.set(saved_execute_data);
-    unsafe { cleanup_frame_slots(frame) };
+    unsafe {
+        // Detached callbacks deliberately keep prev_execute_data null so a
+        // Return opcode exits execute_ex instead of resuming the suspended
+        // caller. If this frame created the throwable, temporarily reconnect
+        // it before cleanup so PHP's stored trace still contains the callback
+        // and its real call site. A non-empty trace belongs to a deeper frame
+        // and must retain that immutable creation snapshot.
+        let needs_detached_trace = callback_threw
+            && !saved_execute_data.is_null()
+            && eg.exception.as_ref().is_some_and(|exception| {
+                exception.as_object().is_some_and(|object| {
+                    object
+                        .get_property("file")
+                        .and_then(Value::as_str)
+                        .is_some_and(|file| !file.is_empty())
+                        && object
+                            .get_property("line")
+                            .and_then(Value::as_long)
+                            .is_some_and(|line| line > 0)
+                        && object
+                            .get_property("trace")
+                            .and_then(Value::as_array)
+                            .is_none_or(PhpArray::is_empty)
+                })
+        });
+        if needs_detached_trace {
+            let caller_opline = (*saved_execute_data).opline;
+            let caller_op_array = (*saved_execute_data).op_array();
+            let caller_index = caller_opline.offset_from(caller_op_array.instructions.as_ptr());
+            let advanced_caller = usize::try_from(caller_index)
+                .ok()
+                .filter(|index| *index < caller_op_array.instructions.len())
+                .is_some();
+            if advanced_caller {
+                (*saved_execute_data).opline = caller_opline.add(1);
+            }
+            (*frame).prev_execute_data = saved_execute_data;
+            let trace = crate::stdlib::collect_debug_backtrace(frame, 0, 0, eg, true);
+            (*frame).prev_execute_data = std::ptr::null_mut();
+            if advanced_caller {
+                (*saved_execute_data).opline = caller_opline;
+            }
+            if let Some(mut exception) = eg.exception.as_ref().and_then(Value::as_object_mut) {
+                exception.set_property("trace", Value::array(trace));
+            }
+        }
+        eg.current_execute_data.set(saved_execute_data);
+        cleanup_frame_slots(frame);
+    }
     pop_vm_call_frame(eg, frame);
 
     // Complete the other half of the ordinary call boundary: writes through
