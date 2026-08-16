@@ -318,15 +318,9 @@ throw new NotThrowable();
     );
     match err {
         rphp::vm::execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Throwable"),
-                "Expected Throwable error, got: {}",
-                msg
-            );
-            assert!(
-                msg.contains("NotThrowable"),
-                "Expected class name, got: {}",
-                msg
+            assert_eq!(
+                msg,
+                "Uncaught Error: Cannot throw objects that do not implement Throwable"
             );
         }
         other => panic!("Expected Fatal, got: {:?}", other),

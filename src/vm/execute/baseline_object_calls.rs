@@ -300,6 +300,24 @@ fn op_new_obj<'a>(
     )
 }
 
+#[cold]
+fn new_object_validation_error<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    ip: usize,
+    message: &str,
+) -> ColdResult<'a> {
+    let error = make_error_value("Error", message);
+    attach_throwable_origin(&error, eg, frame, op_array, ip);
+    match throw_in_frame(eg, frame, error) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    }
+}
+
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_newobj"))]
 #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_newobj"))]
@@ -316,24 +334,36 @@ fn op_new_obj_resolved<'a>(
     let ic = &op_array.cache[ip];
     let class_def = class_id.and_then(|class_id| eg.class_by_id(class_id));
 
-    // Reject instantiation of interfaces, abstract classes, and internal-only classes
+    // Reject instantiation through ordinary catchable Error objects. These
+    // validation failures originate at NewObj and therefore retain its source
+    // location and trace when they escape the current frame.
     if name == "Generator" {
-        return Err(VmError::Fatal(
-            "The \"Generator\" class is reserved for internal use and cannot be manually instantiated".into()
+        return Ok(new_object_validation_error(
+            eg,
+            frame,
+            op_array,
+            ip,
+            "The \"Generator\" class is reserved for internal use and cannot be manually instantiated",
         ));
     }
     if let Some(class_def) = class_def {
         if class_def.is_interface {
-            return Err(VmError::Fatal(format!(
-                "Cannot instantiate interface {}",
-                name
-            )));
+            return Ok(new_object_validation_error(
+                eg,
+                frame,
+                op_array,
+                ip,
+                &format!("Cannot instantiate interface {name}"),
+            ));
         }
         if class_def.is_abstract {
-            return Err(VmError::Fatal(format!(
-                "Cannot instantiate abstract class {}",
-                name
-            )));
+            return Ok(new_object_validation_error(
+                eg,
+                frame,
+                op_array,
+                ip,
+                &format!("Cannot instantiate abstract class {name}"),
+            ));
         }
         if class_def.is_enum {
             let err = make_error_value("Error", &format!(

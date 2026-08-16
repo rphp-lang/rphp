@@ -4,83 +4,59 @@
 
 #[test]
 fn test_throw_string_is_fatal() {
-    // PHP 8: throw "string" is not allowed
-    let err = run_php_expect_error(r#"<?php throw "boom";"#);
-    match err {
-        rphp::vm::execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Throwable"),
-                "Expected Throwable error, got: {}",
-                msg
-            );
-            assert!(
-                msg.contains("string"),
-                "Expected 'string' type mentioned, got: {}",
-                msg
-            );
-        }
-        other => panic!("Expected Fatal, got: {:?}", other),
-    }
+    assert_eq!(
+        run_php(r#"<?php try { throw "boom"; } catch (Error $error) { echo $error->getMessage(); }"#),
+        "Can only throw objects"
+    );
 }
 
 #[test]
 fn test_throw_integer_is_fatal() {
-    let err = run_php_expect_error(r#"<?php throw 42;"#);
-    match err {
-        rphp::vm::execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Throwable"),
-                "Expected Throwable error, got: {}",
-                msg
-            );
-            assert!(
-                msg.contains("int"),
-                "Expected 'int' type mentioned, got: {}",
-                msg
-            );
-        }
-        other => panic!("Expected Fatal, got: {:?}", other),
-    }
+    assert_eq!(
+        run_php(r#"<?php try { throw 42; } catch (Error $error) { echo $error->getMessage(); }"#),
+        "Can only throw objects"
+    );
 }
 
 #[test]
 fn test_throw_non_throwable_object_is_fatal() {
-    let err = run_php_expect_error(
+    assert_eq!(
+        run_php(
         r#"<?php
 class Foo {}
-throw new Foo();
+try { throw new Foo(); } catch (Error $error) { echo $error->getMessage(); }
 "#,
+        ),
+        "Cannot throw objects that do not implement Throwable"
     );
-    match err {
-        rphp::vm::execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Throwable"),
-                "Expected Throwable error, got: {}",
-                msg
-            );
-            assert!(
-                msg.contains("Foo"),
-                "Expected class name mentioned, got: {}",
-                msg
-            );
-        }
-        other => panic!("Expected Fatal, got: {:?}", other),
-    }
 }
 
 #[test]
 fn test_throw_null_is_fatal() {
-    let err = run_php_expect_error(r#"<?php throw null;"#);
-    match err {
-        rphp::vm::execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Throwable"),
-                "Expected Throwable error, got: {}",
-                msg
-            );
-        }
-        other => panic!("Expected Fatal, got: {:?}", other),
+    assert_eq!(
+        run_php(r#"<?php try { throw null; } catch (Error $error) { echo $error->getMessage(); }"#),
+        "Can only throw objects"
+    );
+}
+
+#[test]
+fn non_instantiable_classes_raise_catchable_errors_at_new() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+interface Contract {}
+abstract class Template {}
+foreach ([Contract::class, Template::class, Generator::class] as $class) {
+    try { new $class; } catch (Error $error) {
+        echo $error->getMessage(), '@', $error->getLine(), "\n";
     }
+}
+"#,
+            "/fixture/non-instantiable.php",
+            "/fixture",
+        ),
+        "Cannot instantiate interface Contract@5\nCannot instantiate abstract class Template@5\nThe \"Generator\" class is reserved for internal use and cannot be manually instantiated@5\n"
+    );
 }
 
 #[test]

@@ -159,8 +159,8 @@ f();
     match err {
         rphp::vm::execute::VmError::Fatal(msg) => {
             assert!(
-                msg.contains("Throwable"),
-                "Expected Throwable error, got: {}",
+                msg.starts_with("Uncaught Error: Can only throw objects"),
+                "Expected PHP throw validation error, got: {}",
                 msg
             );
         }

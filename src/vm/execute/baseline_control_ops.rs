@@ -595,30 +595,25 @@ fn op_throw<'a>(
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
         )
     };
-    // PHP 8: only Throwable objects can be thrown
-    if val.as_object().is_none() || {
-        let obj = val.as_object().unwrap();
-        !eg.class_is_a(&obj.class_name, "Throwable")
-    } {
-        let type_name = match val.value_type() {
-            ValueType::Long => "int",
-            ValueType::Double => "float",
-            ValueType::String => "string",
-            ValueType::True | ValueType::False => "bool",
-            ValueType::Null | ValueType::Undef => "null",
-            ValueType::Array => "array",
-            ValueType::Object => {
-                // Object but not Throwable
-                let obj = val.as_object().unwrap();
-                return Err(VmError::Fatal(format!(
-                    "Cannot throw objects that do not implement Throwable (class {})", obj.class_name
-                )));
-            }
-            _ => "unknown",
+    // PHP validates the operand through a normal catchable Error at the throw
+    // opcode. Scalar types and class names are intentionally absent from the
+    // public PHP 8.2 messages.
+    if val.as_object().is_none_or(|object| {
+        !eg.class_is_a(&object.class_name, "Throwable")
+    }) {
+        let message = if val.value_type() == ValueType::Object {
+            "Cannot throw objects that do not implement Throwable"
+        } else {
+            "Can only throw objects"
         };
-        return Err(VmError::Fatal(format!(
-            "Can only throw objects implementing Throwable, {} given", type_name
-        )));
+        let error = make_error_value("Error", message);
+        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
     }
     let thrown = val.clone();
     attach_throwable_origin(&thrown, eg, frame, op_array, instruction_index);
