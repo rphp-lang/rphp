@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `9acedad`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,870 pass, 3,338 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `966e936`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,872 pass, 3,336 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-35.906%; 82.853% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +55/-0. The first four gains are
+35.945%; 82.853% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +57/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -28,10 +28,19 @@ append to become current when the last prior entry was removed.
 The PHP 8.5 pipe operator now has a distinct token and precedence layer between
 concatenation and comparisons. Its baseline lowering evaluates the input, then
 the callable expression, then invokes it with one non-referenceable argument.
-This admits 16 of the 30 pinned pipe tests, including mixed callable styles,
+This admits 17 of the 30 pinned pipe tests, including mixed callable styles,
 namespaces, chaining, exceptions and precedence. The remaining pipe tests stay
-visible as generator, assertion rendering, arrow-function diagnostic and
-general call/type-diagnostic work; one CLI-INI case remains unsupported.
+visible as assertion-source rendering and missing `array_multisort()` work;
+one CLI-INI case remains unsupported.
+
+Static locals returned by reference now keep one request-owned cell across
+full return synchronization, first-class callable invocation and pipe
+forwarding. Generic concatenation dereferences its operands before applying
+the ordinary string fast paths, so compound writes through the returned alias
+retain PHP identity. This adds the pipe reference-context and global-static
+tests with no lost pass. Seven five-million-concatenation release controls
+measured equal 0.31-second medians before and after the change with identical
+output.
 
 Call errors now retain the declaration spelling of user-function names instead
 of exposing the lowercase lookup key, and non-referenceable arguments use PHP

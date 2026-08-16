@@ -132,6 +132,15 @@ closure trace names. The metadata stays inside the existing immutable internal
 name, does not enlarge `OpArray`, remains hidden from closure dumps and magic
 constants, and preserves bound-closure `Closure->` rendering.
 
+The `966e936` static-reference checkpoint adds two exact passes with no lost
+pass: 1,872 pass, 3,336 fail, 110 skip, one XFAIL, 280 unsupported, zero
+timeouts and zero crashes. Full-return synchronization now inspects the raw
+static CV wrapper instead of dereferencing it and replacing its shared cell.
+Generic concat reads referenced operands through that cell, preserving aliases
+through first-class callables and PHP 8.5 pipe forwarders. All feature matrices
+and the unsafe-policy gate pass; seven five-million-concatenation release runs
+retain the 0.31-second median and exact output.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
