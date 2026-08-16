@@ -75,6 +75,7 @@ impl Parser {
     }
 
     fn finish_compound_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
+        let nullsafe_line = Self::nullsafe_write_line(&target);
         if !matches!(
             &target,
             Expr::Variable { .. }
@@ -92,12 +93,16 @@ impl Parser {
                 | Expr::StaticProperty { .. }
                 | Expr::DynamicNamedStaticProperty { .. }
                 | Expr::DynamicStaticProperty { .. }
-        ) {
+        ) && nullsafe_line.is_none()
+        {
             return Err("Invalid compound assignment target".into());
         }
         let op = Self::compound_assign_op(&self.advance())
             .ok_or_else(|| "Expected compound assignment operator".to_string())?;
         let expr = self.parse_expr()?;
+        if let Some(line) = nullsafe_line {
+            return Ok(self.nullsafe_write_error(line));
+        }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
         }
@@ -117,6 +122,9 @@ impl Parser {
             false
         };
         let expr = Box::new(self.parse_expr()?);
+        if let Some(line) = Self::nullsafe_write_line(&target) {
+            return Ok(self.nullsafe_write_error(line));
+        }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
         }
@@ -168,6 +176,7 @@ impl Parser {
     }
 
     fn finish_coalesce_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
+        let nullsafe_line = Self::nullsafe_write_line(&target);
         if !matches!(
             &target,
             Expr::Variable { .. }
@@ -185,11 +194,15 @@ impl Parser {
                 | Expr::StaticProperty { .. }
                 | Expr::DynamicNamedStaticProperty { .. }
                 | Expr::DynamicStaticProperty { .. }
-        ) {
+        ) && nullsafe_line.is_none()
+        {
             return Err("Invalid null-coalescing assignment target".into());
         }
         self.expect(&Token::QuestionQuestionAssign)?;
         let expr = self.parse_expr()?;
+        if let Some(line) = nullsafe_line {
+            return Ok(self.nullsafe_write_error(line));
+        }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
         }
@@ -804,6 +817,9 @@ impl Parser {
             Token::PlusPlus => {
                 self.advance();
                 let target = self.parse_power()?;
+                if let Some(line) = Self::nullsafe_write_line(&target) {
+                    return Ok(self.nullsafe_write_error(line));
+                }
                 match target {
                     Expr::Variable { name, line } => Ok(Expr::PreInc { name, line }),
                     Expr::DynamicVariable { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
@@ -824,6 +840,9 @@ impl Parser {
             Token::MinusMinus => {
                 self.advance();
                 let target = self.parse_power()?;
+                if let Some(line) = Self::nullsafe_write_line(&target) {
+                    return Ok(self.nullsafe_write_error(line));
+                }
                 match target {
                     Expr::Variable { name, line } => Ok(Expr::PreDec { name, line }),
                     Expr::DynamicVariable { .. } => Ok(Expr::PreDecTarget(Box::new(target))),

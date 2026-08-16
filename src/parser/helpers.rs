@@ -847,6 +847,36 @@ impl Parser {
         )
     }
 
+    fn nullsafe_write_line(expr: &Expr) -> Option<usize> {
+        match expr {
+            Expr::PropertyAccess {
+                object,
+                nullsafe,
+                line,
+                ..
+            }
+            | Expr::DynamicPropertyAccess {
+                object,
+                nullsafe,
+                line,
+                ..
+            } => {
+                if *nullsafe {
+                    Some(*line)
+                } else {
+                    Self::nullsafe_write_line(object)
+                }
+            }
+            Expr::ArrayAccess { array, .. } => Self::nullsafe_write_line(array),
+            Expr::DynamicStaticProperty { class, .. } => Self::nullsafe_write_line(class),
+            _ => None,
+        }
+    }
+
+    fn nullsafe_write_error(&mut self, line: usize) -> Expr {
+        self.compile_error("Can't use nullsafe operator in write context", line)
+    }
+
     /// Check if an expression is a variable-like target (valid for isset/empty/unset).
     fn is_variable_like(expr: &Expr) -> bool {
         matches!(

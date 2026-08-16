@@ -284,6 +284,19 @@ fn expression_static_method_calls_retain_class_and_method_operands() {
 }
 
 #[test]
+fn nullsafe_nested_write_target_is_a_deferred_compile_error() {
+    let tokens = Lexer::new("<?php $foo?->bar->baz = sideEffect();")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+            if message == "Can't use nullsafe operator in write context" && *line == 1
+    ));
+}
+
+#[test]
 fn positional_source_argument_after_unpack_is_a_compile_time_error() {
     let tokens = Lexer::new("<?php dispatch(...$batch, 7);")
         .tokenize()

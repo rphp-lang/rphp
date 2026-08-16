@@ -1,6 +1,9 @@
 mod common;
 
-use common::{run_php, run_php_expect_error, run_php_with_source_context};
+use common::{
+    run_php, run_php_expect_error, run_php_expect_error_with_source_context,
+    run_php_with_source_context,
+};
 
 #[test]
 fn nullsafe_method_on_null() {
@@ -358,4 +361,28 @@ var_dump($provider?->target()::$method('variable'));
             "ping:variable|NULL\n",
         )
     );
+}
+
+#[test]
+fn nullsafe_write_contexts_fail_during_compilation_with_source_location() {
+    for expression in [
+        "$foo?->bar = sideEffect();",
+        "$foo?->bar += sideEffect();",
+        "++$foo?->bar;",
+        "$foo?->bar++;",
+        "$foo?->bar ??= sideEffect();",
+        "$foo?->bar->baz = sideEffect();",
+        "$foo?->bar[0]++;",
+    ] {
+        let source = format!("<?php\n$foo = null;\n{expression}\n");
+        let error = run_php_expect_error_with_source_context(
+            &source,
+            "/virtual/nullsafe-write.php",
+            "/virtual",
+        );
+        assert_eq!(
+            format!("{error:?}"),
+            "Fatal(\"Can't use nullsafe operator in write context in /virtual/nullsafe-write.php on line 3\")"
+        );
+    }
 }
