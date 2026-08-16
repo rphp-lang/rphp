@@ -79,6 +79,13 @@ use PHP 8.5's diagnostic wording across positional, named and unpacked calls.
 This closes the pipe `call_by_ref.phpt` case plus adjacent nullsafe and
 restricted-`$GLOBALS` cases without changing the ordinary call path.
 
+The `cc3738a` pipe-arrow diagnostic checkpoint adds three exact passes with no
+lost pass: 1,841 pass, 3,367 fail, 110 skip, one XFAIL, 280 unsupported, zero
+timeouts and zero crashes. The parser preserves PHP 8.5's compile-time fatal
+error for a bare arrow function on the pipe RHS while accepting the explicitly
+parenthesized form. The check runs only during parsing and does not alter the
+runtime call path.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

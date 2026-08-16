@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `d29db36`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,838 pass, 3,370 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `cc3738a`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,841 pass, 3,367 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-35.292%; 82.853% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +23/-0. The first four gains are
+35.349%; 82.853% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +26/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -38,6 +38,12 @@ of exposing the lowercase lookup key, and non-referenceable arguments use PHP
 8.5's `could not be passed by reference` diagnostic. This adds the pipe
 by-reference, nullsafe-property and restricted-`$GLOBALS` cases without losing
 an exact pass; the behavior remains on cold error paths.
+
+An unparenthesized arrow function immediately after `|>` is now retained as a
+located compile-time error even in dead code, matching PHP 8.5's required
+parentheses rule. Parenthesized arrow callables remain valid. This adds all
+three affected precedence diagnostics with no pass-set loss and no runtime
+dispatch change.
 
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
