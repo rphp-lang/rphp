@@ -7,6 +7,26 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 typed-reference assignment-result checkpoint, based on
+`d59fa83`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
+1,733 passes, 2,297 failures, 77 skips, one upstream XFAIL, 237 unsupported
+cases, zero timeouts and zero crashes. Its exact pass-set delta is +1/-0:
+`Zend/tests/assign_typed_ref_result.phpt`.
+
+When an array element aliases a typed property, weak type coercion now updates
+both the stored reference cell and the value produced by the assignment
+expression. A compiler flag limits result writeback to the dedicated temporary
+of value-producing array assignments, so statement assignments do not mutate
+their source variable. Original E2E coverage includes direct, flat-array and
+nested-array writes and verifies that the RHS CV retains its original type.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory is 1,619
+blocks and 289 functions. Composer S0, all four Symfony S1 gates, warmed-kernel
+S2 and cold-kernel S3 pass on AMD64. Nine alternating five-million-element
+array-write release controls measured 0.04 seconds for both the preceding and
+candidate binaries, and the AMD64 native JIT suites remain green.
+
 The current AMD64 typed-instance-reference checkpoint, based on `b8d6dd0`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,722 passes,
 2,308 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero

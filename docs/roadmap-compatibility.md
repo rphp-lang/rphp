@@ -46,10 +46,13 @@ CLI-kernel gate pass on AMD64. The S3 claim remains limited to the exact pinned
 fixture and cold, cached, deleted-cache, malformed-cache and concurrent
 publication transitions described below.
 
-The current pinned PHP 8.2 differential candidate is based on RPHP `d35d125`
-against php-src 8.2.33 `651db3e`: 1,732 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with seven exact typed-property object-name additions
-and no lost pass relative to the retained 1,725-pass baseline. Static
+The current pinned PHP 8.2 differential candidate is based on RPHP `d59fa83`
+against php-src 8.2.33 `651db3e`: 1,733 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with one exact typed-reference assignment-result
+addition and no lost pass relative to the retained 1,732-pass baseline. An
+array-element assignment through a reference held by a typed property now
+returns the weakly coerced value that was actually stored, while leaving the
+original RHS variable unchanged. Static
 properties now participate in owned l-value reference identity across
 inherited, dynamic-owner and dynamic-name forms; nullable/untyped
 uninitialized slots materialize `null`, while non-nullable slots raise the
