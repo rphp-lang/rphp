@@ -640,6 +640,50 @@ fn promote_foreach_property_reference(property: &mut Value) -> Value {
 }
 
 #[inline]
+fn set_foreach_iteration_state(
+    frame: *mut ExecuteData,
+    opline: &Instruction,
+    iterable: Value,
+    position: i64,
+) {
+    // SAFETY: ForeachInit's result and position operands are compiler-allocated
+    // live TMP slots in this frame and neither pointer escapes this helper.
+    unsafe {
+        let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+        frame_result_set(frame, result, opline.result_type, iterable);
+        let cursor = (*frame).get_op_mut(opline.extended_value, OpType::Tmp);
+        frame_tmp_set_long(frame, cursor, position);
+    }
+}
+
+#[inline]
+fn take_foreach_protocol_exception<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Option<ColdResult<'a>> {
+    let exception = eg.exception.take()?;
+    Some(match throw_in_frame(eg, frame, exception) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+    })
+}
+
+#[inline]
+fn uses_user_iterator_protocol(value: &Value, eg: &ExecutorGlobals) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let class_name = object.class_name.to_string();
+    drop(object);
+    !matches!(
+        class_name.as_str(),
+        "Generator" | "ArrayIterator" | "ArrayObject" | "SplObjectStorage" | "SplPriorityQueue"
+    ) && eg.class_is_a(&class_name, "Iterator")
+}
+
+#[inline]
 fn flush_foreach_reference_value(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
@@ -791,14 +835,39 @@ fn op_foreach_init<'a>(
             unsafe { (*frame).opline = base_ptr.add(target) };
             return Ok(ColdResult::Continue);
         }
-        // Store generator object in result TMP
-        let cloned = arr_val.clone();
-        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-        unsafe { frame_result_set(frame, result_ptr, opline.result_type, cloned) };
-        // Set position TMP to 0 (0 = first iteration, don't call next)
-        let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-        unsafe { frame_tmp_set_long(frame, pos_ptr, 0) };
+        // Position 0 means the generator was already started and must not be
+        // resumed again before its first value is consumed.
+        set_foreach_iteration_state(frame, opline, arr_val.clone(), 0);
     } else {
+        if uses_user_iterator_protocol(arr_val, eg) {
+            if by_reference {
+                let error = make_error_value(
+                    "Error",
+                    "An iterator cannot be used with foreach by reference",
+                );
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+            let _ = crate::stdlib::call_object_protocol_method(
+                eg,
+                arr_val,
+                "Iterator",
+                "rewind",
+                &[],
+            )?;
+            if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+                return Ok(control);
+            }
+            // Negative cursor values identify the user Iterator protocol. Each
+            // successful fetch decrements it, retaining first-vs-next state
+            // without a class lookup in the hot ForeachNext path.
+            set_foreach_iteration_state(frame, opline, arr_val.clone(), -1);
+            return Ok(ColdResult::Done);
+        }
         let iterator_values = arr_val.as_object().and_then(|object| {
             matches!(
                 object.class_name.as_ref(),
@@ -850,11 +919,7 @@ fn op_foreach_init<'a>(
         } else {
             iterable.clone()
         };
-        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-        unsafe { frame_result_set(frame, result_ptr, opline.result_type, cloned) };
-        // Set position TMP to 0
-        let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-        unsafe { frame_tmp_set_long(frame, pos_ptr, 0) };
+        set_foreach_iteration_state(frame, opline, cloned, 0);
     }
     Ok(ColdResult::Done)
 }
@@ -882,6 +947,12 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
     }
 
     let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    // SAFETY: ForeachNext's cursor is a compiler-allocated live TMP and is read
+    // and updated only during this synchronous iteration step.
+    let cursor_value = unsafe {
+        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+    };
+    let cursor = cursor_value.as_long().unwrap_or(0);
 
     // Check for Generator object
     let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
@@ -890,9 +961,72 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         } else { None }
     } else { None };
 
-    let has_more = if let Some(gen_ref) = gen_ref_opt {
-        let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-        let pos = pos_val.as_long().unwrap_or(0);
+    let has_more = if cursor < 0 {
+        if cursor < -1 {
+            let _ = crate::stdlib::call_object_protocol_method(
+                eg,
+                arr_val,
+                "Iterator",
+                "next",
+                &[],
+            )?;
+            if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+                return Ok(control);
+            }
+        }
+        let valid = crate::stdlib::call_object_protocol_method(
+            eg,
+            arr_val,
+            "Iterator",
+            "valid",
+            &[],
+        )?
+        .unwrap_or_else(|| Value::bool(false));
+        if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+            return Ok(control);
+        }
+        if !valid.is_truthy() {
+            false
+        } else {
+            let value = crate::stdlib::call_object_protocol_method(
+                eg,
+                arr_val,
+                "Iterator",
+                "current",
+                &[],
+            )?
+            .unwrap_or_else(Value::null);
+            if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+                return Ok(control);
+            }
+            assign_foreach_cv(frame, val_cv, value.dereferenced().clone());
+            if key_encoded > 0 {
+                let key = crate::stdlib::call_object_protocol_method(
+                    eg,
+                    arr_val,
+                    "Iterator",
+                    "key",
+                    &[],
+                )?
+                .unwrap_or_else(Value::null);
+                if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+                    return Ok(control);
+                }
+                assign_foreach_cv(frame, key_encoded - 1, key.dereferenced().clone());
+            }
+            let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
+            unsafe {
+                frame_result_set(
+                    frame,
+                    pos_ptr,
+                    opline.op2_type,
+                    Value::long(cursor - 1),
+                )
+            };
+            true
+        }
+    } else if let Some(gen_ref) = gen_ref_opt {
+        let pos = cursor;
 
         // On first iteration (pos=0), generator is already started by ForeachInit
         // On subsequent iterations, call next()
@@ -940,8 +1074,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             false
         }
     } else {
-        let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-        let pos = pos_val.as_long().unwrap_or(0) as usize;
+        let pos = cursor as usize;
 
         if let Some(arr) = arr_val.dereferenced().as_array() {
             if pos < arr.len() {
