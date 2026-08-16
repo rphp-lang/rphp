@@ -7,6 +7,30 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 late-parent method-link checkpoint, based on `62017d3`, runs
+the default-feature 4,345-case PHP 8.2.33 corpus and records 1,775 passes, 2,255
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. Its exact pass-set delta is +2/-0:
+`Zend/tests/class_alias_017.phpt` and `lsb_016.phpt`.
+
+An exact method-table miss now follows a class's currently resolvable parent
+chain. This supplies inherited instance, static, constructor and magic methods
+when eager top-level registration encountered the parent before a preceding
+runtime `class_alias()` or before the parent's own declaration was linked.
+Ordinary inheritance remains flattened and exact-hit dispatch is unchanged;
+the bounded fallback is cold and preserves child overrides. Original coverage
+checks a directly late parent, an alias parent, a transitive grandchild,
+constructor dispatch and canonical declaring-class identity. Duplicate
+interface detection through aliases remains the separate `class_alias_009`
+boundary.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine 5,000-alias release controls measured a 0.17-second median
+for both the preceding and candidate binaries, with identical output.
+
 The current AMD64 missing-class construction checkpoint, based on `4e76f45`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,773 passes,
 2,257 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
