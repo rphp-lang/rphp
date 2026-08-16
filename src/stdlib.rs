@@ -486,7 +486,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // compact() requires caller scope access (not yet implemented) — intentionally not registered
 
     // --- String functions ---
-    reg_direct!("strlen", fn_strlen, direct_strlen, 1, 1, "string");
+    reg!("strlen", fn_strlen, 1, 1, "string");
     reg!("bin2hex", fn_bin2hex, 1, 1, "string");
     reg!("hex2bin", fn_hex2bin, 1, 1, "string");
     // S3 exposes xxh128, including the raw-output path used by Symfony's
@@ -663,7 +663,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "decimal_separator",
         "thousands_separator"
     );
-    reg_direct!("ord", fn_ord, direct_ord, 1, 1, "character");
+    reg!("ord", fn_ord, 1, 1, "character");
     reg!("chr", fn_chr, 1, 1, "codepoint");
     reg_var!("sprintf", fn_sprintf, 1, "format");
     reg!("vsprintf", fn_vsprintf, 2, 2, "format", "values");
@@ -3081,10 +3081,20 @@ fn fn_array_unshift(
 fn fn_array_key_exists(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let key = arg!(ed, 0);
     let arr = arg!(ed, 1);
+    if arr.as_array().is_none() {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "array_key_exists(): Argument #2 ($array) must be of type array, {} given",
+                arr.dereferenced().type_name()
+            ),
+        ));
+        ret!(rv, Value::null());
+    }
     let exists = if let Some(a) = arr.as_array() {
         match key.value_type() {
             ValueType::Long => a.get_int(key.as_long().unwrap()).is_some(),
@@ -3241,11 +3251,18 @@ fn fn_array_values(
 fn fn_array_slice(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     if let Some(arr) = arr_arg.as_array() {
         let len = arr.len() as i64;
+        if arg!(ed, 1).dereferenced().value_type() == ValueType::Null {
+            report_internal_deprecation(
+                eg,
+                ed,
+                "array_slice(): Passing null to parameter #2 ($offset) of type int is deprecated",
+            )?;
+        }
         let raw_offset = arg_long!(ed, 1);
         let start = if raw_offset < 0 {
             (len + raw_offset).max(0) as usize
@@ -3253,7 +3270,7 @@ fn fn_array_slice(
             raw_offset as usize
         };
         let end = match arg_opt!(ed, 2) {
-            Some(v) => {
+            Some(v) if v.dereferenced().value_type() != ValueType::Null => {
                 let l = v.to_long_val();
                 if l < 0 {
                     (len + l).max(start as i64) as usize
@@ -3261,7 +3278,7 @@ fn fn_array_slice(
                     (start + l as usize).min(arr.len())
                 }
             }
-            None => arr.len(),
+            _ => arr.len(),
         };
         let mut result = PhpArray::new();
         for val in arr.values().skip(start).take(end.saturating_sub(start)) {
@@ -3269,6 +3286,13 @@ fn fn_array_slice(
         }
         ret!(rv, Value::array(result));
     } else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "array_slice(): Argument #1 ($array) must be of type array, {} given",
+                arr_arg.dereferenced().type_name()
+            ),
+        ));
         ret!(rv, Value::null());
     }
 }
@@ -3885,8 +3909,15 @@ fn direct_strlen(args: &[Value]) -> Result<Value, VmError> {
 fn fn_strlen(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
+        )?;
+    }
     let result = direct_strlen(std::slice::from_ref(arg!(ed, 0)))?;
     ret!(rv, result);
 }
@@ -5199,12 +5230,26 @@ fn direct_ord(args: &[Value]) -> Result<Value, VmError> {
     ))
 }
 
-fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "ord(): Passing null to parameter #1 ($character) of type string is deprecated",
+        )?;
+    }
     let result = direct_ord(std::slice::from_ref(arg!(ed, 0)))?;
     ret!(rv, result);
 }
 
-fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "chr(): Passing null to parameter #1 ($codepoint) of type int is deprecated",
+        )?;
+    }
     let code = (arg_long!(ed, 0) & 0xFF) as u8;
     ret!(rv, Value::string(String::from(code as char)));
 }
@@ -5656,7 +5701,14 @@ fn fn_get_class(
     if let Some(obj) = v.as_object() {
         ret!(rv, Value::string(obj.class_name.as_ref()));
     }
-    ret!(rv, Value::bool(false));
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "get_class(): Argument #1 ($object) must be of type object, {} given",
+            v.dereferenced().type_name()
+        ),
+    ));
+    ret!(rv, Value::null());
 }
 
 fn fn_get_called_class(
@@ -6556,6 +6608,13 @@ fn fn_defined(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "defined(): Passing null to parameter #1 ($constant_name) of type string is deprecated",
+        )?;
+    }
     let name = arg_str!(ed, 0);
     ret!(rv, Value::bool(eg.find_constant(&name).is_some()));
 }
@@ -6715,6 +6774,53 @@ pub(crate) fn dispatch_php_error(
     crate::vm::execute::sync_dirty_globals_to_frame(eg, frame);
     let result = result?;
     Ok(eg.exception.is_some() || result.value_type() != ValueType::False)
+}
+
+fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
+    // SAFETY: an internal handler executes synchronously beneath its live
+    // caller. The caller opline has advanced one instruction past DoFcall.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        if caller.is_null() || (*caller).func.is_null() {
+            return (String::new(), 0);
+        }
+        let function = Function::from_common_ptr((*caller).func);
+        if function.fn_type() != FunctionType::User {
+            return (String::new(), 0);
+        }
+        let op_array = &function.as_user().op_array;
+        let file = if op_array.source_file.is_empty() {
+            op_array.name.clone()
+        } else {
+            op_array.source_file.to_string()
+        };
+        let next = (*caller).opline.offset_from(op_array.instructions.as_ptr());
+        let line = usize::try_from(next)
+            .ok()
+            .and_then(|next| {
+                op_array
+                    .source_lines
+                    .iter()
+                    .rev()
+                    .find(|(index, _)| *index <= next as u32)
+                    .map(|(_, line)| *line as usize)
+            })
+            .unwrap_or(0);
+        (file, line)
+    }
+}
+
+fn report_internal_deprecation(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    message: &str,
+) -> Result<(), VmError> {
+    let (file, line) = internal_call_source(ed);
+    let handled = dispatch_php_error(eg, ed, 8192, message, &file, line)?;
+    if !handled && eg.error_reporting & 8192 != 0 {
+        eg.write_output(format!("\nDeprecated: {message} in {file} on line {line}\n").as_bytes());
+    }
+    Ok(())
 }
 
 /// Raise one of PHP's user-generated diagnostics. Recoverable diagnostics are
@@ -9657,7 +9763,10 @@ pub(crate) fn invoke_call_user_func_array(
         None => {
             eg.exception = Some(crate::value::make_error_value(
                 "TypeError",
-                "call_user_func_array(): Argument #2 ($args) must be of type array, given non-array",
+                &format!(
+                    "call_user_func_array(): Argument #2 ($args) must be of type array, {} given",
+                    args_value.dereferenced().type_name()
+                ),
             ));
             return Ok(Value::null());
         }

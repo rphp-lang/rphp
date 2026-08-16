@@ -2327,10 +2327,20 @@ fn op_init_user_call<'a>(
                 callback_raw
             };
             let description = callback.echo_to_string();
-            let error = make_error_value("TypeError", &format!(
-                "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
-                description,
-            ));
+            let message = if opline._pad == 1 {
+                if callback.as_str().is_some() {
+                    format!(
+                        "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{description}\" not found or not callable"
+                    )
+                } else {
+                    "call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given".to_string()
+                }
+            } else {
+                format!(
+                    "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{description}\" not found or not callable"
+                )
+            };
+            let error = make_error_value("TypeError", &message);
             return Ok(match throw_in_frame(eg, frame, error) {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)

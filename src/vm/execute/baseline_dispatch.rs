@@ -1540,6 +1540,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         "Invalid direct internal handler ID".into(),
                     ));
                 };
+                if kind == crate::builtin_metadata::DirectInternalKind::Ord
+                    && argument.dereferenced().value_type() == ValueType::Null
+                {
+                    report_php_deprecation(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "ord(): Passing null to parameter #1 ($character) of type string is deprecated",
+                    )?;
+                }
                 let result = crate::stdlib::invoke_direct_internal1(kind, argument)?;
 
                 if opline.result_type != OpType::Unused {
@@ -1588,6 +1599,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let argument = unsafe {
                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                 };
+                if argument.dereferenced().value_type() == ValueType::Null {
+                    report_php_deprecation(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
+                    )?;
+                }
                 let length = crate::stdlib::direct_strlen_len(argument);
 
                 if opline.result_type != OpType::Unused {
@@ -1604,6 +1624,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Strlen_Cv => {
                 let argument = unsafe { (*frame).cv(opline.op1 as u32) };
+                if argument.dereferenced().value_type() == ValueType::Null {
+                    report_php_deprecation(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "strlen(): Passing null to parameter #1 ($string) of type string is deprecated",
+                    )?;
+                }
                 let length = crate::stdlib::direct_strlen_len(argument);
 
                 if opline.result_type != OpType::Unused {

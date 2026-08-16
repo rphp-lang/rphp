@@ -518,6 +518,36 @@ exact(): Argument #1 ($a) not passed"
 }
 
 #[test]
+fn internal_too_many_arguments_are_catchable_with_php_arity_messages() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([
+    fn() => get_called_class(null),
+    fn() => trim('x', ' ', true),
+] as $call) {
+    try {
+        $call();
+    } catch (ArgumentCountError $error) {
+        echo get_class($error), ':', $error->getMessage(), "\n";
+    }
+}
+try {
+    array_map('strlen', ['a'], ['b']);
+} catch (ArgumentCountError $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "ArgumentCountError:get_called_class() expects exactly 0 arguments, 1 given\n",
+            "ArgumentCountError:trim() expects at most 2 arguments, 3 given\n",
+            "ArgumentCountError:strlen() expects exactly 1 argument, 2 given",
+        )
+    );
+}
+
+#[test]
 fn detached_callbacks_validate_required_arguments_before_entering_the_body() {
     assert_eq!(
         run_php(

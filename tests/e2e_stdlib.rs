@@ -122,6 +122,48 @@ fn test_e2e_strlen_number() {
     assert_eq!(run_php("<?php echo strlen(12345);"), "5");
 }
 
+#[test]
+fn null_scalar_builtin_contracts_report_and_throw_like_php_82() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+set_error_handler(function($level, $message, $file, $line) { echo "$level:$message:$line\n"; });
+$null = null;
+var_dump(strlen($null));
+var_dump(ord($null));
+var_dump(defined($null));
+var_dump(chr($null));
+var_dump(array_slice(['x'], $null, $null));
+restore_error_handler();
+foreach ([
+    fn() => get_class($null),
+    fn() => array_slice($null, 0),
+    fn() => array_key_exists('x', $null),
+] as $call) {
+    try { $call(); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+            "/virtual/null-builtins.php",
+            "/virtual",
+        ),
+        concat!(
+            "8192:strlen(): Passing null to parameter #1 ($string) of type string is deprecated:4\n",
+            "int(0)\n",
+            "8192:ord(): Passing null to parameter #1 ($character) of type string is deprecated:5\n",
+            "int(0)\n",
+            "8192:defined(): Passing null to parameter #1 ($constant_name) of type string is deprecated:6\n",
+            "bool(false)\n",
+            "8192:chr(): Passing null to parameter #1 ($codepoint) of type int is deprecated:7\n",
+            "string(1) \"\0\"\n",
+            "8192:array_slice(): Passing null to parameter #2 ($offset) of type int is deprecated:8\n",
+            "array(1) {\n  [0]=>\n  string(1) \"x\"\n}\n",
+            "get_class(): Argument #1 ($object) must be of type object, null given\n",
+            "array_slice(): Argument #1 ($array) must be of type array, null given\n",
+            "array_key_exists(): Argument #2 ($array) must be of type array, null given\n",
+        )
+    );
+}
+
 // === substr() ===
 
 #[test]

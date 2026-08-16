@@ -7,7 +7,34 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `44861ba`, runs the same
+The current AMD64 internal-null-contract checkpoint, based on `fb8b465`, runs
+the same 4,345-case PHP 8.2.33 corpus and records 1,606 passes, 2,424 failures,
+77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds three exact passes without losing a previous pass or moving
+another failure category:
+`Zend/tests/call_user_func_array_invalid_type.phpt`,
+`Zend/tests/null_to_non_nullable_special_func.phpt` and
+`Zend/tests/nullsafe_operator/013.phpt`. Excess arguments to non-variadic
+internal functions now throw catchable `ArgumentCountError` instances with
+PHP-compatible exact or maximum arity messages, including detached callback
+calls. Compiler-lowered calls retain their source line, and packed literal
+`call_user_func_array()` calls retain their public API identity for callback
+diagnostics. Null passed to scalar parameters of `strlen`, `ord`, `chr`,
+`defined` and the `array_slice` offset now follows PHP 8.2 deprecation handling;
+a null `array_slice` length remains an omitted length. Relevant invalid argument
+types for `array_key_exists`, `array_slice`, `get_class` and
+`call_user_func_array` now produce PHP-compatible `TypeError` messages. Original
+E2E coverage checks catchability, exact messages, handler delivery and physical
+source lines. Five Cargo feature configurations, all-target and unsafe checks,
+Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64. The S3 cold-kernel
+gate was not rerun because this machine has no exact PHP 8.2 oracle. Nine
+alternating release runs of `bench_calls.php` measured medians of 0.347632
+seconds for the preceding binary and 0.346857 seconds for the candidate. The
+directly affected `bench_stdclass_string_property_strlen.php` medians were
+0.619518 and 0.637207 seconds. Both retained identical computed results.
+
+The preceding AMD64 nullsafe-string-interpolation checkpoint, based on
+`44861ba`, runs the same
 4,345-case PHP 8.2.33 corpus and records 1,603 passes, 2,427 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds the exact pass `Zend/tests/nullsafe_operator/033.phpt` without losing a

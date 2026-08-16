@@ -122,49 +122,41 @@ try {
 fn test_new_exception_extra_args_too_many() {
     // Exception accepts message, code and previous; a fourth public argument
     // must still fail the internal-function arity check.
-    let err = run_php_expect_error(
+    let out = run_php(
         r#"<?php
 try {
     throw new Exception("msg", 1, null, "extra");
-} catch (Exception $e) {
+} catch (ArgumentCountError $e) {
     echo $e->getMessage();
 }
 "#,
     );
-    match err {
-        rphp::vm::execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Too many arguments"),
-                "Expected too many args, got: {}",
-                msg
-            );
-        }
-        other => panic!("Expected Fatal, got: {:?}", other),
-    }
+    assert_eq!(
+        out,
+        "Exception::__construct() expects at most 3 arguments, 4 given"
+    );
 }
 
 #[test]
 fn test_getmessage_extra_args_too_many() {
     // getMessage("unused") — getMessage takes 0 public args, so 1 is too many
-    let err = run_php_expect_error(
+    let out = run_php(
         r#"<?php
 try {
     throw new Exception("hello");
 } catch (Exception $e) {
-    echo $e->getMessage("unused");
+    try {
+        echo $e->getMessage("unused");
+    } catch (ArgumentCountError $error) {
+        echo $error->getMessage();
+    }
 }
 "#,
     );
-    match err {
-        rphp::vm::execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Too many arguments"),
-                "Expected too many args, got: {}",
-                msg
-            );
-        }
-        other => panic!("Expected Fatal, got: {:?}", other),
-    }
+    assert_eq!(
+        out,
+        "Exception::getmessage() expects exactly 0 arguments, 1 given"
+    );
 }
 
 #[test]

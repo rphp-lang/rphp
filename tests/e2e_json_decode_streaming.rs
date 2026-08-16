@@ -187,7 +187,7 @@ echo name_length($dynamic) . '|'
     . name_length($missing);
 "#,
         ),
-        "\nWarning: Undefined property: stdClass::$name in name_length on line 6\n5|5|8|5|0"
+        "\nWarning: Undefined property: stdClass::$name in name_length on line 6\n\nDeprecated: strlen(): Passing null to parameter #1 ($string) of type string is deprecated in name_length on line 6\n5|5|8|5|0"
     );
 }
 
