@@ -71,6 +71,14 @@ left-associative chaining and non-referenceable pipe arguments. Fourteen pipe
 cases remain explicit follow-up work across generators, assertion source
 rendering, compile diagnostics, call diagnostics and one CLI-INI capability.
 
+The `d29db36` call-diagnostic checkpoint adds three exact passes with no lost
+pass: 1,838 pass, 3,370 fail, 110 skip, one XFAIL, 280 unsupported, zero
+timeouts and zero crashes. User-function errors recover original declaration
+spelling from cold metadata, while non-referenceable by-reference arguments
+use PHP 8.5's diagnostic wording across positional, named and unpacked calls.
+This closes the pipe `call_by_ref.phpt` case plus adjacent nullsafe and
+restricted-`$GLOBALS` cases without changing the ordinary call path.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
