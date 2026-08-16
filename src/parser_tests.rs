@@ -326,6 +326,29 @@ fn nullsafe_forbidden_contexts_are_deferred_compile_errors() {
 }
 
 #[test]
+fn pipe_requires_parentheses_around_an_arrow_rhs() {
+    let tokens = Lexer::new("<?php\n42 |> fn($value) => $value;")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+            if message == "Arrow functions on the right hand side of |> must be parenthesized"
+                && *line == 2
+    ));
+
+    let tokens = Lexer::new("<?php\n42 |> (fn($value) => $value);")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(!matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { .. }))
+    ));
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_retains_its_short_circuit_flag() {
     let tokens = Lexer::new("<?php $object?->{$property};")
         .tokenize()

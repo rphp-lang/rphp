@@ -531,6 +531,12 @@ impl Parser {
         while let Token::PipeGreater(line) = self.peek() {
             let line = line;
             self.advance();
+            if self.peek() == Token::Fn {
+                self.compile_error(
+                    "Arrow functions on the right hand side of |> must be parenthesized",
+                    line,
+                );
+            }
             let callable = match self.parse_concat()? {
                 Expr::Constant(name) => Expr::FirstClassFunctionCallable(name),
                 callable => callable,
