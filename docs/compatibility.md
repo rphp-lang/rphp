@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `1f679c6`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,889 pass, 3,319 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `06f26cb`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,911 pass, 3,297 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-36.271%; 82.873% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +74/-0. The first four gains are
+36.694%; 82.796% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +96/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -55,6 +55,15 @@ source type, including runtime object class names, while preserving the
 distinct catchable `Error`, `TypeError` and compile-time fatal paths. Type-name
 construction remains confined to rejected cold paths. This adds the three
 `arg_unpack` and `array_unpack` contract cases with no lost pass.
+
+Declared return contracts now distinguish an absent type from `mixed`, require
+an explicit value at an implicit function exit, and reject source-level bare
+returns during compilation with nullable and `never` diagnostics matching PHP
+8.5. Generator bodies retain their independent `Generator` return contract.
+Runtime return errors include the declaring function or method name and an
+uncaught origin/trace. This adds 22 exact tests with no lost pass or remaining
+failure-stage movement. A disabled-JIT/quick-loop ten-million-call control kept
+the same 0.31-second median and checksum before and after the change.
 
 Static locals returned by reference now keep one request-owned cell across
 full return synchronization, first-class callable invocation and pipe

@@ -157,6 +157,16 @@ scalar type or concrete object class across compile-time and catchable runtime
 paths. The exact PHP 8.5.6 delta is +3/-0; valid unpack execution is unchanged,
 and the full feature matrix plus unsafe-policy gate pass.
 
+The `06f26cb` typed-return checkpoint reaches 1,911 passes with 3,297 failures,
+110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero crashes.
+Declared `mixed`, nullable and ordinary typed returns now distinguish an
+explicit `null` from no value, source-level bare returns fail during compilation,
+and generators retain their separate return-value semantics. Canonical function
+and method names plus throwable origin metadata close the adjacent return-error
+cluster. The exact PHP 8.5.6 delta is +22/-0 with no remaining-fail stage moves;
+the feature matrix and unsafe gate pass, while the relevant ten-million-call
+baseline control retains an identical 0.31-second median and checksum.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
