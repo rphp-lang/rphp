@@ -57,6 +57,12 @@ compound-value tracking converts recursive array/object comparison into the
 PHP 8.5 catchable nesting error while preserving self-identity. The remaining
 process hazard is `gh13178_4.phpt`.
 
+The `523f934` array-cursor checkpoint converts that final timeout into an exact
+pass with no lost pass: 1,819 pass, 3,389 fail, 110 skip, one XFAIL, 280
+unsupported, zero timeouts and zero crashes. Removing an ordered array entry
+now adjusts a positional internal cursor only when the removed entry preceded
+it, preserving PHP's current/next semantics across storage transitions.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
