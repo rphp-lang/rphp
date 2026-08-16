@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `28d72cf`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,883 pass, 3,325 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `1f2aa81`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,886 pass, 3,322 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-36.156%; 82.853% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +68/-0. The first four gains are
+36.214%; 82.873% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +71/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -41,6 +41,14 @@ mode emits the assertion warning before an uncaught callback error and exits
 with PHP's status. This adds both PHP 8.5 GH-16293 cases with no lost pass. The
 PHP 8.3+ deprecation diagnostics for the legacy function and constants remain
 outside this checkpoint.
+
+The frontend now retains three additional PHP compile-time contracts even in
+dead code: a free-standing custom `assert()` declaration is forbidden,
+`new class(...)` cannot create a first-class callable, and a first-class
+callable cannot be used as an attribute argument. Attribute groups remain
+otherwise unobserved, but an invalid Closure-producing argument is no longer
+silently discarded. This adds all three affected PHP 8.5 tests with no lost
+pass and completes the reached assertion failure cluster.
 
 Static locals returned by reference now keep one request-owned cell across
 full return synchronization, first-class callable invocation and pipe
