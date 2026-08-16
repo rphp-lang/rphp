@@ -247,6 +247,9 @@ pub const NEW_FLAG_VIRTUAL_DECLARED_READS: u16 = 1 << 3;
 /// InitArray flag: at least one compile-time literal string key guarantees
 /// general hash storage rather than packed integer storage.
 pub const ARRAY_INIT_HASH_HINT: u16 = 1;
+/// InitArray flag: op1 is the already-evaluated class half of a dynamic static
+/// call. Validate it before evaluating the method expression.
+pub const ARRAY_INIT_DYNAMIC_CALL_CLASS: u16 = 1 << 1;
 
 /// AddArrayUnpack flag: the array literal is being materialized as a PHP
 /// constant expression (for example a constant, parameter default or static

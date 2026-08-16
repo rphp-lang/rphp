@@ -7,7 +7,31 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 dynamic-call-error checkpoint, based on `76bb019`, runs the
+The current AMD64 dynamic-call-source checkpoint, based on `cb0211d`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,628 passes, 2,402 failures, 77
+skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds seven exact passes without losing a previous pass:
+`Zend/tests/028.phpt`, `Zend/tests/dynamic_call_002.phpt`,
+`Zend/tests/dynamic_call_003.phpt`, `Zend/tests/dynamic_call_004.phpt`,
+`Zend/tests/indirect_call_array_001.phpt`, `tests/lang/043.phpt` and
+`tests/lang/044.phpt`. `InitDynamicCall` now retains its source line, so
+uncaught invalid-call errors expose the physical file, line and main-frame
+trace. Dynamic static calls validate their already-evaluated class operand
+before evaluating the method expression; an invalid class therefore neither
+reads nor warns for the method expression. A rare `InitArray` flag carries this
+ordering contract without adding work to ordinary array elements. Original E2E
+coverage checks the bytecode source line, exact error and absence of the later
+undefined-method-variable warning. Non-static callbacks and complete
+reference-returning `Closure::call` behavior remain separate boundaries. Five
+Cargo test configurations, all-target and unsafe checks, Composer S0, Symfony
+S1 and warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not rerun
+because this machine has no exact PHP 8.2 oracle. Twenty-one alternating
+release pairs measured `bench_calls.php` medians of 0.347410 seconds for the
+preceding binary and 0.349505 seconds for the candidate. The directly affected
+`bench_hash_dynamic_string_cv_array_loop.php` medians were 0.106917 and
+0.107093 seconds. Both retained identical computed results.
+
+The preceding AMD64 dynamic-call-error checkpoint, based on `76bb019`, runs the
 same 4,345-case PHP 8.2.33 corpus and records 1,621 passes, 2,409 failures, 77
 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
 crashes. It adds the exact passes `Zend/tests/bug64966.phpt` and
