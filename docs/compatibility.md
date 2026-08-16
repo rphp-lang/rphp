@@ -7,6 +7,29 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 alias-interface identity checkpoint, based on `9376324`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,776 passes,
+2,254 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. Its exact pass-set delta is +1/-0:
+`Zend/tests/class_alias_009.phpt`. All 19 pinned `class_alias_*` cases now pass.
+
+Publishing an interface alias now rechecks the canonical class IDs reachable
+through every direct and inherited interface edge. A class, interface or enum
+therefore cannot implement the same identity twice under original and alias
+spellings; the fatal names the consumer and canonical interface. The check
+walks only stable real-class IDs rather than alias table entries, skips symbols
+with fewer than two edges, bounds recursive closure traversal and remains on
+the cold interface-alias boundary. Original coverage checks direct alias
+duplication and a transitive diamond through two differently spelled parents.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine 5,000-interface-alias release controls measured a
+0.23-second median for both the preceding and candidate binaries, with
+identical output.
+
 The current AMD64 late-parent method-link checkpoint, based on `62017d3`, runs
 the default-feature 4,345-case PHP 8.2.33 corpus and records 1,775 passes, 2,255
 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
