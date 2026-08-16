@@ -156,8 +156,8 @@ pub enum Token {
 enum StringPart {
     Literal(String),
     Variable(String),
-    PropertyAccess(String, String, usize), // var_name, property_name, source line
-    ArrayAccess(String, String),           // var_name, index (string or integer literal)
+    PropertyAccess(String, String, bool, usize), // var_name, property_name, nullsafe, source line
+    ArrayAccess(String, String),                 // var_name, index (string or integer literal)
     Expression(Vec<Token>),
 }
 
@@ -1271,13 +1271,50 @@ mod tests {
                 Token::StringLiteral("value=".into()),
                 Token::Dot,
                 Token::LParen(0),
-                Token::This(1),
+                Token::This(2),
                 Token::Arrow,
-                Token::Identifier("render".into(), 1),
-                Token::LParen(1),
+                Token::Identifier("render".into(), 2),
+                Token::LParen(2),
                 Token::StringLiteral("x".into()),
                 Token::Comma,
                 Token::Integer(2),
+                Token::RParen,
+                Token::RParen,
+                Token::RParen,
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn string_interpolation_preserves_nullsafe_property_form_and_source_line() {
+        let tokens = Lexer::new(
+            "<?php\n$nullable = null;\necho \"$nullable?->property()|{$nullable?->method()}\";",
+        )
+        .tokenize()
+        .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Variable("nullable".into(), 2),
+                Token::Assign,
+                Token::Null,
+                Token::Semicolon,
+                echo(3),
+                Token::LParen(0),
+                Token::Variable("nullable".into(), 3),
+                Token::NullSafe,
+                Token::Identifier("property".into(), 3),
+                Token::Dot,
+                Token::StringLiteral("()|".into()),
+                Token::Dot,
+                Token::LParen(0),
+                Token::Variable("nullable".into(), 3),
+                Token::NullSafe,
+                Token::Identifier("method".into(), 3),
+                Token::LParen(3),
                 Token::RParen,
                 Token::RParen,
                 Token::RParen,
