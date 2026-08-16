@@ -7,7 +7,23 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `d017413`, runs the same
+The current AMD64 convergence checkpoint, based on `6bf807c`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,568 passes, 2,462 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds the exact pass `Zend/tests/nullsafe_operator/001.phpt` without losing a
+previous pass or moving another failure category. Expression-based static
+method calls now retain distinct class and method operands in the AST and
+compiler instead of masquerading as user callable-array literals. A nullsafe
+receiver can therefore short-circuit named, braced-dynamic and variable
+`::method()` forms before evaluating the method name or arguments, while the
+continuing path preserves class-string dispatch and evaluation order. Original
+parser and E2E regressions cover both paths. Five Cargo feature configurations,
+all-target and unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass
+on AMD64. Nine release runs of `bench_calls.php` measured medians of 0.3367
+seconds for the preceding binary and 0.3353 seconds for the candidate, with
+the same computed result.
+
+The preceding AMD64 nullsafe-method checkpoint, based on `d017413`, runs the same
 4,345-case PHP 8.2.33 corpus and records 1,567 passes, 2,463 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds eleven exact passes to the retained 1,556-pass checkpoint without losing a

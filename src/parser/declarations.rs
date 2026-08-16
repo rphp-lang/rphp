@@ -1106,6 +1106,18 @@ impl Parser {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
+            Expr::DynamicStaticCall {
+                class,
+                method,
+                args,
+                ..
+            } => {
+                Self::collect_free_vars(class, bound, out);
+                Self::collect_free_vars(method, bound, out);
+                for arg in args {
+                    Self::collect_free_vars(arg.expr(), bound, out);
+                }
+            }
             Expr::FirstClassCallable(callable) => {
                 Self::collect_free_vars(callable, bound, out);
             }

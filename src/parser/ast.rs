@@ -379,6 +379,14 @@ pub enum Expr {
         generic_args: Vec<TypeHint>,
         line: usize,
     },
+    DynamicStaticCall {
+        // $classExpr::$method(args) / $classExpr::method(args)
+        class: Box<Expr>,
+        method: Box<Expr>,
+        args: Vec<CallArg>,
+        generic_args: Vec<TypeHint>,
+        line: usize,
+    },
     FirstClassFunctionCallable(String),
     FirstClassCallable(Box<Expr>),
     Instanceof {
@@ -512,6 +520,16 @@ impl Expr {
             }
             Expr::DynamicCall { callable, args, .. } => {
                 callable.contains_yield() || args.iter().any(CallArg::contains_yield)
+            }
+            Expr::DynamicStaticCall {
+                class,
+                method,
+                args,
+                ..
+            } => {
+                class.contains_yield()
+                    || method.contains_yield()
+                    || args.iter().any(CallArg::contains_yield)
             }
             Expr::FirstClassCallable(callable) => callable.contains_yield(),
             // A closure has its own suspension context; declaring it does not

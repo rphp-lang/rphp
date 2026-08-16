@@ -320,14 +320,12 @@ impl Parser {
                         if matches!(self.peek(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             let args = self.parse_call_args()?;
-                            expr = Expr::DynamicCall {
-                                callable: Box::new(Self::dynamic_member_callable(
-                                    expr,
-                                    Expr::DynamicVariable {
-                                        name: Box::new(property),
-                                        line: dollar_line,
-                                    },
-                                )),
+                            expr = Expr::DynamicStaticCall {
+                                class: Box::new(expr),
+                                method: Box::new(Expr::DynamicVariable {
+                                    name: Box::new(property),
+                                    line: dollar_line,
+                                }),
                                 args,
                                 generic_args: Vec::new(),
                                 line,
@@ -345,14 +343,12 @@ impl Parser {
                         if matches!(self.peek(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             let args = self.parse_call_args()?;
-                            expr = Expr::DynamicCall {
-                                callable: Box::new(Self::dynamic_member_callable(
-                                    expr,
-                                    Expr::Variable {
-                                        name: member_name,
-                                        line: member_line,
-                                    },
-                                )),
+                            expr = Expr::DynamicStaticCall {
+                                class: Box::new(expr),
+                                method: Box::new(Expr::Variable {
+                                    name: member_name,
+                                    line: member_line,
+                                }),
                                 args,
                                 generic_args: Vec::new(),
                                 line,
@@ -381,23 +377,9 @@ impl Parser {
                     if matches!(self.peek(), Token::LParen(_)) {
                         let line = self.expect_lparen()?;
                         let args = self.parse_call_args()?;
-                        expr = Expr::DynamicCall {
-                            callable: Box::new(Expr::ArrayLiteral(vec![
-                                ArrayElement {
-                                    key: None,
-                                    value: expr,
-                                    unpack: false,
-                                    unpack_line: None,
-                                    by_reference: false,
-                                },
-                                ArrayElement {
-                                    key: None,
-                                    value: constant,
-                                    unpack: false,
-                                    unpack_line: None,
-                                    by_reference: false,
-                                },
-                            ])),
+                        expr = Expr::DynamicStaticCall {
+                            class: Box::new(expr),
+                            method: Box::new(constant),
                             args,
                             generic_args: Vec::new(),
                             line,

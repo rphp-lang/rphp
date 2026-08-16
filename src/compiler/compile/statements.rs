@@ -143,6 +143,7 @@ impl Compiler {
                     | Expr::MethodCall { .. }
                     | Expr::StaticCall { .. }
                     | Expr::DynamicCall { .. }
+                    | Expr::DynamicStaticCall { .. }
             );
             if !is_call {
                 return Err(self.goto_error(
