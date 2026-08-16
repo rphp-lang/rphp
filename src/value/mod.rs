@@ -3858,16 +3858,23 @@ impl PhpClosure {
         std::ptr::eq(self, other)
     }
 
+    /// Recover the common header retained by every live Closure function.
+    #[inline]
+    pub(crate) fn common(&self) -> Option<&FunctionCommon> {
+        (!self.func.is_null()).then(|| {
+            // SAFETY: Closure construction accepts only registered function
+            // allocations, which ExecutorGlobals retains for the request.
+            unsafe { &*self.func }
+        })
+    }
+
     /// Recover the user function guaranteed by normal closure construction.
     ///
     /// Keeping the checked pointer cast here gives generic calls and
     /// Reflection one canonical boundary for the closure/function layout.
     #[inline]
     pub(crate) fn user_function(&self) -> Option<&UserFunction> {
-        if self.func.is_null() {
-            return None;
-        }
-        let common = unsafe { &*self.func };
+        let common = self.common()?;
         (common.fn_type == FunctionType::User)
             .then(|| unsafe { &*(self.func as *const UserFunction) })
     }

@@ -86,6 +86,63 @@ catch (Error $error) { echo $error->getMessage(); }
 }
 
 #[test]
+fn closure_var_dump_reports_function_receiver_captures_and_parameters() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function reflectedDebug(string $required, int $optional = 1) {}
+var_dump(Closure::fromCallable('reflectedDebug'));
+
+class DebugReceiver {
+    public function method() {}
+    public function closure(): Closure {
+        $captured = 'kept';
+        return function ($argument) use ($captured) {};
+    }
+}
+$receiver = new DebugReceiver();
+var_dump(Closure::fromCallable([$receiver, 'method']));
+var_dump($receiver->closure());
+"#,
+        ),
+        r#"object(Closure)#1 (2) {
+  ["function"]=>
+  string(14) "reflectedDebug"
+  ["parameter"]=>
+  array(2) {
+    ["$required"]=>
+    string(10) "<required>"
+    ["$optional"]=>
+    string(10) "<optional>"
+  }
+}
+object(Closure)#2 (2) {
+  ["function"]=>
+  string(21) "DebugReceiver::method"
+  ["this"]=>
+  object(DebugReceiver)#1 (0) {
+  }
+}
+object(Closure)#2 (3) {
+  ["static"]=>
+  array(1) {
+    ["captured"]=>
+    string(4) "kept"
+  }
+  ["this"]=>
+  object(DebugReceiver)#1 (0) {
+  }
+  ["parameter"]=>
+  array(1) {
+    ["$argument"]=>
+    string(10) "<required>"
+  }
+}
+"#
+    );
+}
+
+#[test]
 fn variadic_closure_arguments_do_not_overwrite_captures() {
     let out = run_php(
         "<?php $captured = 'kept'; $closure = static function (...$args) use ($captured) { return $captured . ':' . implode(',', $args); }; echo $closure('a', 'b', 'c');",

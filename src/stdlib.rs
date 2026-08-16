@@ -8255,6 +8255,109 @@ fn var_dump_value_inner(
             visited_objects.remove(&identity);
             output
         }
+        ValueType::Closure => {
+            let identity = val
+                .as_closure()
+                .map(|closure| closure as *const PhpClosure as usize)
+                .expect("closure tag must expose closure identity");
+            if !visited_objects.insert(identity) {
+                return format!("{}*RECURSION*\n", prefix);
+            }
+            let closure = val.as_closure().unwrap();
+            let common = closure
+                .common()
+                .expect("live Closure must retain a registered function");
+            let user_function = closure.user_function();
+            let function_name = user_function
+                .map(|function| function.op_array.name.as_str())
+                .filter(|name| {
+                    !name
+                        .rsplit_once("::")
+                        .map_or(*name, |(_, method)| method)
+                        .starts_with("__closure_")
+                })
+                .map(str::to_owned)
+                .or_else(|| {
+                    (common.fn_type == FunctionType::Internal).then(|| {
+                        eg.function_table
+                            .iter()
+                            .find_map(|(name, pointer)| {
+                                std::ptr::eq(*pointer, closure.func).then_some(name.clone())
+                            })
+                            .unwrap_or_else(|| "internal function".to_string())
+                    })
+                });
+
+            let mut static_values = PhpArray::new();
+            if let Some(function) = user_function {
+                let capture_start = common.sig.parameter_cv_count();
+                for (index, capture) in closure.captures.iter().enumerate() {
+                    if capture.value_type() == ValueType::Undef {
+                        continue;
+                    }
+                    let cv = capture_start + index as u32;
+                    let name = function
+                        .op_array
+                        .all_cvs
+                        .iter()
+                        .find_map(|(candidate, name)| (*candidate == cv).then_some(name.as_str()))
+                        .unwrap_or("unknown");
+                    static_values.set_str(name, capture.clone_closure_capture());
+                }
+                let runtime_statics = eg.static_vars.get(&function.op_array.name);
+                for (_, name) in &function.op_array.static_vars {
+                    let value = runtime_statics
+                        .and_then(|values| values.get(name))
+                        .cloned()
+                        .unwrap_or_else(Value::null);
+                    static_values.set_str(name, value);
+                }
+            }
+
+            let mut parameters = PhpArray::new();
+            for (index, name) in common.sig.param_names.iter().enumerate() {
+                let state = if index < common.sig.required_num_args as usize {
+                    "<required>"
+                } else {
+                    "<optional>"
+                };
+                parameters.set_str(&format!("${name}"), Value::string(state));
+            }
+            let property_count = usize::from(function_name.is_some())
+                + usize::from(!static_values.is_empty())
+                + usize::from(closure.bound_this.is_some())
+                + usize::from(!parameters.is_empty());
+            let mut out = format!(
+                "{}object(Closure)#{} ({}) {{\n",
+                prefix, closure.object_handle, property_count
+            );
+            let mut append_property = |name: &str, value: &Value| {
+                out.push_str(&format!("{}  [\"{}\"]=>\n", prefix, name));
+                out.push_str(&var_dump_value_inner(
+                    value,
+                    indent + 1,
+                    eg,
+                    true,
+                    visited_arrays,
+                    visited_objects,
+                ));
+            };
+            if let Some(function_name) = function_name {
+                append_property("function", &Value::string(function_name));
+            }
+            if !static_values.is_empty() {
+                append_property("static", &Value::array(static_values));
+            }
+            if let Some(bound_this) = closure.bound_this.as_ref() {
+                append_property("this", bound_this);
+            }
+            if !parameters.is_empty() {
+                append_property("parameter", &Value::array(parameters));
+            }
+            out.push_str(&format!("{}}}\n", prefix));
+            visited_objects.remove(&identity);
+            out
+        }
         ValueType::Resource => {
             let id = val.as_resource_id().unwrap();
             format!(

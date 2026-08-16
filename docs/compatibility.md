@@ -7,6 +7,36 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 Closure-debug-info checkpoint, based on `d3977b4`, runs the
+default-feature 4,345-case PHP 8.2.33 corpus and records 1,686 passes, 2,344
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. It adds 12 exact passes without losing a previous pass:
+`Zend/tests/bug60738.phpt`, `Zend/tests/bug60738_variation.phpt`,
+`Zend/tests/bug70321.phpt`, `Zend/tests/bug75290.phpt`,
+`Zend/tests/bug81076.phpt`, `Zend/tests/closure_026.phpt`,
+`Zend/tests/closure_034.phpt`, `Zend/tests/closure_035.phpt`,
+`Zend/tests/first_class_callable_optimization.phpt`,
+`Zend/tests/gh8083.phpt`, `Zend/tests/return_types/011.phpt` and
+`Zend/tests/return_types/012.phpt`. `var_dump()` now treats Closure values as
+PHP objects with stable recursion identity and derives PHP 8.2's `function`,
+`static`, `this` and `parameter` debug properties from registered function,
+capture, binding and signature metadata. Named user, internal and method
+closures retain their callable name; anonymous closures omit it. Captured and
+function-static values keep reference/recursion behavior, while undefined
+implicit arrow captures do not create false debug entries. Original E2E
+coverage checks named and method closures, a bound receiver, lexical captures
+and required/optional parameters. The compact `PhpClosure` layout is unchanged.
+Five Cargo test configurations, all-target and unsafe checks, Composer S0,
+Symfony S1 and warmed-kernel S2 pass on AMD64; the production unsafe inventory
+is 1,621 blocks, below the 1,623 ceiling. The S3 cold-kernel gate was not rerun
+because this machine has no exact PHP 8.2 oracle. Twenty-one alternating
+release pairs measured `bench_closure_storage.php` at baseline p10/median/p90
+of 0.008086/0.008294/0.008744 seconds and candidate
+0.007766/0.008222/0.008796 seconds (median -0.87 percent), with identical
+computed results. Constant-AST static placeholders, Closure object-handle
+reuse, direct `->__invoke()` and later PHP source-location debug fields remain
+separate compatibility boundaries.
+
 The current AMD64 Closure-`__invoke`-array checkpoint, based on `84e1270`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,674 passes,
 2,356 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
