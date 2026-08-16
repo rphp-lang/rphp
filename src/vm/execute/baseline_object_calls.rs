@@ -875,10 +875,12 @@ fn op_fetch_obj_r_slow<'a>(
                             .is_some();
                         if opline._pad & FETCH_OBJ_SILENT == 0 && !has_getter {
                             let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
-                            return Err(VmError::Fatal(format!(
+                            let message = format!(
                                 "Cannot access {} property {}::${}",
                                 vis_str, defining_class, name
-                            )));
+                            );
+                            drop(obj);
+                            return Ok(object_property_throw(eg, frame, "Error", message));
                         }
                         property_accessible = false;
                     }
@@ -1257,18 +1259,24 @@ fn op_bind_obj_prop_ref<'a>(
                     Visibility::Private => "private",
                     Visibility::Public => "public",
                 };
-                return Err(VmError::Fatal(format!(
-                    "Cannot access {visibility} property {defining_class}::${name}"
-                )));
+                return Ok(object_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    format!("Cannot access {visibility} property {defining_class}::${name}"),
+                ));
             }
         }
         if eg
             .find_class(&class_name)
             .is_some_and(|class| class.readonly_props.contains(&name))
         {
-            return Err(VmError::Fatal(format!(
-                "Cannot acquire reference to readonly property {class_name}::${name}"
-            )));
+            return Ok(object_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Cannot acquire reference to readonly property {class_name}::${name}"),
+            ));
         }
 
         let key = if force_dynamic {
@@ -1558,10 +1566,12 @@ fn op_assign_obj_prop<'a>(
                                 Visibility::Private => "private",
                                 _ => "public",
                             };
-                            return Err(VmError::Fatal(format!(
+                            let message = format!(
                                 "Cannot access {} property {}::${}",
                                 vis_str, defining_class, name
-                            )));
+                            );
+                            drop(php_obj);
+                            return Ok(object_property_throw(eg, frame, "Error", message));
                         }
                     }
                 }

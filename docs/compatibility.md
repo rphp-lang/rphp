@@ -7,7 +7,29 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 Closure-class-identity checkpoint, based on `7a0bf97`, runs
+The current AMD64 instance-property-visibility-error checkpoint, based on
+`17442b4`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
+1,695 passes, 2,335 failures, 77 skips, one upstream XFAIL, 237 unsupported
+cases, zero timeouts and zero crashes. It adds four exact passes without losing
+a previous pass: `Zend/tests/bug29674.phpt`, `Zend/tests/closure_020.phpt`,
+`Zend/tests/exception_014.phpt` and
+`Zend/tests/readonly_props/visibility_change.phpt`. Inaccessible instance
+property reads, writes and by-reference binds now raise a regular PHP `Error`
+through the shared exception machinery instead of escaping as an internal VM
+fatal. They can therefore be caught, inspected and rendered as uncaught
+throwables; reads retain their exact opcode file, line and stack trace.
+Original E2E coverage exercises all three operations, catchability, messages
+and read-origin metadata. Five Cargo test configurations, all-target and
+unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64; the
+production unsafe inventory remains 1,621 blocks, below the 1,623 ceiling.
+The S3 cold-kernel gate was not rerun because this machine has no exact PHP
+8.2 oracle. The change is confined to cold property-error branches and does
+not alter successful property caches, object/value layouts, callback dispatch
+or JIT plans. Assignment and reference-binding opcodes still need complete
+source-line metadata, while remaining Closure binding traces, static-property
+origins and property-hook behavior are separate compatibility boundaries.
+
+The preceding AMD64 Closure-class-identity checkpoint, based on `7a0bf97`, runs
 the default-feature 4,345-case PHP 8.2.33 corpus and records 1,691 passes,
 2,339 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
 timeouts and zero crashes. It adds two exact passes without losing a previous

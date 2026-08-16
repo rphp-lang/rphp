@@ -1,6 +1,6 @@
 /// Tests for class inheritance (extends)
 mod common;
-use common::{run_php, run_php_expect_error};
+use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
 fn test_extends_basic() {
@@ -288,6 +288,28 @@ class PrivateReadExactChild extends PrivateReadExactParent {
     assert!(
         format!("{error:?}")
             .contains("Cannot access private property PrivateReadExactParent::$value")
+    );
+}
+
+#[test]
+fn inaccessible_instance_property_errors_are_catchable_and_reads_keep_the_opcode_origin() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class HiddenProperty { private int $value = 1; }
+$object = new HiddenProperty;
+try { $read = $object->value; } catch (Error $error) { echo "read:", $error->getLine(), "\n"; }
+try { $object->value = 2; } catch (Error $error) { echo "write:", $error->getMessage(), "\n"; }
+try { $reference =& $object->value; } catch (Error $error) { echo "reference:", $error->getMessage(); }
+"#,
+            "/fixture/property-visibility.php",
+            "/fixture",
+        ),
+        concat!(
+            "read:4\n",
+            "write:Cannot access private property HiddenProperty::$value\n",
+            "reference:Cannot access private property HiddenProperty::$value",
+        )
     );
 }
 
