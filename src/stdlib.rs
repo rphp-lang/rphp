@@ -7666,13 +7666,62 @@ fn var_dump_value_inner(
                     .unwrap_or("");
                 format!("{}enum({}::{})\n", prefix, object.class_name, case)
             } else {
-                let mut property_count = 0;
-                object.for_each_property(|_, _| property_count += 1);
+                let class = eg.class_by_id(object.class_id);
+                let mut property_count = if let Some(class) = class {
+                    class
+                        .properties
+                        .iter()
+                        .enumerate()
+                        .filter(|(slot, _)| {
+                            object
+                                .get_property_slot(*slot)
+                                .is_some_and(|value| value.value_type() != ValueType::Undef)
+                        })
+                        .count()
+                } else {
+                    0
+                };
+                object.for_each_dynamic_property(|_, value| {
+                    property_count += usize::from(value.value_type() != ValueType::Undef);
+                });
                 let mut out = format!(
                     "{}object({})#1 ({}) {{\n",
                     prefix, object.class_name, property_count
                 );
-                object.for_each_property(|name, value| {
+                if let Some(class) = class {
+                    for slot in var_dump_property_slots(eg, object.class_id) {
+                        let definition = &class.properties[slot];
+                        let Some(value) = object.get_property_slot(slot) else {
+                            continue;
+                        };
+                        if value.value_type() == ValueType::Undef {
+                            if !matches!(definition.type_hint, ParamTypeHint::None) {
+                                let key = var_dump_property_key(definition);
+                                out.push_str(&format!("{}  {}=>\n", prefix, key));
+                                out.push_str(&format!(
+                                    "{}  uninitialized({})\n",
+                                    prefix,
+                                    definition.type_hint.display_name()
+                                ));
+                            }
+                            continue;
+                        }
+                        let key = var_dump_property_key(definition);
+                        out.push_str(&format!("{}  {}=>\n", prefix, key));
+                        out.push_str(&var_dump_value_inner(
+                            value,
+                            indent + 1,
+                            eg,
+                            true,
+                            visited_arrays,
+                            visited_objects,
+                        ));
+                    }
+                }
+                object.for_each_dynamic_property(|name, value| {
+                    if value.value_type() == ValueType::Undef {
+                        return;
+                    }
                     out.push_str(&format!("{}  [\"{}\"]=>\n", prefix, name));
                     out.push_str(&var_dump_value_inner(
                         value,
@@ -7700,6 +7749,43 @@ fn var_dump_value_inner(
         }
         _ => format!("{}unknown\n", prefix),
     }
+}
+
+fn var_dump_property_key(definition: &PropertyDefinition) -> String {
+    match definition.visibility {
+        Visibility::Public => format!("[\"{}\"]", definition.name),
+        Visibility::Protected => format!("[\"{}\":protected]", definition.name),
+        Visibility::Private => format!(
+            "[\"{}\":\"{}\":private]",
+            definition.name, definition.declaring_class
+        ),
+    }
+}
+
+fn var_dump_property_slots(eg: &ExecutorGlobals, class_id: u32) -> Vec<usize> {
+    let Some(class) = eg.class_by_id(class_id) else {
+        return Vec::new();
+    };
+    let mut lineage = Vec::new();
+    let mut current = Some(class.name.as_str());
+    while let Some(class_name) = current {
+        let Some(definition) = eg.find_class(class_name) else {
+            break;
+        };
+        lineage.push(definition.name.as_str());
+        current = definition.parent.as_deref();
+    }
+    lineage.reverse();
+
+    let mut slots = (0..class.properties.len()).collect::<Vec<_>>();
+    slots.sort_by_key(|slot| {
+        let property = &class.properties[*slot];
+        lineage
+            .iter()
+            .position(|owner| owner.eq_ignore_ascii_case(&property.declaring_class))
+            .unwrap_or(lineage.len())
+    });
+    slots
 }
 
 fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
