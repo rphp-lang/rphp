@@ -92,7 +92,7 @@ impl Parser {
             Token::While => Some("while".to_string()),
             Token::Do => Some("do".to_string()),
             Token::For => Some("for".to_string()),
-            Token::Foreach => Some("foreach".to_string()),
+            Token::Foreach { .. } => Some("foreach".to_string()),
             Token::As => Some("as".to_string()),
             Token::Switch => Some("switch".to_string()),
             Token::Case => Some("case".to_string()),

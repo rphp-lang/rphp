@@ -735,7 +735,7 @@ impl Parser {
                     body,
                 })
             }
-            Token::Foreach => {
+            Token::Foreach { line } => {
                 self.advance(); // consume 'foreach'
                 self.expect_lparen()?;
                 let array = self.parse_expr()?;
@@ -758,6 +758,7 @@ impl Parser {
                     self.expect(&Token::RParen)?;
                     let body = self.parse_block_or_stmt()?;
                    return Ok(Stmt::Foreach {
+                       line,
                        array,
                        value: ForeachTarget::Destructure(targets),
                         key: None,
@@ -820,6 +821,7 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 let body = self.parse_block_or_stmt()?;
                 Ok(Stmt::Foreach {
+                   line,
                    array,
                    value,
                     key,

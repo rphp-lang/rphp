@@ -1,6 +1,6 @@
 /// E2E tests: foreach loops — value only, key-value, nested, break/continue, edge cases.
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
@@ -66,6 +66,31 @@ foreach (new NestedAggregate() as $key => $value) {
 "#,
         ),
         "first:10|second:20|"
+    );
+}
+
+#[test]
+fn iterator_aggregate_rejects_non_traversable_results_with_foreach_origin() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class InvalidAggregateResult implements IteratorAggregate {
+    #[ReturnTypeWillChange]
+    public function getIterator() {
+        echo 'called|';
+        return 42;
+    }
+}
+try {
+    foreach (new InvalidAggregateResult() as $value) {}
+} catch (Exception $error) {
+    echo $error->getMessage(), '|', $error->getLine();
+}
+"#,
+            "/virtual/iterator-aggregate.php",
+            "/virtual",
+        ),
+        "called|Objects returned by InvalidAggregateResult::getIterator() must be traversable or implement interface Iterator|10"
     );
 }
 
