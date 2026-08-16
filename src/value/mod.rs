@@ -3752,6 +3752,7 @@ mod closure_ownership_tests {
 
     fn closure_with_capture(capture: Value) -> Value {
         Value::closure(PhpClosure {
+            object_handle: 0,
             func: std::ptr::null(),
             called_scope_class_id: 0,
             is_static: true,
@@ -3804,6 +3805,9 @@ mod closure_ownership_tests {
 /// PHP closure — function pointer + captured values.
 /// Stored behind `Rc` in `Value`, like strings, arrays, and objects.
 pub struct PhpClosure {
+    /// Request-local Zend object-store handle. Closures are PHP objects and
+    /// therefore consume the same diagnostic handle sequence as instances.
+    pub(crate) object_handle: u32,
     /// Direct pointer to the resolved function. No string lookup needed at call time.
     pub func: *const FunctionCommon,
     /// Late-called class captured when a class-scoped closure is created.
@@ -3825,6 +3829,7 @@ pub struct PhpClosure {
 impl Clone for PhpClosure {
     fn clone(&self) -> Self {
         Self {
+            object_handle: 0,
             func: self.func,
             called_scope_class_id: self.called_scope_class_id,
             is_static: self.is_static,
@@ -4088,16 +4093,20 @@ impl Value {
     /// Create a closure value from a PhpClosure.
     /// Clone = Rc refcount bump; binding creates a distinct payload and identity.
     #[inline]
-    pub fn closure(c: PhpClosure) -> Self {
+    pub fn closure(mut c: PhpClosure) -> Self {
         if c.captures.capacity() != 0 {
             stats::inc_closure_capture_storage_allocation();
         }
+        let (handle, in_request) = allocate_object_handle();
+        c.object_handle = handle;
         let closure = Rc::new(c);
         stats::inc_closure_payload_allocation();
+        let ptr = Rc::into_raw(closure) as *mut u8;
+        if !in_request {
+            register_object_identity(ptr as usize);
+        }
         Self {
-            data: ValueData {
-                ptr: Rc::into_raw(closure) as *mut u8,
-            },
+            data: ValueData { ptr },
             type_info: ValueType::Closure as u32,
             _not_send: PhantomData,
         }
@@ -4210,6 +4219,7 @@ impl Value {
     pub fn object_handle(&self) -> Option<u32> {
         self.as_object()
             .map(|object| object.lifecycle & OBJECT_HANDLE_MASK)
+            .or_else(|| self.as_closure().map(|closure| closure.object_handle))
     }
 
     /// Mark an Object allocation as having entered its destructor. Returns
@@ -5166,7 +5176,14 @@ impl Drop for Value {
             ValueType::Closure => {
                 // SAFETY: closure construction stores the raw pointer returned
                 // by `Rc::into_raw`; each clone has incremented the same count.
-                unsafe { Rc::decrement_strong_count(self.data.ptr as *const PhpClosure) };
+                unsafe {
+                    let pointer = self.data.ptr as *const PhpClosure;
+                    let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
+                    if Rc::strong_count(&owner) == 1 {
+                        release_object_handle(pointer as usize, (*pointer).object_handle);
+                    }
+                    Rc::decrement_strong_count(pointer);
+                };
             }
             ValueType::Reference if self.is_owned_reference() => {
                 // SAFETY: owned references store the raw pointer produced by

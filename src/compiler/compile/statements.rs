@@ -353,13 +353,21 @@ impl Compiler {
                 Ok((cv, OpType::Cv, ForeachArrayWriteback::Variable(cv)))
             }
             Expr::DynamicVariable { name, line } => {
-                let (key, key_type) = self.compile_expr(name);
+                let (raw_key, raw_key_type) = self.compile_expr(name);
+                let key = self.alloc_tmp();
+                let mut retain_key = Instruction::new(OpCode::AssignCv);
+                retain_key.op1 = key;
+                retain_key.op1_type = OpType::Tmp;
+                retain_key.op2 = raw_key;
+                retain_key.op2_type = raw_key_type;
+                self.instructions.push(retain_key);
                 let current = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
                 fetch.op1 = key;
-                fetch.op1_type = key_type;
+                fetch.op1_type = OpType::Tmp;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_DYNAMIC_RETAIN_NAME;
                 if silent_fetch {
                     fetch._pad |= FETCH_DYNAMIC_SILENT;
                 }
@@ -369,7 +377,7 @@ impl Compiler {
                     OpType::Tmp,
                     ForeachArrayWriteback::DynamicVariable {
                         key,
-                        key_type,
+                        key_type: OpType::Tmp,
                         line: *line,
                     },
                 ))

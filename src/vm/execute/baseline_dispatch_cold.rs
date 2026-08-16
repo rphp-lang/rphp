@@ -347,11 +347,14 @@ fn op_dynamic_variable<'a>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let raw_key = unsafe {
-        (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone()
-    };
-    let key = reference_initial_value(raw_key);
-    let name = if key.value_type() == ValueType::Object {
+    // SAFETY: `frame` is the active execute frame and `opline.op1` names a
+    // compiler-allocated live operand. The retained-name path additionally
+    // writes only its compiler-owned TMP before any handler can reuse it.
+    let name = unsafe {
+        let raw_key =
+            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone();
+        let key = reference_initial_value(raw_key);
+        let name = if key.value_type() == ValueType::Object {
         let class_name = key
             .as_object()
             .map(|object| object.class_name.to_string())
@@ -383,19 +386,28 @@ fn op_dynamic_variable<'a>(
                 ),
             ));
         };
-        rendered.to_string()
-    } else {
-        if key.value_type() == ValueType::Array {
-            report_php_warning(
-                eg,
-                frame,
-                op_array,
-                opline,
-                "Array to string conversion",
-                opline._pad & FETCH_DYNAMIC_ERROR_SUPPRESS != 0,
-            )?;
+            rendered.to_string()
+        } else {
+            if key.value_type() == ValueType::Array {
+                report_php_warning(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    "Array to string conversion",
+                    opline._pad & FETCH_DYNAMIC_ERROR_SUPPRESS != 0,
+                )?;
+            }
+            scalar_dynamic_variable_name(&key)?
+        };
+        if opline.opcode == OpCode::FetchDynamicVar
+            && opline._pad & FETCH_DYNAMIC_RETAIN_NAME != 0
+        {
+            debug_assert_eq!(opline.op1_type, OpType::Tmp);
+            let retained = (*frame).get_op_mut(opline.op1 as u32, OpType::Tmp);
+            frame_slot_set(frame, retained, Value::string(name.clone()));
         }
-        scalar_dynamic_variable_name(&key)?
+        name
     };
     let owner = dynamic_scope_frame(eg, frame);
     let direct_cv = dynamic_scope_cv(owner, &name);
@@ -2970,6 +2982,7 @@ fn op_create_closure(
     let is_static = (opline._pad & crate::vm::instruction::CLOSURE_FLAG_STATIC) != 0;
     let bound_this = closure_bound_this(frame, op_array, is_static);
     let closure = PhpClosure {
+        object_handle: 0,
         func: func_ptr,
         called_scope_class_id,
         is_static,
@@ -3031,6 +3044,7 @@ fn op_create_first_class_callable<'a>(
     });
     let has_heap_captures = resolved.use_vars.iter().any(Value::needs_cleanup);
     let closure = PhpClosure {
+        object_handle: 0,
         func: resolved.func_ptr,
         called_scope_class_id: resolved.called_scope_class_id,
         is_static: bound_this.is_none(),
