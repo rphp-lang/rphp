@@ -484,6 +484,42 @@ var_dump($alias);
 }
 
 #[test]
+fn typed_property_errors_name_the_concrete_assigned_object_class() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface LeftType {}
+interface RightType {}
+class BothTypes implements LeftType, RightType {}
+class LeftOnly implements LeftType {}
+class ObjectTypeSink {
+    public string $scalar;
+    public LeftType&RightType $intersection;
+}
+
+$sink = new ObjectTypeSink;
+foreach ([new LeftOnly, new class {}] as $value) {
+    try {
+        $sink->scalar = $value;
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+
+$shared = new BothTypes;
+$sink->intersection =& $shared;
+try {
+    $shared = new LeftOnly;
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#
+        ),
+        "Cannot assign LeftOnly to property ObjectTypeSink::$scalar of type string\nCannot assign class@anonymous to property ObjectTypeSink::$scalar of type string\nCannot assign LeftOnly to reference held by property ObjectTypeSink::$intersection of type LeftType&RightType\n"
+    );
+}
+
+#[test]
 fn static_property_references_share_storage_and_initialize_nullable_slots() {
     assert_eq!(
         run_php(

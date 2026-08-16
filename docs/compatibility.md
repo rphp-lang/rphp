@@ -118,7 +118,28 @@ cell type metadata and remain a separate compatibility slice. S3 was not
 rerun at that checkpoint; its pre-existing cold `PhpDumper` array-state
 divergence was the next boundary.
 
-The current AMD64 Symfony S3 service-map checkpoint, based on `2b2b6df`,
+The current AMD64 typed-property object-name checkpoint, based on `d35d125`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,732
+passes, 2,298 failures, 77 skips, one upstream XFAIL, 237 unsupported cases,
+zero timeouts and zero crashes. Relative to the exact 1,725-pass base it adds
+seven passes without losing a previous pass:
+`intersection_types/assigning_intersection_types.phpt`,
+`intersection_types/typed_reference.phpt`, `typed_properties_004.phpt`,
+`typed_properties_005.phpt`, `typed_properties_039.phpt`,
+`typed_properties_078.phpt` and `typed_properties_079.phpt`.
+
+Typed-property and property-reference errors now name the assigned object's
+concrete runtime class instead of the generic `object` value kind. Anonymous
+class identities keep their private numeric suffix internally while property
+diagnostics, trace arguments and trace callables expose PHP's stable
+`class@anonymous` name. The formatter reads the immutable class name without
+borrowing property storage, preserving self-assignment and re-entrant object
+boundaries. Original tests cover ordinary, anonymous and intersection-typed
+property failures plus anonymous callable traces. All five Cargo feature
+configurations, all-target checking, unsafe policy, Composer S0 and Symfony S1
+through S3 pass on AMD64; the existing native JIT controls remain green.
+
+The preceding AMD64 Symfony S3 service-map checkpoint, based on `2b2b6df`,
 passes the complete pinned FrameworkBundle 7.4.16 cold-build gate against PHP
 8.2.33. Runtime-resolved method calls now preserve a mutable `$this` property
 when the selected parameter is by-reference while retaining ordinary by-value

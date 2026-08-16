@@ -2,6 +2,13 @@ use std::fmt::Write as _;
 
 use crate::value::{PhpArray, Value, ValueType};
 
+#[inline]
+fn displayed_trace_class_name(class: &str) -> &str {
+    class
+        .strip_prefix("class@anonymous#")
+        .map_or(class, |_| "class@anonymous")
+}
+
 fn append_trace_argument(output: &mut String, value: &Value) {
     let value = value.dereferenced();
     match value.value_type() {
@@ -41,11 +48,7 @@ fn append_trace_argument(output: &mut String, value: &Value) {
             output.push_str("Object(");
             let object = value.as_object().expect("Object-tagged trace argument");
             let class = object.class_name.as_ref();
-            output.push_str(
-                class
-                    .strip_prefix("class@anonymous#")
-                    .map_or(class, |_| "class@anonymous"),
-            );
+            output.push_str(displayed_trace_class_name(class));
             output.push(')');
         }
         ValueType::Closure => output.push_str("Object(Closure)"),
@@ -79,7 +82,7 @@ fn format_trace(trace: &PhpArray, append_main: bool) -> String {
             _ => output.push_str("[internal function]: "),
         }
         if let Some(class) = entry.get_str("class").and_then(Value::as_str) {
-            output.push_str(class);
+            output.push_str(displayed_trace_class_name(class));
             output.push_str(
                 entry
                     .get_str("type")

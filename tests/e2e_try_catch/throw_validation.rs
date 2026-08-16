@@ -323,6 +323,18 @@ fn trace_arguments_hide_the_runtime_identity_suffix_of_anonymous_classes() {
 }
 
 #[test]
+fn trace_callables_hide_the_runtime_identity_suffix_of_anonymous_classes() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\n$object = new class {\n    public $trace;\n    public function __construct() { $this->trace = new Exception(); }\n};\necho $object->trace->getTraceAsString();",
+            "/fixture/anonymous-trace-callable.php",
+            "/fixture",
+        ),
+        "#0 /fixture/anonymous-trace-callable.php(2): class@anonymous->__construct()\n#1 {main}"
+    );
+}
+
+#[test]
 fn root_uncaught_throwable_rendering_omits_the_colon_for_an_empty_message() {
     let error = run_php_expect_error_with_source_context(
         "<?php\nthrow new Exception();",

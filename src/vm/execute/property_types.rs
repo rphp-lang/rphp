@@ -110,6 +110,31 @@ fn coerce_property_value(value: &Value, hint: &ParamTypeHint, weak: bool) -> Opt
     }
 }
 
+/// PHP names the concrete runtime class in typed-property diagnostics instead
+/// of collapsing every declared object to the generic `object` value kind.
+/// Read the immutable class name without borrowing property storage: the value
+/// being assigned may be the same object whose property is currently guarded.
+#[inline(always)]
+fn property_assignment_type_name(value: &Value) -> &str {
+    if value.value_type() == ValueType::Object {
+        // SAFETY: the type tag was checked above and class names are immutable
+        // for the lifetime of the object allocation.
+        let class = unsafe { value.object_class_name_unchecked() };
+        class
+            .strip_prefix("class@anonymous#")
+            .map_or(class, |_| "class@anonymous")
+    } else {
+        value.type_name()
+    }
+}
+
+#[inline(always)]
+fn property_diagnostic_class_name(class: &str) -> &str {
+    class
+        .strip_prefix("class@anonymous#")
+        .map_or(class, |_| "class@anonymous")
+}
+
 #[inline]
 fn prepare_property_assignment(
     value: Value,
@@ -132,8 +157,8 @@ fn prepare_property_assignment(
     }
     Err(format!(
         "Cannot assign {} to property {}::${} of type {}",
-        value.type_name(),
-        definition.type_scope,
+        property_assignment_type_name(&value),
+        property_diagnostic_class_name(&definition.type_scope),
         definition.name,
         definition.type_hint.display_name()
     ))
@@ -188,8 +213,8 @@ fn prepare_reference_assignment(
         .unwrap_or(&constraints[0]);
     Err(format!(
         "Cannot assign {} to reference held by property {}::${} of type {}",
-        value.type_name(),
-        constraint.declaring_class,
+        property_assignment_type_name(&value),
+        property_diagnostic_class_name(&constraint.declaring_class),
         constraint.property,
         constraint.type_hint.display_name()
     ))
@@ -205,7 +230,7 @@ fn prepare_typed_property_reference_attachment(
     strict: bool,
     called_class: &str,
 ) -> Result<Value, String> {
-    let original_type = value.type_name();
+    let original_type = property_assignment_type_name(&value).to_string();
     let prepared = prepare_property_assignment(value, definition, eg, strict, called_class)?;
     if let Some(existing) = constraints.iter().find(|constraint| {
         !property_type_matches_exact(
@@ -219,10 +244,10 @@ fn prepare_typed_property_reference_attachment(
         return Err(format!(
             "Reference with value of type {} held by property {}::${} of type {} is not compatible with property {}::${} of type {}",
             original_type,
-            existing.declaring_class,
+            property_diagnostic_class_name(&existing.declaring_class),
             existing.property,
             existing.type_hint.display_name(),
-            definition.declaring_class,
+            property_diagnostic_class_name(&definition.declaring_class),
             definition.name,
             definition.type_hint.display_name()
         ));

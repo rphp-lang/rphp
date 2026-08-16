@@ -40,17 +40,16 @@ The public platform identity is PHP 8.2.0. The reproducible, machine-readable
 contract corpus is pinned to PHP 8.2.33. The older PHP 8.4 audit remains a
 separately labeled trend line and does not establish PHP 8.4 compatibility.
 
-Composer S0, the four bounded Symfony component S1 gates and the
-reference-warmed Symfony FrameworkBundle S2 diagnostic pass. The pinned
-FrameworkBundle S3 CLI-kernel gate currently exposes a pre-existing
-`PhpDumper` service-map failure on the current base and remains an active
-compatibility cluster; its older accepted evidence is retained below as
-historical scope, not as a current green claim.
+Composer S0, the four bounded Symfony component S1 gates, the reference-warmed
+Symfony FrameworkBundle S2 diagnostic and the pinned FrameworkBundle S3
+CLI-kernel gate pass on AMD64. The S3 claim remains limited to the exact pinned
+fixture and cold, cached, deleted-cache, malformed-cache and concurrent
+publication transitions described below.
 
-The current pinned PHP 8.2 differential baseline is based on RPHP `b8d6dd0`
-against php-src 8.2.33 `651db3e`: 1,722 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass in the current typed-instance-reference candidate, with
-eleven exact additions and no lost pass relative to that base. Static
+The current pinned PHP 8.2 differential candidate is based on RPHP `d35d125`
+against php-src 8.2.33 `651db3e`: 1,732 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with seven exact typed-property object-name additions
+and no lost pass relative to the retained 1,725-pass baseline. Static
 properties now participate in owned l-value reference identity across
 inherited, dynamic-owner and dynamic-name forms; nullable/untyped
 uninitialized slots materialize `null`, while non-nullable slots raise the
