@@ -636,6 +636,13 @@ fn prepare_call_argument(
         return Ok(CallArgumentPreparation::Invalid);
     }
 
+    // Calls and typed-property writes share PHP's weak scalar conversion
+    // table. Reuse the canonical conversion before the object-only string
+    // hook below; exact union members have already won in check_type_hint().
+    if let Some(coerced) = coerce_property_value(value, hint, true) {
+        return Ok(CallArgumentPreparation::Coerced(coerced));
+    }
+
     let coerced = match hint {
         ParamTypeHint::String if value.value_type() == ValueType::Object => {
             call_magic_method(eg, value, "__tostring", &[])?.and_then(|rendered| {
@@ -2196,6 +2203,46 @@ fn too_few_arguments_error(
     make_error_value("ArgumentCountError", &message)
 }
 
+fn argument_type_error(
+    eg: &ExecutorGlobals,
+    function: *const FunctionCommon,
+    common: &FunctionCommon,
+    parameter_index: usize,
+    hint: &ParamTypeHint,
+    value: &Value,
+    caller_op_array: &crate::compiler::OpArray,
+    call_instruction: &Instruction,
+) -> Value {
+    let name = displayed_function_name(eg, function);
+    let parameter = common
+        .sig
+        .param_names
+        .get(parameter_index)
+        .map(String::as_str)
+        .unwrap_or("unknown");
+    let mut message = format!(
+        "{name}(): Argument #{} (${parameter}) must be of type {}, {} given",
+        parameter_index + 1,
+        hint.display_name(),
+        value.type_name()
+    );
+    if common.fn_type == FunctionType::User {
+        let instruction_index = caller_op_array
+            .instructions
+            .iter()
+            .position(|instruction| std::ptr::eq(instruction, call_instruction))
+            .unwrap_or(0);
+        let line = caller_op_array.source_line(instruction_index).unwrap_or(0);
+        let file = if caller_op_array.source_file.is_empty() {
+            caller_op_array.name.as_str()
+        } else {
+            caller_op_array.source_file.as_str()
+        };
+        message.push_str(&format!(", called in {file} on line {line}"));
+    }
+    make_error_value("TypeError", &message)
+}
+
 fn too_many_internal_arguments_error(
     eg: &ExecutorGlobals,
     function: *const FunctionCommon,
@@ -2335,22 +2382,6 @@ fn execute_full_call<'a>(
     // registered function descriptor remains valid for the synchronous call.
     let (func_common, num_args) = unsafe { (&*(*call).func, (*call).num_args) };
     let public_max = func_common.sig.public_arity();
-    if num_args < func_common.sig.required_num_args {
-        let error = too_few_arguments_error(
-            eg,
-            func_common as *const FunctionCommon,
-            func_common,
-            num_args,
-            op_array,
-            opline,
-        );
-        unsafe { cleanup_frame_slots(call) };
-        pop_vm_call_frame(eg, call);
-        return Ok(match throw_in_frame(eg, frame, error) {
-            ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-            ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-        });
-    }
     if func_common.fn_type != FunctionType::User
         && !func_common.sig.is_variadic
         && num_args > public_max
@@ -2369,34 +2400,6 @@ fn execute_full_call<'a>(
             ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
             ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
         });
-    }
-
-    // Named arguments can leave holes even when the public count is correct.
-    for i in 0..func_common.sig.required_num_args {
-        let cv_idx = func_common.sig.param_cv_index(i);
-        let val = unsafe { &*(*call).cv(cv_idx) };
-        if val.is_undef() {
-            let function_name = registered_function_name(eg, unsafe { (*call).func });
-            let parameter_name = func_common
-                .sig
-                .param_names
-                .get(i as usize)
-                .map(String::as_str)
-                .unwrap_or("unknown");
-            let error = make_error_value(
-                "ArgumentCountError",
-                &format!(
-                    "{function_name}(): Argument #{} (${parameter_name}) not passed",
-                    i + 1
-                ),
-            );
-            unsafe { cleanup_frame_slots(call) };
-            pop_vm_call_frame(eg, call);
-            return Ok(match throw_in_frame(eg, frame, error) {
-                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-            });
-        }
     }
 
     if func_common.plan.needs_late_static_scope() {
@@ -2466,16 +2469,15 @@ fn execute_full_call<'a>(
                     }
                     CallArgumentPreparation::Invalid => {}
                 }
-                let function_name = registered_function_name(eg, (*call).func);
-                type_error = Some(make_error_value(
-                    "TypeError",
-                    &format!(
-                        "{}(): Argument #{} must be of type {}, {} given",
-                        function_name,
-                        i + 1,
-                        hint.display_name(),
-                        value.type_name()
-                    ),
+                type_error = Some(argument_type_error(
+                    eg,
+                    (*call).func,
+                    func_common,
+                    i,
+                    hint,
+                    &value,
+                    op_array,
+                    opline,
                 ));
                 break;
             }
@@ -2484,6 +2486,64 @@ fn execute_full_call<'a>(
             unsafe { cleanup_frame_slots(call) };
             pop_vm_call_frame(eg, call);
             return Ok(match throw_in_frame(eg, frame, err) {
+                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+            });
+        }
+    }
+
+    // PHP validates every supplied argument before reporting that a later
+    // required argument is absent. This is observable when the first value has
+    // the wrong type and a subsequent positional parameter was not supplied.
+    if num_args < func_common.sig.required_num_args {
+        let error = too_few_arguments_error(
+            eg,
+            func_common as *const FunctionCommon,
+            func_common,
+            num_args,
+            op_array,
+            opline,
+        );
+        // SAFETY: `call` is the live pending frame owned by `frame`; every
+        // initialized send slot must be released before the frame is popped.
+        unsafe { cleanup_frame_slots(call) };
+        pop_vm_call_frame(eg, call);
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+            ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+        });
+    }
+
+    // Named arguments can leave holes even when the public count is correct.
+    // As with positional arity, validate every supplied value before reporting
+    // the missing required parameter.
+    for i in 0..func_common.sig.required_num_args {
+        let cv_idx = func_common.sig.param_cv_index(i);
+        // SAFETY: required parameter CV indices are part of the compiler-sized
+        // live call frame, including Undef holes left by named sends.
+        let val = unsafe { &*(*call).cv(cv_idx) };
+        if val.is_undef() {
+            // SAFETY: the live pending frame retains its registered function
+            // descriptor for the complete synchronous call attempt.
+            let function_name = registered_function_name(eg, unsafe { (*call).func });
+            let parameter_name = func_common
+                .sig
+                .param_names
+                .get(i as usize)
+                .map(String::as_str)
+                .unwrap_or("unknown");
+            let error = make_error_value(
+                "ArgumentCountError",
+                &format!(
+                    "{function_name}(): Argument #{} (${parameter_name}) not passed",
+                    i + 1
+                ),
+            );
+            // SAFETY: `call` is still the live pending frame and all initialized
+            // slots must be released before removing it from the VM stack.
+            unsafe { cleanup_frame_slots(call) };
+            pop_vm_call_frame(eg, call);
+            return Ok(match throw_in_frame(eg, frame, error) {
                 ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                 ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
             });

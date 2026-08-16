@@ -49,6 +49,7 @@ fn test_string_type_hint_fail() {
     assert_eq!(
         run_php(
             r#"<?php
+declare(strict_types=1);
 function greet(string $name) { echo "Hello $name"; }
 try {
     greet(42);
@@ -79,6 +80,7 @@ fn test_bool_type_hint_fail() {
     assert_eq!(
         run_php(
             r#"<?php
+declare(strict_types=1);
 function check(bool $flag) { echo $flag ? "yes" : "no"; }
 try {
     check(1);

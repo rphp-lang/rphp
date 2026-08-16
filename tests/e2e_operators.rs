@@ -1,6 +1,6 @@
 /// E2E tests: logical operators, ternary, compound assignment, comments.
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
@@ -809,6 +809,36 @@ try { 5 |> pipeMutate(...); } catch (Error $error) { echo $error->getMessage(); 
 "#,
         ),
         "pipeMutate(): Argument #1 ($value) could not be passed by reference"
+    );
+}
+
+#[test]
+fn php_85_pipe_validates_a_supplied_type_before_missing_arguments() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function pipeNeedsTwo(int $first, int $second): int { return $first + $second; }
+try { "wrong" |> "pipeNeedsTwo"; } catch (TypeError $error) { echo $error->getMessage(); }
+"#,
+            "/fixture/type-order.php",
+            "/fixture",
+        ),
+        "pipeNeedsTwo(): Argument #1 ($first) must be of type int, string given, called in /fixture/type-order.php on line 3"
+    );
+}
+
+#[test]
+fn weak_numeric_string_coercion_precedes_the_missing_argument_error() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function weakNeedsTwo(int $first, string $second): void {}
+try { weakNeedsTwo("123"); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
+"#,
+            "/fixture/weak-call.php",
+            "/fixture",
+        ),
+        "Too few arguments to function weakNeedsTwo(), 1 passed in /fixture/weak-call.php on line 3 and exactly 2 expected"
     );
 }
 
