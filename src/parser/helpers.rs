@@ -79,7 +79,7 @@ impl Parser {
             Token::Null => Some("null".to_string()),
             Token::True => Some("true".to_string()),
             Token::False => Some("false".to_string()),
-            Token::Match => Some("match".to_string()),
+            Token::Match(_) => Some("match".to_string()),
             Token::Static => Some("static".to_string()),
             Token::Function(_) => Some("function".to_string()),
             Token::Class => Some("class".to_string()),

@@ -34,7 +34,7 @@ pub enum Token {
     Isset,           // isset
     Empty,           // empty
     Unset,           // unset
-    Match,           // match
+    Match(usize),    // match with source line
     Try,             // try
     Catch,           // catch
     Finally,         // finally
@@ -619,7 +619,7 @@ impl<'a> Lexer<'a> {
                         "isset" => tokens.push(Token::Isset),
                         "empty" => tokens.push(Token::Empty),
                         "unset" => tokens.push(Token::Unset),
-                        "match" => tokens.push(Token::Match),
+                        "match" => tokens.push(Token::Match(line)),
                         "try" => tokens.push(Token::Try),
                         "catch" => tokens.push(Token::Catch),
                         "finally" => tokens.push(Token::Finally),

@@ -1114,7 +1114,7 @@ impl Parser {
                 }
                 self.parse_named_static_access("static".to_string())
             }
-            Token::Match => {
+            Token::Match(_) => {
                 return self.parse_match_expr();
             }
             Token::Function(_) => {

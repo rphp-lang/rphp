@@ -979,7 +979,7 @@ impl Parser {
             }
             Token::Isset
             | Token::Empty
-            | Token::Match
+            | Token::Match(_)
             | Token::New(_)
             | Token::Yield
             | Token::Clone(_)

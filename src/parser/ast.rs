@@ -237,6 +237,7 @@ pub enum Expr {
     },
     Match {
         // match($x) { ... }
+        line: usize,
         expr: Box<Expr>,
         arms: Vec<MatchArm>,
     },
@@ -510,7 +511,7 @@ impl Expr {
             | Expr::PreIncTarget(target)
             | Expr::PreDecTarget(target) => target.contains_yield(),
             Expr::Isset(expressions) => expressions.iter().any(Expr::contains_yield),
-            Expr::Match { expr, arms } => {
+            Expr::Match { expr, arms, .. } => {
                 expr.contains_yield()
                     || arms.iter().any(|arm| {
                         arm.conditions

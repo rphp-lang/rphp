@@ -82,6 +82,10 @@ pub const JMP_FLAG_TARGET_OUTSIDE_TRY: u16 = 1;
 /// The finally-control opcode marks the end of a finally body, not its entry.
 pub const JMP_FLAG_FINALLY_END: u16 = 1 << 1;
 
+/// Throw flag: op1 is the unmatched discriminant and runtime must construct
+/// PHP's value-specific UnhandledMatchError at this source location.
+pub const THROW_FLAG_UNHANDLED_MATCH: u16 = 1;
+
 /// Late-static property flag: the called class lives in the compact frame's
 /// embedded scope slot. Wide frames and instance methods use the resolver.
 pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;

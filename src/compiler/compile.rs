@@ -39,7 +39,7 @@ use crate::vm::instruction::{
     OBJ_PROP_REFERENCE_BIND, OpType, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
     STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_REFERENCE_BIND,
-    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, UNSET_DIM_NESTED,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -5720,7 +5720,7 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::Match { expr, arms } => {
+            Expr::Match { line, expr, arms } => {
                 // match($x) { cond => body, ... default => body }
                 // Compile like a chain of === checks
                 let (expr_op, expr_type) = self.compile_expr(expr);
@@ -5805,15 +5805,11 @@ impl Compiler {
                     self.instructions.push(set);
                 } else {
                     // No default: throw UnhandledMatchError at runtime
-                    let err_obj = crate::value::make_error_value(
-                        "UnhandledMatchError",
-                        "Unhandled match case",
-                    );
-                    let err_idx = self.add_literal(err_obj);
                     let mut throw = Instruction::new(OpCode::Throw);
-                    throw.op1 = err_idx;
-                    throw.op1_type = OpType::Const;
-                    self.instructions.push(throw);
+                    throw.op1 = expr_op;
+                    throw.op1_type = expr_type;
+                    throw._pad |= THROW_FLAG_UNHANDLED_MATCH;
+                    self.push_instruction_at_line(throw, *line);
                 }
 
                 let end_label = self.instructions.len() as u16;

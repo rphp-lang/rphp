@@ -948,7 +948,10 @@ impl Parser {
 
     /// Parse match expression
     fn parse_match_expr(&mut self) -> Result<Expr, String> {
-        self.advance(); // consume 'match'
+        let line = match self.advance() {
+            Token::Match(line) => line,
+            _ => unreachable!("parse_match_expr starts at match"),
+        };
         self.expect_lparen()?;
         let expr = self.parse_expr()?;
         self.expect(&Token::RParen)?;
@@ -991,6 +994,7 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         Ok(Expr::Match {
+            line,
             expr: Box::new(expr),
             arms,
         })
@@ -1228,7 +1232,9 @@ impl Parser {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
-            Expr::Match { expr: inner, arms } => {
+            Expr::Match {
+                expr: inner, arms, ..
+            } => {
                 Self::collect_free_vars(inner, bound, out);
                 for arm in arms {
                     if let Some(conds) = &arm.conditions {

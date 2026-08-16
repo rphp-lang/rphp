@@ -580,6 +580,46 @@ enum ColdResult<'a> {
 
 // ── Additional cold opcode helpers ─────────────────────────────────────
 
+#[cold]
+fn format_unhandled_match_float(number: f64) -> String {
+    if number.is_nan() {
+        return "NAN".to_string();
+    }
+    if number == f64::INFINITY {
+        return "INF".to_string();
+    }
+    if number == f64::NEG_INFINITY {
+        return "-INF".to_string();
+    }
+    let exponent = if number == 0.0 {
+        0
+    } else {
+        number.abs().log10().floor() as i32
+    };
+    if !(-4..14).contains(&exponent) {
+        let scientific = format!("{number:.13e}");
+        let (mantissa, exponent) = scientific
+            .split_once('e')
+            .expect("Rust scientific float formatting has an exponent");
+        let mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
+        let mantissa = if mantissa.contains('.') {
+            mantissa.to_string()
+        } else {
+            format!("{mantissa}.0")
+        };
+        let exponent = exponent.parse::<i32>().unwrap_or(0);
+        return format!("{mantissa}E{exponent:+}");
+    }
+    let decimals = usize::try_from(13 - exponent).unwrap_or(0);
+    let fixed = format!("{number:.decimals$}");
+    let fixed = fixed.trim_end_matches('0').trim_end_matches('.');
+    if fixed.contains('.') {
+        fixed.to_string()
+    } else {
+        format!("{fixed}.0")
+    }
+}
+
 #[inline(never)]
 fn op_throw<'a>(
     eg: &mut ExecutorGlobals,
@@ -595,6 +635,29 @@ fn op_throw<'a>(
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
         )
     };
+    if opline._pad & THROW_FLAG_UNHANDLED_MATCH != 0 {
+        let value = val.dereferenced();
+        let detail = match value.value_type() {
+            ValueType::Null | ValueType::Undef => "NULL".to_string(),
+            ValueType::False => "false".to_string(),
+            ValueType::True => "true".to_string(),
+            ValueType::Long => value.as_long().unwrap().to_string(),
+            ValueType::Double => format_unhandled_match_float(value.as_double().unwrap()),
+            ValueType::String => format!("'{}'", value.as_str().unwrap()),
+            _ => format!("of type {}", value.diagnostic_type_name()),
+        };
+        let error = make_error_value(
+            "UnhandledMatchError",
+            &format!("Unhandled match case {detail}"),
+        );
+        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
     // PHP validates the operand through a normal catchable Error at the throw
     // opcode. Scalar types and class names are intentionally absent from the
     // public PHP 8.2 messages.
