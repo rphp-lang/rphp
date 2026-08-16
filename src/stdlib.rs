@@ -1312,7 +1312,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_ref!("usort", fn_usort, 2, 2, 0b1, "array", "callback");
     reg_ref!("uasort", fn_uasort, 2, 2, 0b1, "array", "callback");
     reg_ref!("uksort", fn_uksort, 2, 2, 0b1, "array", "callback");
-    reg!("array_diff", fn_array_diff, 2, 2, "array1", "array2");
+    reg_var!("array_diff", fn_array_diff, 1, "array", "arrays");
     reg_var!("array_diff_key", fn_array_diff_key, 2, "array", "arrays");
     reg_var!(
         "array_intersect_key",
@@ -7085,22 +7085,36 @@ fn caller_argument(ed: *mut ExecuteData, index: u32, eg: &ExecutorGlobals) -> Op
     }
 }
 
-fn caller_num_args(ed: *mut ExecuteData) -> Option<u32> {
+fn caller_function_frame(ed: *mut ExecuteData) -> Option<*mut ExecuteData> {
     // SAFETY: `ed` is the live internal-function frame for this handler; its
     // predecessor, when non-null, remains allocated until the handler returns.
     unsafe {
         let caller = (*ed).prev_execute_data;
-        (!caller.is_null()).then(|| (*caller).num_args)
+        if caller.is_null() || (*caller).op_array().is_main_script() {
+            None
+        } else {
+            Some(caller)
+        }
     }
+}
+
+fn caller_num_args(ed: *mut ExecuteData) -> Option<u32> {
+    caller_function_frame(ed).map(|caller| unsafe { (*caller).num_args })
 }
 
 fn fn_func_num_args(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let count = caller_num_args(ed).map_or(-1, i64::from);
-    ret!(rv, Value::long(count));
+    let Some(count) = caller_num_args(ed) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "func_num_args() must be called from a function context",
+        ));
+        return Ok(());
+    };
+    ret!(rv, Value::long(i64::from(count)));
 }
 
 fn fn_func_get_arg(
@@ -7108,12 +7122,29 @@ fn fn_func_get_arg(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(index) = arg!(ed, 0)
-        .as_long()
-        .and_then(|index| u32::try_from(index).ok())
-    else {
-        ret!(rv, Value::bool(false));
+    let Some(count) = caller_num_args(ed) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "func_get_arg() cannot be called from the global scope",
+        ));
+        return Ok(());
     };
+    let index = arg!(ed, 0).to_long_val();
+    if index < 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "func_get_arg(): Argument #1 ($position) must be greater than or equal to 0",
+        ));
+        return Ok(());
+    }
+    let index = index as u32;
+    if index >= count {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "func_get_arg(): Argument #1 ($position) must be less than the number of the arguments passed to the currently executed function",
+        ));
+        return Ok(());
+    }
     ret!(
         rv,
         caller_argument(ed, index, eg).unwrap_or_else(|| Value::bool(false))
@@ -7125,7 +7156,13 @@ fn fn_func_get_args(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let count = caller_num_args(ed).unwrap_or(0);
+    let Some(count) = caller_num_args(ed) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "func_get_args() cannot be called from the global scope",
+        ));
+        return Ok(());
+    };
     let mut arguments = PhpArray::with_packed_capacity(count as usize);
     for index in 0..count {
         arguments.push(caller_argument(ed, index, eg).unwrap_or_else(Value::null));
@@ -11145,30 +11182,36 @@ fn fn_uksort(
     fn_user_key_preserving_sort(ed, rv, eg, true, "uksort")
 }
 
-/// array_diff($array1, $array2): array
+/// array_diff($array, ...$arrays): array
 fn fn_array_diff(
     ed: *mut ExecuteData,
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let arr1 = arg!(ed, 0);
-    let arr2 = arg!(ed, 1);
-
-    if let (Some(a1), Some(a2)) = (arr1.as_array(), arr2.as_array()) {
-        let mut result = PhpArray::new();
-        let vals2: Vec<String> = a2.values().map(Value::echo_to_string).collect();
-        for (k, v) in a1.iter() {
-            let vs = v.echo_to_string();
-            if !vals2.iter().any(|v2| *v2 == vs) {
-                match k {
-                    ArrayKey::Int(i) => result.set_int(i, v.clone()),
-                    ArrayKey::String(s) => result.set_str(&s, v.clone()),
-                }
+    let Some(source) = arg!(ed, 0).as_array() else {
+        ret!(rv, Value::array(PhpArray::new()));
+    };
+    let Some(arguments) = arg!(ed, 1).as_array() else {
+        ret!(rv, Value::array(source.clone()));
+    };
+    let mut excluded = Vec::new();
+    for argument in arguments.values() {
+        let Some(array) = argument.as_array() else {
+            ret!(rv, Value::array(PhpArray::new()));
+        };
+        excluded.extend(array.values().map(Value::echo_to_string));
+    }
+    let mut result = PhpArray::new();
+    for (key, value) in source.iter() {
+        let rendered = value.echo_to_string();
+        if !excluded.iter().any(|candidate| *candidate == rendered) {
+            match key {
+                ArrayKey::Int(index) => result.set_int(index, value.clone()),
+                ArrayKey::String(name) => result.set_str(&name, value.clone()),
             }
         }
-        ret!(rv, Value::array(result));
     }
-    ret!(rv, Value::array(PhpArray::new()));
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_diff_key(

@@ -453,6 +453,38 @@ where
     let positional_public_num_args = num_args.saturating_sub(this_offset + capture_count);
     let public_num_args = positional_public_num_args
         .saturating_add(named_variadic.as_ref().map_or(0, Vec::len));
+    if public_num_args < signature.required_num_args as usize {
+        let common = unsafe { &*func_ptr };
+        let required = signature.required_num_args;
+        let relation = if common.fn_type == FunctionType::Internal {
+            if signature.is_variadic || signature.public_arity() > required {
+                "at least"
+            } else {
+                "exactly"
+            }
+        } else if signature.public_arity() > required {
+            "at least"
+        } else {
+            "exactly"
+        };
+        let name = displayed_function_name(eg, func_ptr);
+        let message = if common.fn_type == FunctionType::Internal {
+            let noun = if required == 1 {
+                "argument"
+            } else {
+                "arguments"
+            };
+            format!(
+                "{name}() expects {relation} {required} {noun}, {public_num_args} given"
+            )
+        } else {
+            format!(
+                "Too few arguments to function {name}(), {public_num_args} passed and {relation} {required} expected"
+            )
+        };
+        eg.exception = Some(make_error_value("ArgumentCountError", &message));
+        return Ok((Value::null(), None));
+    }
     let capture_destination = signature.parameter_cv_count() as usize;
     let storage_num_args = if capture_count == 0 {
         num_args

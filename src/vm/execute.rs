@@ -2111,6 +2111,72 @@ fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommo
         .unwrap_or("internal function")
 }
 
+fn displayed_function_name(eg: &ExecutorGlobals, function: *const FunctionCommon) -> String {
+    let registered_name = registered_function_name(eg, function);
+    if registered_name
+        .rsplit_once("::")
+        .map_or(registered_name, |(_, method)| method)
+        .starts_with("__closure_")
+    {
+        eg.declaring_class_of(function)
+            .map(|class| format!("{class}::{{closure}}"))
+            .unwrap_or_else(|| "{closure}".to_string())
+    } else if let Some((_, method)) = registered_name.rsplit_once("::") {
+        eg.declaring_class_of(function)
+            .map(|class| format!("{class}::{method}"))
+            .unwrap_or_else(|| registered_name.to_string())
+    } else {
+        registered_name.to_string()
+    }
+}
+
+fn too_few_arguments_error(
+    eg: &ExecutorGlobals,
+    function: *const FunctionCommon,
+    common: &FunctionCommon,
+    supplied: u32,
+    caller_op_array: &crate::compiler::OpArray,
+    call_instruction: &Instruction,
+) -> Value {
+    let name = displayed_function_name(eg, function);
+    let required = common.sig.required_num_args;
+    let relation = if common.fn_type == FunctionType::Internal {
+        if common.sig.is_variadic || common.sig.public_arity() > required {
+            "at least"
+        } else {
+            "exactly"
+        }
+    } else if common.sig.public_arity() > required {
+        "at least"
+    } else {
+        "exactly"
+    };
+    let message = if common.fn_type == FunctionType::Internal {
+        let noun = if required == 1 {
+            "argument"
+        } else {
+            "arguments"
+        };
+        format!("{name}() expects {relation} {required} {noun}, {supplied} given")
+    } else {
+        let instruction_index = caller_op_array
+            .instructions
+            .iter()
+            .position(|instruction| std::ptr::eq(instruction, call_instruction))
+            .unwrap_or(0);
+        let line = caller_op_array.source_line(instruction_index).unwrap_or(0);
+        let file = if caller_op_array.source_file.is_empty() {
+            caller_op_array.name.as_str()
+        } else {
+            caller_op_array.source_file.as_str()
+        };
+        format!(
+            "Too few arguments to function {name}(), {supplied} passed in {file} on line {line} and {relation} {required} expected"
+        )
+    };
+    make_error_value("ArgumentCountError", &message)
+}
+
 #[cold]
 #[inline(never)]
 fn execute_full_call<'a>(
@@ -2176,11 +2242,20 @@ fn execute_full_call<'a>(
     let num_args = unsafe { (*call).num_args };
     let public_max = func_common.sig.public_arity();
     if num_args < func_common.sig.required_num_args {
-        let function_name = registered_function_name(eg, unsafe { (*call).func });
-        return Err(VmError::Fatal(format!(
-            "Too few arguments to {}, {} passed and exactly {} expected",
-            function_name, num_args, func_common.sig.required_num_args
-        )));
+        let error = too_few_arguments_error(
+            eg,
+            func_common as *const FunctionCommon,
+            func_common,
+            num_args,
+            op_array,
+            opline,
+        );
+        unsafe { cleanup_frame_slots(call) };
+        pop_vm_call_frame(eg, call);
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+            ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+        });
     }
     if func_common.fn_type != FunctionType::User
         && !func_common.sig.is_variadic
@@ -2199,13 +2274,25 @@ fn execute_full_call<'a>(
         let val = unsafe { &*(*call).cv(cv_idx) };
         if val.is_undef() {
             let function_name = registered_function_name(eg, unsafe { (*call).func });
-            return Err(VmError::Fatal(format!(
-                "Too few arguments to {}, argument #{} is missing ({} passed and exactly {} expected)",
-                function_name,
-                i + 1,
-                num_args,
-                func_common.sig.required_num_args
-            )));
+            let parameter_name = func_common
+                .sig
+                .param_names
+                .get(i as usize)
+                .map(String::as_str)
+                .unwrap_or("unknown");
+            let error = make_error_value(
+                "ArgumentCountError",
+                &format!(
+                    "{function_name}(): Argument #{} (${parameter_name}) not passed",
+                    i + 1
+                ),
+            );
+            unsafe { cleanup_frame_slots(call) };
+            pop_vm_call_frame(eg, call);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+            });
         }
     }
 

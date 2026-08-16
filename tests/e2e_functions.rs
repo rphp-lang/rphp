@@ -1,6 +1,9 @@
 /// E2E tests: user-defined functions, internal functions, argument validation.
 mod common;
-use common::{make_eg_with_capture, run_php, run_php_expect_error, run_php_with_functions};
+use common::{
+    make_eg_with_capture, run_php, run_php_expect_error, run_php_with_functions,
+    run_php_with_source_context,
+};
 
 #[test]
 fn reserved_this_parameter_is_rejected_without_aliasing_receiver_storage() {
@@ -483,17 +486,51 @@ fn test_e2e_too_many_args() {
 
 #[test]
 fn test_e2e_too_few_args() {
-    let err = run_php_expect_error("<?php function add($a, $b) { return $a + $b; } echo add(1);");
-    match err {
-        execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Too few arguments"),
-                "Expected 'Too few arguments', got: {}",
-                msg
-            );
-        }
-        _ => panic!("Expected Fatal error, got: {:?}", err),
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function exact($a, $b) {}
+function optional($a, $b = null) {}
+class Receiver { public function method($value) {} }
+foreach ([
+    fn() => exact(1),
+    fn() => optional(),
+    fn() => (new Receiver)->method(),
+    fn() => strlen(),
+] as $call) {
+    try { $call(); } catch (Throwable $error) {
+        echo get_class($error), ':', $error->getMessage(), "\n";
     }
+}
+try { exact(b: 2); } catch (ArgumentCountError $error) {
+    echo $error->getMessage();
+}
+"#,
+            "/virtual/argument-count.php",
+            "/virtual",
+        ),
+        "ArgumentCountError:Too few arguments to function exact(), 1 passed in /virtual/argument-count.php on line 6 and exactly 2 expected\n\
+ArgumentCountError:Too few arguments to function optional(), 0 passed in /virtual/argument-count.php on line 7 and at least 1 expected\n\
+ArgumentCountError:Too few arguments to function Receiver::method(), 0 passed in /virtual/argument-count.php on line 8 and exactly 1 expected\n\
+ArgumentCountError:strlen() expects exactly 1 argument, 0 given\n\
+exact(): Argument #1 ($a) not passed"
+    );
+}
+
+#[test]
+fn detached_callbacks_validate_required_arguments_before_entering_the_body() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+try {
+    array_map(function ($first, $second) { echo 'body'; }, [1]);
+} catch (ArgumentCountError $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+        ),
+        "ArgumentCountError:Too few arguments to function {closure}(), 1 passed and exactly 2 expected"
+    );
 }
 
 #[test]
