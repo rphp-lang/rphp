@@ -158,6 +158,11 @@ impl Parser {
             return Ok(Stmt::Goto { name, line });
         }
         match self.peek() {
+            Token::CompileError(message, line) => {
+                self.advance();
+                self.compile_error(message, line);
+                Ok(Stmt::Noop)
+            }
             Token::Semicolon => {
                 self.advance();
                 Ok(Stmt::Noop)
@@ -845,7 +850,7 @@ impl Parser {
                     body,
                 })
             }
-            Token::Function(_) => {
+            Token::Function(line) => {
                 self.advance(); // consume 'function'
                 // Accept the PHP reference-return declaration marker. Return
                 // aliasing itself remains outside the current execution
@@ -857,6 +862,12 @@ impl Parser {
                     Token::From => "from".to_string(),
                     other => return Err(format!("Expected function name, got {:?}", other)),
                 };
+                if name.eq_ignore_ascii_case("assert") {
+                    self.compile_error(
+                        "Defining a custom assert() function is not allowed, as the function has special semantics",
+                        line,
+                    );
+                }
                 // A named function never inherits the surrounding method's
                 // class scope. Closures deliberately do.
                 let previous_class_scope = self.class_scope_active;

@@ -1132,7 +1132,16 @@ impl Parser {
                     self.advance();
                     let args = if matches!(self.peek(), Token::LParen(_)) {
                         self.expect_lparen()?;
-                        self.parse_call_args()?
+                        if matches!(self.peek(), Token::DotDotDot(_))
+                            && self.peek_at(1) == Token::RParen
+                        {
+                            self.advance();
+                            self.advance();
+                            self.compile_error("Cannot create Closure for new expression", line);
+                            Vec::new()
+                        } else {
+                            self.parse_call_args()?
+                        }
                     } else {
                         Vec::new()
                     };

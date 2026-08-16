@@ -151,6 +151,7 @@ pub enum Token {
     ShiftLeft,        // <<
     ShiftRight,       // >>
     DotDotDot(usize), // ... (variadic / spread) with source line
+    CompileError(String, usize),
     Eof,
 }
 
@@ -165,6 +166,7 @@ enum StringPart {
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
+    deferred_compile_errors: Vec<(String, usize)>,
 }
 
 /// PHP source is byte-oriented and may legally contain non-UTF-8 bytes in
@@ -215,6 +217,7 @@ impl<'a> Lexer<'a> {
         Self {
             src: source.as_bytes(),
             pos: 0,
+            deferred_compile_errors: Vec::new(),
         }
     }
 
@@ -235,6 +238,11 @@ impl<'a> Lexer<'a> {
             self.skip_whitespace()?;
 
             if self.pos >= self.src.len() {
+                tokens.extend(
+                    self.deferred_compile_errors
+                        .drain(..)
+                        .map(|(message, line)| Token::CompileError(message, line)),
+                );
                 tokens.push(Token::Eof);
                 break;
             }
@@ -731,6 +739,10 @@ impl<'a> Lexer<'a> {
 
     fn skip_attribute_group(&mut self) -> Result<(), String> {
         let start = self.pos;
+        let line = 1 + self.src[..start]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count();
         self.pos += 2;
         let mut bracket_depth = 1usize;
         let mut quote = None;
@@ -762,6 +774,13 @@ impl<'a> Lexer<'a> {
                     bracket_depth -= 1;
                     self.pos += 1;
                     if bracket_depth == 0 {
+                        let attribute = &self.src[start..self.pos];
+                        if attribute.windows(3).any(|window| window == b"...") {
+                            self.deferred_compile_errors.push((
+                                "Cannot create Closure as attribute argument".to_string(),
+                                line,
+                            ));
+                        }
                         return Ok(());
                     }
                 }
@@ -1396,5 +1415,17 @@ mod tests {
         assert!(tokens.contains(&Token::ArrayKw));
         assert!(tokens.contains(&Token::True));
         assert!(tokens.contains(&Token::Identifier("ArRaY".into(), 1)));
+    }
+
+    #[test]
+    fn first_class_callable_in_attribute_survives_as_compile_error() {
+        let tokens = Lexer::new("<?php\n#[Example(...)]\nclass Subject {}")
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.contains(&Token::CompileError(
+            "Cannot create Closure as attribute argument".into(),
+            2,
+        )));
     }
 }

@@ -905,3 +905,32 @@ fn test_parse_while() {
         }]
     );
 }
+
+#[test]
+fn forbidden_assert_and_first_class_new_forms_are_deferred_compile_errors() {
+    for (source, expected, line) in [
+        (
+            "<?php\nnamespace Example; function assert() {}",
+            "Defining a custom assert() function is not allowed, as the function has special semantics",
+            2,
+        ),
+        (
+            "<?php\nif (false) { new class(...) {}; }",
+            "Cannot create Closure for new expression",
+            2,
+        ),
+        (
+            "<?php\n#[Example(...)] class Subject {}",
+            "Cannot create Closure as attribute argument",
+            2,
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, line: actual }))
+                if message == expected && *actual == line
+        ));
+    }
+}
