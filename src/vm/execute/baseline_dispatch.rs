@@ -15,7 +15,7 @@ fn return_type_error_value(
         "TypeError",
         &format!(
             "{function_name}(): Return value must be of type {}, {outcome}",
-            hint.display_name()
+            hint.diagnostic_display_name()
         ),
     );
     let instruction_index = op_array
@@ -5569,7 +5569,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array.strict_types,
                         ) == Some(true);
                         if !type_ok {
-                            let outcome = format!("{} returned", retval.type_name());
+                            let outcome = format!("{} returned", retval.diagnostic_type_name());
                             let err = return_type_error_value(
                                 eg,
                                 func_common_ret as *const FunctionCommon,
@@ -5778,7 +5778,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     frame,
                                     ret_callee_class,
                                 ) {
-                                    let outcome = format!("{} returned", retval.type_name());
+                                    let outcome =
+                                        format!("{} returned", retval.diagnostic_type_name());
                                     let err = return_type_error_value(
                                         eg,
                                         func_common as *const FunctionCommon,

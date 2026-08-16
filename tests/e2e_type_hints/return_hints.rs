@@ -397,6 +397,28 @@ var_dump(explicitMixed(), explicitNullable(), implicitUntyped());
 }
 
 #[test]
+fn type_errors_use_canonical_declared_and_concrete_runtime_names() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Expected {}
+function acceptExpected(?Expected $value): void {}
+function acceptIterable(?iterable $value): void {}
+function returnExpected(): ?Expected { return new stdClass(); }
+
+try { acceptExpected(new stdClass()); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { acceptIterable(1); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { returnExpected(); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#
+        ),
+        "acceptExpected(): Argument #1 ($value) must be of type ?Expected, stdClass given, called in <main> on line 7\nacceptIterable(): Argument #1 ($value) must be of type Traversable|array|null, int given, called in <main> on line 9\nreturnExpected(): Return value must be of type ?Expected, stdClass returned\n"
+    );
+}
+
+#[test]
 fn bare_returns_obey_declared_return_contracts_at_compile_time() {
     for (source, expected) in [
         (

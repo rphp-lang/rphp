@@ -2224,8 +2224,8 @@ fn argument_type_error(
     let mut message = format!(
         "{name}(): Argument #{} (${parameter}) must be of type {}, {} given",
         parameter_index + 1,
-        hint.display_name(),
-        value.type_name()
+        hint.diagnostic_display_name(),
+        value.diagnostic_type_name()
     );
     if common.fn_type == FunctionType::User {
         let instruction_index = caller_op_array

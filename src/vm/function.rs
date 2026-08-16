@@ -1044,6 +1044,34 @@ impl ParamTypeHint {
                 .join("&"),
         }
     }
+
+    /// Canonical spelling used by PHP's runtime type errors. This differs
+    /// from source/declaration rendering for iterable and null unions.
+    pub fn diagnostic_display_name(&self) -> std::string::String {
+        match self {
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable") => {
+                "Traversable|array".to_string()
+            }
+            ParamTypeHint::Nullable(inner) => match inner.as_ref() {
+                ParamTypeHint::None => "null".to_string(),
+                ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable") => {
+                    "Traversable|array|null".to_string()
+                }
+                inner => format!("?{}", inner.diagnostic_display_name()),
+            },
+            ParamTypeHint::Union(parts) => parts
+                .iter()
+                .map(ParamTypeHint::diagnostic_display_name)
+                .collect::<Vec<_>>()
+                .join("|"),
+            ParamTypeHint::Intersection(parts) => parts
+                .iter()
+                .map(ParamTypeHint::diagnostic_display_name)
+                .collect::<Vec<_>>()
+                .join("&"),
+            _ => self.display_name(),
+        }
+    }
 }
 
 /// DoFcall dispatch: controls how much validation happens at call boundary.

@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::cell::{Cell, OnceCell, RefCell, UnsafeCell};
 use std::collections::{HashMap, hash_map::Entry};
 use std::fmt::Write as _;
@@ -4651,6 +4651,15 @@ impl Value {
             ValueType::Reference => "reference",
             ValueType::Closure => "Closure",
         }
+    }
+
+    /// PHP's value name in diagnostics. Objects expose their concrete runtime
+    /// class while all scalar names retain the allocation-free static form.
+    pub fn diagnostic_type_name(&self) -> Cow<'_, str> {
+        self.as_object().map_or_else(
+            || Cow::Borrowed(self.type_name()),
+            |object| Cow::Owned(object.class_name.to_string()),
+        )
     }
 
     #[inline]
