@@ -7,10 +7,28 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `91f599c`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,588 passes, 2,442 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `465e80b`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,589 passes, 2,441 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
-adds three exact passes without losing a previous pass:
+adds the exact pass `Zend/tests/nullsafe_operator/016.phpt` without losing a
+previous pass or moving another failure category. A nullsafe chain used as a
+call argument is evaluated once as an ordinary value but is marked
+non-referenceable across known and runtime-resolved signatures. Selecting a
+by-reference positional, named or variadic parameter therefore raises PHP
+8.2's catchable argument `Error`, whether the receiver is null or an object;
+by-value parameters retain the evaluated result. Original E2E coverage checks
+known and dynamic callables, positional and named arguments, both receiver
+branches, evaluation order and the by-value control. Five Cargo feature
+configurations, all-target and unsafe checks, Composer S0, Symfony S1 and
+warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not rerun because
+this machine has no exact PHP 8.2 oracle. Nine release runs of
+`bench_calls.php` measured medians of 0.341740 seconds for the preceding binary
+and 0.341299 seconds for the candidate, with the same computed result.
+
+The preceding AMD64 dynamic-variable re-entry checkpoint, based on `91f599c`,
+runs the same 4,345-case PHP 8.2.33 corpus and records 1,588 passes, 2,442
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. It adds three exact passes without losing a previous pass:
 `Zend/tests/bug68118.phpt`, `Zend/tests/oss_fuzz_54325.phpt` and
 `Zend/tests/type_declarations/closure_with_variadic.phpt`. Read-modify-write
 operations on a variable-variable now evaluate and convert the dynamic name

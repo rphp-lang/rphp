@@ -429,6 +429,51 @@ fn nullsafe_reference_unset_and_foreach_targets_fail_during_compilation() {
 }
 
 #[test]
+fn nullsafe_call_arguments_are_values_but_never_referenceable() {
+    let output = run_php(
+        r#"<?php
+function mutate(&$slot) { $slot = 'changed'; }
+function observe($value) { var_dump($value); }
+function receiver($kind) {
+    echo "receiver:$kind\n";
+    return $kind === 'object' ? (object) ['slot' => 'original'] : null;
+}
+
+foreach (['null', 'object'] as $kind) {
+    try {
+        mutate(receiver($kind)?->slot);
+    } catch (Error $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+
+$callback = 'mutate';
+try {
+    $callback(slot: receiver('named')?->slot);
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+
+observe(receiver('value')?->slot);
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "receiver:null\n",
+            "mutate(): Argument #1 ($slot) cannot be passed by reference\n",
+            "receiver:object\n",
+            "mutate(): Argument #1 ($slot) cannot be passed by reference\n",
+            "receiver:named\n",
+            "mutate(): Argument #1 ($slot) cannot be passed by reference\n",
+            "receiver:value\n",
+            "NULL\n",
+        )
+    );
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_skips_or_evaluates_its_name_once() {
     let out = run_php(
         r#"<?php

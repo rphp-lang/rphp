@@ -2033,7 +2033,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // op1 = value to send, op2 = argument number (0-based)
                 let call = unsafe {
                     let call = (*frame).call;
-                    if opline._pad & SEND_FLAG_GLOBALS != 0 {
+                    if opline._pad & (SEND_FLAG_GLOBALS | SEND_FLAG_NONREFERENCEABLE) != 0 {
                         let common = &*(*call).func;
                         let parameter_index = opline.extended_value as usize;
                         if common.sig.is_param_by_ref(parameter_index as u32) {
