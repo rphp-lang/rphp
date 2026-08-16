@@ -116,6 +116,14 @@ and validates invalid descriptions. Compile-time assertion source text,
 `assert_options()` and CLI-controlled assertion elimination remain explicit
 follow-up work.
 
+The `e4f08d9` strict-internal-string checkpoint adds two exact passes with no
+lost pass: 1,859 pass, 3,349 fail, 110 skip, one XFAIL, 280 unsupported, zero
+timeouts and zero crashes. `strlen()` and `ord()` now reject non-string values
+at internal-call boundaries in `strict_types=1`, including dynamic callbacks
+and pipe chains, while weak calls retain their frame-free lowering and scalar
+coercions. Invalid array callbacks also report the canonical first-member
+diagnostic before iteration.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
