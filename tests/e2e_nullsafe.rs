@@ -156,6 +156,49 @@ echo var_export($result, true);
 }
 
 #[test]
+fn nullsafe_receivers_classify_the_value_inside_references() {
+    let out = run_php(
+        r#"<?php
+class Boxed {
+    public $value = 'object';
+    public function value() { return $this->value; }
+}
+function &identity(&$value) { return $value; }
+$null = null;
+$nullRef = &identity($null);
+var_dump($nullRef?->missing);
+var_dump($nullRef?->missing());
+$object = new Boxed();
+$objectRef = &identity($object);
+var_dump($objectRef?->value);
+var_dump($objectRef?->value());
+$scalar = 42;
+$scalarRef = &identity($scalar);
+set_error_handler(function($level, $message) { echo "handled:$message\n"; });
+var_dump($scalarRef?->missing);
+try {
+    $scalarRef?->missing();
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+    );
+
+    assert_eq!(
+        out,
+        concat!(
+            "NULL\n",
+            "NULL\n",
+            "string(6) \"object\"\n",
+            "string(6) \"object\"\n",
+            "handled:Attempt to read property \"missing\" on int\n",
+            "NULL\n",
+            "Call to a member function missing() on int\n",
+        )
+    );
+}
+
+#[test]
 fn nullsafe_in_echo() {
     let out = run_php(
         r#"<?php
