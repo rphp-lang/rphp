@@ -1,11 +1,42 @@
 # Compatibility status
 
 RPHP implements a growing, tested subset of PHP. Its public dependency-platform
-identity is PHP 8.2.0; some newer language behavior remains available as an
+identity is PHP 8.5.0; some experimental language behavior remains available as an
 experimental RPHP extension, but it is outside that compatibility contract.
 RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
+
+The current AMD64 PHP 8.5 contract baseline is pinned to php-src 8.5.6 commit
+`fcc29c8` and RPHP `298e4c7`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,815 pass, 3,390 fail, 110 skip, one is an upstream XFAIL,
+280 are unsupported, one times out and two crash. The headline pass rate is
+34.870%; 82.277% of attempted cases reach runtime. The exact hazards are
+`Zend/tests/gh13178_4.phpt` (timeout), `gh18572.phpt` (crash) and
+`recursive_array_comparison.phpt` (crash).
+
+The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
+failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
+and zero crashes. The source archive checksum, build configuration, exact
+summary, manifest and coverage map are published under
+`tests/php-src/results/php-8.5.6/`. The older PHP 8.2.33 and 8.4.21 results remain
+historical evidence and do not define the current public contract.
+
+Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass against the
+PHP 8.5 identity. A local cold-kernel S3 revalidation against an exact PHP
+8.5.6 CLI did not complete: RPHP remained in the initial cold `s3-gate.php`
+execution for more than ten minutes. Consequently the retained PHP 8.2 S3
+result is historical evidence only, and no PHP 8.5 S3 claim is made here.
+
+To reproduce the AMD64 RPHP run from the exact external checkout:
+
+```sh
+cargo build --locked --release
+RPHP_PHPT_REFERENCE_PHP=/path/to/php-8.5.6 \
+RPHP_PHPT_FEATURES=default \
+RPHP_PHPT_TIMEOUT=3 scripts/run-php-src-phpt.sh \
+  /path/to/php-src target/release/rphp /tmp/rphp-phpt-results 4
+```
 
 The current AMD64 request-local INI checkpoint, based on `5101a5a`, runs the
 default-feature 4,345-case PHP 8.2.33 corpus and records 1,779 passes, 2,251

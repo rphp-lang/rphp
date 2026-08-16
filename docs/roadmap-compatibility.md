@@ -41,7 +41,7 @@ pinned to php-src 8.5.6 commit `fcc29c8`. The retained PHP 8.2.33 and 8.4.21
 results are historical regression and trend evidence; neither defines current
 PHP behavior.
 
-The initial AMD64 PHP 8.5 baseline uses RPHP `a2d04d2` and discovers 5,599
+The initial AMD64 PHP 8.5 baseline uses RPHP `298e4c7` and discovers 5,599
 unmodified `Zend/tests` and `tests/lang` cases: 1,815 pass, 3,390 fail, 110
 skip, one upstream XFAIL, 280 are unsupported, one times out and two crash.
 The matching PHP 8.5.6 oracle has 5,440 passes, zero ordinary failures, 153
@@ -51,10 +51,12 @@ starts with explicit crash/hang work in `gh18572.phpt`,
 highest-fanout front-end and runtime clusters.
 
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
-S2 pass on AMD64. The cold FrameworkBundle S3 gate remains limited to its exact
-pinned fixture and is revalidated with a PHP 8.5 oracle before its historical
-claim is promoted to the new contract. None of these bounded gates establishes
-general PHP, extension, SAPI or production compatibility.
+S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
+not complete because RPHP remained in the initial cold gate execution for more
+than ten minutes. The retained PHP 8.2 S3 result is therefore historical only;
+the hang is compatibility work, not a PHP 8.5 contract claim. None of these
+bounded gates establishes general PHP, extension, SAPI or production
+compatibility.
 
 ## Measurement system
 
