@@ -46,10 +46,14 @@ CLI-kernel gate pass on AMD64. The S3 claim remains limited to the exact pinned
 fixture and cold, cached, deleted-cache, malformed-cache and concurrent
 publication transitions described below.
 
-The current pinned PHP 8.2 differential candidate is based on RPHP `d59fa83`
-against php-src 8.2.33 `651db3e`: 1,733 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with one exact typed-reference assignment-result
-addition and no lost pass relative to the retained 1,732-pass baseline. An
+The current pinned PHP 8.2 differential candidate is based on RPHP `6402dd1`
+against php-src 8.2.33 `651db3e`: 1,739 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass, with six exact arithmetic-error and shift additions
+and no lost pass relative to the retained 1,733-pass baseline. Division and
+modulo by zero now throw catchable `DivisionByZeroError`, negative shifts throw
+`ArithmeticError`, and shifts at or beyond the AMD64 integer width produce
+PHP's zero or sign-filled result. Numeric-prefix strings warn before shifting,
+while unsupported operands throw `TypeError`. An
 array-element assignment through a reference held by a typed property now
 returns the weakly coerced value that was actually stored, while leaving the
 original RHS variable unchanged. Static

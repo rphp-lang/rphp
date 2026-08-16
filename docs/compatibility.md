@@ -7,6 +7,30 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 arithmetic-operator-error checkpoint, based on `6402dd1`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,739 passes,
+2,291 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. Its exact pass-set delta is +6/-0:
+`Zend/tests/bug76667.phpt`, `compound_assign_with_numeric_strings.phpt`,
+`div_by_zero_compound_refcounted.phpt`,
+`div_by_zero_compound_with_conversion.phpt`, `shift_001.phpt` and
+`shift_002.phpt`.
+
+`DivisionByZeroError` and `ArithmeticError` now have their PHP parent classes
+and inherited Throwable methods. Division and modulo zero paths create located,
+catchable exceptions before compound writeback, preserving the target value.
+Bit shifts reject negative distances with `ArithmeticError`, return zero or a
+sign-filled result at and beyond the 64-bit width, warn for numeric-prefix
+strings, and reject unsupported operand types with `TypeError`. Native double
+and modulo regions still side-exit to this canonical behavior.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,619 blocks and 289 functions. Composer S0, all four Symfony S1 gates,
+warmed-kernel S2 and cold-kernel S3 pass on AMD64. Nine alternating
+five-million-iteration shift controls measured a 0.05-second median for both
+the preceding and candidate binaries with identical output.
+
 The current AMD64 typed-reference assignment-result checkpoint, based on
 `d59fa83`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
 1,733 passes, 2,297 failures, 77 skips, one upstream XFAIL, 237 unsupported
