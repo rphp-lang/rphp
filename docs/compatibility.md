@@ -7,13 +7,36 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `b692f58`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,585 passes, 2,445 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `91f599c`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,588 passes, 2,442 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
-adds the exact pass `Zend/tests/generators/send_returns_current.phpt` without
-losing a previous pass or moving another failure category. The existing string
-reversal implementation is now exposed under PHP's `strrev()` name instead of
-the non-PHP `str_rev` spelling; its signature supports the ordinary positional,
+adds three exact passes without losing a previous pass:
+`Zend/tests/bug68118.phpt`, `Zend/tests/oss_fuzz_54325.phpt` and
+`Zend/tests/type_declarations/closure_with_variadic.phpt`. Read-modify-write
+operations on a variable-variable now evaluate and convert the dynamic name
+once, retain that selected symbol before an undefined-variable handler can
+re-enter the caller, and write back to the original target even if the handler
+mutates the source CV. Object names invoke `__toString()` once. Closures now
+consume and release request-local Zend object-store handles alongside ordinary
+objects, so later object diagnostics observe PHP-compatible numbering.
+Original E2E coverage exercises post/pre increment, compound
+assignment, handler re-entry and one-time object-name conversion. Five Cargo
+feature configurations, all-target and unsafe checks, Composer S0, Symfony S1
+and warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not rerun
+because this machine has no exact PHP 8.2 oracle. Nine release runs measured
+`bench_calls.php` medians of 0.3460 seconds for the preceding binary and 0.3432
+seconds for the candidate. The directly affected closure-copy medians were
+0.0004175 and 0.0004218 seconds; closure-storage medians were 0.007821 and
+0.008496 seconds. Every benchmark retained the same computed result.
+
+The preceding AMD64 string-reversal checkpoint, based on `b692f58`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,585 passes, 2,445 failures, 77
+skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds the exact pass
+`Zend/tests/generators/send_returns_current.phpt` without losing a previous
+pass or moving another failure category. The existing string reversal
+implementation is now exposed under PHP's `strrev()` name instead of the
+non-PHP `str_rev` spelling; its signature supports the ordinary positional,
 named and weak scalar-string paths. Two other tests now execute past the
 missing-symbol boundary and expose separate pre-existing nullsafe by-reference
 argument and re-entrant variable-variable writeback failures; they remain

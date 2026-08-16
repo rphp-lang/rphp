@@ -264,6 +264,7 @@ class IndirectThisFixture {
         }
     }
 }
+
 (new IndirectThisFixture)->probe();
 "#,
     );
@@ -271,5 +272,58 @@ class IndirectThisFixture {
     assert_eq!(
         output,
         "bool(true)\nCannot re-assign $this\nCannot re-assign $this\n"
+    );
+}
+
+#[test]
+fn dynamic_variable_mutations_retain_one_converted_name_across_reentry() {
+    let output = run_php(
+        r#"<?php
+set_error_handler(function($errno, $message) {
+    global $name;
+    echo $message, "\n";
+    $name = 'other';
+});
+
+$name = 'post';
+$$name++;
+var_dump($name, $post, $other ?? null);
+
+$name = 'pre';
+++$$name;
+var_dump($name, $pre, $other ?? null);
+
+$name = 'compound';
+$$name += 2;
+var_dump($name, $compound, $other ?? null);
+
+class RuntimeMutationName {
+    public function __toString() { echo "convert\n"; return 'target'; }
+}
+$key = new RuntimeMutationName;
+$target = 1;
+${$key}++;
+var_dump($target);
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "Undefined variable $post\n",
+            "string(5) \"other\"\n",
+            "int(1)\n",
+            "NULL\n",
+            "Undefined variable $pre\n",
+            "string(5) \"other\"\n",
+            "int(1)\n",
+            "NULL\n",
+            "Undefined variable $compound\n",
+            "string(5) \"other\"\n",
+            "int(2)\n",
+            "NULL\n",
+            "convert\n",
+            "int(2)\n",
+        )
     );
 }

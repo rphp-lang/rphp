@@ -167,6 +167,13 @@ pub const FETCH_DYNAMIC_SILENT: u16 = 1 << 1;
 /// is active. Custom error handlers still run and observe the masked level.
 pub const FETCH_DYNAMIC_ERROR_SUPPRESS: u16 = 1 << 2;
 
+/// `FetchDynamicVar` is the read half of one read-modify-write operation. The
+/// compiler supplies an owned TMP key, and the fetch replaces it with the
+/// converted symbol name before any warning handler can re-enter the caller.
+/// The matching writeback therefore targets the symbol selected by the
+/// original evaluation without converting or reading a mutable source twice.
+pub const FETCH_DYNAMIC_RETAIN_NAME: u16 = 1 << 3;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that
