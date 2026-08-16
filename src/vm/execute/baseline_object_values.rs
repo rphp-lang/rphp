@@ -11,8 +11,12 @@ fn op_nullsafe_check<'a>(
     // `op_array`; result publication records ownership for TMP/VAR slots.
     unsafe {
         let val = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
-        let is_null = val.value_type() == ValueType::Null;
-        let is_non_object = !is_null && val.as_object().is_none();
+        // PHP references are transparent to the nullsafe receiver check. Keep
+        // the original operand alive for the following opcode, but classify
+        // the value stored in its cell rather than the reference wrapper.
+        let receiver = val.dereferenced();
+        let is_null = receiver.value_type() == ValueType::Null;
+        let is_non_object = !is_null && receiver.as_object().is_none();
 
         if is_null {
             // null ?-> anything  =>  null (short-circuit)
@@ -32,7 +36,7 @@ fn op_nullsafe_check<'a>(
                 "Error",
                 &format!(
                     "Call to a member function {method}() on {}",
-                    val.dereferenced().type_name()
+                    receiver.type_name()
                 ),
             );
             let instruction_index = (opline as *const Instruction)

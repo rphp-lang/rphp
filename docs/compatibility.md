@@ -7,8 +7,28 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `6d9d0c6`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,601 passes, 2,429 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `65ba50a`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,602 passes, 2,428 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds the exact pass `Zend/tests/nullsafe_operator/040.phpt` without losing a
+previous pass or moving another failure category. Nullsafe receiver checks now
+classify the value stored inside a PHP reference instead of the reference
+wrapper. A referenced null therefore short-circuits silently, while referenced
+objects use ordinary property and method access and referenced scalars retain
+their normal warning or catchable method error. The receiver cell remains live
+for the following opcode, preserving alias identity and by-reference return
+writeback. Original E2E coverage checks null, object and scalar references,
+both property and method paths, exact handled diagnostics and alias-return
+behavior. Five Cargo feature configurations, all-target and unsafe checks,
+Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64. The S3 cold-kernel
+gate was not rerun because this machine has no exact PHP 8.2 oracle. Nine
+release runs of `bench_calls.php` measured medians of 0.345714 seconds for the
+preceding binary and 0.350360 seconds for the candidate, with the same computed
+result.
+
+The preceding AMD64 magic-constant-postfix checkpoint, based on `6d9d0c6`,
+runs the same 4,345-case PHP 8.2.33 corpus and records 1,601 passes, 2,429
+failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds four exact passes without losing a previous pass or moving another failure
 category: `Zend/tests/gh9136_2.phpt`,
