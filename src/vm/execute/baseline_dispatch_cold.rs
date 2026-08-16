@@ -1757,7 +1757,7 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         class_id,
         raw_class,
         prop,
-        opline._pad & FETCH_OBJ_SILENT != 0,
+        opline._pad & STATIC_PROP_SILENT != 0,
     )
 }
 
@@ -2484,6 +2484,18 @@ fn resolve_static_property_read_cache_miss<'a>(
     let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, false) {
         Ok(resolved) => resolved,
         Err(VmError::Fatal(message)) => {
+            if silent
+                && (message.starts_with("Cannot access private property ")
+                    || message.starts_with("Cannot access protected property ")
+                    || message.starts_with("Access to undeclared static property "))
+            {
+                // `isset()` treats inaccessible and undeclared properties as
+                // absent, while invalid class resolution remains an Error.
+                // SAFETY: result_ptr is the compiler-owned output slot for
+                // this live fetch instruction.
+                unsafe { frame_tmp_set(frame, result_ptr, Value::null()) };
+                return Ok(ColdResult::Done);
+            }
             return Ok(static_property_throw(eg, frame, "Error", message));
         }
         Err(error) => return Err(error),

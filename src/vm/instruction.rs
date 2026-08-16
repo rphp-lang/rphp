@@ -94,6 +94,10 @@ pub const STATIC_PROP_DYNAMIC_OWNER: u16 = 1 << 4;
 /// must therefore verify or re-resolve the selected property name.
 pub const STATIC_PROP_DYNAMIC_NAME: u16 = 1 << 5;
 
+/// Fetch static-property flag: the read is an `isset()`/`empty()`-style silent
+/// probe. This must not alias the late-static embedded-scope bit.
+pub const STATIC_PROP_SILENT: u16 = 1 << 6;
+
 /// CreateClosure flag: PHP's `static function`/`static fn` form cannot bind
 /// an object, even when created inside an instance method.
 pub const CLOSURE_FLAG_STATIC: u16 = 1;
@@ -385,6 +389,7 @@ impl Instruction {
 /// callback resolved by an internal callback helper.
 ///
 /// Mutated via raw pointer writes in the single-threaded VM dispatch loop.
+#[derive(Clone, Copy)]
 pub struct InlineCache {
     /// Resolved function pointer (null = not cached).
     pub func: *const FunctionCommon,

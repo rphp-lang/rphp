@@ -37,7 +37,7 @@ use crate::vm::instruction::{
     InlineCache, Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
     NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, OpType, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, UNSET_DIM_NESTED,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_SILENT, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -3765,7 +3765,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = result;
                 fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_OBJ_SILENT;
+                fetch._pad |= STATIC_PROP_SILENT;
                 if dynamic_owner {
                     fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
                 }

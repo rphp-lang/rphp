@@ -480,7 +480,7 @@ impl Compiler {
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
                 if silent_fetch {
-                    fetch._pad |= FETCH_OBJ_SILENT;
+                    fetch._pad |= STATIC_PROP_SILENT;
                 }
                 if dynamic_owner {
                     fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
@@ -792,7 +792,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_OBJ_SILENT;
+                fetch._pad |= STATIC_PROP_SILENT;
                 if dynamic_owner {
                     fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
                 }
@@ -1477,7 +1477,7 @@ impl Compiler {
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
                 if silent_root_fetch {
-                    fetch._pad |= FETCH_OBJ_SILENT;
+                    fetch._pad |= STATIC_PROP_SILENT;
                 }
                 if dynamic_owner {
                     fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;

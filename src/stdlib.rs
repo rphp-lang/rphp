@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use crate::compiler::compile::{ClassConstantDefinition, PropertyDefinition};
 use crate::compiler::{
     make_direct_internal_function, make_internal_function, make_internal_function_ref,
-    make_internal_function_variadic, make_internal_method,
+    make_internal_function_variadic, make_internal_method, make_internal_method_variadic,
 };
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
@@ -1689,6 +1689,132 @@ fn fn_closure_bind_to(
     )
 }
 
+#[cold]
+#[inline(never)]
+fn take_closure_static_property_caches(source: &PhpClosure) -> Vec<(usize, InlineCache)> {
+    let Some(function) = source.user_function() else {
+        return vec![];
+    };
+    let op_array = &function.op_array;
+    let mut saved = Vec::new();
+    for (index, instruction) in op_array.instructions.iter().enumerate() {
+        if !matches!(
+            instruction.opcode,
+            OpCode::FetchStaticProp
+                | OpCode::FetchLateStaticProp
+                | OpCode::AssignStaticProp
+                | OpCode::AssignLateStaticProp
+        ) {
+            continue;
+        }
+        // SAFETY: each instruction owns one cache entry. Closure::call is
+        // synchronous in the single-threaded VM, so temporarily replacing
+        // only static-property entries cannot race another activation.
+        unsafe {
+            let slot = op_array.cache.as_ptr().add(index) as *mut InlineCache;
+            saved.push((index, *slot));
+            slot.write(InlineCache::empty());
+        }
+    }
+    saved
+}
+
+#[cold]
+#[inline(never)]
+fn restore_closure_static_property_caches(source: &PhpClosure, saved: Vec<(usize, InlineCache)>) {
+    let Some(function) = source.user_function() else {
+        return;
+    };
+    for (index, cache) in saved {
+        // SAFETY: these are the exact entries detached above and the closure's
+        // function storage outlives its synchronous invocation.
+        unsafe {
+            let slot = function.op_array.cache.as_ptr().add(index) as *mut InlineCache;
+            slot.write(cache);
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn fn_closure_call(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let source_value = arg!(ed, 0);
+    let Some(source) = source_value.as_closure() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "Closure::call(): receiver must be of type Closure",
+        ));
+        return Ok(());
+    };
+    let new_this = arg!(ed, 1);
+    let Some(object) = new_this.as_object() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "Closure::call(): Argument #1 ($newThis) must be of type object, {} given",
+                new_this.dereferenced().type_name()
+            ),
+        ));
+        return Ok(());
+    };
+    let Some(scope) = eg.find_class(object.class_name.as_ref()) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Class \"{}\" not found", object.class_name),
+        ));
+        return Ok(());
+    };
+    if source.user_function().is_some() && eg.class_is_internal(object.class_name.as_ref()) {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "Cannot bind closure to scope of internal class {}",
+                object.class_name
+            ),
+        )?;
+        ret!(rv, Value::null());
+    }
+    if source.is_static {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "Cannot bind an instance to a static closure",
+        )?;
+        ret!(rv, Value::null());
+    }
+
+    let Some(mut resolved) = resolve_callback(source_value, eg, None) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "Failed to invoke closure",
+        ));
+        return Ok(());
+    };
+    resolved.bound_this = Some(new_this.clone());
+    resolved.called_scope_class_id = scope.class_id;
+    if resolved.signature().this_offset == 1 {
+        resolved.prepend_args = vec![new_this.clone()];
+    }
+    let arguments = arg!(ed, 2)
+        .as_array()
+        .cloned()
+        .unwrap_or_else(PhpArray::new);
+    let saved_static_caches = take_closure_static_property_caches(source);
+    let result = call_resolved_with_array(eg, &resolved, &arguments);
+    restore_closure_static_property_caches(source, saved_static_caches);
+    let result = result?;
+    ret!(rv, result);
+}
+
 fn fn_array_iterator_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,
@@ -2680,6 +2806,17 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         "newThis",
         "newScope"
     );
+    let closure_call = Box::new(make_internal_method_variadic(
+        fn_closure_call,
+        1,
+        vec!["newThis".to_string(), "args".to_string()],
+    ));
+    let closure_call_ptr = &closure_call.common as *const FunctionCommon;
+    eg.function_table
+        .insert("closure::call".to_string(), closure_call_ptr);
+    eg.method_declaring_class
+        .insert(closure_call_ptr, "Closure".to_string());
+    funcs.push(closure_call);
 
     // Canonical iterator hierarchy used by generator return contracts,
     // instanceof and the iterable pseudo-type.
@@ -9242,29 +9379,35 @@ fn callback_cache_slot(ed: *mut ExecuteData) -> Option<*mut InlineCache> {
     if ed.is_null() {
         return None;
     }
-    let caller = unsafe { (*ed).prev_execute_data };
-    if caller.is_null() {
-        return None;
-    }
+    // SAFETY: an internal handler receives its live frame. Its saved user
+    // caller, opline and compiler-owned cache table remain live until the
+    // synchronous handler returns; all bounds and opcode checks precede the
+    // returned entry pointer.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        if caller.is_null() {
+            return None;
+        }
 
-    let func = unsafe { (*caller).func };
-    if func.is_null() || unsafe { (*func).fn_type } != FunctionType::User {
-        return None;
-    }
+        let func = (*caller).func;
+        if func.is_null() || (*func).fn_type != FunctionType::User {
+            return None;
+        }
 
-    let op_array = unsafe { (*caller).op_array() };
-    let opline = unsafe { (*caller).opline };
-    let base = op_array.instructions.as_ptr();
-    let byte_offset = (opline as usize).checked_sub(base as usize)?;
-    if byte_offset % std::mem::size_of::<crate::vm::instruction::Instruction>() != 0 {
-        return None;
-    }
-    let ip = byte_offset / std::mem::size_of::<crate::vm::instruction::Instruction>();
-    if ip >= op_array.instructions.len() || unsafe { (*opline).opcode } != OpCode::DoFcall {
-        return None;
-    }
+        let op_array = (*caller).op_array();
+        let opline = (*caller).opline;
+        let base = op_array.instructions.as_ptr();
+        let byte_offset = (opline as usize).checked_sub(base as usize)?;
+        if byte_offset % std::mem::size_of::<crate::vm::instruction::Instruction>() != 0 {
+            return None;
+        }
+        let ip = byte_offset / std::mem::size_of::<crate::vm::instruction::Instruction>();
+        if ip >= op_array.instructions.len() || (*opline).opcode != OpCode::DoFcall {
+            return None;
+        }
 
-    Some(unsafe { op_array.cache.as_ptr().add(ip) as *mut InlineCache })
+        Some(op_array.cache.as_ptr().add(ip) as *mut InlineCache)
+    }
 }
 
 /// Resolve a plain string callback through the call-site cache. The retained

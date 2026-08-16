@@ -43,6 +43,39 @@ fn closure_declared_in_method_retains_protected_visibility_scope() {
 }
 
 #[test]
+fn closure_call_temporarily_rebinds_receiver_scope_and_runtime_cache() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CallBox {
+    private int $value;
+    private static int $visible = 1;
+    public function __construct(int $value) { $this->value = $value; }
+    public function multiplier(): Closure {
+        return function (int $factor): int { return $this->value * $factor; };
+    }
+    public static function scopeProbe(): Closure {
+        return function (): bool { return isset(CallBox::$visible); };
+    }
+}
+
+$original = new CallBox(2);
+$replacement = new CallBox(7);
+$multiply = $original->multiplier();
+echo $multiply(3), ':', $multiply->call($replacement, 4), ':', $multiply(5), '|';
+
+$probe = CallBox::scopeProbe();
+echo $probe() ? 'T' : 'F';
+echo $probe->call(new class {}) ? 'T' : 'F';
+echo $probe() ? 'T' : 'F';
+try { $multiply->call(null); } catch (TypeError $error) { echo '|type'; }
+"#,
+        ),
+        "6:28:10|TFT|type"
+    );
+}
+
+#[test]
 fn dynamic_call_expands_a_sole_unpack_argument() {
     let out = run_php(
         "<?php $callable = static fn ($a, $b, $c) => $a . $b . $c; $args = ['a', 'b', 'c']; echo $callable(...$args);",

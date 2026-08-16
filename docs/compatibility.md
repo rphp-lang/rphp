@@ -7,6 +7,32 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 `Closure::call()` checkpoint, based on `bdef267`, runs the
+same default-feature 4,345-case PHP 8.2.33 corpus and records 1,662 passes,
+2,368 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds four exact passes without losing a previous
+pass: `Zend/tests/closure_060.phpt`, `Zend/tests/closure_call.phpt`,
+`Zend/tests/return_types/025.phpt` and
+`Zend/tests/type_declarations/typed_properties_048.phpt`. `Closure::call()` now
+temporarily binds its object and visibility scope, forwards variadic arguments,
+supports `self` return types and restores the closure's original binding after
+the call. Static-property inline caches are detached only for the synchronous
+rebound invocation and restored afterwards, so a private-property decision
+cannot leak between scopes. Static-property silent probes now use a dedicated
+instruction flag rather than aliasing the compact late-static-scope bit.
+Original E2E coverage checks private instance access, arguments, binding
+restoration, temporary static visibility, cache restoration and the non-object
+TypeError. Five Cargo test configurations, all-target and unsafe checks,
+Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64; the production
+unsafe-block inventory decreases from 1,623 to 1,620 through consolidation of
+an existing callback-cache proof. The S3 cold-kernel gate was not rerun because
+this machine has no exact PHP 8.2 oracle. Forty-one alternating release pairs
+measured `bench_static_self_property_write_typed.php` medians of 0.113724
+seconds for the preceding binary and 0.114053 seconds for the candidate (+0.29
+percent), with identical results. `Closure::fromCallable()` for internal
+methods and the related `closure_call_internal.phpt` remain a separate
+compatibility boundary.
+
 The current AMD64 magic-call-trampoline checkpoint, based on `db61930`, runs
 the same 4,345-case PHP 8.2.33 corpus with the default Cargo feature set and
 records 1,658 passes, 2,372 failures,

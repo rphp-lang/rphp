@@ -5785,6 +5785,51 @@ pub fn make_internal_method(
     }
 }
 
+/// Create a variadic InternalFunction for an instance method.
+/// `required_num_args` counts explicit arguments; CV 0 remains the hidden
+/// receiver and the variadic bucket follows the fixed public arguments.
+pub fn make_internal_method_variadic(
+    handler: InternalFunctionHandler,
+    required_num_args: u32,
+    param_names: Vec<String>,
+) -> InternalFunction {
+    let num_args = required_num_args + 1;
+    let variadic_cv_index = num_args;
+    let num_cvs = variadic_cv_index + 1;
+    let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs;
+    InternalFunction {
+        common: FunctionCommon {
+            fn_type: FunctionType::Internal,
+            sig: SignatureInfo {
+                num_args,
+                required_num_args,
+                is_variadic: true,
+                variadic_cv_index,
+                ref_args: 0,
+                returns_reference: false,
+                this_offset: 1,
+                param_type_hints: vec![],
+                param_names,
+                return_type_hint: ParamTypeHint::None,
+            },
+            frame: FrameLayout {
+                num_cvs,
+                num_temps: 0,
+                total_slots,
+            },
+            plan: CallPlan::without_flags(
+                CallStrategy::Full,
+                ReturnStrategy::Full,
+                CleanupMode::ScanAll,
+            ),
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
+        },
+        handler,
+        direct_handler: None,
+    }
+}
+
 /// Create an InternalFunction with by-ref parameter bitmask.
 pub fn make_internal_function_ref(
     handler: InternalFunctionHandler,
