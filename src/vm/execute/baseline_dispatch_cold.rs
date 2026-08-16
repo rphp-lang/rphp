@@ -3003,9 +3003,37 @@ fn op_create_first_class_callable<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: opline operands and result identify compiler-allocated slots in
     // this live frame; the read is cloned before callback resolution mutates VM state.
-    let callable = unsafe {
-        (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone()
+    let (callable, instruction_index) = unsafe {
+        (
+            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone(),
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+        )
     };
+    let existing_closure = if callable.value_type() == ValueType::Closure {
+        Some(callable.clone())
+    } else {
+        callable.as_array().and_then(|array| {
+            (array.len() == 2
+                && array
+                    .get_value_at(1)
+                    .and_then(Value::as_str)
+                    .is_some_and(|method| method.eq_ignore_ascii_case("__invoke")))
+            .then(|| array.get_value_at(0))
+            .flatten()
+            .filter(|receiver| receiver.value_type() == ValueType::Closure)
+            .cloned()
+        })
+    };
+    if let Some(closure) = existing_closure {
+        // SAFETY: the result operand names the prepared compiler-owned slot. A
+        // first-class callable made from Closure or Closure::__invoke is that
+        // same PHP object, so cloning retains identity and ownership.
+        unsafe {
+            let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            frame_tmp_set(frame, result_ptr, closure);
+        }
+        return Ok(ColdResult::Done);
+    }
     let caller_class = get_caller_class(frame, eg);
     let resolved = crate::stdlib::resolve_callback_with_cache(
         &callable,
@@ -3026,7 +3054,13 @@ fn op_create_first_class_callable<'a>(
         )
     });
     let Some(resolved) = resolved else {
-        let error = make_error_value("TypeError", "Failed to create closure from callable");
+        let message = crate::stdlib::first_class_callable_error(
+            &callable,
+            eg,
+            caller_class.as_deref(),
+        );
+        let error = make_error_value("Error", &message);
+        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
         return Ok(match throw_in_frame(eg, frame, error) {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)

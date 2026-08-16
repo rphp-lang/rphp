@@ -9029,6 +9029,101 @@ fn resolve_callback(
     }
 }
 
+/// Produce the PHP-facing reason why a first-class callable could not be
+/// created. The ordinary callback resolver intentionally returns `Option` for
+/// its many legacy callers; this cold diagnostic path preserves the richer
+/// error contract without adding work to successful callback dispatch.
+pub(crate) fn first_class_callable_error(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    caller_class: Option<&str>,
+) -> String {
+    let inaccessible_method =
+        |visibility: Visibility, defining: &str, method: &str| -> Option<String> {
+            if visibility == Visibility::Public
+                || eg.check_visibility(caller_class, defining, visibility)
+            {
+                return None;
+            }
+            let visibility = match visibility {
+                Visibility::Private => "private",
+                Visibility::Protected => "protected",
+                Visibility::Public => unreachable!(),
+            };
+            let scope = caller_class.unwrap_or("global");
+            let suffix = if caller_class.is_some() {
+                format!("scope {scope}")
+            } else {
+                "global scope".to_string()
+            };
+            Some(format!(
+                "Call to {visibility} method {defining}::{method}() from {suffix}"
+            ))
+        };
+
+    let method_error = |class_name: &str, method: &str, require_static: bool| {
+        let class_name = class_name.trim_start_matches('\\');
+        let Some(class) = find_class_case_insensitive(eg, class_name) else {
+            return format!("Class \"{class_name}\" not found");
+        };
+        let Some((visibility, is_static, _, defining)) =
+            find_method_in_class_hierarchy(eg, &class.name, method)
+        else {
+            return format!("Call to undefined method {}::{method}()", class.name);
+        };
+        if let Some(error) = inaccessible_method(visibility, defining, method) {
+            return error;
+        }
+        if require_static && !is_static {
+            return format!(
+                "Non-static method {}::{method}() cannot be called statically",
+                class.name
+            );
+        }
+        "Failed to create closure from callable".to_string()
+    };
+
+    match val.value_type() {
+        ValueType::String => {
+            let name = val.as_str().unwrap_or("");
+            if let Some((class_name, method)) = name.rsplit_once("::") {
+                method_error(class_name, method, true)
+            } else {
+                format!("Call to undefined function {name}()")
+            }
+        }
+        ValueType::Array => {
+            let Some(array) = val.as_array() else {
+                return "Failed to create closure from callable".to_string();
+            };
+            if array.len() != 2 {
+                return "Failed to create closure from callable".to_string();
+            }
+            let Some(receiver) = array.get_value_at(0) else {
+                return "Failed to create closure from callable".to_string();
+            };
+            let Some(method) = array.get_value_at(1).and_then(Value::as_str) else {
+                return "Failed to create closure from callable".to_string();
+            };
+            if let Some(object) = receiver.as_object() {
+                method_error(&object.class_name, method, false)
+            } else if let Some(class_name) = receiver.as_str() {
+                method_error(class_name, method, true)
+            } else {
+                "Failed to create closure from callable".to_string()
+            }
+        }
+        ValueType::Object => {
+            let object = val.as_object().unwrap();
+            format!("Object of type {} is not callable", object.class_name)
+        }
+        _ => format!(
+            "Value of type {} is not callable",
+            val.dereferenced().type_name()
+        ),
+    }
+}
+
 /// Return the otherwise-unused DoFcall inline-cache entry belonging to the PHP
 /// instruction that entered the current internal callback helper.
 #[inline(always)]

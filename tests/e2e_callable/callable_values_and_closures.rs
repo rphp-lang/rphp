@@ -254,6 +254,72 @@ Non-static method ReceiverBase::method() cannot be called statically"
     );
 }
 
+#[test]
+fn first_class_callable_creation_preserves_the_resolution_error() {
+    let out = run_php(
+        r#"<?php
+class CallableDiagnosticTarget {
+    private static function hidden() {}
+    protected static function guarded() {}
+    public function instance() {}
+
+    public static function inside() {
+        self::hidden(...);
+        self::guarded(...);
+        echo "inside\n";
+    }
+}
+
+function report($factory) {
+    try {
+        $factory();
+    } catch (Error $error) {
+        echo get_class($error), ': ', $error->getMessage(), "\n";
+    }
+}
+
+report(fn() => (42)(...));
+report(fn() => missing_callable_function(...));
+report(fn() => MissingCallableClass::method(...));
+report(fn() => CallableDiagnosticTarget::missing(...));
+report(fn() => (new CallableDiagnosticTarget)->missing(...));
+report(fn() => CallableDiagnosticTarget::hidden(...));
+report(fn() => CallableDiagnosticTarget::guarded(...));
+report(fn() => CallableDiagnosticTarget::instance(...));
+CallableDiagnosticTarget::inside();
+?>"#,
+    );
+    assert_eq!(
+        out,
+        "Error: Value of type int is not callable\n\
+Error: Call to undefined function missing_callable_function()\n\
+Error: Class \"MissingCallableClass\" not found\n\
+Error: Call to undefined method CallableDiagnosticTarget::missing()\n\
+Error: Call to undefined method CallableDiagnosticTarget::missing()\n\
+Error: Call to private method CallableDiagnosticTarget::hidden() from global scope\n\
+Error: Call to protected method CallableDiagnosticTarget::guarded() from global scope\n\
+Error: Non-static method CallableDiagnosticTarget::instance() cannot be called statically\n\
+inside\n"
+    );
+}
+
+#[test]
+fn first_class_callable_keeps_existing_closure_identity() {
+    let out = run_php(
+        r#"<?php
+$closure = function() { return 'same'; };
+$direct = $closure(...);
+$invoke = $closure->__invoke(...);
+var_dump($direct === $closure, $invoke === $closure, $direct === $invoke);
+echo $invoke();
+?>"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nsame"
+    );
+}
+
 // -- call_user_func with closure --
 
 #[test]

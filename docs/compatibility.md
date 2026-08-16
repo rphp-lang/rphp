@@ -7,6 +7,34 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 first-class-callable checkpoint, based on `ea71e47`, runs
+the same 4,345-case PHP 8.2.33 corpus and records 1,635 passes, 2,395 failures,
+77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds three exact passes without losing a previous pass:
+`Zend/tests/first_class_callable_006.phpt`,
+`Zend/tests/first_class_callable_009.phpt` and
+`Zend/tests/first_class_callable_errors.phpt`. Failed Closure creation now
+retains PHP's concrete `Error` reason for invalid value types, missing
+functions, missing classes or methods, inaccessible methods and non-static
+class callbacks, including throwable source metadata. Creating a first-class
+callable from an existing Closure or its `__invoke` method returns the same
+Closure object, and strict identity compares Closure payload identity just as
+it does ordinary object identity. Original E2E coverage checks the diagnostic
+families, allowed private/protected access, invocation and all three identity
+comparisons. Magic `__call` trampolines, parser restrictions, strict-call-site
+typing and complete Reflection rendering remain separate boundaries. Five
+Cargo test configurations, all-target and unsafe checks, Composer S0, Symfony
+S1 and warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not rerun
+because this machine has no exact PHP 8.2 oracle. Twenty-one alternating
+release pairs measured `bench_calls.php` medians of 0.347761 seconds for the
+preceding binary and 0.346145 seconds for the candidate (-0.47 percent), while
+`bench_closure_copy.php` moved from 0.000426 to 0.000425 seconds (-0.22
+percent). A 41-pair confirmation measured the closure-storage microbenchmark
+at 0.008256 versus 0.008487 seconds (+2.80 percent) despite the changed branch
+being inactive in that workload; this remains explicit temporary binary-layout
+debt for the later whole-runtime optimization phase. All workloads retained
+identical computed results.
+
 The current AMD64 non-static-class-callback checkpoint, based on `30bbd40`,
 runs the same 4,345-case PHP 8.2.33 corpus and records 1,632 passes, 2,398
 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
