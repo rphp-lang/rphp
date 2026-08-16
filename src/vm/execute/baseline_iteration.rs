@@ -667,6 +667,12 @@ fn flush_foreach_reference_value(
         let value = (&*(*frame).get_op_ptr(value_cv, OpType::Cv, op_array)).clone();
         let array_ptr = (*frame).get_op_mut(array_operand as u32, array_type);
         let array = &mut *array_ptr;
+        if array.is_reference() {
+            // A CV-backed by-reference foreach aliases the source array
+            // directly. Its element reference cell is updated by ordinary CV
+            // assignment, so there is no detached snapshot to flush.
+            return Ok(());
+        }
         if let Some(object) = array.as_object()
             && object.class_name.as_ref() != "Generator"
         {
@@ -689,11 +695,26 @@ fn op_foreach_init<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    // SAFETY: ForeachInit's source operand is a compiler-validated live-frame
-    // slot and remains borrowed only until this opcode finishes.
-    let source = unsafe {
-        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    // SAFETY: ForeachInit's source operand and any promoted live alias use a
+    // compiler-validated frame slot borrowed only until this opcode finishes.
+    // A CV array is promoted to an owned cell before either side mutates it.
+    let (by_reference, live_array_alias) = unsafe {
+        let init_ip =
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        let by_reference = op_array
+            .instructions
+            .get(init_ip + 1)
+            .is_some_and(|next| next.opcode == OpCode::ForeachNextRef);
+        let source = (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let live_array_alias = (by_reference
+            && opline.op1_type == OpType::Cv
+            && (&*source).dereferenced().as_array().is_some())
+        .then(|| materialize_reference_alias(frame, (*frame).cv_mut(opline.op1 as u32)));
+        (by_reference, live_array_alias)
     };
+    let source = live_array_alias.as_ref().unwrap_or_else(|| unsafe {
+        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    });
     let mut resolved_iterable = None;
     let mut aggregate_identities = Vec::new();
     loop {
@@ -787,13 +808,6 @@ fn op_foreach_init<'a>(
                 .flatten()
         });
         let object_values = if iterator_values.is_none() && arr_val.as_object().is_some() {
-            let init_ip = unsafe {
-                (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-            };
-            let by_reference = op_array
-                .instructions
-                .get(init_ip + 1)
-                .is_some_and(|next| next.opcode == OpCode::ForeachNextRef);
             Some(if by_reference {
                 arr_val.clone()
             } else {
@@ -806,7 +820,7 @@ fn op_foreach_init<'a>(
             .as_ref()
             .or(object_values.as_ref())
             .unwrap_or(arr_val);
-        let is_empty = match iterable.as_array() {
+        let is_empty = match iterable.dereferenced().as_array() {
             Some(arr) => arr.is_empty(),
             None if iterable.value_type() == ValueType::Object => false,
             None => {
@@ -831,7 +845,11 @@ fn op_foreach_init<'a>(
             return Ok(ColdResult::Continue);
         }
         // Copy array to result TMP
-        let cloned = iterable.clone();
+        let cloned = if live_array_alias.is_some() {
+            clone_foreach_value::<true>(iterable)
+        } else {
+            iterable.clone()
+        };
         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
         unsafe { frame_result_set(frame, result_ptr, opline.result_type, cloned) };
         // Set position TMP to 0
@@ -925,49 +943,75 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
         let pos = pos_val.as_long().unwrap_or(0) as usize;
 
-        if let Some(arr) = arr_val.as_array() {
+        if let Some(arr) = arr_val.dereferenced().as_array() {
             if pos < arr.len() {
-                if key_encoded > 0 {
-                    // Need both key and value — use get_at()
-                    let (val, key) = arr.get_at(pos).unwrap();
-                    if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
-                        bind_foreach_value_cv(
-                            frame,
-                            val_cv,
-                            clone_foreach_value::<BY_REFERENCE_LOOP>(val),
-                        );
-                    } else {
-                        assign_foreach_cv(frame, val_cv, val.clone());
-                    }
-                    let key_cv = key_encoded - 1;
-                    let key_val = match key {
-                        ArrayKey::Int(k) => Value::long(k),
-                        ArrayKey::String(k) => Value::string(k),
-                    };
-                    assign_foreach_cv(frame, key_cv, key_val);
-                } else {
-                    // Only value needed — use get_value_at() (avoids key clone)
-                    let val = arr.get_value_at(pos).unwrap();
-                    if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
-                        bind_foreach_value_cv(
-                            frame,
-                            val_cv,
-                            clone_foreach_value::<BY_REFERENCE_LOOP>(val),
-                        );
-                    } else {
-                        assign_foreach_cv(frame, val_cv, val.clone());
-                    }
-                }
-                let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
+                // SAFETY: the compiler validated all frame operands. The live
+                // owned-reference target and current array position remain
+                // request-owned throughout this synchronous opcode.
                 unsafe {
+                    if BY_REFERENCE_LOOP && arr_val.is_reference() {
+                        // ForeachInit created an owned reference alias for this
+                        // CV-backed source. Promoting the live entry before the
+                        // body makes both mutations observe the same cell.
+                        let value = (&mut *arr_val.as_ref_ptr())
+                            .as_array_mut()
+                            .and_then(|array| array.argument_unpack_reference_at(pos))
+                            .expect("live foreach position must remain addressable");
+                        bind_foreach_value_cv(frame, val_cv, value);
+                        if key_encoded > 0 {
+                            let key_cv = key_encoded - 1;
+                            let key = arr_val
+                                .dereferenced()
+                                .as_array()
+                                .and_then(|array| array.get_at(pos))
+                                .map(|(_, key)| key)
+                                .expect("promoted foreach entry must retain its key");
+                            let key_value = match key {
+                                ArrayKey::Int(key) => Value::long(key),
+                                ArrayKey::String(key) => Value::string(key),
+                            };
+                            assign_foreach_cv(frame, key_cv, key_value);
+                        }
+                    } else if key_encoded > 0 {
+                        // Need both key and value — use get_at()
+                        let (val, key) = arr.get_at(pos).unwrap();
+                        if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
+                            bind_foreach_value_cv(
+                                frame,
+                                val_cv,
+                                clone_foreach_value::<BY_REFERENCE_LOOP>(val),
+                            );
+                        } else {
+                            assign_foreach_cv(frame, val_cv, val.clone());
+                        }
+                        let key_cv = key_encoded - 1;
+                        let key_val = match key {
+                            ArrayKey::Int(k) => Value::long(k),
+                            ArrayKey::String(k) => Value::string(k),
+                        };
+                        assign_foreach_cv(frame, key_cv, key_val);
+                    } else {
+                        // Only value needed — use get_value_at() (avoids key clone)
+                        let val = arr.get_value_at(pos).unwrap();
+                        if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
+                            bind_foreach_value_cv(
+                                frame,
+                                val_cv,
+                                clone_foreach_value::<BY_REFERENCE_LOOP>(val),
+                            );
+                        } else {
+                            assign_foreach_cv(frame, val_cv, val.clone());
+                        }
+                    }
+                    let pos_ptr = (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
                     frame_result_set(
                         frame,
                         pos_ptr,
                         opline.op2_type,
                         Value::long((pos + 1) as i64),
-                    )
-                };
-                true
+                    );
+                    true
+                }
             } else {
                 false
             }

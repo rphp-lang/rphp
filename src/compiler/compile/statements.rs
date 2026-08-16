@@ -62,6 +62,7 @@ enum CoalesceWrite {
 }
 
 pub(super) enum ForeachArrayWriteback {
+    Discard,
     Variable(u16),
     DynamicVariable {
         key: u16,
@@ -456,6 +457,7 @@ impl Compiler {
         array_type: OpType,
     ) {
         match writeback {
+            ForeachArrayWriteback::Discard => {}
             ForeachArrayWriteback::Variable(cv) => {
                 if array_type == OpType::Cv && array == cv {
                     return;
@@ -2238,8 +2240,12 @@ impl Compiler {
             } => {
                 // Compile array expression
                 let (arr_op, arr_type, reference_writeback) = if *by_ref {
-                    let (op, op_type, writeback) =
-                        self.compile_foreach_reference_source(array, false)?;
+                    let (op, op_type, writeback) = if matches!(array, Expr::ArrayLiteral(_)) {
+                        let (op, op_type) = self.compile_expr(array);
+                        (op, op_type, ForeachArrayWriteback::Discard)
+                    } else {
+                        self.compile_foreach_reference_source(array, false)?
+                    };
                     (op, op_type, Some(writeback))
                 } else {
                     let (op, op_type) = self.compile_expr(array);
