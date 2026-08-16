@@ -120,7 +120,7 @@ impl Compiler {
         );
         if contains_reference && mutable {
             let (source, source_type, writeback) =
-                self.compile_foreach_reference_source(source, true)?;
+                self.compile_foreach_reference_source(source, true, false)?;
             if source_type == OpType::Cv {
                 let internal = self.resolve_cv(&format!("\0list_source_{}", self.next_cv));
                 let mut bind = Instruction::new(OpCode::BindCvRef);
@@ -230,7 +230,8 @@ impl Compiler {
         target: &Expr,
         indices: &[Expr],
     ) -> Result<(u16, OpType), String> {
-        let (array, array_type, writeback) = self.compile_foreach_reference_source(target, true)?;
+        let (array, array_type, writeback) =
+            self.compile_foreach_reference_source(target, true, false)?;
         let keys: Vec<(u16, OpType)> = indices
             .iter()
             .map(|index| self.compile_expr(index))
@@ -354,6 +355,7 @@ impl Compiler {
         &mut self,
         source: &Expr,
         silent_fetch: bool,
+        warn_undefined_root: bool,
     ) -> Result<(u16, OpType, ForeachArrayWriteback), String> {
         // A nullsafe chain is readable but never referenceable. PHP still
         // permits it as a by-reference foreach source by iterating a detached
@@ -553,8 +555,12 @@ impl Compiler {
                         ForeachArrayWriteback::Variable(current),
                     ));
                 }
-                let path =
-                    self.compile_mutable_array_path(root, &reversed_indices, silent_fetch, false)?;
+                let path = self.compile_mutable_array_path(
+                    root,
+                    &reversed_indices,
+                    silent_fetch,
+                    warn_undefined_root,
+                )?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
                 let current = self.alloc_tmp();
@@ -1790,7 +1796,7 @@ impl Compiler {
                     )
                 } else {
                     let (left, left_type, writeback) =
-                        self.compile_foreach_reference_source(target, false)?;
+                        self.compile_foreach_reference_source(target, false, true)?;
                     let (right, right_type) = self.compile_expr(expr);
                     (left, left_type, writeback, right, right_type)
                 };
@@ -2439,7 +2445,7 @@ impl Compiler {
             }
             Stmt::ArrayAppend { target, expr } => {
                 let (array, array_type, writeback) =
-                    self.compile_foreach_reference_source(target, true)?;
+                    self.compile_foreach_reference_source(target, true, false)?;
                 let (value, value_type) = self.compile_expr(expr);
                 let mut append = Instruction::new(OpCode::ArrayPushOp);
                 append.op1 = array;
@@ -2451,7 +2457,7 @@ impl Compiler {
             }
             Stmt::BindArrayAppendReference { var, target } => {
                 let (array, array_type, writeback) =
-                    self.compile_foreach_reference_source(target, true)?;
+                    self.compile_foreach_reference_source(target, true, false)?;
                 let cv = self.resolve_cv(var);
                 let mut bind = Instruction::new(OpCode::BindArrayAppendRef);
                 bind.op1 = array;
@@ -2481,7 +2487,7 @@ impl Compiler {
                         let (op, op_type) = self.compile_expr(array);
                         (op, op_type, ForeachArrayWriteback::Discard)
                     } else {
-                        self.compile_foreach_reference_source(array, false)?
+                        self.compile_foreach_reference_source(array, false, false)?
                     };
                     (op, op_type, Some(writeback))
                 } else {

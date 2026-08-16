@@ -284,3 +284,19 @@ var_dump(temporary_array_result());
         "temporary\nvalue\ntemporary\nvalue\ntemporary\nwarning:Undefined array key 0\ntemporary\nwarning:Undefined array key 0\nwarning:Undefined array key 1\ntemporary\nvalue\nwarning:Undefined array key 0\ntemporary\nvalue\nwarning:Undefined array key 0\nwarning:Undefined array key 1\ntemporary\nNULL\n"
     );
 }
+
+#[test]
+fn compound_array_assignment_reports_undefined_root_key_and_dimension_in_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function(int $level, string $message) {
+    echo "warning:$message\n";
+});
+$array[$key] += 1;
+var_dump($array);
+"#,
+        ),
+        "warning:Undefined variable $array\nwarning:Undefined variable $key\nwarning:Undefined array key \"\"\narray(1) {\n  [\"\"]=>\n  int(1)\n}\n",
+    );
+}
