@@ -386,3 +386,44 @@ fn nullsafe_write_contexts_fail_during_compilation_with_source_location() {
         );
     }
 }
+
+#[test]
+fn nullsafe_reference_unset_and_foreach_targets_fail_during_compilation() {
+    for (expression, message) in [
+        (
+            "$ref =& $foo?->bar;",
+            "Cannot take reference of a nullsafe chain",
+        ),
+        (
+            "$ref =& $foo?->bar->baz;",
+            "Cannot take reference of a nullsafe chain",
+        ),
+        (
+            "$ref =& $foo?->bar();",
+            "Cannot take reference of a nullsafe chain",
+        ),
+        (
+            "$ref =& $foo?->bar()::baz();",
+            "Cannot take reference of a nullsafe chain",
+        ),
+        (
+            "unset($foo?->bar->baz);",
+            "Can't use nullsafe operator in write context",
+        ),
+        (
+            "foreach ([1, 2] as $foo?->bar) { sideEffect(); }",
+            "Can't use nullsafe operator in write context",
+        ),
+    ] {
+        let source = format!("<?php\n$foo = null;\n{expression}\n");
+        let error = run_php_expect_error_with_source_context(
+            &source,
+            "/virtual/nullsafe-forbidden.php",
+            "/virtual",
+        );
+        assert_eq!(
+            format!("{error:?}"),
+            format!("Fatal(\"{message} in /virtual/nullsafe-forbidden.php on line 3\")")
+        );
+    }
+}

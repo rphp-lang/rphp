@@ -75,7 +75,7 @@ impl Parser {
     }
 
     fn finish_compound_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
-        let nullsafe_line = Self::nullsafe_write_line(&target);
+        let nullsafe_line = Self::nullsafe_chain_line(&target);
         if !matches!(
             &target,
             Expr::Variable { .. }
@@ -122,7 +122,7 @@ impl Parser {
             false
         };
         let expr = Box::new(self.parse_expr()?);
-        if let Some(line) = Self::nullsafe_write_line(&target) {
+        if let Some(line) = Self::nullsafe_chain_line(&target) {
             return Ok(self.nullsafe_write_error(line));
         }
         if let Expr::Globals { line } = target {
@@ -130,6 +130,9 @@ impl Parser {
         }
         if by_reference && let Expr::Globals { line } = expr.as_ref() {
             return Ok(self.compile_error("Cannot acquire reference to $GLOBALS", *line));
+        }
+        if by_reference && let Some(line) = Self::nullsafe_chain_line(expr.as_ref()) {
+            return Ok(self.nullsafe_reference_error(line));
         }
         if by_reference
             && matches!(
@@ -176,7 +179,7 @@ impl Parser {
     }
 
     fn finish_coalesce_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
-        let nullsafe_line = Self::nullsafe_write_line(&target);
+        let nullsafe_line = Self::nullsafe_chain_line(&target);
         if !matches!(
             &target,
             Expr::Variable { .. }
@@ -817,7 +820,7 @@ impl Parser {
             Token::PlusPlus => {
                 self.advance();
                 let target = self.parse_power()?;
-                if let Some(line) = Self::nullsafe_write_line(&target) {
+                if let Some(line) = Self::nullsafe_chain_line(&target) {
                     return Ok(self.nullsafe_write_error(line));
                 }
                 match target {
@@ -840,7 +843,7 @@ impl Parser {
             Token::MinusMinus => {
                 self.advance();
                 let target = self.parse_power()?;
-                if let Some(line) = Self::nullsafe_write_line(&target) {
+                if let Some(line) = Self::nullsafe_chain_line(&target) {
                     return Ok(self.nullsafe_write_error(line));
                 }
                 match target {
