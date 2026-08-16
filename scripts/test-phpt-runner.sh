@@ -8,7 +8,8 @@ if command -v "$php_bin" >/dev/null 2>&1; then
     php_bin=$(command -v "$php_bin")
 fi
 fixture_copy=$(mktemp -d "${TMPDIR:-/tmp}/rphp-phpt-runner-fixtures.XXXXXX")
-trap 'rm -rf -- "$fixture_copy"' EXIT HUP INT TERM
+wrapper_fixture=$(mktemp -d "${TMPDIR:-/tmp}/rphp-phpt-wrapper-fixtures.XXXXXX")
+trap 'rm -rf -- "$fixture_copy" "$wrapper_fixture"' EXIT HUP INT TERM
 
 cp -R "$script_root/tests/php-src/runner-fixtures/." "$fixture_copy/"
 "$php_bin" "$script_root/scripts/phpt-runner.php" run \
@@ -130,3 +131,26 @@ if (classify_failure("Parse error: emitted by user code", 0) !== "output"
     exit(1);
 }
 ' "$script_root/scripts/phpt/expectation.php"
+
+# Exercise the public wrapper as well as the underlying PHP runner. A supplied
+# executable does not expose its Cargo features, so an unset label must match
+# the documented default-feature contract build.
+mkdir -p "$wrapper_fixture/Zend/tests" "$wrapper_fixture/tests/lang"
+cp -R "$script_root/tests/php-src/runner-fixtures/." "$wrapper_fixture/Zend/tests/"
+git -C "$wrapper_fixture" init -q
+git -C "$wrapper_fixture" config user.name 'RPHP PHPT test'
+git -C "$wrapper_fixture" config user.email 'phpt-test@example.invalid'
+git -C "$wrapper_fixture" add Zend tests
+git -C "$wrapper_fixture" -c commit.gpgsign=false commit -qm 'Create runner fixture'
+wrapper_commit=$(git -C "$wrapper_fixture" rev-parse HEAD)
+RPHP_PHPT_PHP_SRC_COMMIT=$wrapper_commit \
+RPHP_PHPT_REFERENCE_PHP=$php_bin \
+    "$script_root/scripts/run-php-src-phpt.sh" \
+    "$wrapper_fixture" "$php_bin" "$wrapper_fixture/results" 1
+"$php_bin" -r '
+$summary = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
+if ($summary["features"] !== "default") {
+    fwrite(STDERR, "unexpected default PHPT feature label\n");
+    exit(1);
+}
+' "$wrapper_fixture/results/summary.json"

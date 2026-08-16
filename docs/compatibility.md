@@ -8,7 +8,8 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 magic-call-trampoline checkpoint, based on `db61930`, runs
-the same 4,345-case PHP 8.2.33 corpus and records 1,658 passes, 2,372 failures,
+the same 4,345-case PHP 8.2.33 corpus with the default Cargo feature set and
+records 1,658 passes, 2,372 failures,
 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
 crashes. It adds 23 exact passes without losing a previous pass:
 `Zend/tests/access_modifiers_012.phpt`, `Zend/tests/bug19859.phpt`,
@@ -1441,6 +1442,7 @@ To reproduce the run from an external checkout pinned to the commit above:
 
 ```sh
 cargo build --locked --release --all-features
+RPHP_PHPT_FEATURES=all-features \
 RPHP_PHPT_TIMEOUT=3 scripts/run-php-src-phpt.sh \
   /path/to/php-src target/release/rphp /tmp/rphp-phpt-results 4
 ```

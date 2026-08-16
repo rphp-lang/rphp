@@ -24,6 +24,10 @@ got, not a second compatibility score. A runtime-reaching case may still have
 entirely incorrect behavior. Only an exact PHPT pass counts as compatible.
 
 Use `scripts/run-php-src-phpt.sh` to reproduce or update a result.
+The default manifest feature label is `default`, matching the PHP 8.2 contract
+release build. Set `RPHP_PHPT_FEATURES` whenever the supplied executable was
+built with another feature set; the runner cannot inspect Cargo features from
+the binary.
 
 The script retains the historical PHP 8.4.21 pin by default. Set
 `RPHP_PHPT_PHP_SRC_COMMIT` to run another reviewed corpus pin and record that

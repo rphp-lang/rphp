@@ -82,7 +82,10 @@ fi
 runner_commit=${RPHP_PHPT_RUNNER_COMMIT:-$(git -C "$script_root" rev-parse HEAD)}
 rphp_commit=${RPHP_PHPT_RPHP_COMMIT:-$runner_commit}
 architecture=${RPHP_PHPT_ARCHITECTURE:-$(uname -m)}
-features=${RPHP_PHPT_FEATURES:-all-features}
+# The documented PHP 8.2 contract corpus uses the ordinary release profile.
+# Callers building another feature set must label it explicitly; the runner
+# cannot infer Cargo features from an opaque executable.
+features=${RPHP_PHPT_FEATURES:-default}
 "$reference_php" "$runner" merge \
     --manifest "$output_dir/manifest.jsonl" \
     --summary "$output_dir/summary.json" \
