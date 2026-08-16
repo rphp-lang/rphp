@@ -635,6 +635,16 @@ fn array_diff_key_preserves_missing_keys_and_values() {
 }
 
 #[test]
+fn array_diff_accepts_one_source_and_all_variadic_comparison_arrays() {
+    assert_eq!(
+        run_php(
+            "<?php $source = ['first' => 1, 'second' => 2, 'third' => 3]; echo implode(',', array_diff($source)), '|', implode(',', array_diff($source, [2], [3]));"
+        ),
+        "1,2,3|1"
+    );
+}
+
+#[test]
 fn array_key_set_operations_accept_variadic_comparison_arrays() {
     assert_eq!(
         run_php(

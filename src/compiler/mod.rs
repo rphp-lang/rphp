@@ -94,6 +94,14 @@ impl OpArray {
         &self.literals
     }
 
+    /// Main/include units use their source filename as the op-array name;
+    /// synthetic request roots use `<main>`. Function and method op-arrays
+    /// carry their declared callable name instead.
+    #[inline]
+    pub fn is_main_script(&self) -> bool {
+        self.name == "<main>" || (!self.source_file.is_empty() && self.name == *self.source_file)
+    }
+
     #[inline]
     pub fn source_line(&self, instruction_index: usize) -> Option<usize> {
         self.source_lines
