@@ -4861,8 +4861,9 @@ impl Compiler {
 
                 if generic_args.is_empty() {
                     if let [CallArg::Positional(argument)] = args.as_slice() {
-                        let direct_kind = self
-                            .unambiguous_global_function_name(name)
+                        let direct_kind = (!self.strict_types)
+                            .then(|| self.unambiguous_global_function_name(name))
+                            .flatten()
                             .and_then(crate::builtin_metadata::direct_internal_spec)
                             .filter(|spec| {
                                 spec.required_args <= 1

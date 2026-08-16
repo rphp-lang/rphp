@@ -2075,6 +2075,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // the callback frame and the next two VM dispatches entirely.
                 let next = unsafe { &*opline_ptr.add(1) };
                 let direct_shape = direct_user_calls_enabled()
+                    && !op_array.strict_types
                     && opline.extended_value == 1
                     && next.opcode == OpCode::SendUser
                     && next.extended_value == 0

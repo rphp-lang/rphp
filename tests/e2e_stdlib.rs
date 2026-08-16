@@ -25,6 +25,28 @@ catch (\TypeError $error) { echo "[", $error->getMessage(), "]"; }
 }
 
 #[test]
+fn strict_internal_string_calls_reject_scalars_without_weakening_ordinary_calls() {
+    assert_eq!(
+        run_php("<?php echo strlen(1.5), ':', ord(65), \"\\n\";"),
+        "3:54\n"
+    );
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+foreach ([["strlen", 1.5], ["ord", 65]] as [$function, $argument]) {
+    try { $function($argument); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+try { array_map([null, "method"], []); }
+catch (TypeError $error) { echo $error->getMessage(); }
+"#,
+        ),
+        "strlen(): Argument #1 ($string) must be of type string, float given\nord(): Argument #1 ($character) must be of type string, int given\narray_map(): Argument #1 ($callback) must be a valid callback or null, first array member is not a valid class name or object"
+    );
+}
+
+#[test]
 fn addcslashes_preserves_php_reference_escaping_rules() {
     assert_eq!(
         run_php(

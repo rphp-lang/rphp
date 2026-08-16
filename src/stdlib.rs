@@ -4369,6 +4369,22 @@ fn fn_array_map(
         match resolve_callback_at_callsite(callback, eg, ed) {
             Some(resolved) => Some(resolved),
             None => {
+                if callback
+                    .as_array()
+                    .and_then(|parts| parts.get_value_at(0))
+                    .is_some_and(|receiver| {
+                        !matches!(
+                            receiver.dereferenced().value_type(),
+                            ValueType::String | ValueType::Object
+                        )
+                    })
+                {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        "array_map(): Argument #1 ($callback) must be a valid callback or null, first array member is not a valid class name or object",
+                    ));
+                    return Ok(());
+                }
                 let description = callback.echo_to_string();
                 eg.exception = Some(crate::value::make_error_value(
                     "TypeError",
@@ -4503,6 +4519,9 @@ fn fn_strlen(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if reject_strict_internal_string(eg, ed, arg!(ed, 0), "strlen", "string") {
+        return Ok(());
+    }
     if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
         report_internal_deprecation(
             eg,
@@ -5823,6 +5842,9 @@ fn direct_ord(args: &[Value]) -> Result<Value, VmError> {
 }
 
 fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if reject_strict_internal_string(eg, ed, arg!(ed, 0), "ord", "character") {
+        return Ok(());
+    }
     if arg!(ed, 0).dereferenced().value_type() == ValueType::Null {
         report_internal_deprecation(
             eg,
@@ -7504,6 +7526,40 @@ fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
             .unwrap_or(0);
         (file, line)
     }
+}
+
+fn internal_call_is_strict(ed: *mut ExecuteData) -> bool {
+    // SAFETY: an internal handler executes synchronously beneath its live
+    // caller, whose function header remains valid for the duration of the call.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        if caller.is_null() || (*caller).func.is_null() {
+            return false;
+        }
+        let function = Function::from_common_ptr((*caller).func);
+        function.fn_type() == FunctionType::User && function.as_user().op_array.strict_types
+    }
+}
+
+fn reject_strict_internal_string(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    argument: &Value,
+    function: &str,
+    parameter: &str,
+) -> bool {
+    let argument = argument.dereferenced();
+    if !internal_call_is_strict(ed) || argument.value_type() == ValueType::String {
+        return false;
+    }
+    eg.exception = Some(crate::value::make_error_value(
+        "TypeError",
+        &format!(
+            "{function}(): Argument #1 (${parameter}) must be of type string, {} given",
+            argument.type_name()
+        ),
+    ));
+    true
 }
 
 fn report_internal_deprecation(
