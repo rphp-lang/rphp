@@ -137,6 +137,30 @@ try {
 }
 
 #[test]
+fn iterator_protocol_callbacks_share_live_globals_with_the_suspended_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class GlobalIterator implements Iterator {
+    private int $position = 0;
+    public function rewind(): void { global $indent; echo "R$indent|"; $indent .= 'r'; $this->position = 0; }
+    public function valid(): bool { global $indent; echo "V$indent|"; return $this->position < 1; }
+    public function current(): mixed { global $indent; return $indent; }
+    public function key(): mixed { return 0; }
+    public function next(): void { $this->position++; }
+}
+$indent = 'a';
+foreach (new GlobalIterator() as $value) echo "=$value|";
+$indent = 'b';
+foreach (new GlobalIterator() as $value) echo "=$value|";
+echo "M$indent";
+"#,
+        ),
+        "Ra|Var|=ar|Var|Rb|Vbr|=br|Vbr|Mbr"
+    );
+}
+
+#[test]
 fn iterator_aggregate_generator_closure_preserves_lexical_visibility_scope() {
     assert_eq!(
         run_php(
