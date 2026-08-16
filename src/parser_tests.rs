@@ -349,6 +349,22 @@ fn pipe_requires_parentheses_around_an_arrow_rhs() {
 }
 
 #[test]
+fn pipe_and_call_results_in_destructuring_are_deferred_write_errors() {
+    for source in [
+        "<?php\nlist(identity() ) = $source;",
+        "<?php\nlist(input |> identity(...)) = $source;",
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                if message == "Can't use function return value in write context" && *line == 2
+        ));
+    }
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_retains_its_short_circuit_flag() {
     let tokens = Lexer::new("<?php $object?->{$property};")
         .tokenize()

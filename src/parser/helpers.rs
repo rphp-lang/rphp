@@ -1116,13 +1116,24 @@ impl Parser {
                 let nested = self.parse_list_targets(&Token::RBracket)?;
                 self.expect(&Token::RBracket)?;
                 targets.push(ListTarget::Nested(nested));
-            } else if let Token::Identifier(ref name, _) = self.peek() {
+            } else if let Token::Identifier(ref name, line) = self.peek() {
                 if name == "list" && matches!(self.peek_at(1), Token::LParen(_)) {
                     self.advance(); // consume 'list'
                     self.expect_lparen()?;
                     let nested = self.parse_list_targets(&Token::RParen)?;
                     self.expect(&Token::RParen)?;
                     targets.push(ListTarget::Nested(nested));
+                } else if matches!(self.peek_at(1), Token::PipeGreater(_) | Token::LParen(_)) {
+                    // Calls and pipes are valid expression grammar here, but
+                    // their results cannot become destructuring write targets.
+                    // Consume the complete expression so PHP's compile-time
+                    // diagnostic survives dead-code elimination.
+                    let line = line;
+                    let _ = self.parse_expr()?;
+                    targets.push(ListTarget::Target(self.compile_error(
+                        "Can't use function return value in write context",
+                        line,
+                    )));
                 } else {
                     return Err(format!(
                         "Expected variable in list/destructuring, got identifier '{}'",
