@@ -1,12 +1,12 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 #[inline(never)]
-fn op_nullsafe_check(
+fn op_nullsafe_check<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<bool, VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: every operand and jump target belongs to the live `frame` and
     // `op_array`; result publication records ownership for TMP/VAR slots.
     unsafe {
@@ -20,14 +20,32 @@ fn op_nullsafe_check(
             frame_result_set(frame, result_ptr, opline.result_type, Value::null());
             let target = opline.op2 as usize;
             (*frame).opline = op_array.instructions.as_ptr().add(target);
-            return Ok(true); // continue
+            return Ok(ColdResult::Continue);
         } else if is_non_object {
             // extended_value: 0 = property access (warning + null), 1 = method call (fatal)
             if opline.extended_value == 1 {
-                // Method call on scalar: fatal error (like PHP)
-                return Err(VmError::Fatal(
-                    "Call to a member function on a non-object".into(),
-                ));
+                let method = op_array
+                    .literals
+                    .get(opline._pad as usize)
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let error = make_error_value(
+                    "Error",
+                    &format!(
+                        "Call to a member function {method}() on {}",
+                        val.dereferenced().type_name()
+                    ),
+                );
+                let instruction_index = (opline as *const Instruction)
+                    .offset_from(op_array.instructions.as_ptr())
+                    as usize;
+                attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
             } else {
                 // Property access on scalar: warning + null (like PHP)
                 eg.write_output(b"Warning: Attempt to read property on non-object\n");
@@ -35,10 +53,10 @@ fn op_nullsafe_check(
                 frame_result_set(frame, result_ptr, opline.result_type, Value::null());
                 let target = opline.op2 as usize;
                 (*frame).opline = op_array.instructions.as_ptr().add(target);
-                return Ok(true); // continue
+                return Ok(ColdResult::Continue);
             }
         }
-        Ok(false)
+        Ok(ColdResult::Done)
     }
 }
 

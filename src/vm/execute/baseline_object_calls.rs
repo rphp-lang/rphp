@@ -1925,7 +1925,17 @@ fn op_init_method_call<'a>(
     } else {
         let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
         let method = method_name.as_str().unwrap_or("");
-        let err = make_error_value("Error", &format!("Call to member function {}() on non-object", method));
+        let err = make_error_value(
+            "Error",
+            &format!(
+                "Call to a member function {method}() on {}",
+                obj_val.dereferenced().type_name()
+            ),
+        );
+        let instruction_index = (opline as *const Instruction as usize
+            - op_array.instructions.as_ptr() as usize)
+            / std::mem::size_of::<Instruction>();
+        attach_throwable_origin(&err, eg, frame, op_array, instruction_index);
         match throw_in_frame(eg, frame, err) {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 return Ok(ColdResult::NewFrame(new_frame, new_op_array));
