@@ -249,7 +249,7 @@ try {
 }
 "#
         ),
-        "Return value must be of type int, string returned"
+        "bad(): Return value must be of type int, string returned"
     );
 }
 
@@ -371,6 +371,70 @@ echo f() === null ? "null" : "other";
 "#
         ),
         "null"
+    );
+}
+
+#[test]
+fn declared_return_types_reject_missing_values_but_accept_explicit_null() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function missingMixed(): mixed {}
+function missingNullable(): ?int {}
+function explicitMixed(): mixed { return null; }
+function explicitNullable(): ?int { return null; }
+function implicitUntyped() {}
+
+foreach (["missingMixed", "missingNullable"] as $function) {
+    try { $function(); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+var_dump(explicitMixed(), explicitNullable(), implicitUntyped());
+"#
+        ),
+        "missingMixed(): Return value must be of type mixed, none returned\nmissingNullable(): Return value must be of type ?int, none returned\nNULL\nNULL\nNULL\n"
+    );
+}
+
+#[test]
+fn bare_returns_obey_declared_return_contracts_at_compile_time() {
+    for (source, expected) in [
+        (
+            "<?php function nullable(): ?int { return; }",
+            "A function with return type must return a value (did you mean \"return null;\" instead of \"return;\"?)",
+        ),
+        (
+            "<?php function scalar(): int { return; }",
+            "A function with return type must return a value",
+        ),
+        (
+            "<?php function bottom(): never { return; }",
+            "A never-returning function must not return",
+        ),
+        (
+            "<?php class Bottom { public function stop(): never { return; } }",
+            "A never-returning method must not return",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        let rphp::vm::execute::VmError::Fatal(message) = error else {
+            panic!("unexpected compile error: {error:?}");
+        };
+        assert!(
+            message.contains(expected),
+            "unexpected compile error: {message}"
+        );
+    }
+
+    assert_eq!(
+        run_php("<?php function nothing(): void { return; } nothing(); echo 'ok';"),
+        "ok"
+    );
+    assert_eq!(
+        run_php(
+            "<?php function numbers(): Iterator { yield 1; return; } foreach (numbers() as $value) { echo $value; }"
+        ),
+        "1"
     );
 }
 

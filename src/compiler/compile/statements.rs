@@ -1932,8 +1932,10 @@ impl Compiler {
                 );
                 func_compiler.current_function_name = resolved_name.clone();
                 func_compiler.returns_reference_context = *returns_by_ref;
+                func_compiler.contains_yield = body.iter().any(Stmt::contains_yield);
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
+                func_compiler.return_type_context = cp.return_type_hint.clone();
                 for s in body {
                     func_compiler.compile_stmt(s)?;
                 }
@@ -1996,6 +1998,29 @@ impl Compiler {
                 self.functions.push((resolved_name, user_func));
             }
             Stmt::Return { expr, line } => {
+                if expr.is_none() && !self.contains_yield {
+                    let message = match &self.return_type_context {
+                        ParamTypeHint::None | ParamTypeHint::Void => None,
+                        ParamTypeHint::Never => Some(format!(
+                            "A never-returning {} must not return",
+                            if !self.current_function_name.starts_with("__closure_")
+                                && self.current_function_name.contains("::")
+                            {
+                                "method"
+                            } else {
+                                "function"
+                            }
+                        )),
+                        hint if hint.allows_null() => Some(
+                            "A function with return type must return a value (did you mean \"return null;\" instead of \"return;\"?)"
+                                .to_string(),
+                        ),
+                        _ => Some("A function with return type must return a value".to_string()),
+                    };
+                    if let Some(message) = message {
+                        return Err(self.goto_error(&message, *line));
+                    }
+                }
                 let (op, op_type, has_explicit_value) = if let Some(e) = expr {
                     if self.returns_reference_context
                         && let Some(line) = Self::nullsafe_chain_line(e)
@@ -3250,6 +3275,7 @@ impl Compiler {
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_class, method.name);
                     func_compiler.returns_reference_context = method.returns_by_ref;
+                    func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     // $this is always CV 0 in methods
                     let this_cv = func_compiler.resolve_cv("this");
@@ -3258,6 +3284,7 @@ impl Compiler {
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    func_compiler.return_type_context = cp.return_type_hint.clone();
 
                     // Constructor property promotion: generate $this->param = $param assignments
                     if method.name == "__construct" {
@@ -3576,6 +3603,7 @@ impl Compiler {
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_iface, method.name);
                     func_compiler.returns_reference_context = method.returns_by_ref;
+                    func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
@@ -3583,6 +3611,7 @@ impl Compiler {
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    func_compiler.return_type_context = cp.return_type_hint.clone();
                     let null_idx = func_compiler.add_literal(Value::null());
                     let mut ret = Instruction::new(OpCode::Return);
                     ret.op1_type = OpType::Const;
@@ -3716,6 +3745,7 @@ impl Compiler {
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_trait, method.name);
                     func_compiler.returns_reference_context = method.returns_by_ref;
+                    func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
@@ -3723,6 +3753,7 @@ impl Compiler {
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    func_compiler.return_type_context = cp.return_type_hint.clone();
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
@@ -4119,6 +4150,7 @@ impl Compiler {
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_enum, method.name);
                     func_compiler.returns_reference_context = method.returns_by_ref;
+                    func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
@@ -4126,6 +4158,7 @@ impl Compiler {
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    func_compiler.return_type_context = cp.return_type_hint.clone();
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }

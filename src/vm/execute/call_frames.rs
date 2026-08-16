@@ -561,12 +561,6 @@ fn attach_throwable_origin(
     op_array: &crate::compiler::OpArray,
     instruction_index: usize,
 ) {
-    let Some(line) = op_array.source_line(instruction_index) else {
-        return;
-    };
-    if op_array.source_file.is_empty() {
-        return;
-    }
     if throwable.as_object().is_some_and(|object| {
         object
             .get_property("file")
@@ -579,14 +573,50 @@ fn attach_throwable_origin(
     }) {
         return;
     }
-    // SAFETY: opcode dispatch keeps the complete synchronous frame chain live
-    // for the duration of this cold metadata snapshot.
     let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
         .as_deref()
         .is_some_and(crate::stdlib::ini_boolean);
     let trace_options = if ignore_arguments { 2 } else { 0 };
-    let trace = unsafe {
-        crate::stdlib::collect_debug_backtrace(frame, trace_options, 0, eg, true)
+    // SAFETY: opcode dispatch keeps the complete synchronous frame chain live
+    // for the duration of this cold metadata snapshot. A compiler-synthesized
+    // implicit Return has no source line, so its still-live caller provides
+    // the observable raise location without changing the captured frame chain.
+    let (origin_op_array, line, trace) = unsafe {
+        let mut origin_op_array = op_array;
+        let mut origin_index = instruction_index;
+        if origin_op_array.source_line(origin_index).is_none()
+            && origin_op_array.instructions.get(origin_index).is_some_and(|instruction| {
+                instruction.opcode == OpCode::Return && instruction.extended_value == 0
+            })
+        {
+            let caller = (*frame).prev_execute_data;
+            if !caller.is_null() {
+                let caller_op_array = (*caller).op_array();
+                let caller_ip = (*caller)
+                    .opline
+                    .offset_from(caller_op_array.instructions.as_ptr())
+                    as usize;
+                if let Some(caller_origin) = caller_op_array
+                    .instructions
+                    .len()
+                    .checked_sub(1)
+                    .and_then(|last| (0..=caller_ip.min(last))
+                        .rev()
+                        .find(|index| caller_op_array.source_line(*index).is_some()))
+                {
+                    origin_op_array = caller_op_array;
+                    origin_index = caller_origin;
+                }
+            }
+        }
+        let Some(line) = origin_op_array.source_line(origin_index) else {
+            return;
+        };
+        if origin_op_array.source_file.is_empty() {
+            return;
+        }
+        let trace = crate::stdlib::collect_debug_backtrace(frame, trace_options, 0, eg, true);
+        (origin_op_array, line, trace)
     };
     let Some(mut object) = throwable.as_object_mut() else {
         return;
@@ -596,7 +626,10 @@ fn attach_throwable_origin(
         .and_then(Value::as_str)
         .is_none_or(str::is_empty)
     {
-        object.set_property("file", Value::shared_string(op_array.source_file.clone()));
+        object.set_property(
+            "file",
+            Value::shared_string(origin_op_array.source_file.clone()),
+        );
     }
     if object
         .get_property("line")

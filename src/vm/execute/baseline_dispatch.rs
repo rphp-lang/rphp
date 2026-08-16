@@ -1,6 +1,33 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 #[cold]
+fn return_type_error_value(
+    eg: &ExecutorGlobals,
+    function: *const FunctionCommon,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    hint: &ParamTypeHint,
+    outcome: &str,
+) -> Value {
+    let function_name = displayed_function_name(eg, function);
+    let error = make_error_value(
+        "TypeError",
+        &format!(
+            "{function_name}(): Return value must be of type {}, {outcome}",
+            hint.display_name()
+        ),
+    );
+    let instruction_index = op_array
+        .instructions
+        .iter()
+        .position(|instruction| std::ptr::eq(instruction, opline))
+        .expect("active return instruction belongs to its op array");
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    error
+}
+
+#[cold]
 #[inline(never)]
 fn throw_invalid_dynamic_call_class<'a>(
     eg: &mut ExecutorGlobals,
@@ -5508,7 +5535,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // Inline exact scalar validation before transferring the
                     // value. Complex hints use ReturnStrategy::Full.
                     let ret_hint = &func_common_ret.sig.return_type_hint;
-                    let has_return_type = !matches!(ret_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
+                    let has_return_type = !matches!(ret_hint, ParamTypeHint::None);
+                    if has_return_type && opline.extended_value == 0 {
+                        let err = return_type_error_value(
+                            eg,
+                            func_common_ret as *const FunctionCommon,
+                            frame,
+                            op_array,
+                            opline,
+                            ret_hint,
+                            "none returned",
+                        );
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                        }
+                    }
                     let return_type_proven = known_scalar_satisfies_type_hint(
                         opline.known_result_type(),
                         ret_hint,
@@ -5527,11 +5569,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array.strict_types,
                         ) == Some(true);
                         if !type_ok {
-                            let err = make_error_value("TypeError", &format!(
-                                "Return value must be of type {}, {} returned",
-                                ret_hint.display_name(),
-                                retval.type_name()
-                            ));
+                            let outcome = format!("{} returned", retval.type_name());
+                            let err = return_type_error_value(
+                                eg,
+                                func_common_ret as *const FunctionCommon,
+                                frame,
+                                op_array,
+                                opline,
+                                ret_hint,
+                                &outcome,
+                            );
                             match throw_in_frame(eg, frame, err) {
                                 ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                 ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
@@ -5703,7 +5750,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                         hint => {
-                            if opline.op1_type != OpType::Unused {
+                            if !has_explicit_value {
+                                let err = return_type_error_value(
+                                    eg,
+                                    func_common as *const FunctionCommon,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    hint,
+                                    "none returned",
+                                );
+                                match throw_in_frame(eg, frame, err) {
+                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                }
+                            } else if opline.op1_type != OpType::Unused {
                                 let retval = unsafe {
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
@@ -5717,11 +5778,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     frame,
                                     ret_callee_class,
                                 ) {
-                                    let err = make_error_value("TypeError", &format!(
-                                        "Return value must be of type {}, {} returned",
-                                        hint.display_name(),
-                                        retval.type_name()
-                                    ));
+                                    let outcome = format!("{} returned", retval.type_name());
+                                    let err = return_type_error_value(
+                                        eg,
+                                        func_common as *const FunctionCommon,
+                                        frame,
+                                        op_array,
+                                        opline,
+                                        hint,
+                                        &outcome,
+                                    );
                                     match throw_in_frame(eg, frame, err) {
                                         ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                         ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }

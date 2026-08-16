@@ -1624,6 +1624,9 @@ pub struct Compiler {
     /// &name()` are acquired as references, not read in the ordinary warning
     /// context.
     returns_reference_context: bool,
+    /// Declared return contract for rejecting a source-level bare `return;`
+    /// during compilation. `None` means the current unit is untyped.
+    return_type_context: ParamTypeHint,
     /// Source identity used by the compile-time `__FILE__` and `__DIR__`
     /// constants. Embedders may leave both empty when no file exists.
     source_file: String,
@@ -1789,6 +1792,7 @@ impl Compiler {
             static_vars: Vec::new(),
             current_function_name: String::new(),
             returns_reference_context: false,
+            return_type_context: ParamTypeHint::None,
             source_file: String::new(),
             source_directory: String::new(),
             implicit_return_value: Value::null(),
@@ -5870,6 +5874,7 @@ impl Compiler {
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 func_compiler.current_function_name = closure_name.clone();
                 func_compiler.returns_reference_context = *returns_by_ref;
+                func_compiler.contains_yield = body.iter().any(Stmt::contains_yield);
                 // params come first as CVs (args), then use_vars
                 let compile_result = self.compile_params(&mut func_compiler, params, "closure");
                 let mut cp = match compile_result {
@@ -5889,6 +5894,7 @@ impl Compiler {
                     }
                 };
                 cp.return_type_hint = self.convert_type_hint(return_type);
+                func_compiler.return_type_context = cp.return_type_hint.clone();
                 let mut closure_reference_cvs = Vec::new();
                 for (v, by_reference, line) in use_vars {
                     let cv = func_compiler.resolve_cv(v);

@@ -1099,7 +1099,9 @@ pub(crate) fn make_user_function_typed_with_return_mode(
     let has_no_type_hints = param_type_hints
         .iter()
         .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
-    let has_no_return_type = matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
+    // `mixed` accepts every explicit value, including null, but PHP still
+    // rejects a missing return value. Only an absent declaration is untyped.
+    let has_no_return_type = matches!(return_type_hint, ParamTypeHint::None);
     let has_exact_long_params = !param_type_hints.is_empty()
         && param_type_hints
             .iter()

@@ -994,6 +994,16 @@ pub enum ParamTypeHint {
 }
 
 impl ParamTypeHint {
+    /// Whether an explicit `null` satisfies this declared return contract.
+    /// This does not make a bare or implicit return a value-producing return.
+    pub fn allows_null(&self) -> bool {
+        match self {
+            Self::Mixed | Self::Nullable(_) => true,
+            Self::Union(parts) => parts.iter().any(Self::allows_null),
+            _ => false,
+        }
+    }
+
     /// Whether this return contract needs PHP's late-static called class.
     #[inline]
     pub fn uses_late_static(&self) -> bool {
@@ -1171,10 +1181,10 @@ impl SignatureInfo {
             .param_type_hints
             .iter()
             .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
-        let untyped_return = matches!(
-            self.return_type_hint,
-            ParamTypeHint::None | ParamTypeHint::Mixed
-        );
+        // A declared `mixed` return still requires an explicit value. Keep it
+        // out of the completely untyped ABI so an implicit/bare return reaches
+        // the canonical return-contract check.
+        let untyped_return = matches!(self.return_type_hint, ParamTypeHint::None);
         if untyped_params && untyped_return {
             return Some(CallStrategy::FastScalar);
         }
