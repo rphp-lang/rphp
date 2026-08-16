@@ -1,14 +1,14 @@
 {
     "name": "rphp/composer-platform-fail-fixture",
     "version": "1.0.0",
-    "description": "Negative Composer platform-check gate for RPHP 8.2.0",
+    "description": "Negative Composer platform-check gate for RPHP 8.5.0",
     "license": "MIT",
     "require": {
-        "php": ">=8.2.1"
+        "php": ">=8.5.1"
     },
     "config": {
         "platform": {
-            "php": "8.2.1"
+            "php": "8.5.1"
         },
         "sort-packages": true
     }

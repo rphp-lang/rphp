@@ -17,10 +17,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - name: Install PHP 8.2 oracle
+      - name: Install PHP 8.5 oracle
         uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
+          php-version: "8.5"
           coverage: none
       - name: Run pinned Symfony cold-build frontier
         run: scripts/test-symfony-cold-kernel-s3.sh

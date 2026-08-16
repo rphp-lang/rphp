@@ -9,7 +9,7 @@ See the [project coordination map](roadmap.md), the
 ## Mission and public contract
 
 Make RPHP an increasingly complete, independently implemented PHP runtime with
-PHP 8.2 as its public compatibility contract. `PHP_VERSION`, Composer platform
+PHP 8.5 as its public compatibility contract. `PHP_VERSION`, Composer platform
 checks, documented behavior, diagnostics, and compatibility claims must agree
 with that contract. Experimental RPHP syntax and opt-in features remain outside
 it unless they are admitted explicitly.
@@ -36,76 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Starting evidence
 
-The public platform identity is PHP 8.2.0. The reproducible, machine-readable
-contract corpus is pinned to PHP 8.2.33. The older PHP 8.4 audit remains a
-separately labeled trend line and does not establish PHP 8.4 compatibility.
+The public platform identity is PHP 8.5.0. The reproducible contract corpus is
+pinned to php-src 8.5.6 commit `fcc29c8`. The retained PHP 8.2.33 and 8.4.21
+results are historical regression and trend evidence; neither defines current
+PHP behavior.
 
-Composer S0, the four bounded Symfony component S1 gates, the reference-warmed
-Symfony FrameworkBundle S2 diagnostic and the pinned FrameworkBundle S3
-CLI-kernel gate pass on AMD64. The S3 claim remains limited to the exact pinned
-fixture and cold, cached, deleted-cache, malformed-cache and concurrent
-publication transitions described below.
+The initial AMD64 PHP 8.5 baseline uses RPHP `a2d04d2` and discovers 5,599
+unmodified `Zend/tests` and `tests/lang` cases: 1,815 pass, 3,390 fail, 110
+skip, one upstream XFAIL, 280 are unsupported, one times out and two crash.
+The matching PHP 8.5.6 oracle has 5,440 passes, zero ordinary failures, 153
+skips, one XFAIL and five unsupported SAPI sections. The manifest therefore
+starts with explicit crash/hang work in `gh18572.phpt`,
+`recursive_array_comparison.phpt` and `gh13178_4.phpt`, followed by the
+highest-fanout front-end and runtime clusters.
 
-The current pinned PHP 8.2 differential candidate is based on RPHP `6402dd1`
-against php-src 8.2.33 `651db3e`: 1,739 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass, with six exact arithmetic-error and shift additions
-and no lost pass relative to the retained 1,733-pass baseline. Division and
-modulo by zero now throw catchable `DivisionByZeroError`, negative shifts throw
-`ArithmeticError`, and shifts at or beyond the AMD64 integer width produce
-PHP's zero or sign-filled result. Numeric-prefix strings warn before shifting,
-while unsupported operands throw `TypeError`. An
-array-element assignment through a reference held by a typed property now
-returns the weakly coerced value that was actually stored, while leaving the
-original RHS variable unchanged. Static
-properties now participate in owned l-value reference identity across
-inherited, dynamic-owner and dynamic-name forms; nullable/untyped
-uninitialized slots materialize `null`, while non-nullable slots raise the
-dedicated PHP error. Typed static properties add and remove constraints on the
-shared owned cell as aliases are rebound; CV, compound/inc-dec, array,
-dynamic-variable and global writes enforce the compatible constraint
-intersection without changing the compact `Value` layout. Typed instance
-property acquisition and constraints now extend to direct declared instance
-properties, including compatible type intersections, runtime-named slots,
-clone, rebind and destruction. Magic `__get` reference acquisition remains a
-separate slice. Object `var_dump()` observes property reference cells without an
-ordinary clone that dereferences them. Compiler-only array, property, dynamic-
-variable, append and nested-append CVs are excluded from PHP-visible alias
-cardinality, so they cannot retain a false `&` marker after the last visible
-location is unset. Array-element `=&` follows the general mutable-l-value path,
-binds the destination to the canonical nested cell and writes rebuilt
-containers back through property, global and nested array roots. Rebinding or
-unsetting the last external alias removes the visible reference identity while
-a live nested alias retains PHP's `var_dump()` marker. Static local `=&` binds
-both CV names to one stable reference cell; writes go through the cell, while
-later reference assignment rebinds the destination name. Undefined/self
-sources, unset, `$this`, l-value expression use, array copy-on-write and
-retained destructuring input are covered.
-Variable variables and runtime-named symbol-table operations also
-cover reads, writes, silent probes, unset, coalesce/mutation writeback,
-references, dynamic globals, destructuring, callable postfixes and dynamic
-object/static members. All 57 paths selected for the former leading-dollar
-lexer rejection now execute past that boundary; 31 pass exactly and 26 expose
-separate visible clusters. The corpus retains zero crashes and zero timeouts,
-and the unsafe inventory stays within its existing ceilings. The final Cargo
-gate covers ordinary default `quick-loops+jit-prototype`, explicit typed-only
-`quick-loops`, no-default-features and all-features builds.
-Internal callback frames, suspended generator/coroutine histories,
-exception-chain rendering and per-request Throwable INI controls remain
-explicit boundaries. The Symfony S3 slice remains green against PHP 8.2.33
-through cold, cached, deleted-cache, malformed-cache and concurrent publication
-transitions, including exact health and missing-route results.
-Constructor/precompiled/generator call edges, complete by-reference returns,
-indirect `ArrayAccess` and `WeakMap` appends, symbol-table introspection,
-foreach reference/COW writeback, complex interpolation, delayed class
-linking/autoload validation and other visible failure clusters remain
-boundaries; the broader adoption goal remains active until the selected PHP
-8.2 contract corpus converges.
+Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
+S2 pass on AMD64. The cold FrameworkBundle S3 gate remains limited to its exact
+pinned fixture and is revalidated with a PHP 8.5 oracle before its historical
+claim is promoted to the new contract. None of these bounded gates establishes
+general PHP, extension, SAPI or production compatibility.
 
 ## Measurement system
 
 ### Contract baseline
 
-Pin one public php-src PHP 8.2 commit, the reference CLI build/configuration,
+Pin one public php-src PHP 8.5 commit, the reference CLI build/configuration,
 the RPHP commit, runner commit, feature set, architecture, timeout policy, and
 test-suite selection. Run unmodified `Zend/tests` and `tests/lang` first; add
 other core and extension suites only as separately named capability gates.
@@ -134,7 +89,7 @@ next goal by this order unless an explicit project objective overrides it:
 2. runner/oracle uncertainty and incorrect diagnostics for already-supported
    behavior;
 3. blockers on the active Composer/Symfony gate;
-4. high-fanout PHP 8.2 language and baseline-semantic clusters;
+4. high-fanout PHP 8.5 language and baseline-semantic clusters;
 5. Reflection and standard-library clusters with measured dependency reach;
 6. isolated low-fanout features and optional extensions.
 
@@ -148,9 +103,9 @@ is claimed.
 The workstreams can overlap, but each change must be a complete vertical slice
 through every affected layer. Milestones are evidence gates, not dates.
 
-### C0 — Trustworthy PHP 8.2 differential baseline
+### C0 — Trustworthy PHP 8.5 differential baseline
 
-Build and retain the pinned PHP 8.2 contract run alongside the existing audit.
+Build and retain the pinned PHP 8.5 contract run alongside the historical audits.
 Add original runner regressions for every harness discrepancy found.
 
 Exit gate:
@@ -273,16 +228,16 @@ S4 exit gate:
 
 FPM/CGI protocol compatibility and production hardening remain separate claims.
 
-### C6 — PHP 8.2 contract convergence and ecosystem expansion
+### C6 — PHP 8.5 contract convergence and ecosystem expansion
 
-Drive the PHP 8.2 failure manifest toward zero by root-cause cluster. Admit a
+Drive the PHP 8.5 failure manifest toward zero by root-cause cluster. Admit a
 suite or extension only when its unmodified differential gate has no ordinary
 failure, crash, or timeout and all unsupported capabilities are named. Expand
 the ecosystem after S3 through separately pinned gates such as Console/Dotenv,
 Twig, PDO/Doctrine, Security/sessions, caches, HttpClient/cURL, Messenger, and
 long-lived workers.
 
-A broad PHP 8.2 compatibility label requires an explicit release manifest:
+A broad PHP 8.5 compatibility label requires an explicit release manifest:
 complete selected suites, exact platform/configuration, zero hidden exclusions,
 zero unexplained crash/timeout, and a published list of every unsupported SAPI
 and extension. Until then, documentation must continue to say “tested subset.”

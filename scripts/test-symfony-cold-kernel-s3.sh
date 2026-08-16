@@ -249,8 +249,8 @@ compare_concurrent_captures() {
 }
 
 reference_version="$("${reference_php}" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION.".".PHP_RELEASE_VERSION;')"
-if [[ "${reference_version}" != 8.2.* ]]; then
-    echo "error: Symfony S3 requires a PHP 8.2 reference oracle, got ${reference_version}" >&2
+if [[ "${reference_version}" != 8.5.* ]]; then
+    echo "error: Symfony S3 requires a PHP 8.5 reference oracle, got ${reference_version}" >&2
     exit 1
 fi
 

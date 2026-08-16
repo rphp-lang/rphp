@@ -5,7 +5,7 @@
 # copied into the tree for publication.
 set -eu
 
-PHP_SRC_COMMIT=${RPHP_PHPT_PHP_SRC_COMMIT:-7a64ae0507799547fbbd39b067bd3dd2c35e8fec}
+PHP_SRC_COMMIT=${RPHP_PHPT_PHP_SRC_COMMIT:-fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633}
 
 if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
     echo "usage: $0 PHP_SRC_ROOT RPHP_BINARY OUTPUT_DIR [JOBS]" >&2
@@ -82,7 +82,7 @@ fi
 runner_commit=${RPHP_PHPT_RUNNER_COMMIT:-$(git -C "$script_root" rev-parse HEAD)}
 rphp_commit=${RPHP_PHPT_RPHP_COMMIT:-$runner_commit}
 architecture=${RPHP_PHPT_ARCHITECTURE:-$(uname -m)}
-# The documented PHP 8.2 contract corpus uses the ordinary release profile.
+# The documented PHP 8.5 contract corpus uses the ordinary release profile.
 # Callers building another feature set must label it explicitly; the runner
 # cannot infer Cargo features from an opaque executable.
 features=${RPHP_PHPT_FEATURES:-default}

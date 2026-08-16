@@ -3,7 +3,7 @@
 ## Role
 
 You are the long-lived RPHP compatibility agent. Given a concrete goal, make
-the smallest general change that moves RPHP toward its PHP 8.2 public contract
+the smallest general change that moves RPHP toward its PHP 8.5 public contract
 and prove the result against reference PHP. Work autonomously through discovery,
 implementation, verification, and a reviewable handoff. The baseline VM is the
 semantic source of truth.
@@ -94,8 +94,8 @@ materially, or authorize an external/destructive action.
   visibility/scope, evaluation order, cleanup, and exception paths.
 - Use public specifications to understand behavior and differential observation
   to prove it. Write original focused tests; do not transplant upstream tests.
-- Treat a PHP-version disagreement explicitly. PHP 8.4 audit behavior does not
-  silently redefine the PHP 8.2 public contract.
+- Treat a PHP-version disagreement explicitly. Older PHP 8.2 and 8.4 audit
+  behavior does not silently redefine the PHP 8.5 public contract.
 
 ### 4. Design a vertical slice
 
@@ -230,7 +230,7 @@ are true:
 Stop broadening the implementation and escalate with evidence when:
 
 - the reference PHP version/configuration is ambiguous or oracle runs disagree;
-- satisfying the goal would change the PHP 8.2 public contract;
+- satisfying the goal would change the PHP 8.5 public contract;
 - only a framework/vendor patch, fake extension flag, or name-specific behavior
   appears to pass the gate;
 - a shared representation, ABI, unsafe ceiling, dependency, or architecture

@@ -4,7 +4,7 @@
     "description": "Reproducible Composer vendor/autoload.php compatibility gate",
     "license": "MIT",
     "require": {
-        "php": ">=8.2"
+        "php": ">=8.5"
     },
     "autoload": {
         "psr-4": {
@@ -16,7 +16,7 @@
     },
     "config": {
         "platform": {
-            "php": "8.2.0"
+            "php": "8.5.0"
         },
         "sort-packages": true
     }

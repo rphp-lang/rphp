@@ -58,7 +58,7 @@ cp -R "${failure_fixture_source}/." "${failure_fixture}/"
 cd "${repository_root}"
 cargo build --locked --quiet
 actual="$(target/debug/rphp "${fixture}/run.php")"
-expected='80200|8.2.0|8.2.0|8|cli|loader|hello|composer'
+expected='80500|8.5.0|8.5.0|8|cli|loader|hello|composer'
 if [[ "${actual}" != "${expected}" ]]; then
     printf 'error: Composer S0 gate mismatch\nexpected: %s\nactual:   %s\n' \
         "${expected}" "${actual}" >&2
@@ -74,8 +74,8 @@ if ((platform_failure_status == 0)); then
     exit 1
 fi
 if [[ "${platform_failure_output}" != *'RuntimeException'* \
-    || "${platform_failure_output}" != *'require a PHP version ">= 8.2.1"'* \
-    || "${platform_failure_output}" != *'You are running 8.2.0'* ]]; then
+    || "${platform_failure_output}" != *'require a PHP version ">= 8.5.1"'* \
+    || "${platform_failure_output}" != *'You are running 8.5.0'* ]]; then
     printf 'error: Composer negative platform check mismatch\n%s\n' \
         "${platform_failure_output}" >&2
     exit 1

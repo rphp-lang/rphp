@@ -21,10 +21,10 @@ pub mod vm;
 /// Public compatibility identity used by PHP constants, phpversion(), and
 /// dependency platform checks. Newer experimental syntax does not change this
 /// contract until its full version gate is promoted.
-pub const PHP_COMPAT_VERSION: &str = "8.2.0";
-pub const PHP_COMPAT_VERSION_ID: i64 = 80_200;
+pub const PHP_COMPAT_VERSION: &str = "8.5.0";
+pub const PHP_COMPAT_VERSION_ID: i64 = 80_500;
 pub const PHP_COMPAT_MAJOR_VERSION: i64 = 8;
-pub const PHP_COMPAT_MINOR_VERSION: i64 = 2;
+pub const PHP_COMPAT_MINOR_VERSION: i64 = 5;
 pub const PHP_COMPAT_RELEASE_VERSION: i64 = 0;
 
 fn php_os_family() -> &'static str {

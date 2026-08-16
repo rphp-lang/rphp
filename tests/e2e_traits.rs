@@ -17,7 +17,7 @@ fn constant_php_version_branch_registers_only_the_selected_trait() {
         run_php(
             "<?php if (PHP_VERSION_ID >= 80300) { trait VersionedTrait { public function version() { return 'new'; } } } else { trait VersionedTrait { public function version() { return 'compat'; } } } class VersionedConsumer { use VersionedTrait; } echo (new VersionedConsumer())->version();"
         ),
-        "compat"
+        "new"
     );
 }
 

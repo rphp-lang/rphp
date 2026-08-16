@@ -1117,7 +1117,7 @@ var_dump(phpversion("missing"), extension_loaded("missing"));
 
     assert_eq!(
         output,
-        "8.2.0|80200|8.2.0|8.2.0|8|cli|cli|bool(false)\nbool(false)\n"
+        "8.5.0|80500|8.5.0|8.5.0|8|cli|cli|bool(false)\nbool(false)\n"
     );
 }
 
