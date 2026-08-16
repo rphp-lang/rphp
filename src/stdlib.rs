@@ -5685,10 +5685,10 @@ fn fn_get_class(
 ) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if v.value_type() == ValueType::Undef {
-        // No argument — return the current class name (deprecated in PHP 8 but still works)
+        // PHP 8.2 returns the lexical class name without a diagnostic. The
+        // deprecation for omitting the argument belongs to PHP 8.3 and newer.
         let caller_class = get_calling_scope_class(ed, eg);
         if let Some(cls) = caller_class {
-            eg.write_output(b"Deprecated: Calling get_class() without arguments is deprecated\n");
             ret!(rv, Value::string(cls));
         }
         // Outside class scope: PHP throws Error

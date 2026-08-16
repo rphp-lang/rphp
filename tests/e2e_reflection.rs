@@ -141,6 +141,33 @@ try {
 }
 
 #[test]
+fn get_class_without_argument_uses_php_82_lexical_scope_without_deprecation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BaseName {
+    public static function direct() { echo get_class(), "\n"; }
+    public function instance() { echo get_class(), "\n"; }
+}
+class ChildName extends BaseName {}
+ChildName::direct();
+(new ChildName())->instance();
+try {
+    get_class();
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "BaseName\n",
+            "BaseName\n",
+            "get_class() without arguments must be called from within a class",
+        )
+    );
+}
+
+#[test]
 fn reflection_class_creates_an_instance_without_running_its_constructor() {
     let out = run_php(
         r#"<?php
