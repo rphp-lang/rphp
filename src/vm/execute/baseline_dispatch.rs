@@ -149,6 +149,38 @@ fn increment_php_value(value: &Value) -> Value {
     }
 }
 
+#[inline]
+fn shift_operand_long(value: &Value) -> Result<(i64, bool), ()> {
+    let value = value.dereferenced();
+    if value.value_type() != ValueType::String {
+        return match value.value_type() {
+            ValueType::Long
+            | ValueType::Double
+            | ValueType::True
+            | ValueType::False
+            | ValueType::Null
+            | ValueType::Undef
+            | ValueType::Resource => Ok((value.to_long_val(), false)),
+            _ => Err(()),
+        };
+    }
+
+    let text = value.as_str().unwrap().trim();
+    if let Ok(number) = text.parse::<i64>() {
+        return Ok((number, false));
+    }
+    let bytes = text.as_bytes();
+    let mut end = usize::from(bytes.first().is_some_and(|byte| matches!(byte, b'+' | b'-')));
+    let digit_start = end;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == digit_start {
+        return Err(());
+    }
+    text[..end].parse::<i64>().map(|number| (number, true)).map_err(|_| ())
+}
+
 #[cold]
 #[inline(never)]
 fn finally_jump_state(
@@ -273,6 +305,21 @@ fn throw_illegal_offset_type<'a>(
     throw_in_frame(eg, frame, error)
 }
 
+#[cold]
+#[inline(never)]
+fn throw_operator_error<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    class_name: &str,
+    message: &str,
+) -> ThrowResult<'a> {
+    let error = make_error_value(class_name, message);
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    throw_in_frame(eg, frame, error)
+}
+
 /// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -373,6 +420,48 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     value
                 }
             }};
+        }
+        macro_rules! throw_operator {
+            ($class_name:expr, $message:expr) => {{
+                let instruction_index = (opline_ptr as usize
+                    - op_array.instructions.as_ptr() as usize)
+                    / std::mem::size_of::<Instruction>();
+                match throw_operator_error(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    $class_name,
+                    $message,
+                ) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue 'vm;
+                    }
+                    ThrowResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                }
+            }};
+        }
+        macro_rules! resume_pending_exception {
+            () => {
+                if let Some(exception) = eg.exception.take() {
+                    match throw_in_frame(eg, frame, exception) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue 'vm;
+                        }
+                        ThrowResult::Unhandled(exception) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    }
+                }
+            };
         }
         stats::inc_opcode(opline.opcode as usize);
 
@@ -847,7 +936,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     },
                     OpCode::Mod_LongLong => {
                         if rhs == 0 {
-                            return Err(VmError::Fatal("Division by zero".into()));
+                            throw_operator!("DivisionByZeroError", "Modulo by zero");
                         }
                         let remainder = lhs.checked_rem(rhs).unwrap_or(0);
                         unsafe { frame_tmp_set_long(frame, result_ptr, remainder) };
@@ -1286,7 +1375,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     if d2 == 0.0 {
-                        return Err(VmError::Fatal("Division by zero".into()));
+                        throw_operator!("DivisionByZeroError", "Division by zero");
                     }
                     // PHP: if both are long and divisible, result is long
                     if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
@@ -1312,9 +1401,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
                     if l2 == 0 {
-                        return Err(VmError::Fatal("Division by zero".into()));
+                        throw_operator!("DivisionByZeroError", "Modulo by zero");
                     }
                     let remainder = l1.checked_rem(l2).unwrap_or(0);
                     unsafe { frame_tmp_set_long(frame, result_ptr, remainder) };
@@ -1416,9 +1507,46 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let l1 = op1.to_long_val();
-                let l2 = op2.to_long_val();
-                unsafe { frame_tmp_set_long(frame, result_ptr, l1.wrapping_shl(l2 as u32)) };
+                let Ok((l1, warn_left)) = shift_operand_long(op1) else {
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} << {}",
+                            op1.dereferenced().type_name(),
+                            op2.dereferenced().type_name()
+                        )
+                    );
+                };
+                let Ok((l2, warn_right)) = shift_operand_long(op2) else {
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} << {}",
+                            op1.dereferenced().type_name(),
+                            op2.dereferenced().type_name()
+                        )
+                    );
+                };
+                if warn_left || warn_right {
+                    report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "A non-numeric value encountered",
+                        false,
+                    )?;
+                    resume_pending_exception!();
+                }
+                if l2 < 0 {
+                    throw_operator!("ArithmeticError", "Bit shift by negative number");
+                }
+                let result = if l2 >= i64::BITS as i64 {
+                    0
+                } else {
+                    l1.wrapping_shl(l2 as u32)
+                };
+                unsafe { frame_tmp_set_long(frame, result_ptr, result) };
             }
 
             OpCode::ShiftRight => {
@@ -1426,9 +1554,46 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let l1 = op1.to_long_val();
-                let l2 = op2.to_long_val();
-                unsafe { frame_tmp_set_long(frame, result_ptr, l1.wrapping_shr(l2 as u32)) };
+                let Ok((l1, warn_left)) = shift_operand_long(op1) else {
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} >> {}",
+                            op1.dereferenced().type_name(),
+                            op2.dereferenced().type_name()
+                        )
+                    );
+                };
+                let Ok((l2, warn_right)) = shift_operand_long(op2) else {
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} >> {}",
+                            op1.dereferenced().type_name(),
+                            op2.dereferenced().type_name()
+                        )
+                    );
+                };
+                if warn_left || warn_right {
+                    report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "A non-numeric value encountered",
+                        false,
+                    )?;
+                    resume_pending_exception!();
+                }
+                if l2 < 0 {
+                    throw_operator!("ArithmeticError", "Bit shift by negative number");
+                }
+                let result = if l2 >= i64::BITS as i64 {
+                    if l1 < 0 { -1 } else { 0 }
+                } else {
+                    l1.wrapping_shr(l2 as u32)
+                };
+                unsafe { frame_tmp_set_long(frame, result_ptr, result) };
             }
 
             OpCode::BitwiseNot => {

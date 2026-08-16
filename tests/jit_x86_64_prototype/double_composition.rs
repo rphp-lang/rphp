@@ -260,25 +260,22 @@ fn double_jit_zero_divisor_replays_canonical_php_error() {
     for _ in 0..call_count {
         source.push_str("divideFloat(7.0, 2.0);");
     }
-    source.push_str("divideFloat(7.0, 0.0);");
+    source.push_str("try { divideFloat(7.0, 0.0); } catch (DivisionByZeroError $error) { echo 'caught'; }");
 
     let tokens = Lexer::new(&source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
     let functions = compilation.functions;
-    let (mut globals, _output) = common::make_eg_with_capture();
+    let (mut globals, output) = common::make_eg_with_capture();
     for (name, function) in &functions {
         globals
             .register_function(name, &function.common as *const FunctionCommon)
             .unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
-    assert!(matches!(
-        error,
-        rphp::vm::execute::VmError::Fatal(message) if message == "Division by zero"
-    ));
+    execute::execute(&mut globals, &main).unwrap();
+    assert_eq!(captured_output(&output), "caught");
 
     let function = functions
         .iter()
@@ -296,14 +293,14 @@ fn double_jit_zero_divisor_replays_canonical_php_error() {
 
 #[test]
 fn nested_double_method_loop_zero_divisor_replays_canonical_php_error() {
-    let source = "<?php class Divider { public function divide(float $value, float $divisor): float { return $value / $divisor; } public function calculate(float $value, float $divisor): float { return $this->divide($value, $divisor) + 1.0; } } function accumulate(Divider $divider): float { $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $divider->calculate(8.0, 50000.0 - ($i * 1.0)); } return $total; } $divider = new Divider(); accumulate($divider);";
+    let source = "<?php class Divider { public function divide(float $value, float $divisor): float { return $value / $divisor; } public function calculate(float $value, float $divisor): float { return $this->divide($value, $divisor) + 1.0; } } function accumulate(Divider $divider): float { $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $divider->calculate(8.0, 50000.0 - ($i * 1.0)); } return $total; } $divider = new Divider(); try { accumulate($divider); } catch (DivisionByZeroError $error) { echo 'caught'; }";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
     let functions = compilation.functions;
     let class_defs = compilation.class_defs;
-    let (mut globals, _output) = common::make_eg_with_capture();
+    let (mut globals, output) = common::make_eg_with_capture();
     for (name, function) in &functions {
         globals
             .register_function(name, &function.common as *const FunctionCommon)
@@ -313,11 +310,8 @@ fn nested_double_method_loop_zero_divisor_replays_canonical_php_error() {
         globals.register_class(class_def).unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
-    assert!(matches!(
-        error,
-        rphp::vm::execute::VmError::Fatal(message) if message == "Division by zero"
-    ));
+    execute::execute(&mut globals, &main).unwrap();
+    assert_eq!(captured_output(&output), "caught");
 
     let loop_plan = functions
         .iter()

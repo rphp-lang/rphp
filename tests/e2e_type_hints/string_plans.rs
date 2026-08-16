@@ -202,19 +202,22 @@ echo localAlias(4) . ":" . parameterMutation(4);
 }
 
 #[test]
-fn test_scalar_modulo_guard_preserves_division_by_zero_error() {
-    let error = run_php_expect_error(
+fn test_scalar_modulo_guard_side_exits_to_catchable_division_by_zero_error() {
+    assert_eq!(
+        run_php(
         r#"<?php
 function invalidModulo(int $value): int {
     return ($value % 0) ^ 13;
 }
-invalidModulo(4);
+try {
+    invalidModulo(4);
+} catch (DivisionByZeroError $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
 "#,
+        ),
+        "DivisionByZeroError:Modulo by zero",
     );
-    assert!(matches!(
-        error,
-        rphp::vm::execute::VmError::Fatal(message) if message == "Division by zero"
-    ));
 }
 
 #[test]

@@ -73,6 +73,40 @@ fn test_e2e_mod() {
 }
 
 #[test]
+fn arithmetic_operator_errors_are_catchable_and_leave_compound_targets_unchanged() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$division = "12";
+try {
+    $division /= 0;
+} catch (DivisionByZeroError $error) {
+    echo get_class($error), ':', $error->getMessage(), "\n";
+}
+var_dump($division);
+
+$modulo = "7";
+try {
+    $modulo %= "0";
+} catch (DivisionByZeroError $error) {
+    echo get_class($error), ':', $error->getMessage(), "\n";
+}
+var_dump($modulo);
+
+foreach ([-1, 64, 65] as $distance) {
+    try {
+        var_dump(-3 << $distance, -3 >> $distance);
+    } catch (ArithmeticError $error) {
+        echo get_class($error), ':', $error->getMessage(), "\n";
+    }
+}
+"#,
+        ),
+        "DivisionByZeroError:Division by zero\nstring(2) \"12\"\nDivisionByZeroError:Modulo by zero\nstring(1) \"7\"\nArithmeticError:Bit shift by negative number\nint(0)\nint(-1)\nint(0)\nint(-1)\n",
+    );
+}
+
+#[test]
 fn test_e2e_precedence_mul_add() {
     assert_eq!(run_php("<?php echo 2 + 3 * 4;"), "14");
 }

@@ -58,6 +58,11 @@ const BUILTIN_EXCEPTION_SUBCLASSES: &[(&str, &str)] = &[
     ("UnexpectedValueException", "RuntimeException"),
 ];
 
+const BUILTIN_ARITHMETIC_ERROR_SUBCLASSES: &[(&str, &str)] = &[
+    ("ArithmeticError", "Error"),
+    ("DivisionByZeroError", "ArithmeticError"),
+];
+
 // ============================================================================
 // Helper macros — zero-cost abstractions for stdlib handlers
 // ============================================================================
@@ -2770,6 +2775,33 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     })
     .unwrap();
 
+    for &(name, parent) in BUILTIN_ARITHMETIC_ERROR_SUBCLASSES {
+        eg.register_class(ClassDef {
+            name: name.to_string(),
+            source_file: None,
+            parent: Some(parent.to_string()),
+            implements: vec![],
+            is_interface: false,
+            is_abstract: false,
+            is_final: false,
+            is_trait: false,
+            is_enum: false,
+            is_readonly: false,
+            uses: vec![],
+            trait_aliases: vec![],
+            properties: vec![],
+            static_properties: vec![],
+            constants: vec![],
+            property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+            property_defaults: std::rc::Rc::from([]),
+            readonly_props: vec![],
+            methods: vec![],
+            abstract_methods: vec![],
+            class_id: 0,
+        })
+        .unwrap();
+    }
+
     // TypeError extends Error
     eg.register_class(ClassDef {
         name: "TypeError".to_string(),
@@ -2908,6 +2940,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         .chain(BUILTIN_EXCEPTION_SUBCLASSES.iter().map(|&(name, _)| name))
         .chain([
             "Error",
+            "ArithmeticError",
+            "DivisionByZeroError",
             "TypeError",
             "CompileError",
             "ParseError",
