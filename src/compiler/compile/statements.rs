@@ -91,6 +91,97 @@ pub(super) enum ForeachArrayWriteback {
 }
 
 impl Compiler {
+    pub(super) fn compile_list_assignment_source(
+        &mut self,
+        source: &Expr,
+        contains_reference: bool,
+        assignment_line: usize,
+    ) -> Result<(u16, OpType, ForeachArrayWriteback, bool), String> {
+        let mutable = matches!(
+            source,
+            Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false, ..
+                }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false, ..
+                }
+                | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
+                | Expr::ArrayAccess { .. }
+        );
+        if contains_reference && mutable {
+            let (source, source_type, writeback) =
+                self.compile_foreach_reference_source(source, true)?;
+            if source_type == OpType::Cv {
+                let internal = self.resolve_cv(&format!("\0list_source_{}", self.next_cv));
+                let mut bind = Instruction::new(OpCode::BindCvRef);
+                bind.op1 = source;
+                bind.op1_type = OpType::Cv;
+                bind.result = internal;
+                bind.result_type = OpType::Cv;
+                bind._pad |= REFERENCE_RESULT_INTERNAL;
+                self.instructions.push(bind);
+                return Ok((
+                    internal,
+                    OpType::Cv,
+                    ForeachArrayWriteback::Discard,
+                    false,
+                ));
+            }
+            return Ok((source, source_type, writeback, false));
+        }
+
+        if contains_reference {
+            let is_call = matches!(
+                source,
+                Expr::FunctionCall { .. }
+                    | Expr::MethodCall { .. }
+                    | Expr::StaticCall { .. }
+                    | Expr::DynamicCall { .. }
+            );
+            if !is_call {
+                return Err(self.goto_error(
+                    "Cannot assign reference to non referenceable value",
+                    assignment_line,
+                ));
+            }
+            let (source, source_type) = self.compile_expr(source);
+            return Ok((
+                source,
+                source_type,
+                ForeachArrayWriteback::Discard,
+                true,
+            ));
+        }
+
+        let (source, source_type) = self.compile_expr(source);
+        if source_type == OpType::Cv {
+            let retained = self.alloc_tmp();
+            let mut assign = Instruction::new(OpCode::AssignCv);
+            assign.op1 = retained;
+            assign.op1_type = OpType::Tmp;
+            assign.op2 = source;
+            assign.op2_type = source_type;
+            self.instructions.push(assign);
+            Ok((
+                retained,
+                OpType::Tmp,
+                ForeachArrayWriteback::Discard,
+                false,
+            ))
+        } else {
+            Ok((
+                source,
+                source_type,
+                ForeachArrayWriteback::Discard,
+                false,
+            ))
+        }
+    }
+
     pub(super) fn compile_array_element_reference_binding(
         &mut self,
         source: &Expr,
@@ -2239,8 +2330,14 @@ impl Compiler {
                 by_ref,
                 body,
             } => {
+                let destructure_by_ref = matches!(
+                    value,
+                    ForeachTarget::Destructure(targets)
+                        if targets.iter().any(ListTarget::contains_reference)
+                );
+                let reference_iteration = *by_ref || destructure_by_ref;
                 // Compile array expression
-                let (arr_op, arr_type, reference_writeback) = if *by_ref {
+                let (arr_op, arr_type, reference_writeback) = if reference_iteration {
                     let (op, op_type, writeback) = if matches!(array, Expr::ArrayLiteral(_)) {
                         let (op, op_type) = self.compile_expr(array);
                         (op, op_type, ForeachArrayWriteback::Discard)
@@ -2297,7 +2394,7 @@ impl Compiler {
                 };
 
                 let done_tmp = self.alloc_tmp();
-                let mut next = Instruction::new(if *by_ref {
+                let mut next = Instruction::new(if reference_iteration {
                     OpCode::ForeachNextRef
                 } else {
                     OpCode::ForeachNext
@@ -2330,7 +2427,7 @@ impl Compiler {
                 self.instructions.push(jmpz);
 
                 if let Some(targets) = destructure {
-                    self.compile_list_targets(targets, val_cv, OpType::Cv, 0)?;
+                    self.compile_list_targets(targets, val_cv, OpType::Cv, 0, false)?;
                 }
                 if let Some(target) = key_write {
                     self.compile_assignment_target_expression(
@@ -2383,6 +2480,23 @@ impl Compiler {
                     flush.result = val_cv;
                     flush.result_type = OpType::Cv;
                     self.instructions.push(flush);
+                    // A reference nested inside a destructuring target needs
+                    // reference iteration to mutate the source element, but
+                    // unlike an explicit `foreach (... as &$value)` PHP does
+                    // not leave the synthetic outer value alias alive after
+                    // the loop. Rebinding the compiler-only CV releases that
+                    // final alias while preserving references created inside
+                    // the destructured element.
+                    if destructure_by_ref && !*by_ref {
+                        let null = self.add_literal(Value::null());
+                        let mut release = Instruction::new(OpCode::AssignCv);
+                        release.op1 = val_cv;
+                        release.op1_type = OpType::Cv;
+                        release.op2 = null;
+                        release.op2_type = OpType::Const;
+                        release._pad |= ASSIGN_CV_REBIND;
+                        self.instructions.push(release);
+                    }
                     self.emit_foreach_reference_source_writeback(
                         writeback,
                         arr_copy_tmp,
@@ -2826,18 +2940,27 @@ impl Compiler {
                 }
             }
             Stmt::ListAssign { targets, expr } => {
-                // Compile the RHS expression
-                let (rhs_op, rhs_type) = self.compile_expr(expr);
-                // Store the RHS into a temp so we can index into it multiple times
-                let rhs_tmp = self.alloc_tmp();
-                let mut assign = Instruction::new(OpCode::AssignCv);
-                assign.op1_type = OpType::Tmp;
-                assign.op1 = rhs_tmp;
-                assign.op2_type = rhs_type;
-                assign.op2 = rhs_op;
-                self.instructions.push(assign);
-                // For each target, emit FetchDimR + AssignCv
-                self.compile_list_targets(targets, rhs_tmp, OpType::Tmp, 0)?;
+                let contains_reference = targets.iter().any(ListTarget::contains_reference);
+                let (source, source_type, writeback, diagnose_nonreferenceable) =
+                    self.compile_list_assignment_source(
+                        expr,
+                        contains_reference,
+                        targets
+                            .iter()
+                            .map(ListTarget::source_line)
+                            .find(|line| *line != 0)
+                            .unwrap_or(0),
+                    )?;
+                self.compile_list_targets(
+                    targets,
+                    source,
+                    source_type,
+                    0,
+                    diagnose_nonreferenceable,
+                )?;
+                if contains_reference {
+                    self.emit_foreach_reference_source_writeback(writeback, source, source_type);
+                }
             }
             Stmt::Global(vars) => {
                 for target in vars {

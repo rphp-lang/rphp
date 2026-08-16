@@ -204,6 +204,11 @@ pub const ASSIGN_DIM_REFERENCE: u16 = 1;
 /// alias and must not affect reference-wrapper observation.
 pub const REFERENCE_RESULT_INTERNAL: u16 = 1;
 
+/// The source of a reference destructuring operation is a temporary
+/// expression. A by-value result must emit PHP's non-referenceable notice,
+/// while a returned reference remains a valid aliasing source.
+pub const REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE: u16 = 1 << 1;
+
 /// NewObj flag: a literal zero-argument object is assigned to a dead local
 /// whose only uses are an immediate bounded span of declared-property reads.
 /// A warmed quick loop may project exact scalar defaults without allocating

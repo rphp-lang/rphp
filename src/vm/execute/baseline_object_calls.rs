@@ -1251,11 +1251,12 @@ fn op_bind_obj_prop_ref<'a>(
     Ok(ColdResult::Done)
 }
 
-fn op_bind_array_dim_ref(
+fn op_bind_array_dim_ref<'a>(
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: the compiler emits mutable array/CV operands owned by this live
     // frame. Promoting the element to an Rc-backed cell makes both aliases
     // independent of subsequent array storage reallocations.
@@ -1267,10 +1268,90 @@ fn op_bind_array_dim_ref(
         );
         let key = value_to_array_key(index)?;
         let array_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
-        if matches!((*array_ptr).value_type(), ValueType::Null | ValueType::Undef) {
-            slot_set(array_ptr, Value::array(PhpArray::new()));
+        let raw_type = (*array_ptr).dereferenced().value_type();
+        if raw_type == ValueType::String {
+            let error = make_error_value("Error", "Cannot create references to/from string offsets");
+            let instruction_index = (opline as *const Instruction)
+                .offset_from(op_array.instructions.as_ptr()) as usize;
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
         }
-        let array = (&mut *array_ptr)
+        if raw_type == ValueType::Object {
+            let receiver = (*array_ptr).dereferenced().clone();
+            let returned = crate::stdlib::call_object_protocol_method(
+                eg,
+                &receiver,
+                "ArrayAccess",
+                "offsetGet",
+                std::slice::from_ref(index),
+            )?
+            .ok_or_else(|| {
+                let class_name = receiver
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .unwrap_or_else(|| "object".to_string());
+                VmError::Fatal(format!("Cannot use object of type {class_name} as array"))
+            })?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+            let mut binding = if returned.is_owned_reference() {
+                returned.clone_owned_reference_alias()
+            } else if returned.is_reference() {
+                Value::reference(returned.as_ref_ptr())
+            } else {
+                let class_name = receiver
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .unwrap_or_else(|| "object".to_string());
+                report_php_notice(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &format!(
+                        "Indirect modification of overloaded element of {class_name} has no effect"
+                    ),
+                )?;
+                Value::owned_reference(returned)
+            };
+            if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                binding.mark_internal_reference_alias();
+            }
+            let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+            frame_slot_set(frame, destination, binding);
+            return Ok(ColdResult::Done);
+        }
+        if opline._pad & REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE != 0
+            && !(*array_ptr).is_reference()
+        {
+            report_php_notice(
+                eg,
+                frame,
+                op_array,
+                opline,
+                "Attempting to set reference to non referenceable value",
+            )?;
+        }
+        let mutable_source = if (*array_ptr).is_reference() {
+            &mut *(*array_ptr).as_ref_ptr()
+        } else {
+            &mut *array_ptr
+        };
+        if matches!(mutable_source.value_type(), ValueType::Null | ValueType::Undef) {
+            slot_set(mutable_source, Value::array(PhpArray::new()));
+        }
+        let array = mutable_source
             .as_array_mut()
             .ok_or_else(|| VmError::Fatal("Cannot acquire reference to non-array offset".into()))?;
         if array.get_key_mut(&key).is_none() {
@@ -1296,7 +1377,7 @@ fn op_bind_array_dim_ref(
         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
         frame_slot_set(frame, destination, binding);
     }
-    Ok(())
+    Ok(ColdResult::Done)
 }
 
 fn op_assign_obj_prop<'a>(

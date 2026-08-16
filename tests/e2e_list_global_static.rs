@@ -562,3 +562,71 @@ fn test_destructuring_expression_preserves_a_cv_rhs_before_overwriting_it() {
         "ab"
     );
 }
+
+#[test]
+fn reference_destructuring_aliases_positional_keyed_and_nested_elements() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$source = [10, 'inner' => [20]];
+[&$first, 'inner' => [&$second]] = $source;
+$first = 11;
+$source['inner'][0] = 21;
+echo $source[0], ':', $second;
+"#,
+        ),
+        "11:21"
+    );
+}
+
+#[test]
+fn reference_destructuring_preserves_rhs_when_a_target_reuses_its_name() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = ['left', 'right'];
+[&$values, &$tail] = $values;
+$values = 'changed';
+$tail = 'updated';
+echo $values, ':', $tail;
+"#,
+        ),
+        "changed:updated"
+    );
+}
+
+#[test]
+fn reference_destructuring_tracks_reference_returning_calls_and_properties() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function &borrow_list(&$value) { return $value; }
+class ReferenceHolder { public $items = [3]; }
+$holder = new ReferenceHolder();
+[&$fromCall] = borrow_list($holder->items);
+[&$fromProperty] = $holder->items;
+$fromCall = 4;
+$fromProperty = 5;
+echo $holder->items[0];
+"#,
+        ),
+        "5"
+    );
+}
+
+#[test]
+fn foreach_reference_destructuring_mutates_only_referenced_members() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$rows = [[1, 10], [2, 20]];
+foreach ($rows as [&$mutable, $copy]) {
+    $mutable += 3;
+    $copy += 100;
+}
+echo $rows[0][0], ':', $rows[0][1], '|', $rows[1][0], ':', $rows[1][1];
+"#,
+        ),
+        "4:10|5:20"
+    );
+}
