@@ -415,6 +415,28 @@ var_dump($object->nullable, $object->number);
 }
 
 #[test]
+fn typed_reference_array_assignment_expression_returns_the_coerced_value() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CoercedReferenceResult { public ?string $value; }
+$object = new CoercedReferenceResult;
+$direct =& $object->value;
+var_dump($direct = 0, $object->value);
+$array = [];
+$array['slot'] =& $object->value;
+$rhs = 12;
+var_dump($array['slot'] = $rhs, $rhs, $object->value);
+$nested = ['inner' => []];
+$nested['inner'][0] =& $object->value;
+var_dump($nested['inner'][0] = 34, $object->value);
+"#
+        ),
+        "string(1) \"0\"\nstring(1) \"0\"\nstring(2) \"12\"\nint(12)\nstring(2) \"12\"\nstring(2) \"34\"\nstring(2) \"34\"\n"
+    );
+}
+
+#[test]
 fn dynamic_instance_reference_intersections_do_not_reuse_a_stale_property_slot() {
     assert_eq!(
         run_php(

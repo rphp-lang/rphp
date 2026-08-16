@@ -3730,6 +3730,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             element.reference_property_constraints(),
                             cloned_val
                         );
+                        if opline._pad & crate::vm::instruction::ASSIGN_DIM_RESULT_VALUE != 0 {
+                            debug_assert_eq!(opline.result_type, OpType::Tmp);
+                            let result = unsafe {
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                            };
+                            unsafe { frame_slot_set(frame, result, cloned_val.clone()) };
+                        }
                         assignment_slot_set(element, cloned_val);
                     } else {
                         php_arr.set(key, cloned_val);

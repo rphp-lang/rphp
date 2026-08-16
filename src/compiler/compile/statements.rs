@@ -1194,6 +1194,7 @@ impl Compiler {
                 assign.op2_type = key_type;
                 assign.result = result;
                 assign.result_type = OpType::Tmp;
+                assign._pad |= ASSIGN_DIM_RESULT_VALUE;
                 self.instructions.push(assign);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);

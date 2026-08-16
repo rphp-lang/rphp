@@ -243,6 +243,10 @@ pub const ASSIGN_DIM_REFERENCE: u16 = 1;
 /// Synthetic parent writeback after nested unset. Scalar parents are validated
 /// with unset-specific diagnostics and are never materialized as arrays.
 pub const ASSIGN_DIM_UNSET_REBUILD: u16 = 1 << 1;
+/// AssignDim is the value-producing write of an assignment expression. If a
+/// typed-property reference coerces the stored value, the compiler-generated
+/// TMP must expose that coerced value as the expression result.
+pub const ASSIGN_DIM_RESULT_VALUE: u16 = 1 << 2;
 /// UnsetDim addresses the leaf of a multi-dimensional path. String parents use
 /// PHP's nested-offset diagnostic rather than the flat string-unset message.
 pub const UNSET_DIM_NESTED: u16 = 1;
