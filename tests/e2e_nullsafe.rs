@@ -493,6 +493,43 @@ fn nullsafe_chains_cannot_be_returned_from_reference_declarations() {
 }
 
 #[test]
+fn nullsafe_destructuring_targets_fail_before_execution() {
+    for (assignment, message) in [
+        (
+            "[$foo?->bar] = sideEffect();",
+            "Assignments can only happen to writable values",
+        ),
+        (
+            "list($foo?->bar->baz) = sideEffect();",
+            "Assignments can only happen to writable values",
+        ),
+        (
+            "[[$foo->bar?->baz]] = sideEffect();",
+            "Assignments can only happen to writable values",
+        ),
+        (
+            "[$foo?->bar[]] = sideEffect();",
+            "Assignments can only happen to writable values",
+        ),
+        (
+            "[&$foo?->bar] = sideEffect();",
+            "Cannot assign reference to non referenceable value",
+        ),
+    ] {
+        let source = format!("<?php\necho 'unreachable';\n{assignment}\n");
+        let error = run_php_expect_error_with_source_context(
+            &source,
+            "/virtual/nullsafe-destructuring.php",
+            "/virtual",
+        );
+        assert_eq!(
+            format!("{error:?}"),
+            format!("Fatal(\"{message} in /virtual/nullsafe-destructuring.php on line 3\")")
+        );
+    }
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_skips_or_evaluates_its_name_once() {
     let out = run_php(
         r#"<?php

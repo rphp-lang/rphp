@@ -7,9 +7,29 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `483575d`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,590 passes, 2,440 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `f5a697f`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,591 passes, 2,439 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds the exact pass `Zend/tests/nullsafe_operator/021.phpt` without losing a
+previous pass or moving another failure category. Short and `list()`
+destructuring assignments now reject a target whose writable receiver spine
+contains a nullsafe operator, including nested and append targets. Ordinary
+targets use PHP 8.2's `Assignments can only happen to writable values` fatal;
+reference targets retain the distinct non-referenceable-value diagnostic. The
+parser consumes the complete l-value and records a deferred compile error, so
+neither top-level code nor the assignment RHS executes. Original E2E coverage
+checks both syntaxes, nested and append forms, reference targets, source
+location and pre-execution failure. Five Cargo feature configurations,
+all-target and unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass
+on AMD64. The S3 cold-kernel gate was not rerun because this machine has no
+exact PHP 8.2 oracle. Nine release runs of `bench_calls.php` measured medians
+of 0.345851 seconds for the preceding binary and 0.338875 seconds for the
+candidate, with the same computed result.
+
+The preceding AMD64 nullsafe reference-return checkpoint, based on `483575d`,
+runs the same 4,345-case PHP 8.2.33 corpus and records 1,590 passes, 2,440
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. It
 adds the exact pass `Zend/tests/nullsafe_operator/017.phpt` without losing a
 previous pass or moving another failure category. Functions, methods and
 closures declared to return by reference now reject any nullsafe receiver
