@@ -423,6 +423,29 @@ where
     I: Iterator<Item = Value>,
 {
     let saved_execute_data = eg.current_execute_data.get();
+    // Detached callback entries (Iterator, ArrayAccess, array_* callbacks, ...)
+    // bypass DoFcall. Publish the suspended caller's current global-scope CVs
+    // before a user callback that may execute `global $name`; otherwise the
+    // callback can bind to an older ExecutorGlobals snapshot.
+    let user_callee = unsafe { ((*func_ptr).fn_type == FunctionType::User).then(|| &*(func_ptr as *const UserFunction)) };
+    if let Some(user) = user_callee
+        && user.op_array.may_access_globals
+        && !saved_execute_data.is_null()
+    {
+        unsafe {
+            let caller = &mut *saved_execute_data;
+            sync_dirty_globals_to_frame(eg, caller);
+            let caller_op_array = caller.op_array();
+            let vars = if !caller_op_array.main_scope_vars.is_empty() {
+                &caller_op_array.main_scope_vars
+            } else {
+                &caller_op_array.global_vars
+            };
+            for (cv, name) in vars {
+                globals_set(&mut eg.globals, name, caller.cv(*cv).clone());
+            }
+        }
+    }
     // SAFETY: every detached-call entry receives a resolved, live function
     // descriptor which remains registered for the synchronous frame lifetime.
     let signature = unsafe { &(*func_ptr).sig };
@@ -606,6 +629,13 @@ where
     eg.current_execute_data.set(saved_execute_data);
     unsafe { cleanup_frame_slots(frame) };
     pop_vm_call_frame(eg, frame);
+
+    // Complete the other half of the ordinary call boundary: writes through
+    // `global` in a detached callback must become visible in the suspended
+    // caller before its next opcode executes.
+    if !saved_execute_data.is_null() {
+        unsafe { sync_dirty_globals_to_frame(eg, &mut *saved_execute_data) };
+    }
 
     execution_result?;
 
