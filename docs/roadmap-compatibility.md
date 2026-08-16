@@ -186,6 +186,15 @@ The exact PHP 8.5.6 delta is +5/-0 with no remaining-failure stage movement;
 the full feature matrix and unsafe-policy gate pass, and no performance gate is
 required for cold error construction.
 
+The `c404c71` unmatched-match checkpoint reaches 1,925 passes with 3,283
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. The compiler retains the discriminant and exact `match` source line
+for the cold throw edge, where PHP-compatible scalar or concrete-type text is
+used to construct `UnhandledMatchError`. The exact PHP 8.5.6 delta is +3/-0
+with no remaining-failure stage movement; the full feature matrix and unsafe
+gate pass. No runtime performance gate applies because successful match arms
+retain their existing execution path.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
