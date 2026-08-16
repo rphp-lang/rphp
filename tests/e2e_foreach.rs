@@ -70,6 +70,48 @@ foreach (new NestedAggregate() as $key => $value) {
 }
 
 #[test]
+fn user_iterator_protocol_preserves_order_exceptions_aggregates_and_by_ref_error() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class TraceIterator implements Iterator {
+    public int $position = 0;
+    public function __construct(public ?string $trap = null) {}
+    private function visit(string $method): void {
+        echo $method[0];
+        if ($this->trap === $method) throw new Exception($method);
+    }
+    public function rewind(): void { $this->visit('rewind'); $this->position = 0; }
+    public function valid(): bool { $this->visit('valid'); return $this->position < 2; }
+    public function current(): mixed { $this->visit('current'); return $this->position + 10; }
+    public function key(): mixed { $this->visit('key'); return 'k' . $this->position; }
+    public function next(): void { $this->visit('next'); $this->position++; }
+}
+foreach (['rewind', 'valid', 'current', 'key', 'next', null] as $trap) {
+    try {
+        foreach (new TraceIterator($trap) as $key => $value) echo "=$key:$value;";
+    } catch (Exception $error) {
+        echo '!' . $error->getMessage();
+    }
+    echo '|';
+}
+class TraceAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable { echo 'G'; return new TraceIterator(); }
+}
+foreach (new TraceAggregate() as $key => $value) { echo "=$key:$value;"; }
+try {
+    $iterator = new TraceIterator();
+    foreach ($iterator as &$value) {}
+} catch (Error $error) {
+    echo '|' . $error->getMessage();
+}
+"#
+        ),
+        "r!rewind|rv!valid|rvc!current|rvck!key|rvck=k0:10;n!next|rvck=k0:10;nvck=k1:11;nv|Grvck=k0:10;nvck=k1:11;nv|An iterator cannot be used with foreach by reference"
+    );
+}
+
+#[test]
 fn iterator_aggregate_generator_closure_preserves_lexical_visibility_scope() {
     assert_eq!(
         run_php(
