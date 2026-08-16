@@ -1187,7 +1187,7 @@ impl Parser {
                     line,
                 });
             }
-            Token::LBracket(_) => {
+            Token::LBracket(line) => {
                 // Short array syntax: [1, 2, 'a' => 3]
                 if self.is_short_list_assign() {
                     self.advance();
@@ -1198,6 +1198,7 @@ impl Parser {
                     return Ok(Expr::ListAssign {
                         targets,
                         expr: Box::new(expr),
+                        line,
                     });
                 }
                 self.advance(); // consume '['

@@ -1299,6 +1299,9 @@ fn test_unset_dim_on_null_silent() {
 }
 
 #[test]
-fn test_unset_dim_on_undef_silent() {
-    assert_eq!(run_php("<?php unset($x[0]); echo 'ok';"), "ok");
+fn test_unset_dim_on_undef_warns_and_continues() {
+    assert_eq!(
+        run_php("<?php unset($x[0]); echo 'ok';"),
+        "\nWarning: Undefined variable $x in <main> on line 1\nok"
+    );
 }

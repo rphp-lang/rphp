@@ -197,7 +197,7 @@ impl Compiler {
             root = array.as_ref();
         }
         reversed_indices.reverse();
-        let path = self.compile_mutable_array_path(root, &reversed_indices, true)?;
+        let path = self.compile_mutable_array_path(root, &reversed_indices, true, false)?;
         let &(container, container_type) = path.containers.last().unwrap();
         let &(key, key_type) = path.keys.last().unwrap();
         let mut bind = Instruction::new(OpCode::BindArrayDimRef);
@@ -518,7 +518,7 @@ impl Compiler {
                     ));
                 }
                 let path =
-                    self.compile_mutable_array_path(root, &reversed_indices, silent_fetch)?;
+                    self.compile_mutable_array_path(root, &reversed_indices, silent_fetch, false)?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
                 let current = self.alloc_tmp();
@@ -815,7 +815,8 @@ impl Compiler {
                         root = array.as_ref();
                     }
                     reversed_indices.reverse();
-                    let path = self.compile_mutable_array_path(root, &reversed_indices, true)?;
+                    let path =
+                        self.compile_mutable_array_path(root, &reversed_indices, true, false)?;
                     let &(container, container_type) = path.containers.last().unwrap();
                     let &(key, key_type) = path.keys.last().unwrap();
                     let current = self.alloc_tmp();
@@ -1068,6 +1069,7 @@ impl Compiler {
                     root,
                     &reversed_indices,
                     true,
+                    false,
                 )?)
             }
             _ => return Err("Invalid assignment target".into()),
@@ -1264,7 +1266,7 @@ impl Compiler {
                     root = array.as_ref();
                 }
                 reversed_indices.reverse();
-                let path = self.compile_mutable_array_path(root, &reversed_indices, true)?;
+                let path = self.compile_mutable_array_path(root, &reversed_indices, true, false)?;
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
 
@@ -1304,16 +1306,30 @@ impl Compiler {
         root: &Expr,
         indices: &[Expr],
         silent_root_fetch: bool,
+        warn_undefined_root: bool,
     ) -> Result<MutableArrayPath, String> {
         if indices.is_empty() {
             return Err("Array mutation requires at least one dimension".into());
         }
         let (root, writeback, path_indices) = match root {
-            Expr::Variable { name: var, .. } => (
-                (self.resolve_cv(var), OpType::Cv),
-                ArrayRootWriteback::None,
-                indices,
-            ),
+            Expr::Variable { name: var, line } => {
+                let cv = self.resolve_cv(var);
+                if warn_undefined_root
+                    && *line != 0
+                    && !self.definitely_defined_cvs.contains(&cv)
+                {
+                    let name = self.add_literal(Value::string(var.clone()));
+                    let mut check = Instruction::new(OpCode::FetchCvR);
+                    check.op1 = cv;
+                    check.op1_type = OpType::Cv;
+                    check.op2 = name;
+                    check.op2_type = OpType::Const;
+                    check.result_type = OpType::Unused;
+                    self.push_instruction_at_line(check, *line);
+                    self.invalidate_reentrant_definitions();
+                }
+                ((cv, OpType::Cv), ArrayRootWriteback::None, indices)
+            }
             Expr::DynamicVariable { name, line } => {
                 let (key, key_type) = self.compile_expr(name);
                 let container = self.alloc_tmp();
@@ -1514,6 +1530,27 @@ impl Compiler {
             rebuild.result = child;
             rebuild.result_type = child_type;
             self.instructions.push(rebuild);
+        }
+    }
+
+    fn rebuild_mutable_array_path_after_unset(
+        &mut self,
+        path: &MutableArrayPath,
+        source_line: usize,
+    ) {
+        for parent_index in (0..path.containers.len() - 1).rev() {
+            let (parent, parent_type) = path.containers[parent_index];
+            let (child, child_type) = path.containers[parent_index + 1];
+            let (key, key_type) = path.keys[parent_index];
+            let mut rebuild = Instruction::new(OpCode::AssignDim);
+            rebuild.op1 = parent;
+            rebuild.op1_type = parent_type;
+            rebuild.op2 = key;
+            rebuild.op2_type = key_type;
+            rebuild.result = child;
+            rebuild.result_type = child_type;
+            rebuild._pad |= ASSIGN_DIM_UNSET_REBUILD;
+            self.push_instruction_at_line(rebuild, source_line);
         }
     }
 
@@ -2254,7 +2291,12 @@ impl Compiler {
                 }
                 self.definitely_defined_cvs = switch_exit_definitions;
             }
-            Stmt::ArrayAssign { var, index, expr } => {
+            Stmt::ArrayAssign {
+                var,
+                index,
+                expr,
+                line,
+            } => {
                 // $var[index] = expr
                 let (idx_op, idx_type) = self.compile_expr(index);
                 let (val_op, val_type) = self.compile_expr(expr);
@@ -2276,7 +2318,7 @@ impl Compiler {
                     instr.result_type = val_type;
                     instr.result = val_op;
                 }
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 if var != "GLOBALS" {
                     let cv = self.resolve_cv(var);
                     self.definitely_defined_cvs.insert(cv);
@@ -2286,8 +2328,9 @@ impl Compiler {
                 root,
                 indices,
                 expr,
+                line,
             } => {
-                let path = self.compile_mutable_array_path(root, indices, true)?;
+                let path = self.compile_mutable_array_path(root, indices, true, false)?;
 
                 let (value, value_type) = self.compile_expr(expr);
                 let &(leaf, leaf_type) = path.containers.last().unwrap();
@@ -2299,7 +2342,7 @@ impl Compiler {
                 assign.op2_type = leaf_key_type;
                 assign.result = value;
                 assign.result_type = value_type;
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, *line);
 
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
@@ -2308,7 +2351,7 @@ impl Compiler {
                     self.definitely_defined_cvs.insert(cv);
                 }
             }
-            Stmt::ArrayPush { var, expr } => {
+            Stmt::ArrayPush { var, expr, line } => {
                 // $var[] = expr
                 let cv_idx = self.resolve_cv(var);
                 let (val_op, val_type) = self.compile_expr(expr);
@@ -2317,7 +2360,7 @@ impl Compiler {
                 instr.op1 = cv_idx;
                 instr.op2_type = val_type;
                 instr.op2 = val_op;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 self.definitely_defined_cvs.insert(cv_idx);
             }
             Stmt::ArrayAppend { target, expr } => {
@@ -2449,7 +2492,7 @@ impl Compiler {
                 self.instructions.push(jmpz);
 
                 if let Some(targets) = destructure {
-                    self.compile_list_targets(targets, val_cv, OpType::Cv, 0, false)?;
+                    self.compile_list_targets(targets, val_cv, OpType::Cv, 0, *line, false)?;
                 }
                 if let Some(target) = key_write {
                     self.compile_assignment_target_expression(
@@ -2571,7 +2614,7 @@ impl Compiler {
                             unset.op1_type = key_type;
                             self.push_instruction_at_line(unset, *line);
                         }
-                        Expr::ArrayAccess { .. } => {
+                        Expr::ArrayAccess { line, .. } => {
                             let mut root = target;
                             let mut indices = Vec::new();
                             while let Expr::ArrayAccess { array, index, .. } = root {
@@ -2589,7 +2632,8 @@ impl Compiler {
                                 self.instructions.push(unset);
                                 continue;
                             }
-                            let path = self.compile_mutable_array_path(root, &indices, true)?;
+                            let path =
+                                self.compile_mutable_array_path(root, &indices, true, true)?;
                             let &(leaf, leaf_type) = path.containers.last().unwrap();
                             let &(key, key_type) = path.keys.last().unwrap();
                             let mut unset = Instruction::new(OpCode::UnsetDim);
@@ -2597,8 +2641,11 @@ impl Compiler {
                             unset.op1_type = leaf_type;
                             unset.op2 = key;
                             unset.op2_type = key_type;
-                            self.instructions.push(unset);
-                            self.rebuild_mutable_array_path(&path);
+                            if path.containers.len() > 1 {
+                                unset._pad |= UNSET_DIM_NESTED;
+                            }
+                            self.push_instruction_at_line(unset, *line);
+                            self.rebuild_mutable_array_path_after_unset(&path, *line);
                             self.write_back_mutable_array_root(&path);
                         }
                         Expr::PropertyAccess {
@@ -2845,6 +2892,7 @@ impl Compiler {
                 property,
                 index,
                 expr,
+                line,
             } => {
                 let (obj_op, obj_type, deferred_fetches) =
                     self.prepare_property_modify_base(object);
@@ -2863,7 +2911,7 @@ impl Compiler {
                 instr.result = val_op;
                 instr.result_type = val_type;
                 instr.extended_value = prop_idx as u32;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
             }
             Stmt::Include {
                 path,
@@ -2961,7 +3009,11 @@ impl Compiler {
                 self.instructions.push(instr);
                 }
             }
-            Stmt::ListAssign { targets, expr } => {
+            Stmt::ListAssign {
+                targets,
+                expr,
+                line,
+            } => {
                 let contains_reference = targets.iter().any(ListTarget::contains_reference);
                 let (source, source_type, writeback, diagnose_nonreferenceable) =
                     self.compile_list_assignment_source(
@@ -2978,6 +3030,7 @@ impl Compiler {
                     source,
                     source_type,
                     0,
+                    *line,
                     diagnose_nonreferenceable,
                 )?;
                 self.emit_foreach_reference_source_writeback(writeback, source, source_type);

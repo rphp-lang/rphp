@@ -1301,7 +1301,7 @@ fn op_bind_array_dim_ref<'a>(
                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
             });
         }
-        if raw_type == ValueType::Object {
+        if matches!(raw_type, ValueType::Object | ValueType::Closure) {
             let receiver = (*array_ptr).dereferenced().clone();
             let returned = crate::stdlib::call_object_protocol_method(
                 eg,
@@ -1309,14 +1309,24 @@ fn op_bind_array_dim_ref<'a>(
                 "ArrayAccess",
                 "offsetGet",
                 std::slice::from_ref(index),
-            )?
-            .ok_or_else(|| {
-                let class_name = receiver
-                    .as_object()
-                    .map(|object| object.class_name.to_string())
-                    .unwrap_or_else(|| "object".to_string());
-                VmError::Fatal(format!("Cannot use object of type {class_name} as array"))
-            })?;
+            )?;
+            let Some(returned) = returned else {
+                let instruction_index = (opline as *const Instruction)
+                    .offset_from(op_array.instructions.as_ptr())
+                    as usize;
+                return Ok(match throw_object_as_array(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    &receiver,
+                ) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            };
             if let Some(exception) = eg.exception.take() {
                 return Ok(match throw_in_frame(eg, frame, exception) {
                     ThrowResult::Handled(new_frame, new_op_array) => {

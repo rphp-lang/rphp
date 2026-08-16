@@ -955,6 +955,10 @@ impl Parser {
 
     /// Parse `list($a, $b, ...) = expr;`
     fn parse_list_assign(&mut self) -> Result<Stmt, String> {
+        let line = match self.peek() {
+            Token::Identifier(_, line) => line,
+            _ => 0,
+        };
         self.advance(); // consume 'list' identifier
         self.expect_lparen()?;
         let targets = self.parse_list_targets(&Token::RParen)?;
@@ -962,18 +966,30 @@ impl Parser {
         self.expect(&Token::Assign)?;
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
-        Ok(Stmt::ListAssign { targets, expr })
+        Ok(Stmt::ListAssign {
+            targets,
+            expr,
+            line,
+        })
     }
 
     /// Parse `[$a, $b, ...] = expr;`
     fn parse_short_list_assign(&mut self) -> Result<Stmt, String> {
+        let line = match self.peek() {
+            Token::LBracket(line) => line,
+            _ => 0,
+        };
         self.advance(); // consume '['
         let targets = self.parse_list_targets(&Token::RBracket)?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
-        Ok(Stmt::ListAssign { targets, expr })
+        Ok(Stmt::ListAssign {
+            targets,
+            expr,
+            line,
+        })
     }
 
     /// Parse comma-separated list targets (variables, skips, nested brackets).

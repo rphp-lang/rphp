@@ -26,16 +26,17 @@ use crate::value::{
 };
 use crate::vm::instruction::{
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION,
-    ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND, ASSIGN_DIM_REFERENCE, ASSIGN_OBJ_MODIFY,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET,
-    FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT,
-    FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
-    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND, ASSIGN_DIM_REFERENCE, ASSIGN_DIM_UNSET_REBUILD,
+    ASSIGN_OBJ_MODIFY, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
+    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
+    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
+    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND,
+    FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OpType, REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -6676,7 +6677,11 @@ impl Compiler {
                 }
                 (assigned, assigned_type)
             }
-            Expr::ListAssign { targets, expr } => {
+            Expr::ListAssign {
+                targets,
+                expr,
+                line,
+            } => {
                 let contains_reference = targets.iter().any(ListTarget::contains_reference);
                 let (retained, retained_type, writeback, diagnose_nonreferenceable) = match self
                     .compile_list_assignment_source(
@@ -6700,6 +6705,7 @@ impl Compiler {
                     retained,
                     retained_type,
                     0,
+                    *line,
                     diagnose_nonreferenceable,
                 ) {
                     self.deferred_error = Some(error);
@@ -7500,6 +7506,7 @@ impl Compiler {
         array: u16,
         array_type: OpType,
         start_index: usize,
+        source_line: usize,
         diagnose_nonreferenceable: bool,
     ) -> Result<(), String> {
         use crate::parser::ListTarget;
@@ -7517,7 +7524,7 @@ impl Compiler {
                     fetch.op2 = idx_literal;
                     fetch.result_type = OpType::Tmp;
                     fetch.result = fetch_tmp;
-                    self.instructions.push(fetch);
+                    self.push_instruction_at_line(fetch, source_line);
                     // assign to CV
                     let cv_idx = self.resolve_cv(var_name);
                     let mut assign = Instruction::new(OpCode::AssignCv);
@@ -7551,7 +7558,7 @@ impl Compiler {
                     fetch.op2 = idx_literal;
                     fetch.result_type = OpType::Tmp;
                     fetch.result = fetch_tmp;
-                    self.instructions.push(fetch);
+                    self.push_instruction_at_line(fetch, source_line);
 
                     match target {
                         Expr::CompileError { message, line } => {
@@ -7640,8 +7647,12 @@ impl Compiler {
                                 root = array.as_ref();
                             }
                             reversed_indices.reverse();
-                            let path =
-                                self.compile_mutable_array_path(root, &reversed_indices, false)?;
+                            let path = self.compile_mutable_array_path(
+                                root,
+                                &reversed_indices,
+                                false,
+                                false,
+                            )?;
                             let &(container, container_type) = path.containers.last().unwrap();
                             let &(key, key_type) = path.keys.last().unwrap();
                             let mut assign = Instruction::new(OpCode::AssignDim);
@@ -7718,12 +7729,13 @@ impl Compiler {
                         bind.result_type = OpType::Cv;
                         bind.result = sub;
                         bind._pad |= REFERENCE_RESULT_INTERNAL;
-                        self.instructions.push(bind);
+                        self.push_instruction_at_line(bind, source_line);
                         self.compile_list_targets(
                             inner_targets,
                             sub,
                             OpType::Cv,
                             0,
+                            source_line,
                             diagnose_nonreferenceable,
                         )?;
                     } else {
@@ -7735,13 +7747,14 @@ impl Compiler {
                         fetch.op2 = idx_literal;
                         fetch.result_type = OpType::Tmp;
                         fetch.result = sub_tmp;
-                        self.instructions.push(fetch);
+                        self.push_instruction_at_line(fetch, source_line);
                         let nested_start = self.instructions.len();
                         self.compile_list_targets(
                             inner_targets,
                             sub_tmp,
                             OpType::Tmp,
                             0,
+                            source_line,
                             diagnose_nonreferenceable,
                         )?;
                         for instruction in &mut self.instructions[nested_start..] {
@@ -7763,7 +7776,7 @@ impl Compiler {
                     fetch.op2 = key_op;
                     fetch.result_type = OpType::Tmp;
                     fetch.result = fetch_tmp;
-                    self.instructions.push(fetch);
+                    self.push_instruction_at_line(fetch, source_line);
                     let cv_idx = self.resolve_cv(var);
                     let mut assign = Instruction::new(OpCode::AssignCv);
                     assign.op1_type = OpType::Cv;
@@ -7798,12 +7811,13 @@ impl Compiler {
                         bind.result_type = OpType::Cv;
                         bind.result = sub;
                         bind._pad |= REFERENCE_RESULT_INTERNAL;
-                        self.instructions.push(bind);
+                        self.push_instruction_at_line(bind, source_line);
                         self.compile_list_targets(
                             targets,
                             sub,
                             OpType::Cv,
                             0,
+                            source_line,
                             diagnose_nonreferenceable,
                         )?;
                     } else {
@@ -7815,13 +7829,14 @@ impl Compiler {
                         fetch.op2 = key;
                         fetch.result_type = OpType::Tmp;
                         fetch.result = sub;
-                        self.instructions.push(fetch);
+                        self.push_instruction_at_line(fetch, source_line);
                         let nested_start = self.instructions.len();
                         self.compile_list_targets(
                             targets,
                             sub,
                             OpType::Tmp,
                             0,
+                            source_line,
                             diagnose_nonreferenceable,
                         )?;
                         for instruction in &mut self.instructions[nested_start..] {
