@@ -166,6 +166,31 @@ echo is_callable(null) ? 'true' : 'false';
     assert_eq!(out, "false");
 }
 
+#[test]
+fn invalid_dynamic_callable_values_throw_catchable_errors() {
+    let out = run_php(
+        r#"<?php
+$values = [null, 'missing_dynamic_function', ['only-one'], new stdClass];
+foreach ($values as $value) {
+    try {
+        $value();
+    } catch (Error $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+echo "continued";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Value of type null is not callable\n\
+Call to undefined function missing_dynamic_function()\n\
+Array callback must have exactly two elements\n\
+Object of type stdClass is not callable\n\
+continued"
+    );
+}
+
 // -- call_user_func with closure --
 
 #[test]

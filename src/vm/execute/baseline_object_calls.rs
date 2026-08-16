@@ -2523,18 +2523,37 @@ fn op_init_dynamic_call<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let callable = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    let (callable, instruction_index) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+        )
+    };
 
     if callable.value_type() == ValueType::Array {
         let callable_array = callable
             .as_array()
             .expect("array-tagged dynamic callable must expose array storage");
+        if callable_array.len() != 2 {
+            let error = make_error_value(
+                "Error",
+                "Array callback must have exactly two elements",
+            );
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
         if callable_array.len() == 2
             && callable_array
                 .get_value_at(1)
                 .is_some_and(|method| method.as_str().is_none())
         {
             let error = make_error_value("Error", "Method name must be a string");
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             return Ok(match throw_in_frame(eg, frame, error) {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
@@ -2559,6 +2578,7 @@ fn op_init_dynamic_call<'a>(
                     class_name.to_ascii_lowercase()
                 ),
             );
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             return Ok(match throw_in_frame(eg, frame, error) {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
@@ -2580,6 +2600,7 @@ fn op_init_dynamic_call<'a>(
             }
             if !loaded {
                 let error = make_error_value("Error", &format!("Class \"{class_name}\" not found"));
+                attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
                 return Ok(match throw_in_frame(eg, frame, error) {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
@@ -2588,8 +2609,16 @@ fn op_init_dynamic_call<'a>(
                 });
             }
         }
-        let resolved = resolve_user_call_at_opline(eg, frame, op_array, opline)
-            .ok_or_else(|| VmError::Fatal("Array is not callable".into()))?;
+        let Some(resolved) = resolve_user_call_at_opline(eg, frame, op_array, opline) else {
+            let error = make_error_value("Error", "Array is not callable");
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        };
         // Dynamic-call sends start at CV 0 because the compiler cannot know
         // that this callable is a method. Defer the hidden receiver until
         // DoFcall, which shifts the supplied positional prefix by one.
@@ -2626,6 +2655,7 @@ fn op_init_dynamic_call<'a>(
                 "Error",
                 &format!("Cannot call {normalized}() dynamically"),
             );
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             return Ok(match throw_in_frame(eg, frame, error) {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
@@ -2633,9 +2663,19 @@ fn op_init_dynamic_call<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         }
-        let func_ptr = eg.find_function(func_name).ok_or_else(|| {
-            VmError::Fatal(format!("Call to undefined function {}()", func_name))
-        })?;
+        let Some(func_ptr) = eg.find_function(func_name) else {
+            let error = make_error_value(
+                "Error",
+                &format!("Call to undefined function {}()", func_name),
+            );
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        };
 
         let num_args = opline.extended_value;
         let pending_call = unsafe { (*frame).call };
@@ -2657,7 +2697,19 @@ fn op_init_dynamic_call<'a>(
         let full_name = format!("{}::__invoke", class_name.to_lowercase());
         let func_ptr = match eg.find_function(&full_name) {
             Some(ptr) => ptr,
-            None => return Err(VmError::Fatal(format!("Call to undefined method {}::__invoke()", class_name))),
+            None => {
+                let error = make_error_value(
+                    "Error",
+                    &format!("Object of type {class_name} is not callable"),
+                );
+                attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
         };
 
         let num_args = opline.extended_value;
@@ -2679,7 +2731,20 @@ fn op_init_dynamic_call<'a>(
         // may execute nested calls before this frame reaches DoFcall.
         push_pending_invoke_this(eg, call as usize, callable.clone());
     } else {
-        return Err(VmError::Fatal(format!("Value of type {:?} is not callable", callable.value_type())));
+        let error = make_error_value(
+            "Error",
+            &format!(
+                "Value of type {} is not callable",
+                callable.dereferenced().type_name()
+            ),
+        );
+        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+        });
     }
     Ok(ColdResult::Done)
 }

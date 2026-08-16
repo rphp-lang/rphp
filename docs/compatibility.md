@@ -7,7 +7,26 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 illegal-array-offset checkpoint, based on `eed927c`, runs the
+The current AMD64 dynamic-call-error checkpoint, based on `76bb019`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,621 passes, 2,409 failures, 77
+skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds the exact passes `Zend/tests/bug64966.phpt` and
+`Zend/tests/dynamic_call_freeing.phpt` without losing a previous pass. Invalid
+dynamic calls through null and other scalar values, undefined string function
+names, malformed callback arrays and objects without `__invoke` now throw a
+catchable PHP `Error` with PHP 8.2 type names and messages. Temporary callable
+expressions are still evaluated and released before control reaches the
+handler. Original E2E coverage checks all four invalid value families and
+continued execution after every catch. The missing uncaught source trace in
+`Zend/tests/028.phpt`, non-static callback validation and several method/class
+callback diagnostics remain separate boundaries. Five Cargo test
+configurations, all-target and unsafe checks, Composer S0, Symfony S1 and
+warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not rerun because
+this machine has no exact PHP 8.2 oracle. Nine alternating release runs of
+`bench_calls.php` measured medians of 0.352278 seconds for the preceding binary
+and 0.344349 seconds for the candidate, with the same computed result.
+
+The preceding AMD64 illegal-array-offset checkpoint, based on `eed927c`, runs the
 same 4,345-case PHP 8.2.33 corpus and records 1,619 passes, 2,411 failures, 77
 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
 crashes. It adds six exact passes without losing a previous pass or moving
