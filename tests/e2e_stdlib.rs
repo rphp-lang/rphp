@@ -726,6 +726,16 @@ fn array_cursor_functions_track_reset_end_next_prev_current_and_key() {
     );
 }
 
+#[test]
+fn array_cursor_survives_unset_and_reappend_across_storage_transition() {
+    assert_eq!(
+        run_php(
+            "<?php $array = ['first']; reset($array); for ($expected = 0; $expected <= 10; $expected++) { $key = key($array); echo $key, ','; next($array); unset($array[$key]); $array[] = 'next'; } echo '|'; $array = ['a', 'b', 'c']; next($array); unset($array[0]); echo key($array), current($array), ','; unset($array[1]); echo key($array), current($array);"
+        ),
+        "0,1,2,3,4,5,6,7,8,9,10,|1b,2c"
+    );
+}
+
 // === array_reverse ===
 
 #[test]

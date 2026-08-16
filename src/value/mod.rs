@@ -2041,6 +2041,14 @@ impl PhpArray {
         self.cursor_current()
     }
 
+    #[inline]
+    fn adjust_cursor_after_remove(&self, removed_position: usize) {
+        let current = self.cursor.get();
+        if removed_position < current {
+            self.cursor.set(current - 1);
+        }
+    }
+
     /// PHP array union (`$left + $right`): retain every left entry and append
     /// only right-hand keys that are absent. Values stay COW-safe clones and
     /// the left array's insertion order remains authoritative.
@@ -3359,9 +3367,14 @@ impl PhpArray {
                 ArrayKey::Int(key) => small.find_int(*key),
                 ArrayKey::String(key) => small.find_str(key),
             };
-            return position
-                .and_then(|position| small.remove_at(position))
-                .is_some();
+            if let Some(position) = position {
+                let removed = small.remove_at(position).is_some();
+                if removed {
+                    self.adjust_cursor_after_remove(position);
+                }
+                return removed;
+            }
+            return false;
         }
         if let ArrayStorage::LinearHash(linear) = &mut self.storage {
             let position = match key {
@@ -3371,6 +3384,7 @@ impl PhpArray {
             if let Some(position) = position {
                 linear.entries.remove(position);
                 linear.invalidate_index();
+                self.adjust_cursor_after_remove(position);
                 return true;
             }
             return false;
@@ -3395,6 +3409,7 @@ impl PhpArray {
                 }
                 *verified_int_prefix = rebuild_int_index(entries, int_index, 0);
                 Self::reindex_string_entries(entries, str_index, idx);
+                self.adjust_cursor_after_remove(idx);
                 return true;
             }
         }

@@ -44,6 +44,33 @@ fn packed_long_chunks_preserve_keys_and_reject_other_storage() {
 }
 
 #[test]
+fn removal_preserves_the_logical_internal_cursor_position() {
+    let mut array = PhpArray::new();
+    array.push(Value::string("first"));
+    array.push(Value::string("second"));
+    array.push(Value::string("third"));
+
+    assert_eq!(array.cursor_next().and_then(Value::as_str), Some("second"));
+    assert!(array.remove(&ArrayKey::Int(0)));
+    assert_eq!(array.cursor_key(), Some(ArrayKey::Int(1)));
+    assert_eq!(
+        array.cursor_current().and_then(Value::as_str),
+        Some("second")
+    );
+
+    assert!(array.remove(&ArrayKey::Int(1)));
+    assert_eq!(array.cursor_key(), Some(ArrayKey::Int(2)));
+    assert_eq!(
+        array.cursor_current().and_then(Value::as_str),
+        Some("third")
+    );
+
+    assert!(array.remove(&ArrayKey::Int(2)));
+    array.push(Value::string("replacement"));
+    assert_eq!(array.cursor_key(), Some(ArrayKey::Int(3)));
+}
+
+#[test]
 fn integer_index_compact_long_payload_stays_exact_across_mutation() {
     let keys = [107, -4, 91, 33, 205, 17, 409, 73, 301];
     let mut array = PhpArray::new();
