@@ -29,6 +29,12 @@ tree_digest() {
     sha256_file "${manifest}"
 }
 
+reference_version="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION.".".PHP_RELEASE_VERSION;')"
+if [[ "${reference_version}" != 8.5.* ]]; then
+    echo "error: Symfony S2 requires a PHP 8.5 reference oracle, got ${reference_version}" >&2
+    exit 1
+fi
+
 if [[ ! -f "${composer_phar}" ]]; then
     curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
         "${composer_url}" -o "${download_candidate}"
