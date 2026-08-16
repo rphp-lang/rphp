@@ -1402,6 +1402,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "response_code"
     );
     reg!("ini_get", fn_ini_get, 1, 1, "option");
+    reg!("ini_set", fn_ini_set, 2, 2, "option", "value");
     reg!(
         "parse_ini_string",
         parse_ini::fn_parse_ini_string,
@@ -13386,6 +13387,14 @@ fn fn_ini_get(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let option = arg_str!(ed, 0);
+    let normalized = option.to_ascii_lowercase();
+    if let Some(value) = eg
+        .ini_overrides
+        .as_deref()
+        .and_then(|overrides| overrides.get(&normalized))
+    {
+        ret!(rv, Value::string(value.clone()));
+    }
     if option.eq_ignore_ascii_case("display_errors") {
         ret!(rv, Value::string("1"));
     }
@@ -13393,6 +13402,69 @@ fn fn_ini_get(
         ret!(rv, Value::string(if eg.gc_enabled { "1" } else { "0" }));
     }
     ret!(rv, Value::bool(false));
+}
+
+pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> {
+    if let Some(value) = eg
+        .ini_overrides
+        .as_deref()
+        .and_then(|overrides| overrides.get(option))
+    {
+        return Some(value.clone());
+    }
+    Some(match option {
+        "display_errors" | "report_memleaks" => "1".to_string(),
+        "zend.exception_ignore_args" => "0".to_string(),
+        "zend.enable_gc" => if eg.gc_enabled { "1" } else { "0" }.to_string(),
+        "memory_limit" => "-1".to_string(),
+        "zend.exception_string_param_max_len" => "15".to_string(),
+        "fiber.stack_size" => "2097152".to_string(),
+        _ => return None,
+    })
+}
+
+pub(crate) fn ini_boolean(value: &str) -> bool {
+    !matches!(
+        value.to_ascii_lowercase().as_str(),
+        "" | "0" | "off" | "no" | "false" | "none"
+    )
+}
+
+fn fn_ini_set(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let option = arg_str!(ed, 0).to_ascii_lowercase();
+    let value = arg!(ed, 1).echo_to_string();
+    let Some(previous) = ini_default(eg, &option) else {
+        ret!(rv, Value::bool(false));
+    };
+
+    if option == "zend.exception_string_param_max_len"
+        && !value
+            .parse::<i64>()
+            .is_ok_and(|value| (0..=1_000_000).contains(&value))
+    {
+        ret!(rv, Value::bool(false));
+    }
+    if option == "fiber.stack_size" && value.parse::<i64>().is_ok_and(|value| value < 0) {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "fiber.stack_size must be a positive number",
+        )?;
+        ret!(rv, Value::bool(false));
+    }
+    if option == "zend.enable_gc" {
+        eg.gc_enabled = ini_boolean(&value);
+    }
+    eg.ini_overrides
+        .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+        .insert(option, value);
+    ret!(rv, Value::string(previous));
 }
 
 fn fn_gc_enabled(

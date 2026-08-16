@@ -581,7 +581,13 @@ fn attach_throwable_origin(
     }
     // SAFETY: opcode dispatch keeps the complete synchronous frame chain live
     // for the duration of this cold metadata snapshot.
-    let trace = unsafe { crate::stdlib::collect_debug_backtrace(frame, 0, 0, eg, true) };
+    let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+        .as_deref()
+        .is_some_and(crate::stdlib::ini_boolean);
+    let trace_options = if ignore_arguments { 2 } else { 0 };
+    let trace = unsafe {
+        crate::stdlib::collect_debug_backtrace(frame, trace_options, 0, eg, true)
+    };
     let Some(mut object) = throwable.as_object_mut() else {
         return;
     };

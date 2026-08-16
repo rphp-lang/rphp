@@ -242,6 +242,18 @@ fn throwable_trace_snapshots_method_calls_and_arguments_at_creation() {
 }
 
 #[test]
+fn exception_ignore_args_omits_arguments_when_the_trace_is_created() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nfunction captureIgnored($secret) { return new Exception(); }\nini_set('zend.exception_ignore_args', '1');\n$ignored = captureIgnored('hidden');\nini_set('zend.exception_ignore_args', '0');\nvar_export($ignored->getTrace());\necho \"\\n\", $ignored->getTraceAsString();",
+            "/fixture/ignore-args.php",
+            "/fixture",
+        ),
+        "array (\n  0 => array (\n  'file' => '/fixture/ignore-args.php',\n  'line' => 4,\n  'function' => 'captureIgnored',\n),\n)\n#0 /fixture/ignore-args.php(4): captureIgnored()\n#1 {main}"
+    );
+}
+
+#[test]
 fn nested_uncaught_trace_uses_each_callers_source_line() {
     let error = run_php_expect_error_with_source_context(
         "<?php\nfunction outer($value) {\n    inner($value);\n}\nfunction inner($value) {\n    throw new Exception('boom');\n}\nouter(42);",

@@ -1403,7 +1403,15 @@ fn op_yield_from<'a>(
                     {
                         let inner_state: GeneratorState = inner_gen_ref.borrow().state;
                         if inner_state == GeneratorState::Created {
-                            match resume_generator(eg, &inner_gen_ref, Value::null())? {
+                            if eg.generator_delegation_depth >= 512 {
+                                return Err(VmError::Fatal(
+                                    "Maximum generator delegation depth exceeded".to_string(),
+                                ));
+                            }
+                            eg.generator_delegation_depth += 1;
+                            let resumed = resume_generator(eg, &inner_gen_ref, Value::null());
+                            eg.generator_delegation_depth -= 1;
+                            match resumed? {
                                 GeneratorResumeOutcome::Advanced => {}
                                 GeneratorResumeOutcome::Threw(exception) => {
                                     eg.active_generator = Some(gen_ref);

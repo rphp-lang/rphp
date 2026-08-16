@@ -1132,6 +1132,32 @@ fn gc_controls_expose_request_local_state_through_ini_get() {
 }
 
 #[test]
+fn ini_set_returns_previous_values_and_mutates_the_admitted_request_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(ini_set('unknown.option', 'value'));
+var_dump(ini_set('zend.enable_gc', '0'), gc_enabled(), ini_get('zend.enable_gc'));
+var_dump(ini_set('zend.enable_gc', 'on'), gc_enabled(), ini_get('zend.enable_gc'));
+var_dump(ini_set('zend.exception_string_param_max_len', '-1'));
+var_dump(ini_set('zend.exception_string_param_max_len', '1000000'));
+var_dump(ini_set('zend.exception_string_param_max_len', '20'));
+echo ini_get('zend.exception_string_param_max_len');
+"#,
+        ),
+        concat!(
+            "bool(false)\n",
+            "string(1) \"1\"\nbool(false)\nstring(1) \"0\"\n",
+            "string(1) \"0\"\nbool(true)\nstring(2) \"on\"\n",
+            "bool(false)\n",
+            "string(2) \"15\"\n",
+            "string(7) \"1000000\"\n",
+            "20"
+        )
+    );
+}
+
+#[test]
 fn parse_ini_supports_typed_sections_raw_bytes_and_integer_expressions() {
     assert_eq!(
         run_php(
