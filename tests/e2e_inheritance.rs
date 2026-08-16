@@ -1,6 +1,10 @@
 /// Tests for class inheritance (extends)
 mod common;
 use common::{run_php, run_php_expect_error, run_php_with_source_context};
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
+use rphp::vm::opcode::OpCode;
 
 #[test]
 fn test_extends_basic() {
@@ -292,24 +296,36 @@ class PrivateReadExactChild extends PrivateReadExactParent {
 }
 
 #[test]
-fn inaccessible_instance_property_errors_are_catchable_and_reads_keep_the_opcode_origin() {
-    assert_eq!(
-        run_php_with_source_context(
-            r#"<?php
+fn inaccessible_instance_property_errors_are_catchable_and_keep_the_opcode_origin() {
+    let source = r#"<?php
 class HiddenProperty { private int $value = 1; }
 $object = new HiddenProperty;
 try { $read = $object->value; } catch (Error $error) { echo "read:", $error->getLine(), "\n"; }
-try { $object->value = 2; } catch (Error $error) { echo "write:", $error->getMessage(), "\n"; }
-try { $reference =& $object->value; } catch (Error $error) { echo "reference:", $error->getMessage(); }
-"#,
-            "/fixture/property-visibility.php",
-            "/fixture",
-        ),
-        concat!(
-            "read:4\n",
-            "write:Cannot access private property HiddenProperty::$value\n",
-            "reference:Cannot access private property HiddenProperty::$value",
-        )
+try { $object->value = 2; } catch (Error $error) { echo "write:", $error->getLine(), "\n"; }
+try { $reference =& $object->value; } catch (Error $error) { echo "reference:", $error->getLine(); }
+"#;
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compiled = Compiler::new().compile(&statements).unwrap();
+    let property_lines: Vec<_> = compiled
+        .main
+        .instructions()
+        .iter()
+        .enumerate()
+        .filter(|(_, instruction)| {
+            matches!(
+                instruction.opcode,
+                OpCode::AssignObjProp | OpCode::BindObjPropRef
+            )
+        })
+        .map(|(index, _)| compiled.main.source_line(index))
+        .collect();
+    assert!(property_lines.contains(&Some(5)), "{property_lines:?}");
+    assert!(property_lines.contains(&Some(6)), "{property_lines:?}");
+
+    assert_eq!(
+        run_php_with_source_context(source, "/fixture/property-visibility.php", "/fixture",),
+        concat!("read:4\n", "write:5\n", "reference:6",)
     );
 }
 

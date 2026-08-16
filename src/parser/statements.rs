@@ -555,7 +555,10 @@ impl Parser {
 
                         if is_prop_assign {
                             if let Expr::PropertyAccess {
-                                object, property, ..
+                                object,
+                                property,
+                                line,
+                                ..
                             } = expr
                             {
                                 self.advance(); // consume '='
@@ -565,6 +568,7 @@ impl Parser {
                                     object: *object,
                                     property,
                                     expr: rhs,
+                                    line,
                                 });
                             }
                         } else if matches!(expr, Expr::ArrayAccess { .. }) {
@@ -1417,11 +1421,12 @@ impl Parser {
                     object,
                     property,
                     nullsafe: false,
-                    ..
+                    line,
                 } => Ok(Stmt::AssignProp {
                     object: *object,
                     property,
                     expr: *expr,
+                    line,
                 }),
                 Expr::StaticProperty {
                     class_name,

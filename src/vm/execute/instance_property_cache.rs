@@ -14,6 +14,25 @@ fn object_property_throw<'a>(
     }
 }
 
+#[inline]
+fn object_property_throw_at<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    class: &str,
+    message: String,
+) -> ColdResult<'a> {
+    let error = make_error_value(class, &message);
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    match throw_in_frame(eg, frame, error) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    }
+}
+
 /// Complete typed-property path for conversions, complex declarations and
 /// generic runtime contracts after the exact-int write above declines.
 #[inline]

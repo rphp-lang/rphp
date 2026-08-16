@@ -7,7 +7,33 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 instance-property-visibility-error checkpoint, based on
+The current AMD64 property-write-origin checkpoint, based on `43c522d`, runs
+the default-feature 4,345-case PHP 8.2.33 corpus and records 1,698 passes,
+2,332 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds three exact passes without losing a
+previous pass: `Zend/tests/objects_017.phpt`,
+`Zend/tests/type_declarations/typed_properties_029.phpt` and
+`Zend/tests/type_declarations/typed_properties_060.phpt`. Ordinary and dynamic
+instance-property assignment and reference-binding forms now preserve their
+property-token source line from the AST through `AssignObjProp` and
+`BindObjPropRef` bytecode. Catchable and uncaught visibility and typed-property
+errors consequently expose the correct file, line and root trace instead of
+line zero or an unlocated fatal. Original E2E coverage inspects the emitted
+source-line table and validates runtime origins for read, write and reference
+binding. Five Cargo test configurations, all-target and unsafe checks,
+Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64; the production
+unsafe inventory remains 1,621 blocks, below the 1,623 ceiling. The S3
+cold-kernel gate was not rerun because this machine has no exact PHP 8.2
+oracle. Twenty-one alternating release pairs measured
+`bench_instance_property_write.php` at baseline p10/median/p90 of
+0.165227/0.168968/0.171955 seconds and candidate
+0.160270/0.167953/0.172789 seconds (median -0.60 percent), with identical final
+property values. The runtime object/value and inline-cache layouts are
+unchanged; the compiler stores sparse metadata only for the newly located
+opcodes. Nested magic-method and Closure trace propagation, static-property
+origins and remaining writeback forms are separate compatibility boundaries.
+
+The preceding AMD64 instance-property-visibility-error checkpoint, based on
 `17442b4`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
 1,695 passes, 2,335 failures, 77 skips, one upstream XFAIL, 237 unsupported
 cases, zero timeouts and zero crashes. It adds four exact passes without losing

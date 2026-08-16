@@ -835,6 +835,7 @@ pub enum Stmt {
         object: Expr,
         property: String,
         expr: Expr,
+        line: usize,
     },
     AssignStaticProp {
         // ClassName::$prop = expr

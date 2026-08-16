@@ -1210,6 +1210,8 @@ fn op_bind_obj_prop_ref<'a>(
     // The receiver is cloned before its CV can be replaced, and the owned
     // reference cell keeps the property target stable across object growth.
     unsafe {
+        let instruction_index =
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
         let receiver = (&*(*frame).get_op_ptr(
             opline.op1 as u32,
             opline.op1_type,
@@ -1259,9 +1261,11 @@ fn op_bind_obj_prop_ref<'a>(
                     Visibility::Private => "private",
                     Visibility::Public => "public",
                 };
-                return Ok(object_property_throw(
+                return Ok(object_property_throw_at(
                     eg,
                     frame,
+                    op_array,
+                    instruction_index,
                     "Error",
                     format!("Cannot access {visibility} property {defining_class}::${name}"),
                 ));
@@ -1271,9 +1275,11 @@ fn op_bind_obj_prop_ref<'a>(
             .find_class(&class_name)
             .is_some_and(|class| class.readonly_props.contains(&name))
         {
-            return Ok(object_property_throw(
+            return Ok(object_property_throw_at(
                 eg,
                 frame,
+                op_array,
+                instruction_index,
                 "Error",
                 format!("Cannot acquire reference to readonly property {class_name}::${name}"),
             ));

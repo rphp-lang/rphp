@@ -6590,7 +6590,7 @@ impl Compiler {
                         object,
                         property,
                         nullsafe: false,
-                        ..
+                        line,
                     } => {
                         let (object, object_type) = self.compile_property_modify_base(object);
                         let property = self.add_literal(Value::string(property.clone()));
@@ -6601,14 +6601,14 @@ impl Compiler {
                         bind.op2_type = OpType::Const;
                         bind.result = destination;
                         bind.result_type = OpType::Cv;
-                        self.instructions.push(bind);
+                        self.push_instruction_at_line(bind, *line);
                         (destination, OpType::Cv)
                     }
                     Expr::DynamicPropertyAccess {
                         object,
                         property,
                         nullsafe: false,
-                        ..
+                        line,
                     } => {
                         let (object, object_type) = self.compile_property_modify_base(object);
                         let (property, property_type) = self.compile_expr(property);
@@ -6619,7 +6619,7 @@ impl Compiler {
                         bind.op2_type = property_type;
                         bind.result = destination;
                         bind.result_type = OpType::Cv;
-                        self.instructions.push(bind);
+                        self.push_instruction_at_line(bind, *line);
                         (destination, OpType::Cv)
                     }
                     Expr::ArrayAccess { array, index, .. } => {

@@ -297,7 +297,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -309,7 +309,7 @@ impl Compiler {
                 bind.result = destination;
                 bind.result_type = OpType::Cv;
                 bind._pad |= REFERENCE_RESULT_INTERNAL;
-                self.instructions.push(bind);
+                self.push_instruction_at_line(bind, *line);
             }
             Expr::DynamicPropertyAccess {
                 object,
@@ -1221,7 +1221,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -1233,7 +1233,7 @@ impl Compiler {
                 assign.result = source;
                 assign.result_type = OpType::Cv;
                 assign._pad |= ASSIGN_OBJ_MODIFY;
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, *line);
 
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
                 bind.op1 = object;
@@ -1245,13 +1245,13 @@ impl Compiler {
                 if source_is_internal {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
                 }
-                self.instructions.push(bind);
+                self.push_instruction_at_line(bind, *line);
             }
             Expr::DynamicPropertyAccess {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -1263,7 +1263,7 @@ impl Compiler {
                 assign.result = source;
                 assign.result_type = OpType::Cv;
                 assign._pad |= ASSIGN_OBJ_MODIFY;
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, *line);
 
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
                 bind.op1 = object;
@@ -1275,7 +1275,7 @@ impl Compiler {
                 if source_is_internal {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
                 }
-                self.instructions.push(bind);
+                self.push_instruction_at_line(bind, *line);
             }
             Expr::ArrayAccess { .. } => {
                 let mut root = target;
@@ -2873,6 +2873,7 @@ impl Compiler {
                 object,
                 property,
                 expr,
+                line,
             } => {
                 let (obj_op, obj_type, deferred_fetches) =
                     self.prepare_property_modify_base(object);
@@ -2889,7 +2890,7 @@ impl Compiler {
                 assign.op2_type = OpType::Const;
                 assign.result = val_op;
                 assign.result_type = val_type;
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, *line);
             }
             Stmt::AssignStaticProp {
                 class_name,
