@@ -898,6 +898,26 @@ echo $value, ':', $alias, ':', $closureAlias, "\n";"#;
 }
 
 #[test]
+fn static_reference_returns_survive_first_class_callable_and_pipe_forwarders() {
+    let source = r#"<?php
+function &staticSlot($suffix) {
+    static $value = "original";
+    $value .= " " . $suffix;
+    return $value;
+}
+function &throughPipe() { return "pipe" |> staticSlot(...); }
+$callable = staticSlot(...);
+$direct =& $callable("callable");
+$direct = "changed";
+echo staticSlot("direct"), "\n";
+$piped =& throughPipe();
+$piped = "forwarded";
+echo staticSlot("after"), "\n";"#;
+
+    assert_eq!(run_php(source), "changed direct\nforwarded after\n");
+}
+
+#[test]
 fn reference_returns_preserve_global_array_and_method_property_cells() {
     let source = r#"<?php
 function &globalSlot() { return $GLOBALS['shared']; }

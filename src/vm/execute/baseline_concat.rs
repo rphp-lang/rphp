@@ -9,6 +9,11 @@ fn op_concat(
 ) -> Result<(), VmError> {
     let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    // Operators consume the value stored in a PHP reference cell, not the
+    // reference wrapper itself. This matters after `=&` publishes a returned
+    // reference and the referenced CV is subsequently used by `.=`.
+    let op1 = op1.dereferenced();
+    let op2 = op2.dereferenced();
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
     // Fast path: both operands are strings — avoid echo_to_string() heap allocation.
@@ -70,4 +75,3 @@ fn op_concat(
     unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
     Ok(())
 }
-

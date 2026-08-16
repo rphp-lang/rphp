@@ -5643,8 +5643,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     for (cv_idx, var_name) in &op_array.static_vars {
                         // SAFETY: `cv_idx` comes from this frame's validated
                         // op array and the frame remains live until return.
-                        let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                        // SAFETY: `get_op_mut` returned the initialized CV slot
+                        // Inspect the raw CV wrapper. `get_op_mut` follows PHP
+                        // references and would make every correctly bound
+                        // static look like an ordinary value, replacing its
+                        // shared cell at each return boundary.
+                        let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
+                        // SAFETY: `cv_mut` returned the initialized raw CV slot
                         // owned by the still-live frame.
                         let value = unsafe { &*cv_ptr };
                         // BindStatic installs the request-owned reference cell
