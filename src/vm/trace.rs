@@ -35,11 +35,20 @@ fn append_trace_argument(output: &mut String, value: &Value) {
         ValueType::String => {
             let value = value.as_str().unwrap();
             output.push('\'');
+            for byte in value.as_bytes().iter().take(15) {
+                match byte {
+                    b'\\' => output.push_str("\\\\"),
+                    b'\n' => output.push_str("\\n"),
+                    b'\r' => output.push_str("\\r"),
+                    b'\t' => output.push_str("\\t"),
+                    0x20..=0x7e => output.push(*byte as char),
+                    _ => {
+                        let _ = write!(output, "\\x{byte:02X}");
+                    }
+                }
+            }
             if value.len() > 15 {
-                output.push_str(&String::from_utf8_lossy(&value.as_bytes()[..15]));
                 output.push_str("...");
-            } else {
-                output.push_str(value);
             }
             output.push('\'');
         }

@@ -344,6 +344,18 @@ fn trace_arguments_hide_the_runtime_identity_suffix_of_anonymous_classes() {
 }
 
 #[test]
+fn throwable_trace_strings_escape_bytes_like_php() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nfunction capture($value) { return (new Exception())->getTraceAsString(); }\necho capture(\"a\\\\b\\nž\");",
+            "/fixture/trace-string-bytes.php",
+            "/fixture",
+        ),
+        "#0 /fixture/trace-string-bytes.php(3): capture('a\\\\b\\n\\xC5\\xBE')\n#1 {main}"
+    );
+}
+
+#[test]
 fn trace_callables_hide_the_runtime_identity_suffix_of_anonymous_classes() {
     assert_eq!(
         run_php_with_source_context(
@@ -383,6 +395,18 @@ fn uncaught_throwable_renders_the_complete_previous_chain_oldest_first() {
         rphp::vm::execute::VmError::Fatal(message)
             if message == "Uncaught Error: root in /fixture/previous-chain.php:2\nStack trace:\n#0 {main}\n\nNext Exception in /fixture/previous-chain.php:3\nStack trace:\n#0 {main}\n\nNext RuntimeException: outer in /fixture/previous-chain.php:4\nStack trace:\n#0 {main}\n  thrown in /fixture/previous-chain.php on line 4"
     ));
+}
+
+#[test]
+fn throwable_string_rendering_uses_the_stored_origin_trace_and_previous_chain() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\n$root = new Error('root');\n$outer = new RuntimeException('', 0, $root);\necho $outer;",
+            "/fixture/throwable-string.php",
+            "/fixture",
+        ),
+        "Error: root in /fixture/throwable-string.php:2\nStack trace:\n#0 {main}\n\nNext RuntimeException in /fixture/throwable-string.php:3\nStack trace:\n#0 {main}"
+    );
 }
 
 #[test]

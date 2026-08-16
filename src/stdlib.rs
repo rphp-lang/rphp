@@ -1676,6 +1676,17 @@ fn fn_throwable_get_trace_as_string(
     );
 }
 
+fn fn_throwable_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::string(crate::vm::execute::format_throwable_string(eg, arg!(ed, 0)))
+    );
+}
+
 fn bind_closure_value(
     source_value: &Value,
     new_this: &Value,
@@ -3106,6 +3117,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         reg_method!(class, "getfile", fn_throwable_get_file, 1, 0);
         reg_method!(class, "getline", fn_throwable_get_line, 1, 0);
         reg_method!(class, "gettrace", fn_throwable_get_trace, 1, 0);
+        reg_method!(class, "__tostring", fn_throwable_to_string, 1, 0);
         reg_method!(
             class,
             "gettraceasstring",

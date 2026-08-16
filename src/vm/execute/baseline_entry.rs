@@ -42,6 +42,16 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
 
 #[cold]
 pub(crate) fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) -> String {
+    format_throwable_chain(eg, thrown, true)
+}
+
+#[cold]
+pub(crate) fn format_throwable_string(eg: &ExecutorGlobals, thrown: &Value) -> String {
+    format_throwable_chain(eg, thrown, false)
+}
+
+#[cold]
+fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) -> String {
     struct Segment {
         class_name: String,
         message: String,
@@ -98,9 +108,15 @@ pub(crate) fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) ->
     let Some(final_segment) = snapshot(thrown) else {
         let message = thrown.echo_to_string();
         return if message.is_empty() {
-            "Uncaught Exception".to_string()
-        } else {
+            if uncaught {
+                "Uncaught Exception".to_string()
+            } else {
+                "Exception".to_string()
+            }
+        } else if uncaught {
             format!("Uncaught Exception: {message}")
+        } else {
+            format!("Exception: {message}")
         };
     };
     let final_location = final_segment
@@ -130,9 +146,9 @@ pub(crate) fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) ->
 
     let mut rendered = String::new();
     for (index, segment) in segments.into_iter().enumerate() {
-        if index == 0 {
+        if index == 0 && uncaught {
             rendered.push_str("Uncaught ");
-        } else {
+        } else if index != 0 {
             rendered.push_str("\n\nNext ");
         }
         rendered.push_str(&segment.class_name);
@@ -149,7 +165,7 @@ pub(crate) fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) ->
             rendered.push_str(&crate::vm::trace::format_throwable_trace(&trace));
         }
     }
-    if let Some((file, line)) = final_location {
+    if uncaught && let Some((file, line)) = final_location {
         rendered.push_str("\n  thrown in ");
         rendered.push_str(&file);
         rendered.push_str(" on line ");
