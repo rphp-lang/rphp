@@ -209,6 +209,42 @@ fn finally_jump_state(
     }
 }
 
+fn throw_object_as_array<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    receiver: &Value,
+) -> ThrowResult<'a> {
+    let class_name = if receiver.value_type() == ValueType::Closure {
+        "Closure".to_string()
+    } else {
+        receiver
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| "object".to_string())
+    };
+    throw_array_dimension_error(
+        eg,
+        frame,
+        op_array,
+        instruction_index,
+        &format!("Cannot use object of type {class_name} as array"),
+    )
+}
+
+fn throw_array_dimension_error<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    message: &str,
+) -> ThrowResult<'a> {
+    let error = make_error_value("Error", message);
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    throw_in_frame(eg, frame, error)
+}
+
 /// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -447,12 +483,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         OpType::Cv,
                         op_array,
                     );
-                    let result =
-                        (*frame).get_op_mut(opline.result as u32, opline.result_type);
                     if !source.is_undef() {
-                        frame_tmp_set(frame, result, source.clone());
+                        if opline.result_type != OpType::Unused {
+                            let result =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            frame_tmp_set(frame, result, source.clone());
+                        }
                     } else {
-                        frame_tmp_set(frame, result, Value::null());
+                        if opline.result_type != OpType::Unused {
+                            let result =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            frame_tmp_set(frame, result, Value::null());
+                        }
                         report_undefined_variable_read(
                             eg,
                             frame,
@@ -1788,7 +1830,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
-                                    continue;
+                                    continue 'vm;
                                 }
                                 ThrowResult::Unhandled(thrown) => {
                                     eg.exception = Some(thrown);
@@ -2457,7 +2499,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
-                                    continue;
+                                    continue 'vm;
                                 }
                                 ThrowResult::Unhandled(thrown) => {
                                     eg.exception = Some(thrown);
@@ -2664,7 +2706,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             frame = call;
                             op_array = unsafe { (*frame).op_array() };
-                            continue;
+                            continue 'vm;
                         }
                     } // else: type_ok
                     } // if arity/generator ok
@@ -3135,7 +3177,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             },
                         );
                     }
-                } else if arr_val.value_type() == ValueType::Object {
+                } else if matches!(arr_val.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr_val.clone();
                     let key = idx_val.clone();
                     let method = if opline._pad & FETCH_DIM_ISSET != 0 {
@@ -3160,25 +3202,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let value = match value? {
                         Some(value) => value,
                         None => {
-                            let class_name = receiver
-                                .as_object()
-                                .map(|object| object.class_name.to_string())
-                                .unwrap_or_else(|| "object".to_string());
-                            let error = make_error_value(
-                                "Error",
-                                &format!("Cannot use object of type {class_name} as array"),
-                            );
                             let instruction_index = (opline_ptr as usize
                                 - op_array.instructions.as_ptr() as usize)
                                 / std::mem::size_of::<Instruction>();
-                            attach_throwable_origin(
-                                &error,
+                            match throw_object_as_array(
                                 eg,
                                 frame,
                                 op_array,
                                 instruction_index,
-                            );
-                            match throw_in_frame(eg, frame, error) {
+                                &receiver,
+                            ) {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -3196,7 +3229,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
-                                continue;
+                                continue 'vm;
                             }
                             ThrowResult::Unhandled(exception) => {
                                 eg.exception = Some(exception);
@@ -3305,7 +3338,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
-            OpCode::AssignDim => {
+            OpCode::AssignDim => 'assign_dim: {
                 // op1[op2] = result (value source encoded in result/result_type)
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let cloned_val = if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
@@ -3327,31 +3360,102 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
-                if arr.value_type() == ValueType::Object {
+                if opline._pad & ASSIGN_DIM_UNSET_REBUILD != 0
+                    && !matches!(
+                        arr.value_type(),
+                        ValueType::Array | ValueType::Object | ValueType::Closure
+                    )
+                {
+                    if arr.value_type() == ValueType::False {
+                        report_php_deprecation(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Automatic conversion of false to array is deprecated",
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        break 'assign_dim;
+                    }
+                    if matches!(arr.value_type(), ValueType::Undef | ValueType::Null) {
+                        break 'assign_dim;
+                    }
+                    let message = if arr.value_type() == ValueType::String {
+                        "Cannot use string offset as an array"
+                    } else {
+                        "Cannot unset offset in a non-array variable"
+                    };
+                    let instruction_index = (opline_ptr as usize
+                        - op_array.instructions.as_ptr() as usize)
+                        / std::mem::size_of::<Instruction>();
+                    match throw_array_dimension_error(
+                        eg,
+                        frame,
+                        op_array,
+                        instruction_index,
+                        message,
+                    ) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue 'vm;
+                        }
+                        ThrowResult::Unhandled(exception) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    }
+                }
+                if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
                     let args = [idx_val.clone(), cloned_val];
-                    crate::stdlib::call_object_protocol_method(
+                    let handled = crate::stdlib::call_object_protocol_method(
                         eg,
                         &receiver,
                         "ArrayAccess",
                         "offsetSet",
                         &args,
-                    )?
-                    .ok_or_else(|| {
-                        let class_name = receiver
-                            .as_object()
-                            .map(|object| object.class_name.to_string())
-                            .unwrap_or_else(|| "object".to_string());
-                        VmError::Fatal(format!(
-                            "Cannot use object of type {class_name} as array"
-                        ))
-                    })?;
+                    )?;
+                    if handled.is_none() {
+                        let instruction_index = (opline_ptr as usize
+                            - op_array.instructions.as_ptr() as usize)
+                            / std::mem::size_of::<Instruction>();
+                        match throw_object_as_array(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            &receiver,
+                        ) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
                     if let Some(exception) = eg.exception.take() {
                         match throw_in_frame(eg, frame, exception) {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
-                                continue;
+                                continue 'vm;
                             }
                             ThrowResult::Unhandled(exception) => {
                                 eg.exception = Some(exception);
@@ -3400,25 +3504,38 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
-                if arr.value_type() == ValueType::Object {
+                if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
                     let args = [Value::null(), cloned_val];
-                    crate::stdlib::call_object_protocol_method(
+                    let handled = crate::stdlib::call_object_protocol_method(
                         eg,
                         &receiver,
                         "ArrayAccess",
                         "offsetSet",
                         &args,
-                    )?
-                    .ok_or_else(|| {
-                        let class_name = receiver
-                            .as_object()
-                            .map(|object| object.class_name.to_string())
-                            .unwrap_or_else(|| "object".to_string());
-                        VmError::Fatal(format!(
-                            "Cannot use object of type {class_name} as array"
-                        ))
-                    })?;
+                    )?;
+                    if handled.is_none() {
+                        let instruction_index = (opline_ptr as usize
+                            - op_array.instructions.as_ptr() as usize)
+                            / std::mem::size_of::<Instruction>();
+                        match throw_object_as_array(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            &receiver,
+                        ) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
                     if let Some(exception) = eg.exception.take() {
                         match throw_in_frame(eg, frame, exception) {
                             ThrowResult::Handled(new_frame, new_op_array) => {
@@ -3481,25 +3598,38 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
-                if arr.value_type() == ValueType::Object {
+                if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
                     let key = idx_val.clone();
-                    crate::stdlib::call_object_protocol_method(
+                    let handled = crate::stdlib::call_object_protocol_method(
                         eg,
                         &receiver,
                         "ArrayAccess",
                         "offsetUnset",
                         std::slice::from_ref(&key),
-                    )?
-                    .ok_or_else(|| {
-                        let class_name = receiver
-                            .as_object()
-                            .map(|object| object.class_name.to_string())
-                            .unwrap_or_else(|| "object".to_string());
-                        VmError::Fatal(format!(
-                            "Cannot use object of type {class_name} as array"
-                        ))
-                    })?;
+                    )?;
+                    if handled.is_none() {
+                        let instruction_index = (opline_ptr as usize
+                            - op_array.instructions.as_ptr() as usize)
+                            / std::mem::size_of::<Instruction>();
+                        match throw_object_as_array(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            &receiver,
+                        ) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
                     if let Some(exception) = eg.exception.take() {
                         match throw_in_frame(eg, frame, exception) {
                             ThrowResult::Handled(new_frame, new_op_array) => {
@@ -3524,10 +3654,58 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     ValueType::Undef | ValueType::Null => {
                         // PHP silently ignores unset on undef/null
                     }
-                    _ => {
-                        return Err(VmError::Fatal(
-                            "Cannot unset offset in a non-array variable".into(),
-                        ));
+                    ValueType::False => {
+                        report_php_deprecation(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Automatic conversion of false to array is deprecated",
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                    value_type => {
+                        let message = if value_type == ValueType::String {
+                            if opline._pad & UNSET_DIM_NESTED != 0 {
+                                "Cannot use string offset as an array"
+                            } else {
+                                "Cannot unset string offsets"
+                            }
+                        } else {
+                            "Cannot unset offset in a non-array variable"
+                        };
+                        let instruction_index = (opline_ptr as usize
+                            - op_array.instructions.as_ptr() as usize)
+                            / std::mem::size_of::<Instruction>();
+                        match throw_array_dimension_error(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            message,
+                        ) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
                     }
                 }
             }
@@ -3862,28 +4040,43 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     );
                     php_obj
                         .get_property(&storage_key)
-                        .filter(|value| value.value_type() == ValueType::Object)
+                        .filter(|value| {
+                            matches!(value.value_type(), ValueType::Object | ValueType::Closure)
+                        })
                         .cloned()
                 } else {
                     None
                 };
                 if let Some(receiver) = object_dimension {
-                    crate::stdlib::call_object_protocol_method(
+                    let handled = crate::stdlib::call_object_protocol_method(
                         eg,
                         &receiver,
                         "ArrayAccess",
                         "offsetSet",
                         &[key, new_val],
-                    )?
-                    .ok_or_else(|| {
-                        let class_name = receiver
-                            .as_object()
-                            .map(|object| object.class_name.to_string())
-                            .unwrap_or_else(|| "object".to_string());
-                        VmError::Fatal(format!(
-                            "Cannot use object of type {class_name} as array"
-                        ))
-                    })?;
+                    )?;
+                    if handled.is_none() {
+                        let instruction_index = (opline_ptr as usize
+                            - op_array.instructions.as_ptr() as usize)
+                            / std::mem::size_of::<Instruction>();
+                        match throw_object_as_array(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            &receiver,
+                        ) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
                     if let Some(exception) = eg.exception.take() {
                         match throw_in_frame(eg, frame, exception) {
                             ThrowResult::Handled(new_frame, new_op_array) => {

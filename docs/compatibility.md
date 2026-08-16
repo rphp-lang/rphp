@@ -7,7 +7,23 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `b571b61`, runs the same
+The current AMD64 convergence checkpoint, based on `523b670`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,556 passes, 2,474 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds three exact passes to the retained 1,553-pass checkpoint without losing a
+previous pass. Plain objects and closures used as array dimensions now raise a
+located, catchable `Error` consistently across read, write, append, reference,
+property and unset paths. Flat and nested `unset()` retain PHP's distinct
+undefined-variable warning, false-to-array deprecation and scalar/string/object
+diagnostics without detaching a live CV during eval or foreach mutation.
+Destructuring bytecode carries the assignment source line, including nested and
+foreach forms. Original regressions cover the catchable mutation surface,
+closure destructuring and undefined/null/scalar unset behavior. Five Cargo
+feature configurations, all-target and unsafe checks, Composer S0, Symfony S1
+and warmed-kernel S2 pass on AMD64. A five-million array-write release control
+measured 0.04 seconds for both the preceding and candidate binaries.
+
+The preceding AMD64 clone checkpoint, based on `b571b61`, runs the same
 4,345-case PHP 8.2.33 corpus and records 1,553 passes, 2,477 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds 11 exact passes to the retained 1,542-pass checkpoint without losing a

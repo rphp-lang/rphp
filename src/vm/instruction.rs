@@ -203,6 +203,12 @@ pub const ASSIGN_CV_MOVE_SOURCE: u16 = 1 << 1;
 /// reference assignments must retain the cell so self-referential arrays and
 /// later aliases observe one identity.
 pub const ASSIGN_DIM_REFERENCE: u16 = 1;
+/// Synthetic parent writeback after nested unset. Scalar parents are validated
+/// with unset-specific diagnostics and are never materialized as arrays.
+pub const ASSIGN_DIM_UNSET_REBUILD: u16 = 1 << 1;
+/// UnsetDim addresses the leaf of a multi-dimensional path. String parents use
+/// PHP's nested-offset diagnostic rather than the flat string-unset message.
+pub const UNSET_DIM_NESTED: u16 = 1;
 
 /// A reference-binding result is stored only in a compiler-generated CV. The
 /// handle owns the shared cell for execution lifetime but is not a PHP-visible

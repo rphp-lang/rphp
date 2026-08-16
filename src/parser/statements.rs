@@ -409,6 +409,7 @@ impl Parser {
                         return Ok(Stmt::ArrayPush {
                             var: var_name,
                             expr,
+                            line,
                         });
                     }
                     // Parse a complete $a[idx]...[idx] write. Keeping every
@@ -433,12 +434,14 @@ impl Parser {
                                 var: var_name,
                                 index: indices.pop().unwrap(),
                                 expr,
+                                line,
                             }
                         } else {
                             Stmt::NestedArrayAssign {
                                 root: Self::variable_expression(var_name, line),
                                 indices,
                                 expr,
+                                line,
                             }
                         });
                     }
@@ -562,6 +565,10 @@ impl Parser {
                                 });
                             }
                         } else if matches!(expr, Expr::ArrayAccess { .. }) {
+                            let line = match &expr {
+                                Expr::ArrayAccess { line, .. } => *line,
+                                _ => unreachable!(),
+                            };
                             let (root, mut indices) = Self::split_array_access(expr);
                             self.advance(); // consume '='
                             let rhs = self.parse_expr()?;
@@ -576,6 +583,7 @@ impl Parser {
                                     property,
                                     index: indices.pop().unwrap(),
                                     expr: rhs,
+                                    line,
                                 });
                             }
                             if matches!(
@@ -590,6 +598,7 @@ impl Parser {
                                     root,
                                     indices,
                                     expr: rhs,
+                                    line,
                                 });
                             }
                             return Err("Unsupported array assignment target".into());
@@ -1095,6 +1104,10 @@ impl Parser {
             return self.finish_compound_assign_statement(expr);
         }
         if self.peek() == Token::Assign && matches!(expr, Expr::ArrayAccess { .. }) {
+            let line = match &expr {
+                Expr::ArrayAccess { line, .. } => *line,
+                _ => unreachable!(),
+            };
             let (root, indices) = Self::split_array_access(expr);
             if !matches!(
                 root,
@@ -1111,6 +1124,7 @@ impl Parser {
                 root,
                 indices,
                 expr: value,
+                line,
             });
         }
         let static_property = match &expr {
@@ -1423,6 +1437,10 @@ impl Parser {
                     expr,
                 })),
                 target @ Expr::ArrayAccess { .. } => {
+                    let line = match &target {
+                        Expr::ArrayAccess { line, .. } => *line,
+                        _ => unreachable!(),
+                    };
                     let (root, mut indices) = Self::split_array_access(target);
                     if indices.len() == 1
                         && let Expr::PropertyAccess {
@@ -1437,12 +1455,14 @@ impl Parser {
                             property,
                             index: indices.pop().unwrap(),
                             expr: *expr,
+                            line,
                         });
                     }
                     Ok(Stmt::NestedArrayAssign {
                         root,
                         indices,
                         expr: *expr,
+                        line,
                     })
                 }
                 _ => Err("Invalid assignment target".into()),

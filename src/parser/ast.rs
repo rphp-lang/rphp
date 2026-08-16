@@ -370,6 +370,7 @@ pub enum Expr {
         // [$first, , $third] = expression used inside a larger expression.
         targets: Vec<ListTarget>,
         expr: Box<Expr>,
+        line: usize,
     },
     DynamicCall {
         // $var(args) — variable function call / closure call
@@ -475,7 +476,7 @@ impl Expr {
             | Expr::ArrayAppendAssign { target, expr, .. } => {
                 target.contains_yield() || expr.contains_yield()
             }
-            Expr::ListAssign { targets, expr } => {
+            Expr::ListAssign { targets, expr, .. } => {
                 targets.iter().any(ListTarget::contains_yield) || expr.contains_yield()
             }
             Expr::CompoundAssignExpression { target, expr, .. } => {
@@ -738,17 +739,20 @@ pub enum Stmt {
         var: String,
         index: Expr,
         expr: Expr,
+        line: usize,
     },
     NestedArrayAssign {
         // $a[first][second]..., $obj->prop[...]..., or Class::$prop[...]... = expr
         root: Expr,
         indices: Vec<Expr>,
         expr: Expr,
+        line: usize,
     },
     ArrayPush {
         // $a[] = expr
         var: String,
         expr: Expr,
+        line: usize,
     },
     ArrayAppend {
         // $obj->items[$key][] = expr or Class::$items[] = expr
@@ -826,6 +830,7 @@ pub enum Stmt {
         property: String,
         index: Expr,
         expr: Expr,
+        line: usize,
     },
     Declare {
         // declare(strict_types=1);
@@ -850,6 +855,7 @@ pub enum Stmt {
         // list($a, $b) = expr; or [$a, $b] = expr;
         targets: Vec<ListTarget>,
         expr: Expr,
+        line: usize,
     },
     Global(Vec<GlobalTarget>), // global $a, $$name, ${expr};
     StaticVar {
@@ -937,6 +943,7 @@ impl Stmt {
                 root,
                 indices,
                 expr,
+                ..
             } => {
                 root.contains_yield()
                     || indices.iter().any(Expr::contains_yield)
@@ -978,7 +985,7 @@ impl Stmt {
                 object.contains_yield() || index.contains_yield() || expr.contains_yield()
             }
             Stmt::Namespace { body, .. } => body.iter().any(Stmt::contains_yield),
-            Stmt::ListAssign { targets, expr } => {
+            Stmt::ListAssign { targets, expr, .. } => {
                 targets.iter().any(ListTarget::contains_yield) || expr.contains_yield()
             }
             Stmt::StaticVar { vars } => vars

@@ -129,6 +129,25 @@ fn report_php_notice(
     report_php_diagnostic(eg, frame, op_array, opline, message, 8, "Notice", false)
 }
 
+fn report_php_deprecation(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    message: &str,
+) -> Result<(), VmError> {
+    report_php_diagnostic(
+        eg,
+        frame,
+        op_array,
+        opline,
+        message,
+        8192,
+        "Deprecated",
+        false,
+    )
+}
+
 fn scalar_dynamic_variable_name(value: &Value) -> Result<String, VmError> {
     Ok(match value.value_type() {
         ValueType::Undef | ValueType::Null | ValueType::False => String::new(),

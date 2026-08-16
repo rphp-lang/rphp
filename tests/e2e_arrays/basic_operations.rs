@@ -712,3 +712,58 @@ try {
         "Error|Cannot use object of type PlainDimensionObject as array"
     );
 }
+
+#[test]
+fn mutating_plain_object_dimensions_throws_catchable_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PlainMutationObject {}
+class ObjectHolder { public $value; }
+foreach (['write', 'append', 'unset', 'reference', 'property'] as $operation) {
+    $object = new PlainMutationObject;
+    try {
+        if ($operation === 'write') {
+            $object['key'] = 1;
+        } elseif ($operation === 'append') {
+            $object[] = 1;
+        } elseif ($operation === 'unset') {
+            unset($object['key']);
+        } elseif ($operation === 'reference') {
+            $reference =& $object['key'];
+        } else {
+            $holder = new ObjectHolder;
+            $holder->value = $object;
+            $holder->value['key'] = 1;
+        }
+    } catch (Error $error) {
+        echo $operation, '|', $error->getMessage(), "\n";
+    }
+}
+"#,
+        ),
+        concat!(
+            "write|Cannot use object of type PlainMutationObject as array\n",
+            "append|Cannot use object of type PlainMutationObject as array\n",
+            "unset|Cannot use object of type PlainMutationObject as array\n",
+            "reference|Cannot use object of type PlainMutationObject as array\n",
+            "property|Cannot use object of type PlainMutationObject as array\n",
+        )
+    );
+}
+
+#[test]
+fn destructuring_a_closure_reports_a_catchable_error() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+try {
+    [$value] = static function () {};
+} catch (Error $error) {
+    echo get_class($error), '|', $error->getMessage();
+}
+"#,
+        ),
+        "Error|Cannot use object of type Closure as array"
+    );
+}
