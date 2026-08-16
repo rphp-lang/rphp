@@ -324,3 +324,38 @@ $probe?->returnsNull()->missing();
     );
     assert!(format!("{error:?}").contains("missing"));
 }
+
+#[test]
+fn nullsafe_short_circuit_spans_dynamic_static_calls() {
+    let out = run_php(
+        r#"<?php
+class StaticTarget {
+    public static function ping($value) { echo "ping:$value|"; }
+}
+class StaticProvider {
+    public function target() { return StaticTarget::class; }
+}
+function methodName() { echo "method|"; return 'ping'; }
+$null = null;
+var_dump($null?->target()::ping(argumentMustNotRun()));
+var_dump($null?->target()::{methodName()}(argumentMustNotRun()));
+var_dump($null?->target()::$undefinedMethod(argumentMustNotRun()));
+$provider = new StaticProvider;
+var_dump($provider?->target()::ping('named'));
+var_dump($provider?->target()::{methodName()}('dynamic'));
+$method = 'ping';
+var_dump($provider?->target()::$method('variable'));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "NULL\n",
+            "NULL\n",
+            "NULL\n",
+            "ping:named|NULL\n",
+            "method|ping:dynamic|NULL\n",
+            "ping:variable|NULL\n",
+        )
+    );
+}

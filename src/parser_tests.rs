@@ -265,6 +265,25 @@ fn test_parse_first_class_callable_and_argument_unpack() {
 }
 
 #[test]
+fn expression_static_method_calls_retain_class_and_method_operands() {
+    let tokens = Lexer::new("<?php $provider?->target()::$method($argument);")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &statements[0],
+        Stmt::ExprStmt(Expr::DynamicStaticCall {
+            class,
+            method,
+            args,
+            ..
+        }) if matches!(class.as_ref(), Expr::MethodCall { nullsafe: true, method, .. } if method == "target")
+            && matches!(method.as_ref(), Expr::Variable { name, .. } if name == "method")
+            && matches!(args.as_slice(), [CallArg::Positional(Expr::Variable { name, .. })] if name == "argument")
+    ));
+}
+
+#[test]
 fn positional_source_argument_after_unpack_is_a_compile_time_error() {
     let tokens = Lexer::new("<?php dispatch(...$batch, 7);")
         .tokenize()

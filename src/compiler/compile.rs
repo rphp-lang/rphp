@@ -6419,67 +6419,53 @@ impl Compiler {
                 let (callable_op, callable_type) = self.compile_expr(callable);
                 let receiver_patches =
                     self.take_nullsafe_receiver_patches(callable_op, callable_type);
-                if generic_args.is_empty()
-                    && args
-                        .iter()
-                        .any(|argument| matches!(argument, CallArg::Unpack(_)))
-                {
-                    let (array_op, array_type) =
-                        self.compile_mixed_unpacked_call_arguments(args, 0);
-                    let tmp = self.alloc_tmp();
-                    let mut call = Instruction::new(OpCode::CallUserFuncArray);
-                    call.op1 = callable_op;
-                    call.op1_type = callable_type;
-                    call.op2 = array_op;
-                    call.op2_type = array_type;
-                    call.result = tmp;
-                    call.result_type = OpType::Tmp;
-                    call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
-                    self.push_instruction_at_line(call, *line);
-                    self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
-                    return (tmp, OpType::Tmp);
-                }
-                let compiled_args = args
-                    .iter()
-                    .any(CallArg::contains_yield)
-                    .then(|| self.compile_call_args(args));
-
-                let runtime_generic_check = self.emit_generic_check(
-                    OpCode::CheckGenericArgs,
-                    GenericDeclarationKind::Function,
-                    generic_args,
-                    None,
+                let (tmp, result_type) = self.compile_dynamic_call_from_operand(
                     callable_op,
                     callable_type,
-                    0,
-                    OpType::Unused,
+                    args,
+                    generic_args,
+                    *line,
                 );
-
-                // InitDynamicCall: op1=callable, extended_value=num_args
-                let mut init = Instruction::new(OpCode::InitDynamicCall);
-                init.op1 = callable_op;
-                init.op1_type = callable_type;
-                init.extended_value = args.len() as u32;
-                self.instructions.push(init);
-
-                // Send arguments
-                if let Some(compiled_args) = compiled_args.as_deref() {
-                    self.emit_precompiled_runtime_call_args(args, compiled_args, 0, 0, true, true);
-                } else {
-                    self.emit_call_args(args, 0, 0, true, true);
-                }
-                self.emit_reified_argument_check(runtime_generic_check);
-
-                // DoFcall
-                let tmp = self.alloc_tmp();
-                let mut do_fcall = Instruction::new(OpCode::DoFcall);
-                do_fcall.result = tmp;
-                do_fcall.result_type = OpType::Tmp;
-                self.push_instruction_at_line(do_fcall, *line);
-                self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
                 self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
-
-                (tmp, OpType::Tmp)
+                (tmp, result_type)
+            }
+            Expr::DynamicStaticCall {
+                class,
+                method,
+                args,
+                generic_args,
+                line,
+            } => {
+                let callable = self.alloc_tmp();
+                let mut init = Instruction::new(OpCode::InitArray);
+                init.result = callable;
+                init.result_type = OpType::Tmp;
+                init.extended_value = 2;
+                self.instructions.push(init);
+                let (class_op, class_type) = self.compile_expr(class);
+                let receiver_patches = self.take_nullsafe_receiver_patches(class_op, class_type);
+                let mut class_element = Instruction::new(OpCode::AddArrayElement);
+                class_element.op1 = callable;
+                class_element.op1_type = OpType::Tmp;
+                class_element.op2 = class_op;
+                class_element.op2_type = class_type;
+                self.instructions.push(class_element);
+                let (method_op, method_type) = self.compile_expr(method);
+                let mut method_element = Instruction::new(OpCode::AddArrayElement);
+                method_element.op1 = callable;
+                method_element.op1_type = OpType::Tmp;
+                method_element.op2 = method_op;
+                method_element.op2_type = method_type;
+                self.instructions.push(method_element);
+                let (result, result_type) = self.compile_dynamic_call_from_operand(
+                    callable,
+                    OpType::Tmp,
+                    args,
+                    generic_args,
+                    *line,
+                );
+                self.publish_nullsafe_receiver_patches(result, receiver_patches);
+                (result, result_type)
             }
             Expr::Instanceof { expr, class_name } => {
                 let (obj_op, obj_type) = self.compile_expr(expr);
@@ -6630,7 +6616,8 @@ impl Compiler {
                             Expr::FunctionCall { line, .. }
                             | Expr::MethodCall { line, .. }
                             | Expr::StaticCall { line, .. }
-                            | Expr::DynamicCall { line, .. } => *line,
+                            | Expr::DynamicCall { line, .. }
+                            | Expr::DynamicStaticCall { line, .. } => *line,
                             _ => 0,
                         };
                         self.push_instruction_at_line(bind, line);
@@ -7408,6 +7395,67 @@ impl Compiler {
             self.instructions[index].op2 = self.instructions.len() as u16;
         }
         (tmp, OpType::Tmp)
+    }
+
+    fn compile_dynamic_call_from_operand(
+        &mut self,
+        callable: u16,
+        callable_type: OpType,
+        args: &[CallArg],
+        generic_args: &[TypeHint],
+        line: usize,
+    ) -> (u16, OpType) {
+        if generic_args.is_empty()
+            && args
+                .iter()
+                .any(|argument| matches!(argument, CallArg::Unpack(_)))
+        {
+            let (arguments, arguments_type) = self.compile_mixed_unpacked_call_arguments(args, 0);
+            let result = self.alloc_tmp();
+            let mut call = Instruction::new(OpCode::CallUserFuncArray);
+            call.op1 = callable;
+            call.op1_type = callable_type;
+            call.op2 = arguments;
+            call.op2_type = arguments_type;
+            call.result = result;
+            call.result_type = OpType::Tmp;
+            call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
+            self.push_instruction_at_line(call, line);
+            return (result, OpType::Tmp);
+        }
+
+        let compiled_args = args
+            .iter()
+            .any(CallArg::contains_yield)
+            .then(|| self.compile_call_args(args));
+        let runtime_generic_check = self.emit_generic_check(
+            OpCode::CheckGenericArgs,
+            GenericDeclarationKind::Function,
+            generic_args,
+            None,
+            callable,
+            callable_type,
+            0,
+            OpType::Unused,
+        );
+        let mut init = Instruction::new(OpCode::InitDynamicCall);
+        init.op1 = callable;
+        init.op1_type = callable_type;
+        init.extended_value = args.len() as u32;
+        self.instructions.push(init);
+        if let Some(compiled_args) = compiled_args.as_deref() {
+            self.emit_precompiled_runtime_call_args(args, compiled_args, 0, 0, true, true);
+        } else {
+            self.emit_call_args(args, 0, 0, true, true);
+        }
+        self.emit_reified_argument_check(runtime_generic_check);
+        let result = self.alloc_tmp();
+        let mut do_fcall = Instruction::new(OpCode::DoFcall);
+        do_fcall.result = result;
+        do_fcall.result_type = OpType::Tmp;
+        self.push_instruction_at_line(do_fcall, line);
+        self.emit_reified_return_check(runtime_generic_check, result, OpType::Tmp);
+        (result, OpType::Tmp)
     }
 
     /// Emit arguments for compiler-lowered call_user_func. Unlike an ordinary
