@@ -7,6 +7,30 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 request-local INI checkpoint, based on `5101a5a`, runs the
+default-feature 4,345-case PHP 8.2.33 corpus and records 1,779 passes, 2,251
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. Its exact pass-set delta is +3/-0:
+`Zend/tests/bug26698.phpt`, `exception_ignore_args.phpt` and `gc_003.phpt`.
+
+`ini_set()` now admits a bounded request-local subset, returns each previous
+string value, rejects unsupported names and updates the existing GC control
+state. Throwable creation honors `zend.exception_ignore_args` by omitting
+arguments from the stored trace, so changing the option later cannot disclose
+them. Original coverage checks the mutation and previous-value contract plus
+that immutable trace behavior. A temporary depth guard converts the currently
+recursive deep `yield from` bridge from a Rust stack-overflow crash into an
+ordinary explicit failure; stack-safe 50,000-level delegation remains open,
+as do real `memory_limit` enforcement and Fiber stack sizing.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Seven 500-million-addition release controls measured a
+0.70-second median for both the preceding and candidate binaries, with
+identical output.
+
 The current AMD64 alias-interface identity checkpoint, based on `9376324`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,776 passes,
 2,254 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
