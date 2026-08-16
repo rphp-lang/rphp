@@ -153,6 +153,10 @@ pub const FETCH_OBJ_COMPOUND: u16 = 1 << 4;
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;
+/// `BindObjPropRef` rebinds the property to the reference supplied in its
+/// result CV. Without this flag the opcode promotes/fetches the property cell
+/// and rebinds the result CV instead.
+pub const OBJ_PROP_REFERENCE_BIND: u16 = 1 << 1;
 
 /// `FetchDimR` is the terminal probe of `isset($container[$offset])`. Arrays
 /// can answer directly; ArrayAccess objects dispatch `offsetExists()` instead

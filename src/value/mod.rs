@@ -404,6 +404,19 @@ impl DynamicPropertyMap {
         result
     }
 
+    fn clone_for_php_object(&self) -> Self {
+        let mut clone = Self::with_capacity(self.len());
+        self.for_each(|name, value| {
+            let value = if value.is_owned_reference() && value.owned_reference_is_aliased() {
+                value.clone_owned_reference_alias()
+            } else {
+                value.clone()
+            };
+            clone.insert_owned(name.to_string(), value);
+        });
+        clone
+    }
+
     #[inline]
     pub(crate) fn get(&self, key: &str) -> Option<&Value> {
         match &self.storage {
@@ -708,6 +721,13 @@ pub struct PhpObject {
     pub generator: Option<GeneratorRef>,
 }
 
+#[inline]
+fn instance_property_reference_owner(handle: u32, slot: usize) -> usize {
+    debug_assert!(handle != 0);
+    debug_assert!(slot <= u32::MAX as usize);
+    ((handle as usize) << 32) | slot
+}
+
 #[cfg(target_pointer_width = "64")]
 const _: [(); 72] = [(); std::mem::size_of::<PhpObject>()];
 
@@ -953,6 +973,11 @@ impl PhpObject {
         self.property_values.get(slot)
     }
 
+    #[inline(always)]
+    pub(crate) fn property_name_at_slot(&self, slot: usize) -> Option<&str> {
+        self.property_layout.key(slot)
+    }
+
     #[inline]
     pub fn get_property_slot_mut(&mut self, slot: usize) -> Option<&mut Value> {
         self.property_values.get_mut(slot)
@@ -1042,6 +1067,12 @@ impl PhpObject {
     #[inline]
     pub fn set_property(&mut self, key: &str, value: Value) -> Option<usize> {
         if let Some(slot) = self.property_layout.slot(key) {
+            let handle = self.lifecycle & OBJECT_HANDLE_MASK;
+            if handle != 0 {
+                self.property_values[slot].remove_reference_property_constraint(
+                    instance_property_reference_owner(handle, slot),
+                );
+            }
             self.property_values[slot] = value;
             Some(slot)
         } else {
@@ -1055,6 +1086,12 @@ impl PhpObject {
     /// Unset a declared property or remove a dynamic property.
     pub fn unset_property(&mut self, key: &str) -> bool {
         if let Some(slot) = self.property_layout.slot(key) {
+            let handle = self.lifecycle & OBJECT_HANDLE_MASK;
+            if handle != 0 {
+                self.property_values[slot].remove_reference_property_constraint(
+                    instance_property_reference_owner(handle, slot),
+                );
+            }
             self.property_values[slot] = Value::undef();
             true
         } else {
@@ -1080,10 +1117,48 @@ impl PhpObject {
             dynamic.for_each(visitor);
         }
     }
+
+    pub(crate) fn clone_for_php(&self) -> Self {
+        Self {
+            class_name: self.class_name.clone(),
+            class_id: self.class_id,
+            lifecycle: 0,
+            property_layout: self.property_layout.clone(),
+            property_values: self
+                .property_values
+                .iter()
+                .map(|value| {
+                    if value.is_owned_reference() && value.owned_reference_is_aliased() {
+                        value.clone_owned_reference_alias()
+                    } else {
+                        value.clone()
+                    }
+                })
+                .collect(),
+            dynamic_properties: self
+                .dynamic_properties
+                .as_ref()
+                .map(|properties| Box::new(properties.clone_for_php_object())),
+            generator: None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn instance_property_reference_owner(&self, slot: usize) -> usize {
+        instance_property_reference_owner(self.lifecycle & OBJECT_HANDLE_MASK, slot)
+    }
 }
 
 impl Drop for PhpObject {
     fn drop(&mut self) {
+        let handle = self.lifecycle & OBJECT_HANDLE_MASK;
+        if handle != 0 {
+            for (slot, value) in self.property_values.iter().enumerate() {
+                value.remove_reference_property_constraint(instance_property_reference_owner(
+                    handle, slot,
+                ));
+            }
+        }
         let width = self.property_values.len();
         if width == 0 || width > MAX_POOLED_DECLARED_PROPERTIES {
             return;

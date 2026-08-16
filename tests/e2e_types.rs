@@ -384,6 +384,106 @@ var_dump($object);"#
 }
 
 #[test]
+fn typed_instance_reference_constraints_coerce_reject_and_rebind() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class TypedInstanceReference {
+    public int $number = 1;
+    public ?int $nullable = 2;
+    public int|string $wide = 3;
+}
+$object = new TypedInstanceReference;
+$alias =& $object->number;
+$alias = "4";
+$object->nullable =& $alias;
+$object->wide =& $alias;
+echo $alias, ':', $object->number, ':', $object->nullable, ':', $object->wide, "\n";
+try {
+    $object->wide = "invalid";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+$other = null;
+$object->nullable =& $other;
+$other = null;
+var_dump($object->nullable, $object->number);
+"#
+        ),
+        "4:4:4:4\nCannot assign string to reference held by property TypedInstanceReference::$number of type int\nNULL\nint(4)\n"
+    );
+}
+
+#[test]
+fn dynamic_instance_reference_intersections_do_not_reuse_a_stale_property_slot() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DynamicTypedReferences {
+    public int $integer;
+    public float $decimal;
+    public ?int $nullableInteger;
+    public ?string $nullableString;
+}
+function bindPair(DynamicTypedReferences $object, string $left, string $right, $value): void {
+    try {
+        $object->$right = $value;
+        $object->$left =& $object->$right;
+        echo "$left/$right:ok\n";
+    } catch (TypeError $error) {
+        echo "$left/$right:error\n";
+    }
+}
+$object = new DynamicTypedReferences;
+bindPair($object, 'integer', 'decimal', 42.0);
+bindPair($object, 'integer', 'nullableInteger', 42);
+bindPair($object, 'nullableInteger', 'nullableString', null);
+echo $object->integer, ':';
+var_dump($object->nullableInteger, $object->nullableString);
+"#
+        ),
+        "integer/decimal:error\ninteger/nullableInteger:ok\nnullableInteger/nullableString:ok\n42:NULL\nNULL\n"
+    );
+}
+
+#[test]
+fn typed_instance_reference_owners_follow_uninitialized_clone_and_destruction_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RequiredInstanceReference {
+    public int $required;
+    public ?int $optional;
+}
+$uninitialized = new RequiredInstanceReference;
+try {
+    $bad =& $uninitialized->required;
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+$ok =& $uninitialized->optional;
+var_dump($ok);
+
+class ClonedInstanceReference { public int $value = 1; }
+$object = new ClonedInstanceReference;
+$alias =& $object->value;
+$clone = clone $object;
+unset($object);
+try {
+    $alias = "blocked";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+unset($clone);
+$alias = "free";
+var_dump($alias);
+"#
+        ),
+        "Cannot access uninitialized non-nullable property RequiredInstanceReference::$required by reference\nNULL\nCannot assign string to reference held by property ClonedInstanceReference::$value of type int\nstring(4) \"free\"\n"
+    );
+}
+
+#[test]
 fn static_property_references_share_storage_and_initialize_nullable_slots() {
     assert_eq!(
         run_php(

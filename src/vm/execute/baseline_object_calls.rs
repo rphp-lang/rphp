@@ -1295,6 +1295,104 @@ fn op_bind_obj_prop_ref<'a>(
                 effective_caller,
             )
         };
+        let (declared_slot, definition, owner) = {
+            let object = receiver.as_object().unwrap();
+            let slot = (!force_dynamic).then(|| object.property_slot(&key)).flatten();
+            let definition = slot
+                .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
+                .map(|definition| definition as *const crate::compiler::compile::PropertyDefinition);
+            let owner = slot.map(|slot| object.instance_property_reference_owner(slot));
+            (slot, definition, owner)
+        };
+        let definition = definition.map(|definition| &*definition);
+
+        if opline._pad & OBJ_PROP_REFERENCE_BIND == 0
+            && let Some(definition) = definition
+            && definition.is_typed()
+            && declared_slot.is_some_and(|slot| {
+                receiver
+                    .as_object()
+                    .and_then(|object| object.get_property_slot(slot).map(Value::is_undef))
+                    .unwrap_or(false)
+            })
+            && !property_type_matches_exact(
+                &Value::null(),
+                &definition.type_hint,
+                eg,
+                &definition.type_scope,
+                &class_name,
+            )
+        {
+            return Ok(object_property_throw_at(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                "Error",
+                format!(
+                    "Cannot access uninitialized non-nullable property {}::${} by reference",
+                    definition.declaring_class, definition.name
+                ),
+            ));
+        }
+
+        if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
+            let source = (*frame).cv_mut(opline.result as u32) as *mut Value;
+            let binding = materialize_reference_alias(frame, source);
+            let constraints = binding.reference_property_constraints();
+            let current = (&*binding.as_ref_ptr()).clone();
+            let prepared = if let Some(definition) = definition {
+                match prepare_typed_property_reference_attachment(
+                    current,
+                    definition,
+                    &constraints,
+                    eg,
+                    op_array.strict_types,
+                    &class_name,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return Ok(object_property_throw_at(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            "TypeError",
+                            message,
+                        ));
+                    }
+                }
+            } else {
+                current
+            };
+            let target = binding.as_ref_ptr();
+            std::ptr::drop_in_place(target);
+            target.write(prepared);
+            let property_binding = binding.clone_owned_reference_alias();
+            let mut object = receiver.as_object_mut().unwrap();
+            if force_dynamic {
+                object.set_dynamic_property(&key, property_binding.clone_owned_reference_alias());
+            } else {
+                object.set_property(&key, property_binding.clone_owned_reference_alias());
+            }
+            drop(object);
+            if let (Some(definition), Some(owner)) = (definition, owner)
+                && definition.is_typed()
+            {
+                property_binding.add_reference_property_constraint(
+                    crate::value::ReferencePropertyConstraint {
+                        owner,
+                        declaring_class: definition.declaring_class.clone(),
+                        property: definition.name.clone(),
+                        type_scope: definition.type_scope.clone(),
+                        called_class: class_name.clone(),
+                        type_hint: definition.type_hint.clone(),
+                    },
+                );
+            }
+            return Ok(ColdResult::Done);
+        }
+
         let mut object = receiver.as_object_mut().unwrap();
         let property = if force_dynamic {
             object.get_dynamic_property_mut(&key)
@@ -1325,6 +1423,27 @@ fn op_bind_obj_prop_ref<'a>(
             binding
         };
         drop(object);
+
+        if let Some(definition) = definition
+            && definition.is_typed()
+        {
+            let current = (&*binding.as_ref_ptr()).clone();
+            if current.is_undef() {
+                let target = binding.as_ref_ptr();
+                std::ptr::drop_in_place(target);
+                target.write(Value::null());
+            }
+            binding.add_reference_property_constraint(
+                crate::value::ReferencePropertyConstraint {
+                    owner: owner.expect("declared typed property must retain its slot"),
+                    declaring_class: definition.declaring_class.clone(),
+                    property: definition.name.clone(),
+                    type_scope: definition.type_scope.clone(),
+                    called_class: class_name.clone(),
+                    type_hint: definition.type_hint.clone(),
+                },
+            );
+        }
 
         if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
             binding.mark_internal_reference_alias();
@@ -1649,6 +1768,17 @@ fn op_assign_obj_prop<'a>(
         let definition = declared_slot.and_then(|slot| {
             eg.instance_property_definition(php_obj.class_id, slot)
         });
+        let property_constraints = if force_dynamic {
+            php_obj
+                .get_dynamic_property_with_position(&key)
+                .map(|(property, _)| property.reference_property_constraints())
+                .unwrap_or_default()
+        } else {
+            php_obj
+                .get_property(&key)
+                .map(Value::reference_property_constraints)
+                .unwrap_or_default()
+        };
         let object_class_id = php_obj.class_id;
         let object_class_name = php_obj.class_name.clone();
         let prop_exists = if force_dynamic {
@@ -1694,6 +1824,17 @@ fn op_assign_obj_prop<'a>(
                 };
             }
         }
+        assigned = match prepare_reference_assignment(
+            assigned,
+            &property_constraints,
+            eg,
+            op_array.strict_types,
+        ) {
+            Ok(value) => value,
+            Err(message) => {
+                return Ok(object_property_throw(eg, frame, "TypeError", message));
+            }
+        };
 
         // Cache: if public, not enum, not readonly, key == name → mark for write fast path.
         if prop_is_public && prop_is_writable && key == name && object_class_id != 0 {

@@ -33,6 +33,22 @@ fn object_property_throw_at<'a>(
     }
 }
 
+#[inline]
+fn prepare_cached_instance_reference_write(
+    object: &Value,
+    slot: usize,
+    value: Value,
+    eg: &ExecutorGlobals,
+    strict: bool,
+) -> Result<Value, String> {
+    // SAFETY: callers prove the cached class ID before supplying its declared
+    // slot, which remains stable for the lifetime of this object allocation.
+    let constraints = unsafe {
+        (&*object.object_property_slot_unchecked(slot)).reference_property_constraints()
+    };
+    prepare_reference_assignment(value, &constraints, eg, strict)
+}
+
 /// Complete typed-property path for conversions, complex declarations and
 /// generic runtime contracts after the exact-int write above declines.
 #[inline]
@@ -109,7 +125,19 @@ fn try_assign_cached_typed_instance_property<'a>(
     }
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     if definition.generic_declaration.is_some() {
-        set_value(source.clone());
+        let value = match prepare_cached_instance_reference_write(
+            object,
+            cache.property_slot(),
+            source.clone(),
+            eg,
+            op_array.strict_types,
+        ) {
+            Ok(value) => value,
+            Err(message) => {
+                return Ok(Some(object_property_throw(eg, frame, "TypeError", message)));
+            }
+        };
+        set_value(value);
         return Ok(Some(ColdResult::Done));
     }
 
@@ -137,6 +165,18 @@ fn try_assign_cached_typed_instance_property<'a>(
             _ => None,
         };
         if let Some(value) = fast_value {
+            let value = match prepare_cached_instance_reference_write(
+                object,
+                cache.property_slot(),
+                value,
+                eg,
+                op_array.strict_types,
+            ) {
+                Ok(value) => value,
+                Err(message) => {
+                    return Ok(Some(object_property_throw(eg, frame, "TypeError", message)));
+                }
+            };
             set_value(value);
             return Ok(Some(ColdResult::Done));
         }
@@ -160,6 +200,18 @@ fn try_assign_cached_typed_instance_property<'a>(
                 "TypeError",
                 message,
             )));
+        }
+    };
+    let value = match prepare_cached_instance_reference_write(
+        object,
+        cache.property_slot(),
+        value,
+        eg,
+        op_array.strict_types,
+    ) {
+        Ok(value) => value,
+        Err(message) => {
+            return Ok(Some(object_property_throw(eg, frame, "TypeError", message)));
         }
     };
     set_value(value);

@@ -7,6 +7,45 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 typed-instance-reference checkpoint, based on `b8d6dd0`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,722 passes,
+2,308 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. Its exact pass-set delta is +11/-0:
+`Zend/tests/bug35239.phpt`, `Zend/tests/bug68191.phpt`,
+`Zend/tests/bug71539_1.phpt`, `Zend/tests/objects_019.phpt`,
+`Zend/tests/type_declarations/typed_properties_066.phpt`,
+`typed_properties_071.phpt`, `typed_properties_076.phpt`,
+`typed_properties_081.phpt`, `typed_properties_096.phpt`,
+`typed_properties_106.phpt` and
+`typed_properties_reference_coercion_leak.phpt`.
+
+Typed declared instance properties now attach their contract to an owned
+reference cell, compose multiple property types as an intersection, coerce
+valid weak assignments and reject incompatible writes before mutation. Rebind,
+unset and object destruction remove exactly that property's ownership; object
+clone preserves a genuinely aliased property cell and its independent typed
+owner, while an unaliased historical reference wrapper is copied by value.
+Runtime-named declared-property write caches compare the current name with the
+cached slot before reuse, preventing one call site from writing a later name
+into an earlier slot. Original E2E coverage includes nullable/non-nullable
+initialization, weak conversion, incompatible intersections, runtime-name cache
+reuse, rebind, clone and destruction.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory is 1,616
+blocks and 289 functions. Composer S0, all four Symfony S1 gates and warmed
+kernel S2 also pass. The broader cold-kernel S3 gate currently fails in the
+same `PhpDumper` service-map path on both base `b8d6dd0` and this candidate, so
+it is not attributed to or claimed by this checkpoint. Thirty-one alternating
+pinned-core release pairs measured untyped fixed-name instance writes at
+baseline p10/median/p90 0.169407/0.173816/0.181983 seconds and candidate
+0.173159/0.176327/0.200415 seconds (+1.44 percent median), typed fixed-name
+writes at 0.168438/0.172390/0.183697 and
+0.171785/0.174767/0.190799 seconds (+1.38 percent), and runtime-name writes at
+0.677460/0.681391/0.691501 and 0.711077/0.713742/0.732626 seconds (+4.75
+percent). Checksums are identical. The localized runtime-name cost is retained
+for exact slot selection; magic `__get` references remain a separate cluster.
+
 The current AMD64 typed-reference-constraint checkpoint, based on `7aa97ae`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,711 passes,
 2,319 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero

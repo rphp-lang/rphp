@@ -105,17 +105,29 @@ fn op_clone_obj<'a>(
 
         let cloned_obj = {
             let obj = src_val.as_object().unwrap();
-            PhpObject {
-                class_name: obj.class_name.clone(),
-                class_id: obj.class_id,
-                lifecycle: 0,
-                property_layout: obj.property_layout.clone(),
-                property_values: obj.property_values.clone(),
-                dynamic_properties: obj.dynamic_properties.clone(),
-                generator: None,
-            }
+            obj.clone_for_php()
         };
         let cloned_val = Value::object(cloned_obj);
+        {
+            let cloned = cloned_val.as_object().unwrap();
+            for (slot, property) in cloned.property_values.iter().enumerate() {
+                let Some(definition) = eg.instance_property_definition(cloned.class_id, slot) else {
+                    continue;
+                };
+                if definition.is_typed() && property.is_owned_reference() {
+                    property.add_reference_property_constraint(
+                        crate::value::ReferencePropertyConstraint {
+                            owner: cloned.instance_property_reference_owner(slot),
+                            declaring_class: definition.declaring_class.clone(),
+                            property: definition.name.clone(),
+                            type_scope: definition.type_scope.clone(),
+                            called_class: cloned.class_name.to_string(),
+                            type_hint: definition.type_hint.clone(),
+                        },
+                    );
+                }
+            }
+        }
 
     #[cfg(feature = "php-generics-reified")]
         if let Some(binding) = eg.reified_object_binding(src_val) {

@@ -1273,16 +1273,6 @@ impl Compiler {
             } => {
                 let (object, object_type) = self.compile_expr(object);
                 let property = self.add_literal(Value::string(property.clone()));
-                let mut assign = Instruction::new(OpCode::AssignObjProp);
-                assign.op1 = object;
-                assign.op1_type = object_type;
-                assign.op2 = property;
-                assign.op2_type = OpType::Const;
-                assign.result = source;
-                assign.result_type = OpType::Cv;
-                assign._pad |= ASSIGN_OBJ_MODIFY;
-                self.push_instruction_at_line(assign, *line);
-
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
                 bind.op1 = object;
                 bind.op1_type = object_type;
@@ -1290,6 +1280,7 @@ impl Compiler {
                 bind.op2_type = OpType::Const;
                 bind.result = source;
                 bind.result_type = OpType::Cv;
+                bind._pad |= OBJ_PROP_REFERENCE_BIND;
                 if source_is_internal {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
                 }
@@ -1303,16 +1294,6 @@ impl Compiler {
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
-                let mut assign = Instruction::new(OpCode::AssignObjProp);
-                assign.op1 = object;
-                assign.op1_type = object_type;
-                assign.op2 = property;
-                assign.op2_type = property_type;
-                assign.result = source;
-                assign.result_type = OpType::Cv;
-                assign._pad |= ASSIGN_OBJ_MODIFY;
-                self.push_instruction_at_line(assign, *line);
-
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
                 bind.op1 = object;
                 bind.op1_type = object_type;
@@ -1320,6 +1301,7 @@ impl Compiler {
                 bind.op2_type = property_type;
                 bind.result = source;
                 bind.result_type = OpType::Cv;
+                bind._pad |= OBJ_PROP_REFERENCE_BIND;
                 if source_is_internal {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
                 }

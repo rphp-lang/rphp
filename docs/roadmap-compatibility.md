@@ -40,17 +40,17 @@ The public platform identity is PHP 8.2.0. The reproducible, machine-readable
 contract corpus is pinned to PHP 8.2.33. The older PHP 8.4 audit remains a
 separately labeled trend line and does not establish PHP 8.4 compatibility.
 
-Composer S0, the four bounded Symfony component S1 gates, the reference-warmed
-Symfony FrameworkBundle S2 diagnostic, and the pinned Symfony FrameworkBundle
-S3 CLI-kernel cold-build gate pass. S3 covers RPHP-built container and route
-caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
-publication transitions against PHP 8.2. It does not admit an HTTP adapter or
-a repeated-request lifecycle gate.
+Composer S0, the four bounded Symfony component S1 gates and the
+reference-warmed Symfony FrameworkBundle S2 diagnostic pass. The pinned
+FrameworkBundle S3 CLI-kernel gate currently exposes a pre-existing
+`PhpDumper` service-map failure on the current base and remains an active
+compatibility cluster; its older accepted evidence is retained below as
+historical scope, not as a current green claim.
 
-The current pinned PHP 8.2 differential baseline is based on RPHP `7aa97ae`
-against php-src 8.2.33 `651db3e`: 1,711 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass in the current typed-reference candidate, with three
-exact additions and no lost pass relative to that base. Static
+The current pinned PHP 8.2 differential baseline is based on RPHP `b8d6dd0`
+against php-src 8.2.33 `651db3e`: 1,722 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass in the current typed-instance-reference candidate, with
+eleven exact additions and no lost pass relative to that base. Static
 properties now participate in owned l-value reference identity across
 inherited, dynamic-owner and dynamic-name forms; nullable/untyped
 uninitialized slots materialize `null`, while non-nullable slots raise the
@@ -58,7 +58,10 @@ dedicated PHP error. Typed static properties add and remove constraints on the
 shared owned cell as aliases are rebound; CV, compound/inc-dec, array,
 dynamic-variable and global writes enforce the compatible constraint
 intersection without changing the compact `Value` layout. Typed instance
-property acquisition remains a separate slice. Object `var_dump()` observes property reference cells without an
+property acquisition and constraints now extend to direct declared instance
+properties, including compatible type intersections, runtime-named slots,
+clone, rebind and destruction. Magic `__get` reference acquisition remains a
+separate slice. Object `var_dump()` observes property reference cells without an
 ordinary clone that dereferences them. Compiler-only array, property, dynamic-
 variable, append and nested-append CVs are excluded from PHP-visible alias
 cardinality, so they cannot retain a false `&` marker after the last visible

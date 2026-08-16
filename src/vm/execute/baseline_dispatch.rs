@@ -4126,8 +4126,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
                     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
                     let ic = &op_array.cache[ip];
-                    let cache_matches = ic.class_id == obj_class_id && obj_class_id != 0;
                     let property_flags = ic.property_flags();
+                    let dynamic_name_matches = if opline.op2_type == OpType::Const {
+                        true
+                    } else {
+                        // SAFETY: AssignObjProp's op2 is a compiler-emitted
+                        // operand in this live frame/op-array. The borrowed
+                        // string is consumed before either can advance.
+                        let requested = unsafe {
+                            (&*(*frame).get_op_ptr(
+                                opline.op2 as u32,
+                                opline.op2_type,
+                                op_array,
+                            ))
+                                .dereferenced()
+                                .as_str()
+                        };
+                        requested.is_some_and(|requested| {
+                            obj_val.as_object().is_some_and(|object| {
+                                object.property_name_at_slot(ic.property_slot()) == Some(requested)
+                            })
+                        })
+                    };
+                    let cache_matches = ic.class_id == obj_class_id
+                        && obj_class_id != 0
+                        && dynamic_name_matches;
                     // flags == 3: read-safe + write-safe declared property slot.
                     if property_flags == 3 && cache_matches {
                         // SAFETY: the compiler-emitted source belongs to the
@@ -4197,14 +4220,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     {
-                    } else if let Some(result) = try_assign_cached_typed_instance_property(
-                        eg,
-                        frame,
-                        op_array,
-                        opline,
-                        obj_val,
-                        obj_class_id,
-                    )? {
+                    } else if cache_matches
+                        && let Some(result) = try_assign_cached_typed_instance_property(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            obj_val,
+                            obj_class_id,
+                        )?
+                    {
                         match result {
                             ColdResult::NewFrame(nf, no) => {
                                 frame = nf;
@@ -4220,7 +4245,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
                         {
-                            let generic_handled = if ic.class_id == obj_class_id && obj_class_id != 0 {
+                            let generic_handled = if cache_matches {
                                 if let Some(declaration) = ic.generic_property_declaration() {
                                     let name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) }
                                         .as_str()
