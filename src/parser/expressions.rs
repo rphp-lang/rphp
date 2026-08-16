@@ -531,7 +531,7 @@ impl Parser {
         while let Token::PipeGreater(line) = self.peek() {
             let line = line;
             self.advance();
-            if self.peek() == Token::Fn {
+            if matches!(self.peek(), Token::Fn(_)) {
                 self.compile_error(
                     "Arrow functions on the right hand side of |> must be parenthesized",
                     line,
@@ -1094,11 +1094,11 @@ impl Parser {
                 }
             }
             Token::Static => {
-                if self.peek_at(1) == Token::Function {
+                if matches!(self.peek_at(1), Token::Function(_)) {
                     self.advance(); // consume 'static'
                     return self.parse_closure(true);
                 }
-                if self.peek_at(1) == Token::Fn {
+                if matches!(self.peek_at(1), Token::Fn(_)) {
                     self.advance(); // consume 'static'
                     return self.parse_arrow_function(true);
                 }
@@ -1117,11 +1117,11 @@ impl Parser {
             Token::Match => {
                 return self.parse_match_expr();
             }
-            Token::Function => {
+            Token::Function(_) => {
                 // Closure (anonymous function)
                 return self.parse_closure(false);
             }
-            Token::Fn => {
+            Token::Fn(_) => {
                 // Arrow function: fn($x) => expr
                 return self.parse_arrow_function(false);
             }

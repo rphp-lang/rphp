@@ -5679,6 +5679,7 @@ impl Compiler {
                 (result_tmp, OpType::Tmp)
             }
             Expr::Closure {
+                line,
                 is_static,
                 returns_by_ref,
                 params,
@@ -5687,9 +5688,30 @@ impl Compiler {
                 return_type,
                 generic_params,
             } => {
+                let trace_scope = if let Some((_, public_name)) = self
+                    .current_function_name
+                    .starts_with("__closure_")
+                    .then(|| self.current_function_name.split_once('@'))
+                    .flatten()
+                {
+                    public_name.to_string()
+                } else if self.current_function_name.is_empty()
+                    || self.current_function_name == "<main>"
+                    || self.current_function_name == self.source_file
+                {
+                    self.source_file.clone()
+                } else {
+                    format!("{}()", self.current_function_name.replace("->", "::"))
+                };
+                let public_trace_name = if trace_scope.is_empty() {
+                    "{closure}".to_string()
+                } else {
+                    format!("{{closure:{trace_scope}:{line}}}")
+                };
                 let closure_name = format!(
-                    "__closure_{}",
-                    CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed)
+                    "__closure_{}@{}",
+                    CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed),
+                    public_trace_name
                 );
                 self.record_generic_declaration(
                     GenericDeclarationKind::Closure,

@@ -8214,12 +8214,15 @@ pub(crate) unsafe fn collect_debug_backtrace(
         let function = Function::from_common_ptr((*frame).func);
         let name = match function.fn_type() {
             FunctionType::User => {
-                let name = function.as_user().op_array.name.clone();
+                let op_array = &function.as_user().op_array;
+                let name = op_array.name.clone();
                 if name.is_empty() {
                     break;
                 }
                 if name.starts_with("__closure_") {
-                    "{closure}".to_string()
+                    name.split_once('@')
+                        .map(|(_, public_name)| public_name.to_string())
+                        .unwrap_or_else(|| "{closure}".to_string())
                 } else {
                     name
                 }
@@ -8263,20 +8266,7 @@ pub(crate) unsafe fn collect_debug_backtrace(
                 }
             }
         }
-        if let Some((class, method)) = name.rsplit_once("::") {
-            entry.set_str("function", Value::string(method.to_string()));
-            entry.set_str("class", Value::string(class.to_string()));
-            let is_instance = !eg
-                .find_method_info(class, method)
-                .is_some_and(|(_, is_static, _)| is_static);
-            entry.set_str("type", Value::string(if is_instance { "->" } else { "::" }));
-            if include_object && is_instance {
-                let object = (*frame).cv(0).dereferenced();
-                if object.as_object().is_some() {
-                    entry.set_str("object", object.clone());
-                }
-            }
-        } else if name == "{closure}"
+        if (name == "{closure}" || name.starts_with("{closure:"))
             && function.fn_type() == FunctionType::User
             && let Some((this_cv, _)) = function
                 .as_user()
@@ -8291,6 +8281,19 @@ pub(crate) unsafe fn collect_debug_backtrace(
             entry.set_str("type", Value::string("->"));
             if include_object {
                 entry.set_str("object", (*frame).cv(*this_cv).dereferenced().clone());
+            }
+        } else if let Some((class, method)) = name.rsplit_once("::") {
+            entry.set_str("function", Value::string(method.to_string()));
+            entry.set_str("class", Value::string(class.to_string()));
+            let is_instance = !eg
+                .find_method_info(class, method)
+                .is_some_and(|(_, is_static, _)| is_static);
+            entry.set_str("type", Value::string(if is_instance { "->" } else { "::" }));
+            if include_object && is_instance {
+                let object = (*frame).cv(0).dereferenced();
+                if object.as_object().is_some() {
+                    entry.set_str("object", object.clone());
+                }
             }
         } else {
             entry.set_str("function", Value::string(name));
@@ -8690,10 +8693,11 @@ fn var_dump_value_inner(
             let function_name = user_function
                 .map(|function| function.op_array.name.as_str())
                 .filter(|name| {
-                    !name
-                        .rsplit_once("::")
-                        .map_or(*name, |(_, method)| method)
-                        .starts_with("__closure_")
+                    !name.starts_with("__closure_")
+                        && !name
+                            .rsplit_once("::")
+                            .map_or(*name, |(_, method)| method)
+                            .starts_with("__closure_")
                 })
                 .map(str::to_owned)
                 .or_else(|| {

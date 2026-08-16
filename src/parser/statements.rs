@@ -223,7 +223,7 @@ impl Parser {
                 // Top-level class/function import. Their alias tables are
                 // separate in PHP even when the source alias is identical.
                 self.advance(); // consume 'use'
-                let kind = if self.peek() == Token::Function {
+                let kind = if matches!(self.peek(), Token::Function(_)) {
                     self.advance();
                     UseKind::Function
                 } else if self.peek() == Token::Const {
@@ -239,7 +239,7 @@ impl Parser {
                         return Err("Group use declaration cannot be empty".to_string());
                     }
                     loop {
-                        let item_kind = if self.peek() == Token::Function {
+                        let item_kind = if matches!(self.peek(), Token::Function(_)) {
                             if kind != UseKind::Class {
                                 return Err(
                                     "Typed group use declaration cannot override its kind"
@@ -845,7 +845,7 @@ impl Parser {
                     body,
                 })
             }
-            Token::Function => {
+            Token::Function(_) => {
                 self.advance(); // consume 'function'
                 // Accept the PHP reference-return declaration marker. Return
                 // aliasing itself remains outside the current execution
@@ -962,7 +962,7 @@ impl Parser {
                 self.finish_static_property_statement(expr)
             }
             Token::Static
-                if matches!(self.peek_at(1), Token::Function | Token::Fn) =>
+                if matches!(self.peek_at(1), Token::Function(_) | Token::Fn(_)) =>
             {
                 self.parse_expression_statement()
             }
@@ -974,7 +974,7 @@ impl Parser {
             | Token::Clone(_)
             | Token::Print
             | Token::LParen(_)
-            | Token::Fn
+            | Token::Fn(_)
             | Token::Integer(_)
             | Token::Float(_)
             | Token::StringLiteral(_)

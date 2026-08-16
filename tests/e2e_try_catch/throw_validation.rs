@@ -279,7 +279,7 @@ fn bound_closure_property_modify_errors_keep_the_origin_and_closure_trace_name()
     assert!(matches!(
         error,
         rphp::vm::execute::VmError::Fatal(message)
-            if message == "Uncaught Error: Cannot access private property BoundTrace::$value in /fixture/bound-closure-trace.php:5\nStack trace:\n#0 /fixture/bound-closure-trace.php(10): Closure->{closure}()\n#1 {main}\n  thrown in /fixture/bound-closure-trace.php on line 5"
+            if message == "Uncaught Error: Cannot access private property BoundTrace::$value in /fixture/bound-closure-trace.php:5\nStack trace:\n#0 /fixture/bound-closure-trace.php(10): Closure->{closure:BoundTrace::make():5}()\n#1 {main}\n  thrown in /fixture/bound-closure-trace.php on line 5"
     ));
 }
 
@@ -315,7 +315,19 @@ fn closure_creation_trace_uses_phps_public_closure_name() {
             "/fixture/closure-trace.php",
             "/fixture",
         ),
-        "#0 /fixture/closure-trace.php(5): {closure}(42)\n#1 {main}"
+        "#0 /fixture/closure-trace.php(5): {closure:/fixture/closure-trace.php:2}(42)\n#1 {main}"
+    );
+}
+
+#[test]
+fn nested_closure_trace_names_retain_the_public_parent_location() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\n$outer = function () {\n    return function () { return new Exception(); };\n};\n$inner = $outer();\necho $inner()->getTraceAsString();",
+            "/fixture/nested-closure-trace.php",
+            "/fixture",
+        ),
+        "#0 /fixture/nested-closure-trace.php(6): {closure:{closure:/fixture/nested-closure-trace.php:2}:3}()\n#1 {main}"
     );
 }
 
@@ -327,7 +339,7 @@ fn trace_arguments_hide_the_runtime_identity_suffix_of_anonymous_classes() {
             "/fixture/anonymous-trace-argument.php",
             "/fixture",
         ),
-        "#0 /fixture/anonymous-trace-argument.php(5): {closure}(Object(class@anonymous))\n#1 {main}"
+        "#0 /fixture/anonymous-trace-argument.php(5): {closure:/fixture/anonymous-trace-argument.php:2}(Object(class@anonymous))\n#1 {main}"
     );
 }
 

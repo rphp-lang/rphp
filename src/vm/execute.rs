@@ -2139,10 +2139,11 @@ fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommo
 
 fn displayed_function_name(eg: &ExecutorGlobals, function: *const FunctionCommon) -> String {
     let registered_name = registered_function_name(eg, function);
-    if registered_name
-        .rsplit_once("::")
-        .map_or(registered_name, |(_, method)| method)
-        .starts_with("__closure_")
+    if registered_name.starts_with("__closure_")
+        || registered_name
+            .rsplit_once("::")
+            .map_or(registered_name, |(_, method)| method)
+            .starts_with("__closure_")
     {
         eg.declaring_class_of(function)
             .map(|class| format!("{class}::{{closure}}"))

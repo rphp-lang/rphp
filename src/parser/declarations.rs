@@ -70,7 +70,7 @@ impl Parser {
 
         while self.peek() != Token::RBrace && !self.at_eof() {
             let modifiers = self.parse_member_modifiers();
-            if self.peek() == Token::Function {
+            if matches!(self.peek(), Token::Function(_)) {
                 self.advance();
                 // PHP permits functions and methods to declare a reference
                 // return with an ampersand before the name. The runtime's
@@ -315,7 +315,7 @@ impl Parser {
 
             let modifiers = self.parse_member_modifiers();
 
-            if self.peek() == Token::Function {
+            if matches!(self.peek(), Token::Function(_)) {
                 // Method
                 self.advance(); // consume 'function'
                 let returns_by_ref = self.peek() == Token::Ampersand;
@@ -460,7 +460,7 @@ impl Parser {
             }
             let modifiers = self.parse_member_modifiers();
 
-            if self.peek() == Token::Function {
+            if matches!(self.peek(), Token::Function(_)) {
                 self.advance();
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
@@ -546,7 +546,7 @@ impl Parser {
             let modifiers = self.parse_member_modifiers();
             if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, true)?);
-            } else if self.peek() == Token::Function {
+            } else if matches!(self.peek(), Token::Function(_)) {
                 self.advance(); // consume 'function'
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
@@ -719,7 +719,7 @@ impl Parser {
                 let modifiers = self.parse_member_modifiers();
                 if self.peek() == Token::Const {
                     constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
-                } else if self.peek() == Token::Function {
+                } else if matches!(self.peek(), Token::Function(_)) {
                     self.advance();
                     let returns_by_ref = self.peek() == Token::Ampersand;
                     self.consume_reference_return_marker();
@@ -999,7 +999,10 @@ impl Parser {
     /// Parse arrow function: fn($x, $y) => expr
     /// Desugars to Closure with auto-captured use vars and body = [Return(expr)]
     fn parse_arrow_function(&mut self, is_static: bool) -> Result<Expr, String> {
-        self.advance(); // consume 'fn'
+        let line = match self.advance() {
+            Token::Fn(line) => line,
+            token => return Err(format!("Expected fn, got {token:?}")),
+        };
         let returns_by_ref = if self.peek() == Token::Ampersand {
             self.advance();
             true
@@ -1027,6 +1030,7 @@ impl Parser {
             line: 0,
         }];
         Ok(Expr::Closure {
+            line,
             is_static,
             returns_by_ref,
             params,
@@ -1289,7 +1293,10 @@ impl Parser {
 
     /// Parse closure: function($a, $b) use($c) { ... }
     fn parse_closure(&mut self, is_static: bool) -> Result<Expr, String> {
-        self.advance(); // consume 'function'
+        let line = match self.advance() {
+            Token::Function(line) => line,
+            token => return Err(format!("Expected function, got {token:?}")),
+        };
         let returns_by_ref = if self.peek() == Token::Ampersand {
             self.advance();
             true
@@ -1351,6 +1358,7 @@ impl Parser {
         self.pop_generic_scope();
 
         Ok(Expr::Closure {
+            line,
             is_static,
             returns_by_ref,
             params,

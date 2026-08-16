@@ -242,6 +242,7 @@ pub enum Expr {
     },
     Closure {
         // [static] function($x) use($y) { ... }: ReturnType
+        line: usize,
         is_static: bool,
         returns_by_ref: bool,
         params: Vec<Param>,

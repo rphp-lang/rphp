@@ -8,65 +8,65 @@ pub enum Token {
     Echo {
         line: usize,
     }, // echo
-    Function, // function
+    Function(usize), // function with source line
     Return {
         line: usize,
     }, // return
-    If,       // if
-    Else,     // else
-    While,    // while
-    For,      // for
-    ElseIf,   // elseif
-    Do,       // do
-    Break,    // break
-    Continue, // continue
-    Switch,   // switch
-    Case,     // case
-    Default,  // default
-    Null,     // null
-    True,     // true
-    False,    // false
-    ArrayKw,  // array
+    If,              // if
+    Else,            // else
+    While,           // while
+    For,             // for
+    ElseIf,          // elseif
+    Do,              // do
+    Break,           // break
+    Continue,        // continue
+    Switch,          // switch
+    Case,            // case
+    Default,         // default
+    Null,            // null
+    True,            // true
+    False,           // false
+    ArrayKw,         // array
     Foreach {
         line: usize,
     }, // foreach
-    As,       // as
-    Isset,    // isset
-    Empty,    // empty
-    Unset,    // unset
-    Match,    // match
-    Try,      // try
-    Catch,    // catch
-    Finally,  // finally
-    Throw(u32), // throw with source line
-    Class,    // class
-    New(u32), // new with source line
-    Public,   // public
-    Protected, // protected
-    Private,  // private
-    This(usize), // $this with source line (handled as special variable)
-    Extends,  // extends
-    Static,   // static
-    Instanceof, // instanceof
-    Const,    // const
-    Interface, // interface
-    Trait,    // trait
-    Implements, // implements
-    Abstract, // abstract
-    Declare,  // declare
-    Final,    // final
-    Enum,     // enum
-    Namespace, // namespace
-    Backslash, // \ (namespace separator)
-    Yield,    // yield
-    From,     // from (used after yield)
-    Print,    // print
-    Global,   // global
-    Clone(usize), // clone, source line
-    Include,  // include
-    IncludeOnce, // include_once
-    Require,  // require
-    RequireOnce, // require_once
+    As,              // as
+    Isset,           // isset
+    Empty,           // empty
+    Unset,           // unset
+    Match,           // match
+    Try,             // try
+    Catch,           // catch
+    Finally,         // finally
+    Throw(u32),      // throw with source line
+    Class,           // class
+    New(u32),        // new with source line
+    Public,          // public
+    Protected,       // protected
+    Private,         // private
+    This(usize),     // $this with source line (handled as special variable)
+    Extends,         // extends
+    Static,          // static
+    Instanceof,      // instanceof
+    Const,           // const
+    Interface,       // interface
+    Trait,           // trait
+    Implements,      // implements
+    Abstract,        // abstract
+    Declare,         // declare
+    Final,           // final
+    Enum,            // enum
+    Namespace,       // namespace
+    Backslash,       // \ (namespace separator)
+    Yield,           // yield
+    From,            // from (used after yield)
+    Print,           // print
+    Global,          // global
+    Clone(usize),    // clone, source line
+    Include,         // include
+    IncludeOnce,     // include_once
+    Require,         // require
+    RequireOnce,     // require_once
     Goto {
         /// Preserve the lexeme because `goto` is also legal as a contextual
         /// identifier whose spelling can remain observably case-sensitive.
@@ -140,7 +140,7 @@ pub enum Token {
     Arrow,            // ->
     NullSafe,         // ?->
     DoubleColon,      // ::
-    Fn,               // fn (arrow functions)
+    Fn(usize),        // fn (arrow functions), with source line
     Use,              // use (closure use)
     Pipe,             // | (bitwise or, multi-catch separator)
     Ampersand,        // & (bitwise and, reference)
@@ -589,7 +589,7 @@ impl<'a> Lexer<'a> {
                         "echo" => {
                             tokens.push(Token::Echo { line });
                         }
-                        "function" => tokens.push(Token::Function),
+                        "function" => tokens.push(Token::Function(line)),
                         "return" => tokens.push(Token::Return { line }),
                         "if" => tokens.push(Token::If),
                         "else" => tokens.push(Token::Else),
@@ -639,7 +639,7 @@ impl<'a> Lexer<'a> {
                         "namespace" => tokens.push(Token::Namespace),
                         "yield" => tokens.push(Token::Yield),
                         "from" => tokens.push(Token::From),
-                        "fn" => tokens.push(Token::Fn),
+                        "fn" => tokens.push(Token::Fn(line)),
                         "use" => tokens.push(Token::Use),
                         "print" => tokens.push(Token::Print),
                         "global" => tokens.push(Token::Global),
