@@ -285,11 +285,18 @@ pub(crate) fn call_function_iter_with_context<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
+    let capture_start = num_args.saturating_sub(capture_count);
     let (return_value, _) = call_function_value_iter::<_, false>(
         eg,
         func_ptr,
         num_args,
-        args.cloned(),
+        args.enumerate().map(|(index, value)| {
+            if index >= capture_start {
+                value.clone_closure_capture()
+            } else {
+                value.clone()
+            }
+        }),
         called_scope_class_id,
         bound_this.cloned(),
         capture_count,

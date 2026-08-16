@@ -1047,6 +1047,27 @@ fn trigger_error_routes_allowed_levels_through_the_registered_handler() {
 }
 
 #[test]
+fn detached_callbacks_preserve_reference_capture_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$state = 'a';
+set_error_handler(function(int $level, string $message) use (&$state) {
+    $state .= 'b';
+});
+trigger_error('handled');
+echo $state, '|';
+array_map(function(string $value) use (&$state) {
+    $state .= $value;
+}, ['c']);
+echo $state;
+"#,
+        ),
+        "ab|abc"
+    );
+}
+
+#[test]
 fn trigger_error_emits_unhandled_php_82_user_diagnostics_at_the_callsite() {
     assert_eq!(
         run_php_with_source_context(
