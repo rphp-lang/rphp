@@ -167,6 +167,17 @@ cluster. The exact PHP 8.5.6 delta is +22/-0 with no remaining-fail stage moves;
 the feature matrix and unsafe gate pass, while the relevant ten-million-call
 baseline control retains an identical 0.31-second median and checksum.
 
+The `40d51bc` Throwable-string checkpoint reaches 1,917 passes with 3,291
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Built-in Throwable families share one previous-chain renderer across
+explicit string conversion and uncaught output, while stored trace arguments
+use PHP's byte-oriented escaping. The exact PHP 8.5.6 delta is +6/-0. Eleven
+remaining failures move from object-conversion runtime errors to their correct
+later output stage and stay visible under independent diagnostic/control-flow
+gaps. All feature configurations and the unsafe-policy gate pass; no performance
+gate applies because formatting is confined to an explicitly requested cold
+Throwable path.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
