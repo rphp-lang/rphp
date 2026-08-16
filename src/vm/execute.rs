@@ -2692,6 +2692,8 @@ pub(crate) fn values_equal(a: &Value, b: &Value) -> bool {
 
 /// PHP === comparison: same type and same value (recursive for arrays).
 pub(crate) fn values_identical(a: &Value, b: &Value) -> bool {
+    let a = a.dereferenced();
+    let b = b.dereferenced();
     if matches!(a.value_type(), ValueType::Undef | ValueType::Null)
         && matches!(b.value_type(), ValueType::Undef | ValueType::Null)
     {

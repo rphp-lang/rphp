@@ -279,6 +279,48 @@ fn test_e2e_foreach_by_reference_writes_values_back() {
 }
 
 #[test]
+fn foreach_by_reference_observes_live_appends_and_element_overwrites() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = [1, 2, 3];
+foreach ($values as $key => &$value) {
+    echo "$key:$value|";
+    if ($value == 2) {
+        $values[] = 4;
+    }
+    if ($value == 3) {
+        $values[$key] = 30;
+    } else {
+        $value *= 10;
+    }
+}
+echo $values[0], ',', $values[1], ',', $values[2], ',', $values[3];
+"#
+        ),
+        "0:1|1:2|2:3|3:4|10,20,30,40"
+    );
+}
+
+#[test]
+fn foreach_by_reference_accepts_a_temporary_array() {
+    assert_eq!(
+        run_php("<?php foreach ([1, 2, 3] as &$value) { $value *= 2; echo $value; }"),
+        "246"
+    );
+}
+
+#[test]
+fn foreach_element_references_are_transparent_to_array_identity() {
+    assert_eq!(
+        run_php(
+            "<?php $values = [1, 2]; foreach ($values as &$value) { var_dump($values === [1, 2]); }"
+        ),
+        "bool(true)\nbool(true)\n"
+    );
+}
+
+#[test]
 fn test_e2e_foreach_by_reference_flushes_break_value() {
     assert_eq!(
         run_php(
