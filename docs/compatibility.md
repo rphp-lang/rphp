@@ -7,7 +7,25 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 internal-null-contract checkpoint, based on `fb8b465`, runs
+The current AMD64 PHP-8.2-get-class checkpoint, based on `413bd3c`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,608 passes, 2,422 failures, 77
+skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds the exact passes `Zend/tests/009.phpt` and
+`Zend/tests/generators/generator_static_method.phpt` without losing a previous
+pass or moving another failure category. In PHP 8.2, calling `get_class()`
+without an argument returns the lexical class name without a diagnostic when
+executed in class scope; the omission deprecation begins in PHP 8.3 and must not
+leak into RPHP's PHP 8.2 public contract. Global calls retain their catchable
+`Error`, explicit non-object arguments retain their `TypeError`, and inherited
+static, instance and generator frames preserve their existing lexical scope.
+Original E2E coverage checks these boundaries. Five Cargo feature
+configurations, all-target and unsafe checks, Composer S0, Symfony S1 and
+warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not rerun because
+this machine has no exact PHP 8.2 oracle. Nine alternating release runs of
+`bench_calls.php` measured medians of 0.346073 seconds for the preceding binary
+and 0.345184 seconds for the candidate, with the same computed result.
+
+The preceding AMD64 internal-null-contract checkpoint, based on `fb8b465`, runs
 the same 4,345-case PHP 8.2.33 corpus and records 1,606 passes, 2,424 failures,
 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
 crashes. It adds three exact passes without losing a previous pass or moving
