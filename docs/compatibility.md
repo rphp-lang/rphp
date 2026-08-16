@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `547409b`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,852 pass, 3,356 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `3804063`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,853 pass, 3,355 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-35.561%; 82.853% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +37/-0. The first four gains are
+35.580%; 82.853% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +38/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -53,6 +53,13 @@ first-class callables, reference initialization and strict/weak include
 boundaries without losing a previous pass. Exact hot calls remain on their
 existing compact paths; the additional work is confined to mismatched cold
 call preparation.
+
+`iterator_to_array()` now consumes arrays and the canonical Generator,
+IteratorAggregate and Iterator protocols, preserves or reindexes keys as
+requested, and propagates traversal exceptions. This closes the PHP 8.5 pipe
+generator chain without adding a pipe-specific path. Six other reached tests
+using the builtin remain blocked earlier by independent SPL or Reflection
+gaps and stay ordinary failures.
 
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts

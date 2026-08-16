@@ -93,6 +93,13 @@ user-call diagnostics include parameter and caller metadata, and weak scalar
 arguments use the same canonical coercion table as typed writes. Exact compact
 calls are unchanged; the new work stays on mismatched cold call preparation.
 
+The `3804063` iterator-to-array checkpoint adds one exact pass with no lost
+pass: 1,853 pass, 3,355 fail, 110 skip, one XFAIL, 280 unsupported, zero
+timeouts and zero crashes. The builtin reuses the canonical traversable
+collector for Generator, IteratorAggregate and Iterator, also accepts arrays,
+and implements preserve/reindex key behavior. This closes the pipe generator
+chain; remaining users are blocked by earlier independent SPL/Reflection gaps.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
