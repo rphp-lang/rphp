@@ -661,10 +661,18 @@ impl Parser {
                 let expr = self.parse_unary()?;
                 Ok(Expr::BitwiseNot(Box::new(expr)))
             }
-            Token::Clone => {
+            Token::Clone(line) => {
                 self.advance();
                 let expr = self.parse_unary()?;
-                Ok(Expr::Clone(Box::new(expr)))
+                // Assignment binds inside clone's operand in PHP's grammar:
+                // `clone $copy = new C` means `clone ($copy = new C)`.
+                // Finishing the tail at each recursive clone level also keeps
+                // `clone clone $copy = new C` right-associated.
+                let expr = self.finish_assignment_tail(expr)?;
+                Ok(Expr::Clone {
+                    expr: Box::new(expr),
+                    line,
+                })
             }
             Token::LParen(_) => {
                 // Check for type cast: (int), (string), (float), (bool), (array), (object)

@@ -951,7 +951,7 @@ impl Parser {
             | Token::Match
             | Token::New(_)
             | Token::Yield
-            | Token::Clone
+            | Token::Clone(_)
             | Token::Print
             | Token::LParen(_)
             | Token::Fn

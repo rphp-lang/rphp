@@ -694,3 +694,21 @@ echo '|', $both['data'][0], ':', $both['priority'][0], ':', $both['priority'][1]
         "3:ready|high-early,high-late,low,|high-early:2:8"
     );
 }
+
+#[test]
+fn reading_a_plain_object_dimension_throws_a_catchable_error() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PlainDimensionObject {}
+$object = new PlainDimensionObject;
+try {
+    echo $object['key'];
+} catch (Error $error) {
+    echo get_class($error), '|', $error->getMessage();
+}
+"#,
+        ),
+        "Error|Cannot use object of type PlainDimensionObject as array"
+    );
+}

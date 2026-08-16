@@ -126,7 +126,7 @@ impl Parser {
             Token::From => Some("from".to_string()),
             Token::Global => Some("global".to_string()),
             Token::Print => Some("print".to_string()),
-            Token::Clone => Some("clone".to_string()),
+            Token::Clone(_) => Some("clone".to_string()),
             Token::Include => Some("include".to_string()),
             Token::IncludeOnce => Some("include_once".to_string()),
             Token::Require => Some("require".to_string()),

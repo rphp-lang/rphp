@@ -7,8 +7,22 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `7300c28`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,542 passes, 2,488 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `b571b61`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,553 passes, 2,477 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds 11 exact passes to the retained 1,542-pass checkpoint without losing a
+previous pass. Nested `clone` expressions now apply assignment at PHP's operand
+precedence, and `CloneObj` retains source provenance so cloning a non-object
+raises a catchable `Error` with the correct file, line and trace. Dynamic
+construction accepts an object as its class prototype while rejecting other
+non-string operands with PHP's catchable diagnostic. Reading a dimension from
+a non-`ArrayAccess` object likewise raises a located `Error` rather than an
+uncatchable VM fatal. Original regressions cover all three contracts; all four
+base clone PHPTs, the five Cargo feature configurations, all-target check,
+unsafe policy, Composer S0, Symfony S1 and warmed-kernel S2 gates pass on AMD64.
+
+The preceding AMD64 object-lifecycle checkpoint, based on `7300c28`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,542 passes, 2,488 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds 20 exact passes to the retained 1,522-pass checkpoint without losing a
 previous pass. Request-local object-store handles now retain alias identity and

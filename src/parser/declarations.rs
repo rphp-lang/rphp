@@ -1261,7 +1261,7 @@ impl Parser {
             Expr::YieldFrom(sub) => {
                 Self::collect_free_vars(sub, bound, out);
             }
-            Expr::Clone(inner) => {
+            Expr::Clone { expr: inner, .. } => {
                 Self::collect_free_vars(inner, bound, out);
             }
         }

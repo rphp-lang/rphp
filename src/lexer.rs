@@ -62,7 +62,7 @@ pub enum Token {
     From,     // from (used after yield)
     Print,    // print
     Global,   // global
-    Clone,    // clone
+    Clone(usize), // clone, source line
     Include,  // include
     IncludeOnce, // include_once
     Require,  // require
@@ -635,7 +635,7 @@ impl<'a> Lexer<'a> {
                         "use" => tokens.push(Token::Use),
                         "print" => tokens.push(Token::Print),
                         "global" => tokens.push(Token::Global),
-                        "clone" => tokens.push(Token::Clone),
+                        "clone" => tokens.push(Token::Clone(line)),
                         "include" => tokens.push(Token::Include),
                         "include_once" => tokens.push(Token::IncludeOnce),
                         "require" => tokens.push(Token::Require),

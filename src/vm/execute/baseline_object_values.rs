@@ -56,9 +56,16 @@ fn op_clone_obj<'a>(
         let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
 
         if src_val.value_type() != ValueType::Object {
-            return Err(VmError::Fatal(
-                "__clone method called on non-object".into(),
-            ));
+            let error = make_error_value("Error", "__clone method called on non-object");
+            let instruction_index = (opline as *const Instruction)
+                .offset_from(op_array.instructions.as_ptr()) as usize;
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
         }
 
     // Enum cases are singletons — cloning is forbidden
