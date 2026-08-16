@@ -43,6 +43,109 @@ use crate::vm::instruction::{
 };
 use crate::vm::opcode::OpCode;
 
+fn assertion_expression_source(expr: &Expr) -> Option<String> {
+    fn render(expr: &Expr, parent_precedence: u8, right_child: bool) -> Option<String> {
+        let (text, precedence) = match expr {
+            Expr::Integer(value) => (value.to_string(), 100),
+            Expr::Float(value) => (value.to_string(), 100),
+            Expr::StringLiteral(value) => (
+                format!("\"{}\"", value.replace('\\', "\\\\").replace('\"', "\\\"")),
+                100,
+            ),
+            Expr::Bool(value) => (value.to_string(), 100),
+            Expr::Null => ("null".to_string(), 100),
+            Expr::Variable { name, .. } => (format!("${name}"), 100),
+            Expr::Constant(name) => (name.clone(), 100),
+            Expr::FirstClassCallable(callable) => {
+                let callable = render(callable, 100, false)?;
+                (format!("{callable}(...)"), 100)
+            }
+            Expr::FirstClassFunctionCallable(name) => (format!("{name}(...)"), 100),
+            Expr::FunctionCall { name, args, .. } => {
+                let args = args
+                    .iter()
+                    .map(|argument| match argument {
+                        CallArg::Positional(value) => render(value, 0, false),
+                        CallArg::Named { name, value } => {
+                            render(value, 0, false).map(|value| format!("{name}: {value}"))
+                        }
+                        CallArg::Unpack(value) => {
+                            render(value, 0, false).map(|value| format!("...{value}"))
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                (format!("{name}({})", args.join(", ")), 100)
+            }
+            Expr::Closure {
+                is_static,
+                returns_by_ref,
+                params,
+                body,
+                ..
+            } if params.is_empty()
+                && body.len() == 1
+                && matches!(
+                    body[0],
+                    Stmt::Return {
+                        line: 0,
+                        expr: Some(_)
+                    }
+                ) =>
+            {
+                let Stmt::Return {
+                    expr: Some(value), ..
+                } = &body[0]
+                else {
+                    unreachable!()
+                };
+                let value = render(value, 0, false)?;
+                let static_prefix = if *is_static { "static " } else { "" };
+                let reference = if *returns_by_ref { "&" } else { "" };
+                (format!("{static_prefix}fn{reference}() => {value}"), 5)
+            }
+            Expr::BinaryOp { op, left, right } => {
+                let (operator, precedence) = match op {
+                    BinOp::Or => ("||", 10),
+                    BinOp::And => ("&&", 20),
+                    BinOp::Equal => ("==", 30),
+                    BinOp::NotEqual => ("!=", 30),
+                    BinOp::Identical => ("===", 30),
+                    BinOp::NotIdentical => ("!==", 30),
+                    BinOp::Less => ("<", 30),
+                    BinOp::LessEqual => ("<=", 30),
+                    BinOp::Greater => (">", 30),
+                    BinOp::GreaterEqual => (">=", 30),
+                    BinOp::Concat => (".", 50),
+                    BinOp::Add => ("+", 60),
+                    BinOp::Sub => ("-", 60),
+                    BinOp::Mul => ("*", 70),
+                    BinOp::Div => ("/", 70),
+                    BinOp::Mod => ("%", 70),
+                    _ => return None,
+                };
+                let left = render(left, precedence, false)?;
+                let right = render(right, precedence, true)?;
+                (format!("{left} {operator} {right}"), precedence)
+            }
+            Expr::Pipe {
+                input, callable, ..
+            } => {
+                let precedence = 40;
+                let input = render(input, precedence, false)?;
+                let callable = render(callable, precedence, true)?;
+                (format!("{input} |> {callable}"), precedence)
+            }
+            _ => return None,
+        };
+        if precedence < parent_precedence || (right_child && precedence == parent_precedence) {
+            Some(format!("({text})"))
+        } else {
+            Some(text)
+        }
+    }
+    render(expr, 0, false).map(|expression| format!("assert({expression})"))
+}
+
 use super::{
     finalize_user_method, make_user_function_full,
     make_user_function_typed_with_return_mode as make_user_function_typed,
@@ -4824,6 +4927,33 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
+                // PHP's assert construct supplies canonical source text when
+                // the caller omitted an explicit description.
+                let synthesized_assert_args = if generic_args.is_empty()
+                    && !name.contains('\\')
+                    && name.eq_ignore_ascii_case("assert")
+                    && args.len() == 1
+                {
+                    assertion_expression_source(args[0].expr()).map(|mut source| {
+                        if let CallArg::Named { name, .. } = &args[0] {
+                            source.insert_str("assert(".len(), &format!("{name}: "));
+                        }
+                        let mut synthesized = args.clone();
+                        if matches!(args[0], CallArg::Named { .. }) {
+                            synthesized.push(CallArg::Named {
+                                name: "description".to_string(),
+                                value: Expr::StringLiteral(source),
+                            });
+                        } else {
+                            synthesized.push(CallArg::Positional(Expr::StringLiteral(source)));
+                        }
+                        synthesized
+                    })
+                } else {
+                    None
+                };
+                let args = synthesized_assert_args.as_deref().unwrap_or(args);
+
                 if generic_args.is_empty()
                     && args
                         .iter()
@@ -4861,7 +4991,7 @@ impl Compiler {
                 }
 
                 if generic_args.is_empty() {
-                    if let [CallArg::Positional(argument)] = args.as_slice() {
+                    if let [CallArg::Positional(argument)] = args {
                         let direct_kind = (!self.strict_types)
                             .then(|| self.unambiguous_global_function_name(name))
                             .flatten()
@@ -4905,9 +5035,7 @@ impl Compiler {
                         }
                     }
 
-                    if let [CallArg::Positional(first), CallArg::Positional(second)] =
-                        args.as_slice()
-                    {
+                    if let [CallArg::Positional(first), CallArg::Positional(second)] = args {
                         let direct_kind = self
                             .unambiguous_global_function_name(name)
                             .and_then(crate::builtin_metadata::direct_internal_spec)
@@ -4964,9 +5092,7 @@ impl Compiler {
                     }
 
                     if self.is_global_builtin_call(name, "call_user_func_array") {
-                        if let [CallArg::Positional(callback), CallArg::Positional(array)] =
-                            args.as_slice()
-                        {
+                        if let [CallArg::Positional(callback), CallArg::Positional(array)] = args {
                             if let Expr::ArrayLiteral(elements) = array {
                                 if elements.iter().all(|element| {
                                     element.key.is_none() && !element.value.contains_yield()

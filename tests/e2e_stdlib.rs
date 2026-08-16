@@ -14,6 +14,7 @@ foreach ([[false], [false, "reason"]] as $arguments) {
     try { $check(...$arguments); }
     catch (\AssertionError $error) { echo "[", $error->getMessage(), "]"; }
 }
+
 try { $check(false, new \Exception("preserved")); }
 catch (\Throwable $error) { echo "[", get_class($error), ":", $error->getMessage(), "]"; }
 try { $check(false, []); }
@@ -21,6 +22,22 @@ catch (\TypeError $error) { echo "[", $error->getMessage(), "]"; }
 "#,
         ),
         "bool(true)\n[][reason][Exception:preserved][assert(): Argument #2 ($description) must be of type Throwable|string|null, array given]"
+    );
+}
+
+#[test]
+fn direct_assert_uses_php_85_canonical_expression_as_default_description() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace Example;
+foreach ([1, 2] as $value) {
+    try { assert(false && $value < 3 |> (fn() => 4)); }
+    catch (\AssertionError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        "assert(false && $value < 3 |> (fn() => 4))\nassert(false && $value < 3 |> (fn() => 4))\n"
     );
 }
 
