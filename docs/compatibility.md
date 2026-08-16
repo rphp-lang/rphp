@@ -7,6 +7,42 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 magic-call-trampoline checkpoint, based on `db61930`, runs
+the same 4,345-case PHP 8.2.33 corpus and records 1,658 passes, 2,372 failures,
+77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds 23 exact passes without losing a previous pass:
+`Zend/tests/access_modifiers_012.phpt`, `Zend/tests/bug19859.phpt`,
+`Zend/tests/bug31683.phpt`, `Zend/tests/bug34260.phpt`,
+`Zend/tests/bug50383.phpt`, `Zend/tests/bug55247.phpt`,
+`Zend/tests/bug69025.phpt`, `Zend/tests/bug71474.phpt`,
+`Zend/tests/call_static.phpt`, `Zend/tests/call_static_002.phpt`,
+`Zend/tests/call_static_004.phpt`, `Zend/tests/enum/__call.phpt`,
+`Zend/tests/enum/__callStatic.phpt`,
+`Zend/tests/first_class_callable_005.phpt`,
+`Zend/tests/first_class_callable_016.phpt`, `Zend/tests/fr47160.phpt`,
+`Zend/tests/generators/generator_trampoline.phpt`, `Zend/tests/gh16515.phpt`,
+`Zend/tests/indirect_call_array_004.phpt`,
+`Zend/tests/is_callable_trampoline_uaf.phpt`,
+`Zend/tests/object_handlers.phpt`, `Zend/tests/objects_021.phpt` and
+`Zend/tests/traits/static_004.phpt`. Missing or inaccessible instance and
+static methods now dispatch through public `__call` and `__callStatic` for
+direct, dynamic, first-class and `call_user_func` calls. The trampoline
+preserves the originally requested method, packs positional and named
+arguments into PHP's two magic parameters and retains inherited static scope.
+Original E2E coverage exercises instance, static, inherited, first-class and
+callback-array paths. The persistent `PhpClosure` layout remains 72 bytes in
+fresh baseline and candidate DWARF. Five Cargo test configurations,
+all-target and unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass
+on AMD64. The S3 cold-kernel gate was not rerun because this machine has no
+exact PHP 8.2 oracle. Twenty-one alternating release pairs measured
+`bench_calls.php` medians of 0.345492 seconds for the preceding binary and
+0.351058 seconds for the candidate (+1.61 percent), with identical computed
+results. The latest static-call measurement was 1.588284 versus 1.580534
+seconds (-0.49 percent). The ordinary-call movement is explicit temporary
+performance debt for the later whole-runtime optimization phase. Recursive
+overload suppression and remaining parser, signature and Reflection cases
+remain separate compatibility boundaries.
+
 The current AMD64 first-class-callable checkpoint, based on `ea71e47`, runs
 the same 4,345-case PHP 8.2.33 corpus and records 1,635 passes, 2,395 failures,
 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero

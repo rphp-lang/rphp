@@ -453,6 +453,7 @@ fn op_new_obj_resolved<'a>(
                 use_vars: Vec::new(),
                 called_scope_class_id: class_id,
                 bound_this: None,
+                is_magic_call: false,
             };
             let source_file = if op_array.source_file.is_empty() {
                 op_array.name.as_str()
@@ -1815,7 +1816,7 @@ fn op_init_method_call<'a>(
         // — avoids class_name.clone() and full method resolution on cache hit.
         let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
         let ic = &op_array.cache[ip];
-        let (func_ptr, has_generic_contract) = if !ic.func.is_null()
+        let (func_ptr, has_generic_contract, magic_method) = if !ic.func.is_null()
             && ic.class_id == obj_class_id
             && obj_class_id != 0
         {
@@ -1824,6 +1825,7 @@ fn op_init_method_call<'a>(
                 ic.func,
                 cfg!(any(feature = "php-generics-erased", feature = "php-generics-reified"))
                     && ic.method_has_generic_contract(),
+                None,
             )
         } else {
             let target_class_name = obj.class_name.clone();
@@ -1849,13 +1851,25 @@ fn op_init_method_call<'a>(
             };
 
             let full_name = format!("{}::{}", dispatch_class, method);
-            let resolved = match eg.find_function(&full_name) {
-                Some(ptr) => ptr,
+            let (resolved, magic_method) = match eg.find_function(&full_name) {
+                Some(ptr) => (ptr, None),
                 None => {
-                    let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
-                    match throw_in_frame(eg, frame, err) {
-                        ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
-                        ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                    let magic = eg
+                        .find_method_info(&target_class_name, "__call")
+                        .filter(|(visibility, is_static, _)| {
+                            *visibility == Visibility::Public && !*is_static
+                        })
+                        .and_then(|(_, _, defining)| {
+                            eg.find_function(&format!("{defining}::__call"))
+                        });
+                    if let Some(magic) = magic {
+                        (magic, Some(Value::string(method)))
+                    } else {
+                        let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                            ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                        }
                     }
                 }
             };
@@ -1897,7 +1911,7 @@ fn op_init_method_call<'a>(
             }
 
             // Cache the resolution (don't cache if class_id is 0 = unknown)
-            if obj_class_id != 0 {
+            if obj_class_id != 0 && magic_method.is_none() {
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let common = unsafe { &*resolved };
                 let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
@@ -1922,7 +1936,7 @@ fn op_init_method_call<'a>(
                     linked_generic_long_contract,
                 );
             }
-            (resolved, resolved_has_generic_contract)
+            (resolved, resolved_has_generic_contract, magic_method)
         };
         #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
         let _ = has_generic_contract;
@@ -1949,7 +1963,8 @@ fn op_init_method_call<'a>(
                     .into(),
             ));
         }
-        let scalar_plan_eligible = !has_active_generic_contract
+        let scalar_plan_eligible = magic_method.is_none()
+            && !has_active_generic_contract
             && common.fn_type == FunctionType::User
             && num_args == common.sig.public_arity()
             && {
@@ -1962,10 +1977,15 @@ fn op_init_method_call<'a>(
                         && user.scalar_double_plan.is_some())
             };
         let deferred = should_defer_scalar_call(opline, scalar_plan_eligible);
+        let storage_slots = if magic_method.is_some() {
+            (num_args + 1).max(3)
+        } else {
+            num_args + 1
+        };
         let call = if deferred {
             eg.pending_call_stack.push_deferred_scalar_call(
                 func_ptr,
-                num_args + 1,
+                storage_slots,
                 num_args,
                 frame,
                 pending_call,
@@ -1973,7 +1993,7 @@ fn op_init_method_call<'a>(
         } else {
             eg.vm_stack.push_call_frame(
                 func_ptr,
-                num_args + 1,
+                storage_slots,
                 num_args,
                 frame,
                 pending_call,
@@ -1986,6 +2006,9 @@ fn op_init_method_call<'a>(
             } else {
                 frame_set_this(call, obj_val.clone());
             }
+        }
+        if let Some(method) = magic_method {
+            push_pending_magic_call(eg, call as usize, method);
         }
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
         if let Some(contract) = generic_contract {
@@ -2078,14 +2101,14 @@ fn op_init_static_call<'a>(
     let class = resolve_static_call_class(eg, frame, &raw_class, dynamic_scope)
         .unwrap_or_else(|| raw_class.clone());
     let cached = op_array.cache[ip].func;
-    let (func_ptr, method_is_non_static) = if !cached.is_null() {
+    let (func_ptr, method_is_non_static, magic_method) = if !cached.is_null() {
         let tagged = cached as usize;
         if tagged & 1 == 0 {
             // Keep the overwhelmingly common static-method cache hit as the
             // original pointer without an unconditional mask operation.
-            (cached, false)
+            (cached, false, None)
         } else {
-            ((tagged & !1usize) as *const FunctionCommon, true)
+            ((tagged & !1usize) as *const FunctionCommon, true, None)
         }
     } else {
         if eg.find_class(&class).is_none() {
@@ -2110,21 +2133,33 @@ fn op_init_static_call<'a>(
         }
 
         let full_name = format!("{}::{}", class, method);
-        let resolved = match eg.find_function(&full_name) {
-            Some(ptr) => ptr,
+        let (resolved, magic_method) = match eg.find_function(&full_name) {
+            Some(ptr) => (ptr, None),
             None => {
                 if class_callback_requires_instance(eg, &class, &method) {
                     return Ok(throw_non_static_callback_error(
                         eg, frame, op_array, ip, &class, &method,
                     ));
                 }
-                let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", raw_class, method));
-                match throw_in_frame(eg, frame, err) {
-                    ThrowResult::Handled(new_frame, new_op_array) => {
-                        return Ok(ColdResult::NewFrame(new_frame, new_op_array));
-                    }
-                    ThrowResult::Unhandled(thrown) => {
-                        return Ok(ColdResult::Unhandled(thrown));
+                let magic = eg
+                    .find_method_info(&class, "__callStatic")
+                    .filter(|(visibility, is_static, _)| {
+                        *visibility == Visibility::Public && *is_static
+                    })
+                    .and_then(|(_, _, defining)| {
+                        eg.find_function(&format!("{defining}::__callStatic"))
+                    });
+                if let Some(magic) = magic {
+                    (magic, Some(Value::string(&method)))
+                } else {
+                    let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", raw_class, method));
+                    match throw_in_frame(eg, frame, err) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            return Ok(ColdResult::NewFrame(new_frame, new_op_array));
+                        }
+                        ThrowResult::Unhandled(thrown) => {
+                            return Ok(ColdResult::Unhandled(thrown));
+                        }
                     }
                 }
             }
@@ -2156,7 +2191,7 @@ fn op_init_static_call<'a>(
         // Shared trait op arrays can be entered through different consuming
         // classes. Leaving their call cache empty keeps ordinary static calls'
         // exact one-load hot path and makes the exceptional scope explicit.
-        if !dynamic_scope {
+        if !dynamic_scope && magic_method.is_none() {
             unsafe {
                 let cache = &mut *(op_array.cache.as_ptr().add(ip)
                     as *mut crate::vm::instruction::InlineCache);
@@ -2167,7 +2202,7 @@ fn op_init_static_call<'a>(
                     as *const FunctionCommon;
             }
         }
-        (resolved, method_is_non_static)
+        (resolved, method_is_non_static, magic_method)
     };
 
     let num_args = opline.extended_value;
@@ -2190,7 +2225,10 @@ fn op_init_static_call<'a>(
             ));
         }
     }
-    if common.fn_type == FunctionType::User && num_args == common.sig.public_arity() {
+    if magic_method.is_none()
+        && common.fn_type == FunctionType::User
+        && num_args == common.sig.public_arity()
+    {
         let user = unsafe { &*(func_ptr as *const UserFunction) };
         if let Some(plan) = user.scalar_long_plan.as_deref()
             && let Some((result, do_fcall_ptr)) = unsafe {
@@ -2215,9 +2253,14 @@ fn op_init_static_call<'a>(
     }
     // +1 for $this at CV 0 (compiler allocates $this even for static calls)
     let pending_call = unsafe { (*frame).call };
+    let storage_slots = if magic_method.is_some() {
+        (num_args + 1).max(3)
+    } else {
+        num_args + 1
+    };
     let call = eg.vm_stack.push_call_frame(
         func_ptr,
-        num_args + 1,
+        storage_slots,
         num_args,
         frame,
         pending_call,
@@ -2259,6 +2302,9 @@ fn op_init_static_call<'a>(
     };
     if called_scope_class_id != 0 {
         publish_late_static_call_class_id(eg, call, called_scope_class_id);
+    }
+    if let Some(method) = magic_method {
+        push_pending_magic_call(eg, call as usize, method);
     }
     Ok(ColdResult::Done)
 }
@@ -2517,9 +2563,15 @@ fn init_resolved_user_call_mode(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     explicit_args: u32,
-    resolved: crate::stdlib::ResolvedCallback,
+    mut resolved: crate::stdlib::ResolvedCallback,
     defer_method_receiver: bool,
 ) {
+    let magic_method = if resolved.is_magic_call {
+        debug_assert_eq!(resolved.use_vars.len(), 1);
+        resolved.use_vars.pop()
+    } else {
+        None
+    };
     let called_scope_class_id = resolved.called_scope_class_id;
     let bound_this = resolved.bound_this;
     let signature = unsafe { &(*resolved.func_ptr).sig };
@@ -2540,6 +2592,11 @@ fn init_resolved_user_call_mode(
     }
     if called_scope_class_id != 0 {
         publish_late_static_call_class_id(eg, call, called_scope_class_id);
+    }
+    if let Some(method) = magic_method {
+        // Late-static scope stays below this entry and the receiver marker is
+        // pushed later, so DoFcall consumes receiver -> magic -> scope in order.
+        push_pending_magic_call(eg, call as usize, method);
     }
 
     // push_call_frame leaves the whole requested argument prefix
@@ -2740,6 +2797,7 @@ fn op_init_dynamic_call<'a>(
             use_vars: closure.clone_captures(),
             called_scope_class_id: closure.called_scope_class_id,
             bound_this,
+            is_magic_call: crate::stdlib::closure_is_magic_call(closure, eg),
         };
         let is_method = resolved.is_method();
         if is_method {

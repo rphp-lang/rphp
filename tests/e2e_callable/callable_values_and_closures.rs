@@ -320,6 +320,50 @@ echo $invoke();
     );
 }
 
+#[test]
+fn first_class_callable_dispatches_magic_instance_and_static_methods() {
+    let out = run_php(
+        r#"<?php
+class MagicCallableBase {
+    public function __call($name, $arguments) {
+        return 'instance:' . $name . ':' . implode(',', $arguments);
+    }
+    public static function __callStatic($name, $arguments) {
+        return static::class . ':' . $name . ':' . implode(',', $arguments);
+    }
+}
+class MagicCallableChild extends MagicCallableBase {}
+
+$object = new MagicCallableBase;
+$instance = $object->missing(...);
+$array = [$object, 'other'];
+$fromArray = $array(...);
+$static = MagicCallableBase::unknown(...);
+$inherited = MagicCallableChild::unknown(...);
+
+echo $instance(1, 'x'), "\n";
+echo $fromArray(), "\n";
+echo $static('s'), "\n";
+echo $inherited('i'), "\n";
+echo $object->direct(2, 'd'), "\n";
+echo MagicCallableChild::directStatic(5), "\n";
+echo call_user_func([$object, 'callback'], 3), "\n";
+echo call_user_func(['MagicCallableChild', 'staticCallback'], 4);
+?>"#,
+    );
+    assert_eq!(
+        out,
+        "instance:missing:1,x\n\
+instance:other:\n\
+MagicCallableBase:unknown:s\n\
+MagicCallableChild:unknown:i\n\
+instance:direct:2,d\n\
+MagicCallableChild:directStatic:5\n\
+instance:callback:3\n\
+MagicCallableChild:staticCallback:4"
+    );
+}
+
 // -- call_user_func with closure --
 
 #[test]

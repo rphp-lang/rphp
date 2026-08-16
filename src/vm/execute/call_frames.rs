@@ -336,6 +336,25 @@ fn take_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize) -> Option
     Some(receiver)
 }
 
+// The high bit belongs to the late-static-scope entry sharing this packed
+// sidecar. Magic-call metadata uses the next disjoint non-pointer tag.
+const PENDING_MAGIC_CALL_TAG: usize = 1usize << (usize::BITS - 2);
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn push_pending_magic_call(eg: &mut ExecutorGlobals, call_key: usize, method: Value) {
+    debug_assert_eq!(call_key & PENDING_MAGIC_CALL_TAG, 0);
+    push_pending_invoke_this(eg, call_key | PENDING_MAGIC_CALL_TAG, method);
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn take_pending_magic_call(eg: &mut ExecutorGlobals, call_key: usize) -> Option<Value> {
+    take_pending_invoke_this(eg, call_key | PENDING_MAGIC_CALL_TAG)
+}
+
 /// Initialize the sparse argument ABI on the first named send. Keeping this
 /// work out of `op_send_named` prevents a correctness-only cold path from
 /// displacing the quick-dispatch working set.
@@ -407,6 +426,7 @@ unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteDat
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
         eg.discard_generic_member_call(call_key);
         let _ = take_pending_invoke_this(eg, call_key);
+        let _ = take_pending_magic_call(eg, call_key);
         cleanup_frame_slots(call);
         pop_call_storage(eg, call);
         call = next;
@@ -437,6 +457,7 @@ unsafe fn cleanup_call_and_throw<'a>(
         eg.discard_pending_reified_binding_scopes(frame as usize);
     }
     let _ = take_pending_invoke_this(eg, call_key);
+    let _ = take_pending_magic_call(eg, call_key);
     (*frame).call = (*call).call;
     cleanup_frame_slots(call);
     pop_call_storage(eg, call);

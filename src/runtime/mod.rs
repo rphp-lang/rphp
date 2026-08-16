@@ -183,6 +183,7 @@ pub(crate) struct AutoloadEntry {
     pub(crate) use_vars: Vec<Value>,
     pub(crate) called_scope_class_id: u32,
     pub(crate) bound_this: Option<Value>,
+    pub(crate) is_magic_call: bool,
 }
 
 /// Cold request-local SPL state. Executors that never register an autoloader

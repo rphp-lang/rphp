@@ -235,6 +235,7 @@ fn resolved_entry(callback: Value, resolved: ResolvedCallback) -> AutoloadEntry 
         use_vars: resolved.use_vars,
         called_scope_class_id: resolved.called_scope_class_id,
         bound_this: resolved.bound_this,
+        is_magic_call: resolved.is_magic_call,
     }
 }
 
@@ -249,6 +250,7 @@ fn invoke_entry(
         use_vars: entry.use_vars.clone(),
         called_scope_class_id: entry.called_scope_class_id,
         bound_this: entry.bound_this.clone(),
+        is_magic_call: entry.is_magic_call,
     };
     let _ = call_resolved_with_values(eg, &resolved, std::slice::from_ref(class_name))?;
     Ok(())

@@ -2206,6 +2206,46 @@ fn too_many_internal_arguments_error(
 
 #[cold]
 #[inline(never)]
+fn pack_pending_magic_call(
+    call: *mut ExecuteData,
+    method: Value,
+    pending_named: &mut Option<Vec<(String, Value)>>,
+) {
+    // SAFETY: the magic initializer reserves the two declared public slots
+    // plus the complete original send prefix in this live pending frame.
+    unsafe {
+        let original_num_args = (*call).num_args;
+        let mut arguments = PhpArray::with_packed_capacity(original_num_args as usize);
+        for index in 0..original_num_args {
+            arguments.push((*call).cv(index + 1).clone());
+        }
+        if let Some(named) = pending_named.take() {
+            for (name, value) in named {
+                arguments.set_str(&name, value);
+            }
+        }
+
+        let method_slot = (*call).cv_mut(1) as *mut Value;
+        if original_num_args == 0 {
+            frame_slot_init(call, method_slot, method);
+        } else {
+            frame_slot_set(call, method_slot, method);
+        }
+        let arguments_slot = (*call).cv_mut(2) as *mut Value;
+        if original_num_args < 2 {
+            frame_slot_init(call, arguments_slot, Value::array(arguments));
+        } else {
+            frame_slot_set(call, arguments_slot, Value::array(arguments));
+        }
+        for index in 2..original_num_args {
+            frame_slot_set(call, (*call).cv_mut(index + 1), Value::undef());
+        }
+        (*call).num_args = 2;
+    }
+}
+
+#[cold]
+#[inline(never)]
 fn execute_full_call<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -2217,16 +2257,21 @@ fn execute_full_call<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     stats::inc_do_fcall_full();
 
-    let return_value_ptr = if opline.result_type != OpType::Unused {
-        unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) }
-    } else {
-        std::ptr::null_mut()
+    // SAFETY: both frames are live and the optional result operand names a
+    // compiler-owned slot in the caller.
+    let return_value_ptr = unsafe {
+        let result = if opline.result_type != OpType::Unused {
+            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+        } else {
+            std::ptr::null_mut()
+        };
+        (*call).return_value = result;
+        result
     };
-    unsafe { (*call).return_value = return_value_ptr };
 
     // Extract named variadic args eagerly so no error path can leak them.
     let call_key = call as usize;
-    let pending_named = eg.pending_named_variadic.remove(&call_key);
+    let mut pending_named = eg.pending_named_variadic.remove(&call_key);
     let pending_closure_captures = eg.pending_closure_captures.remove(&call_key);
 
     // SendVal filled CV 0..N-1 for a dynamically resolved invokable object.
@@ -2265,6 +2310,10 @@ fn execute_full_call<'a>(
         }
     }
 
+    let pending_magic_method = take_pending_magic_call(eg, call_key);
+    if let Some(method) = pending_magic_method {
+        pack_pending_magic_call(call, method, &mut pending_named);
+    }
     // SAFETY: `call` is the live compiler-sized frame linked from `frame`; its
     // registered function descriptor remains valid for the synchronous call.
     let (func_common, num_args) = unsafe { (&*(*call).func, (*call).num_args) };

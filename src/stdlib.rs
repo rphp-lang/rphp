@@ -19,7 +19,7 @@ use crate::compiler::{
 };
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
-use crate::value::{ArrayKey, PhpArray, Value, ValueType};
+use crate::value::{ArrayKey, PhpArray, PhpClosure, Value, ValueType};
 use crate::vm::execute::{
     ScalarLongSortOrder, VmError, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
@@ -8738,6 +8738,7 @@ pub(crate) fn call_object_public_method(
         use_vars: vec![],
         called_scope_class_id: class_id,
         bound_this: None,
+        is_magic_call: false,
     };
     call_resolved_with_values(eg, &resolved, args).map(Some)
 }
@@ -8757,6 +8758,9 @@ pub(crate) struct ResolvedCallback {
     pub(crate) called_scope_class_id: u32,
     /// Object bound as `$this`; it is frame metadata, not a public argument.
     pub(crate) bound_this: Option<Value>,
+    /// Invocation must pack the requested method name and public arguments for
+    /// a resolved `__call` or `__callStatic` trampoline.
+    pub(crate) is_magic_call: bool,
 }
 
 impl ResolvedCallback {
@@ -8855,6 +8859,43 @@ fn get_calling_scope_class<'a>(
     eg.declaring_class_of(func)
 }
 
+fn resolve_magic_callback(
+    eg: &ExecutorGlobals,
+    class_name: &str,
+    requested_method: &str,
+    magic_method: &str,
+    receiver: Option<&Value>,
+) -> Option<ResolvedCallback> {
+    let (visibility, is_static, func_ptr, _) =
+        find_method_in_class_hierarchy(eg, class_name, magic_method)?;
+    if visibility != Visibility::Public || (receiver.is_none() && !is_static) {
+        return None;
+    }
+    Some(ResolvedCallback {
+        func_ptr,
+        prepend_args: vec![receiver.cloned().unwrap_or_else(Value::null)],
+        use_vars: vec![Value::string(requested_method)],
+        called_scope_class_id: eg.find_class(class_name)?.class_id,
+        bound_this: None,
+        is_magic_call: true,
+    })
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn closure_is_magic_call(closure: &PhpClosure, eg: &ExecutorGlobals) -> bool {
+    if closure.captures.len() != 1 || closure.captures[0].as_str().is_none() {
+        return false;
+    }
+    let Some(class) = eg.declaring_class_of(closure.func) else {
+        return false;
+    };
+    ["__call", "__callStatic"].into_iter().any(|method| {
+        eg.find_function(&format!("{class}::{method}"))
+            .is_some_and(|function| std::ptr::eq(function, closure.func))
+    })
+}
+
 /// Resolve a callback value to a function pointer.
 /// Supports: string (function name), array [func_name, use_vars...] (closure),
 /// array [object, "method"], and objects with __invoke.
@@ -8877,6 +8918,7 @@ fn resolve_callback(
                 use_vars: closure.clone_captures(),
                 called_scope_class_id: closure.called_scope_class_id,
                 bound_this: closure.bound_this.clone(),
+                is_magic_call: closure_is_magic_call(closure, eg),
             };
             let prepend_args = if resolved.signature().this_offset == 1 {
                 vec![closure.bound_this.clone().unwrap_or_else(Value::null)]
@@ -8892,10 +8934,25 @@ fn resolve_callback(
             let name = val.as_str().unwrap();
             if let Some((class_name, method_name)) = name.rsplit_once("::") {
                 let class_name = class_name.trim_start_matches('\\');
-                let (visibility, is_static, func_ptr, _) =
-                    find_method_in_class_hierarchy(eg, class_name, method_name)?;
+                let Some((visibility, is_static, func_ptr, _)) =
+                    find_method_in_class_hierarchy(eg, class_name, method_name)
+                else {
+                    return resolve_magic_callback(
+                        eg,
+                        class_name,
+                        method_name,
+                        "__callStatic",
+                        None,
+                    );
+                };
                 if visibility != Visibility::Public || !is_static {
-                    return None;
+                    return resolve_magic_callback(
+                        eg,
+                        class_name,
+                        method_name,
+                        "__callStatic",
+                        None,
+                    );
                 }
                 return Some(ResolvedCallback {
                     func_ptr,
@@ -8903,6 +8960,7 @@ fn resolve_callback(
                     use_vars: vec![],
                     called_scope_class_id: eg.find_class(class_name)?.class_id,
                     bound_this: None,
+                    is_magic_call: false,
                 });
             }
             eg.find_function(name).map(|ptr| ResolvedCallback {
@@ -8911,6 +8969,7 @@ fn resolve_callback(
                 use_vars: vec![],
                 called_scope_class_id: 0,
                 bound_this: None,
+                is_magic_call: false,
             })
         }
         ValueType::Array => {
@@ -8930,6 +8989,7 @@ fn resolve_callback(
                         use_vars,
                         called_scope_class_id: 0,
                         bound_this: None,
+                        is_magic_call: false,
                     });
                 }
             }
@@ -8944,19 +9004,35 @@ fn resolve_callback(
             if let Some(obj) = obj_val.as_object() {
                 // Instance method: [$obj, "method"]
                 // Public: always callable. Private/protected: only from declaring scope.
-                let class_name = obj.class_name.as_ref();
+                let class_name = obj.class_name.to_string();
                 let called_scope_class_id = obj.class_id;
-                let (visibility, _, func_ptr, declaring) =
-                    find_method_in_class_hierarchy(eg, class_name, method_name)?;
+                drop(obj);
+                let Some((visibility, _, func_ptr, declaring)) =
+                    find_method_in_class_hierarchy(eg, &class_name, method_name)
+                else {
+                    return resolve_magic_callback(
+                        eg,
+                        &class_name,
+                        method_name,
+                        "__call",
+                        Some(obj_val),
+                    );
+                };
                 match visibility {
                     Visibility::Public => {}
                     Visibility::Protected => {
                         // Protected: caller must be in the same hierarchy
                         let allowed = caller_class.map_or(false, |cc| {
-                            eg.class_is_a(class_name, cc) || eg.class_is_a(cc, class_name)
+                            eg.class_is_a(&class_name, cc) || eg.class_is_a(cc, &class_name)
                         });
                         if !allowed {
-                            return None;
+                            return resolve_magic_callback(
+                                eg,
+                                &class_name,
+                                method_name,
+                                "__call",
+                                Some(obj_val),
+                            );
                         }
                     }
                     Visibility::Private => {
@@ -8964,24 +9040,45 @@ fn resolve_callback(
                         let allowed =
                             caller_class.map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
                         if !allowed {
-                            return None;
+                            return resolve_magic_callback(
+                                eg,
+                                &class_name,
+                                method_name,
+                                "__call",
+                                Some(obj_val),
+                            );
                         }
                     }
                 }
-                drop(obj);
                 Some(ResolvedCallback {
                     func_ptr,
                     prepend_args: vec![obj_val.clone()],
                     use_vars: vec![],
                     called_scope_class_id,
                     bound_this: None,
+                    is_magic_call: false,
                 })
             } else if let Some(class_str) = obj_val.as_str() {
                 // Static method: ["ClassName", "method"] — must be static; visibility depends on scope
-                let (visibility, is_static, func_ptr, declaring) =
-                    find_method_in_class_hierarchy(eg, class_str, method_name)?;
+                let Some((visibility, is_static, func_ptr, declaring)) =
+                    find_method_in_class_hierarchy(eg, class_str, method_name)
+                else {
+                    return resolve_magic_callback(
+                        eg,
+                        class_str,
+                        method_name,
+                        "__callStatic",
+                        None,
+                    );
+                };
                 if !is_static {
-                    return None;
+                    return resolve_magic_callback(
+                        eg,
+                        class_str,
+                        method_name,
+                        "__callStatic",
+                        None,
+                    );
                 }
                 match visibility {
                     Visibility::Public => {}
@@ -8990,14 +9087,26 @@ fn resolve_callback(
                             eg.class_is_a(class_str, cc) || eg.class_is_a(cc, class_str)
                         });
                         if !allowed {
-                            return None;
+                            return resolve_magic_callback(
+                                eg,
+                                class_str,
+                                method_name,
+                                "__callStatic",
+                                None,
+                            );
                         }
                     }
                     Visibility::Private => {
                         let allowed =
                             caller_class.map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
                         if !allowed {
-                            return None;
+                            return resolve_magic_callback(
+                                eg,
+                                class_str,
+                                method_name,
+                                "__callStatic",
+                                None,
+                            );
                         }
                     }
                 }
@@ -9007,6 +9116,7 @@ fn resolve_callback(
                     use_vars: vec![],
                     called_scope_class_id: eg.find_class(class_str)?.class_id,
                     bound_this: None,
+                    is_magic_call: false,
                 })
             } else {
                 None
@@ -9023,6 +9133,7 @@ fn resolve_callback(
                 use_vars: vec![],
                 called_scope_class_id: 0,
                 bound_this: None,
+                is_magic_call: false,
             })
         }
         _ => None,
@@ -9183,6 +9294,7 @@ fn resolve_cached_string_callback(
         use_vars: vec![],
         called_scope_class_id: 0,
         bound_this: None,
+        is_magic_call: false,
     })
 }
 
@@ -9320,6 +9432,24 @@ pub(super) fn resolve_callback_at_callsite(
     resolve_callback_with_cache(val, eg, caller_class, callback_cache_slot(ed))
 }
 
+#[cold]
+#[inline(never)]
+fn call_magic_resolved_with_array(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    arguments: PhpArray,
+) -> Result<Value, VmError> {
+    let method = resolved
+        .use_vars
+        .first()
+        .cloned()
+        .unwrap_or_else(Value::null);
+    let mut target = resolved.clone();
+    target.is_magic_call = false;
+    target.use_vars.clear();
+    call_resolved_with_values(eg, &target, &[method, Value::array(arguments)])
+}
+
 /// Invoke a resolved callback with positional values from a PHP array.
 /// Plain functions over packed arrays use the backing Value slice directly;
 /// receivers, captures and hash arrays keep the general segmented iterator.
@@ -9329,6 +9459,9 @@ fn call_resolved_with_array(
     resolved: &ResolvedCallback,
     args: &PhpArray,
 ) -> Result<Value, VmError> {
+    if resolved.is_magic_call {
+        return call_magic_resolved_with_array(eg, resolved, args.clone());
+    }
     if let Some(values) = args.packed_values() {
         return call_resolved_with_values(eg, resolved, values);
     }
@@ -9356,6 +9489,16 @@ pub(super) fn call_resolved_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
+    if resolved.is_magic_call {
+        let values: Vec<_> = args.collect();
+        let start = resolved.prepend_args.len();
+        let end = values.len().saturating_sub(resolved.use_vars.len());
+        let mut arguments = PhpArray::with_packed_capacity(end.saturating_sub(start));
+        for value in &values[start..end] {
+            arguments.push((*value).clone());
+        }
+        return call_magic_resolved_with_array(eg, resolved, arguments);
+    }
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
     }
@@ -9384,6 +9527,16 @@ pub(super) fn call_resolved_owned_iter<I>(
 where
     I: Iterator<Item = Value>,
 {
+    if resolved.is_magic_call {
+        let mut values: Vec<_> = args.collect();
+        let start = resolved.prepend_args.len();
+        let end = values.len().saturating_sub(resolved.use_vars.len());
+        let mut arguments = PhpArray::with_packed_capacity(end.saturating_sub(start));
+        for value in values.drain(start..end) {
+            arguments.push(value);
+        }
+        return call_magic_resolved_with_array(eg, resolved, arguments);
+    }
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
     }
@@ -9412,6 +9565,20 @@ fn call_resolved_owned_iter_with_named<I>(
 where
     I: Iterator<Item = Value>,
 {
+    if resolved.is_magic_call {
+        let mut values: Vec<_> = args.collect();
+        let start = resolved.prepend_args.len();
+        let end = values.len().saturating_sub(resolved.use_vars.len());
+        let mut arguments =
+            PhpArray::with_packed_capacity(end.saturating_sub(start) + named_variadic.len());
+        for value in values.drain(start..end) {
+            arguments.push(value);
+        }
+        for (name, value) in named_variadic {
+            arguments.set_str(&name, value);
+        }
+        return call_magic_resolved_with_array(eg, resolved, arguments);
+    }
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
     }
@@ -9437,6 +9604,18 @@ pub(super) fn call_resolved_owned_iter_readback_arg0<I>(
 where
     I: Iterator<Item = Value>,
 {
+    if resolved.is_magic_call {
+        let mut values: Vec<_> = args.collect();
+        let start = resolved.prepend_args.len();
+        let end = values.len().saturating_sub(resolved.use_vars.len());
+        let readback = values.get(start).cloned().unwrap_or_else(Value::undef);
+        let mut packed = PhpArray::with_packed_capacity(end.saturating_sub(start));
+        for value in values.drain(start..end) {
+            packed.push(value);
+        }
+        let result = call_magic_resolved_with_array(eg, resolved, packed)?;
+        return Ok((result, readback));
+    }
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok((Value::null(), Value::null()));
     }
@@ -9460,6 +9639,13 @@ pub(crate) fn call_resolved_with_values(
     resolved: &ResolvedCallback,
     args: &[Value],
 ) -> Result<Value, VmError> {
+    if resolved.is_magic_call {
+        let mut arguments = PhpArray::with_packed_capacity(args.len());
+        for value in args {
+            arguments.push(value.clone());
+        }
+        return call_magic_resolved_with_array(eg, resolved, arguments);
+    }
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
     }
@@ -9492,6 +9678,9 @@ fn call_resolved_with_php_array(
     resolved: ResolvedCallback,
     args: &PhpArray,
 ) -> Result<Value, VmError> {
+    if resolved.is_magic_call {
+        return call_magic_resolved_with_array(eg, &resolved, args.clone());
+    }
     if !args.has_string_keys() {
         return call_resolved_with_array(eg, &resolved, args);
     }
