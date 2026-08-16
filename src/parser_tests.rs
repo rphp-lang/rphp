@@ -326,6 +326,36 @@ fn nullsafe_forbidden_contexts_are_deferred_compile_errors() {
 }
 
 #[test]
+fn braced_dynamic_nullsafe_property_retains_its_short_circuit_flag() {
+    let tokens = Lexer::new("<?php $object?->{$property};")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        statements.as_slice(),
+        [Stmt::ExprStmt(Expr::DynamicPropertyAccess {
+            object,
+            property,
+            nullsafe: true,
+            line: 1,
+        })]
+            if matches!(object.as_ref(), Expr::Variable { name, .. } if name == "object")
+                && matches!(property.as_ref(), Expr::Variable { name, .. } if name == "property")
+    ));
+}
+
+#[test]
+fn braced_dynamic_nullsafe_method_remains_an_explicit_boundary() {
+    let tokens = Lexer::new("<?php $object?->{$method}();")
+        .tokenize()
+        .unwrap();
+    assert_eq!(
+        Parser::new(tokens).parse().unwrap_err(),
+        "Dynamic nullsafe method calls are not supported yet"
+    );
+}
+
+#[test]
 fn positional_source_argument_after_unpack_is_a_compile_time_error() {
     let tokens = Lexer::new("<?php dispatch(...$batch, 7);")
         .tokenize()

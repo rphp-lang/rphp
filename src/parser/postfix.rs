@@ -396,15 +396,15 @@ impl Parser {
                     let nullsafe = matches!(self.peek(), Token::NullSafe);
                     self.advance();
                     if self.peek() == Token::LBrace {
-                        if nullsafe {
-                            return Err(
-                                "Dynamic nullsafe method calls are not supported yet".into()
-                            );
-                        }
                         self.advance();
                         let member = self.parse_expr()?;
                         self.expect(&Token::RBrace)?;
                         if matches!(self.peek(), Token::LParen(_)) {
+                            if nullsafe {
+                                return Err(
+                                    "Dynamic nullsafe method calls are not supported yet".into()
+                                );
+                            }
                             let line = self.expect_lparen()?;
                             let args = self.parse_call_args()?;
                             expr = Expr::DynamicCall {
@@ -432,7 +432,7 @@ impl Parser {
                             expr = Expr::DynamicPropertyAccess {
                                 object: Box::new(expr),
                                 property: Box::new(member),
-                                nullsafe: false,
+                                nullsafe,
                                 line: expression_line.unwrap_or(0),
                             };
                         }
