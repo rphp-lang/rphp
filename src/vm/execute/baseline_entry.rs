@@ -1,6 +1,7 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Value, VmError> {
+    crate::value::begin_object_handle_request();
     let func_ptr = &main_func.common as *const FunctionCommon;
     let frame = eg.vm_stack.push_call_frame(
         func_ptr,
@@ -17,7 +18,9 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     }
     eg.current_execute_data.set(frame);
 
-    execute_ex(eg, frame)?;
+    let execution = execute_ex(eg, frame);
+    crate::value::end_object_handle_request();
+    execution?;
 
     #[cfg(debug_assertions)]
     super::hot::dump_bail_stats();

@@ -89,7 +89,7 @@ fn op_clone_obj<'a>(
             PhpObject {
                 class_name: obj.class_name.clone(),
                 class_id: obj.class_id,
-                destructor_ran: false,
+                lifecycle: 0,
                 property_layout: obj.property_layout.clone(),
                 property_values: obj.property_values.clone(),
                 dynamic_properties: obj.dynamic_properties.clone(),

@@ -694,10 +694,10 @@ pub struct PhpObject {
     pub class_name: Rc<str>,
     /// Stable numeric class ID — matches ClassDef.class_id. Used for inline cache keying.
     pub class_id: u32,
-    /// A PHP object destructor runs at most once for this allocation. Keeping
-    /// the bit on the object avoids stale raw-address identities when the
-    /// allocator reuses storage for a later object in the same request.
-    pub(crate) destructor_ran: bool,
+    /// Low bits hold the request-local Zend object-store handle; the high bit
+    /// records that this allocation has entered its destructor. Packing both
+    /// lifecycle values here preserves the 72-byte PhpObject layout.
+    pub(crate) lifecycle: u32,
     /// Shared name → slot mapping owned by the class definition.
     pub property_layout: Rc<ObjectLayout>,
     /// Declared properties in compact numeric slots.
@@ -725,6 +725,102 @@ thread_local! {
     /// one slot per width still covers the steady state after two allocations.
     static DECLARED_PROPERTY_STORAGE_POOL: RefCell<[Option<Vec<Value>>; 6]> =
         RefCell::new(std::array::from_fn(|_| None));
+    /// Zend exposes a request-local object-store handle in var_dump(),
+    /// spl_object_id() and related diagnostics. Keep that compatibility state
+    /// beside the Rc allocation rather than enlarging every PhpObject.
+    static OBJECT_HANDLES: std::cell::UnsafeCell<ObjectHandleState> =
+        std::cell::UnsafeCell::new(ObjectHandleState::default());
+}
+
+#[derive(Default)]
+struct ObjectHandleState {
+    next: u32,
+    released: Vec<u32>,
+    before_request: Vec<usize>,
+    stale: Vec<usize>,
+    in_request: bool,
+}
+
+impl ObjectHandleState {
+    fn allocate(&mut self) -> u32 {
+        let handle = self.released.pop().unwrap_or_else(|| {
+            let handle = if self.next == 0 { 1 } else { self.next };
+            self.next = handle
+                .checked_add(1)
+                .expect("PHP object handle space exhausted");
+            handle
+        });
+        assert!(
+            handle <= OBJECT_HANDLE_MASK,
+            "PHP object handle space exhausted"
+        );
+        handle
+    }
+
+    fn register_identity(&mut self, identity: usize) {
+        if !self.in_request {
+            self.before_request.push(identity);
+        }
+    }
+
+    fn release(&mut self, identity: usize, handle: u32) {
+        if let Some(position) = self
+            .stale
+            .iter()
+            .position(|candidate| *candidate == identity)
+        {
+            self.stale.swap_remove(position);
+            return;
+        }
+        if let Some(position) = self
+            .before_request
+            .iter()
+            .position(|candidate| *candidate == identity)
+        {
+            self.before_request.swap_remove(position);
+        }
+        self.released.push(handle);
+    }
+}
+
+const OBJECT_DESTRUCTOR_RAN: u32 = 1 << 31;
+const OBJECT_HANDLE_MASK: u32 = !OBJECT_DESTRUCTOR_RAN;
+
+fn with_object_handles<T>(callback: impl FnOnce(&mut ObjectHandleState) -> T) -> T {
+    OBJECT_HANDLES.with(|state| {
+        // This state is thread-local, and none of its operations invokes PHP
+        // code or otherwise re-enters object allocation/drop.
+        callback(unsafe { &mut *state.get() })
+    })
+}
+
+fn allocate_object_handle() -> (u32, bool) {
+    with_object_handles(|state| (state.allocate(), state.in_request))
+}
+
+fn register_object_identity(identity: usize) {
+    with_object_handles(|state| state.register_identity(identity));
+}
+
+fn release_object_handle(identity: usize, handle: u32) {
+    with_object_handles(|state| state.release(identity, handle));
+}
+
+/// Start a fresh request numbering sequence once every owner from the prior
+/// request has gone away. A still-live object means the caller intentionally
+/// reuses one ExecutorGlobals and its request-local state.
+pub(crate) fn begin_object_handle_request() {
+    with_object_handles(|state| {
+        let before_request = std::mem::take(&mut state.before_request);
+        state.stale.extend(before_request);
+        state.next = 1;
+        state.released.clear();
+        state.in_request = true;
+    });
+}
+
+pub(crate) fn end_object_handle_request() {
+    with_object_handles(|state| state.in_request = false);
 }
 
 const MAX_POOLED_DECLARED_PROPERTIES: usize = 5;
@@ -767,7 +863,7 @@ impl PhpObject {
         Self {
             class_name,
             class_id,
-            destructor_ran: false,
+            lifecycle: 0,
             property_layout,
             property_values,
             dynamic_properties: None,
@@ -793,7 +889,7 @@ impl PhpObject {
         Self {
             class_name: Rc::from(class_name),
             class_id,
-            destructor_ran: false,
+            lifecycle: 0,
             property_layout: Rc::new(ObjectLayout::empty()),
             property_values: Vec::new(),
             dynamic_properties: if properties.is_empty() {
@@ -819,7 +915,7 @@ impl PhpObject {
         Self {
             class_name,
             class_id: 0,
-            destructor_ran: false,
+            lifecycle: 0,
             property_layout,
             property_values: Vec::new(),
             dynamic_properties: if properties.is_empty() {
@@ -3970,13 +4066,18 @@ impl Value {
     /// Create an object value from a PhpObject (reference-counted).
     /// Stores Rc pointer directly — no Box wrapper. Clone = Rc increment, Drop = Rc decrement.
     #[inline]
-    pub fn object(obj: PhpObject) -> Self {
+    pub fn object(mut obj: PhpObject) -> Self {
         let is_declared = obj.class_id != 0;
+        let (handle, in_request) = allocate_object_handle();
+        obj.lifecycle = handle;
         let rc = Rc::new(RefCell::new(obj));
         if is_declared {
             stats::inc_declared_object_owner_allocation();
         }
         let ptr = Rc::into_raw(rc) as *mut u8;
+        if !in_request {
+            register_object_identity(ptr as usize);
+        }
         Self {
             data: ValueData { ptr },
             type_info: ValueType::Object as u32,
@@ -4104,6 +4205,13 @@ impl Value {
         })
     }
 
+    /// Request-local object-store handle used by PHP-visible diagnostics.
+    #[inline]
+    pub fn object_handle(&self) -> Option<u32> {
+        self.as_object()
+            .map(|object| object.lifecycle & OBJECT_HANDLE_MASK)
+    }
+
     /// Mark an Object allocation as having entered its destructor. Returns
     /// false when the same allocation was already destructed.
     #[inline]
@@ -4111,10 +4219,10 @@ impl Value {
         let Some(mut object) = self.as_object_mut() else {
             return false;
         };
-        if object.destructor_ran {
+        if object.lifecycle & OBJECT_DESTRUCTOR_RAN != 0 {
             return false;
         }
-        object.destructor_ran = true;
+        object.lifecycle |= OBJECT_DESTRUCTOR_RAN;
         true
     }
 
@@ -5041,7 +5149,15 @@ impl Drop for Value {
             }
             ValueType::Object => {
                 // Drop = Rc decrement. Frees PhpObject when refcount reaches 0.
-                unsafe { Rc::decrement_strong_count(self.data.ptr as *const RefCell<PhpObject>) };
+                unsafe {
+                    let pointer = self.data.ptr as *const RefCell<PhpObject>;
+                    let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
+                    if Rc::strong_count(&owner) == 1 {
+                        let handle = (*(*pointer).as_ptr()).lifecycle & OBJECT_HANDLE_MASK;
+                        release_object_handle(pointer as usize, handle);
+                    }
+                    Rc::decrement_strong_count(pointer);
+                };
             }
             #[cfg(feature = "resource-lifetime")]
             ValueType::Resource => {

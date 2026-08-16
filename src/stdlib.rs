@@ -7722,8 +7722,12 @@ fn var_dump_value_inner(
                     property_count += usize::from(value.value_type() != ValueType::Undef);
                 });
                 let mut out = format!(
-                    "{}object({})#1 ({}) {{\n",
-                    prefix, object.class_name, property_count
+                    "{}object({})#{} ({}) {{\n",
+                    prefix,
+                    object.class_name,
+                    val.object_handle()
+                        .expect("live object must retain its request-local handle"),
+                    property_count
                 );
                 if let Some(class) = class {
                     for slot in var_dump_property_slots(eg, object.class_id) {

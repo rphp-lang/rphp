@@ -7,6 +7,25 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 convergence checkpoint, based on `7300c28`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,542 passes, 2,488 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds 20 exact passes to the retained 1,522-pass checkpoint without losing a
+previous pass. Request-local object-store handles now retain alias identity and
+Zend-compatible recycling in `var_dump()`. Compiler scratch values release
+objects at their logical PHP lifetime boundary, and re-entrant magic property
+access retains its receiver across user code that rebinds the originating
+variable. Original tests cover shared and recycled handles; the focused PHPT
+regression set, five Cargo feature configurations, all-target check, unsafe
+policy, Composer S0, Symfony S1 and warmed-kernel S2 gates pass on AMD64.
+
+This correctness checkpoint deliberately leaves object-allocation throughput
+for the execution/performance workstream: a one-million-allocation release
+control measured 0.15 seconds for the candidate versus 0.09 seconds for the
+preceding binary on the same AMD64 host. The PHP-visible lifecycle contract is
+the optimization boundary; a later fast path must preserve handle identity,
+recycling, destructor order and request reset behavior.
+
 ## Official PHP 8.2 php-src PHPT contract baseline
 
 The public contract baseline runs the unmodified `Zend/tests` and `tests/lang`
