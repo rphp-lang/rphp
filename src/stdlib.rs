@@ -1480,6 +1480,69 @@ fn fn_throwable_construct(
     Ok(())
 }
 
+/// Internal handler for ErrorException::__construct(). The object's creation
+/// site has already initialized file/line before this method runs. Nullable
+/// overrides only replace that origin when PHP's constructor contract says so.
+fn fn_error_exception_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let this_val = arg!(ed, 0);
+    let message = arg_opt!(ed, 1);
+    let code = arg_opt!(ed, 2);
+    let severity = arg_opt!(ed, 3);
+    let filename = arg_opt!(ed, 4);
+    let line = arg_opt!(ed, 5);
+    let previous = arg_opt!(ed, 6);
+    if let Some(mut object) = this_val.as_object_mut() {
+        object.set_property(
+            "message",
+            message.cloned().unwrap_or_else(|| Value::string("")),
+        );
+        object.set_property("code", code.cloned().unwrap_or_else(|| Value::long(0)));
+        object.set_property(
+            "severity",
+            severity.cloned().unwrap_or_else(|| Value::long(1)),
+        );
+
+        if filename.is_some_and(|value| value.value_type() != ValueType::Null) {
+            object.set_property("file", filename.cloned().unwrap());
+            object.set_property(
+                "line",
+                line.filter(|value| value.value_type() != ValueType::Null)
+                    .cloned()
+                    .unwrap_or_else(|| Value::long(0)),
+            );
+        } else if let Some(line) = line.filter(|value| value.value_type() != ValueType::Null) {
+            object.set_property("line", line.clone());
+        }
+
+        let previous_key = eg
+            .find_property_visibility(&object.class_name, "previous")
+            .map_or_else(
+                || "previous".to_string(),
+                |(_, declaring_class)| {
+                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
+                },
+            );
+        object.set_property(&previous_key, previous.cloned().unwrap_or_else(Value::null));
+    }
+    Ok(())
+}
+
+fn fn_error_exception_get_severity(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let severity = arg!(ed, 0)
+        .as_object()
+        .and_then(|object| object.get_property("severity").cloned())
+        .unwrap_or_else(|| Value::long(1));
+    ret!(rv, severity);
+}
+
 fn fn_throwable_get_code(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -2718,6 +2781,36 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         .unwrap();
     }
 
+    eg.register_class(ClassDef {
+        name: "ErrorException".to_string(),
+        source_file: None,
+        parent: Some("Exception".to_string()),
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        properties: vec![PropertyDefinition::new(
+            "severity".to_string(),
+            Some(Value::long(1)),
+            Visibility::Protected,
+            "ErrorException".to_string(),
+        )],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
+
     // Error implements Throwable
     eg.register_class(ClassDef {
         name: "Error".to_string(),
@@ -2939,6 +3032,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         .into_iter()
         .chain(BUILTIN_EXCEPTION_SUBCLASSES.iter().map(|&(name, _)| name))
         .chain([
+            "ErrorException",
             "Error",
             "ArithmeticError",
             "DivisionByZeroError",
@@ -2950,16 +3044,33 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         ]);
     for class in throwable_classes {
         // All explicit constructor parameters are optional.
-        reg_method!(
-            class,
-            "__construct",
-            fn_throwable_construct,
-            4,
-            0,
-            "message",
-            "code",
-            "previous"
-        );
+        if class == "ErrorException" {
+            reg_method!(
+                class,
+                "__construct",
+                fn_error_exception_construct,
+                7,
+                0,
+                "message",
+                "code",
+                "severity",
+                "filename",
+                "line",
+                "previous"
+            );
+            reg_method!(class, "getseverity", fn_error_exception_get_severity, 1, 0);
+        } else {
+            reg_method!(
+                class,
+                "__construct",
+                fn_throwable_construct,
+                4,
+                0,
+                "message",
+                "code",
+                "previous"
+            );
+        }
         // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
         reg_method!(class, "getcode", fn_throwable_get_code, 1, 0);

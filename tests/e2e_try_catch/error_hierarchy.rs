@@ -166,3 +166,44 @@ fn user_exception_constructor_can_forward_to_internal_parent_constructor() {
         "missing:service:7"
     );
 }
+
+#[test]
+fn error_exception_constructor_preserves_or_overrides_creation_origin() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+$previous = new Exception('previous');
+$default = new ErrorException('default');
+$lineOnly = new ErrorException('line', 2, 8, null, 123);
+$fileOnly = new ErrorException('file', 3, 4, 'source.php', null, $previous);
+echo $default->getMessage(), ':', $default->getSeverity(), ':', $default->getLine(), '|';
+echo $lineOnly->getFile() === __FILE__ ? 'same' : 'different', ':', $lineOnly->getLine(), '|';
+echo $fileOnly->getFile(), ':', $fileOnly->getLine(), ':', $fileOnly->getCode(), ':';
+echo $fileOnly->getPrevious() === $previous ? 'same' : 'different';
+"#,
+            "/virtual/error-exception.php",
+            "/virtual",
+        ),
+        "default:1:3|same:123|source.php:0:3:same"
+    );
+}
+
+#[test]
+fn error_exception_constructor_supports_named_metadata_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$error = new ErrorException(
+    message: 'named',
+    code: 9,
+    severity: 16,
+    filename: 'named.php',
+    line: 27,
+);
+echo $error->getMessage(), ':', $error->getCode(), ':', $error->getSeverity(), ':';
+echo $error->getFile(), ':', $error->getLine();
+"#,
+        ),
+        "named:9:16:named.php:27"
+    );
+}
