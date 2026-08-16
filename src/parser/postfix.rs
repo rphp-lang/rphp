@@ -585,7 +585,7 @@ impl Parser {
                 Token::PlusPlus | Token::MinusMinus => {
                     let increment = self.peek() == Token::PlusPlus;
                     self.advance();
-                    if let Some(line) = Self::nullsafe_write_line(&expr) {
+                    if let Some(line) = Self::nullsafe_chain_line(&expr) {
                         expr = self.nullsafe_write_error(line);
                         continue;
                     }

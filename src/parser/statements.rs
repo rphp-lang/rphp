@@ -479,6 +479,9 @@ impl Parser {
                                     ),
                                 ));
                             }
+                            if let Some(line) = Self::nullsafe_chain_line(&target) {
+                                return Ok(Stmt::ExprStmt(self.nullsafe_reference_error(line)));
+                            }
                             return Ok(Stmt::ExprStmt(Expr::AssignReference {
                                 var: var_name,
                                 target: Box::new(target),
@@ -901,6 +904,8 @@ impl Parser {
                 }
                 if let Expr::Globals { line } = expr {
                     expr = self.globals_modification_error(line);
+                } else if let Some(line) = Self::nullsafe_chain_line(&expr) {
+                    expr = self.nullsafe_write_error(line);
                 }
                 targets.push(expr);
                 while self.peek() == Token::Comma {
@@ -911,6 +916,8 @@ impl Parser {
                     }
                     if let Expr::Globals { line } = expr {
                         expr = self.globals_modification_error(line);
+                    } else if let Some(line) = Self::nullsafe_chain_line(&expr) {
+                        expr = self.nullsafe_write_error(line);
                     }
                     targets.push(expr);
                 }

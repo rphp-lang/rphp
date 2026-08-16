@@ -297,6 +297,35 @@ fn nullsafe_nested_write_target_is_a_deferred_compile_error() {
 }
 
 #[test]
+fn nullsafe_forbidden_contexts_are_deferred_compile_errors() {
+    for (source, expected) in [
+        (
+            "<?php $ref =& $foo?->bar()->baz;",
+            "Cannot take reference of a nullsafe chain",
+        ),
+        (
+            "<?php unset($foo?->bar->baz);",
+            "Can't use nullsafe operator in write context",
+        ),
+        (
+            "<?php foreach ([1] as $foo?->bar) {}",
+            "Can't use nullsafe operator in write context",
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(
+            matches!(
+                statements.last(),
+                Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                    if message == expected && *line == 1
+            ),
+            "unexpected AST for {source}: {statements:#?}"
+        );
+    }
+}
+
+#[test]
 fn positional_source_argument_after_unpack_is_a_compile_time_error() {
     let tokens = Lexer::new("<?php dispatch(...$batch, 7);")
         .tokenize()

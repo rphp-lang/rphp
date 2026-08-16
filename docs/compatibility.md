@@ -7,22 +7,41 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `1755721`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,574 passes, 2,456 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `7ed185b`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,578 passes, 2,452 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
-adds six exact passes without losing a previous pass or moving another failure
-category: `Zend/tests/nullsafe_operator/004.phpt` through `008.phpt` and
-`nullsafe_operator/020.phpt`. Assignment, compound assignment, pre/post
-increment and null-coalescing assignment now defer nullsafe write-context
-rejection to compilation and report PHP 8.2's fatal message with the source
-filename and line. The check walks ordinary property and array suffixes, so a
-nullsafe operator hidden earlier in the mutable receiver chain cannot escape
-validation; the right-hand expression is parsed but never executed. Original
-parser and E2E regressions cover direct and nested targets. Five Cargo feature
-configurations, all-target and unsafe checks, Composer S0, Symfony S1 and
-warmed-kernel S2 pass on AMD64. Nine release runs of `bench_calls.php` measured
-medians of 0.3415 seconds for the preceding binary and 0.3363 seconds for the
-candidate, with the same computed result.
+adds four exact passes without losing a previous pass or moving another
+failure category: `Zend/tests/nullsafe_operator/009.phpt`, `010.phpt`,
+`022.phpt` and `024.phpt`. Taking a reference to a nullsafe property or method
+chain now fails during compilation with PHP 8.2's dedicated diagnostic;
+`unset()` and nullsafe `foreach` write targets use the write-context fatal.
+One shared receiver-spine check follows nested properties, methods, arrays and
+dynamic static postfixes, including the statement parser's direct reference
+assignment path. Parsing completes, but no target, loop body or referenced
+expression is evaluated. Original parser and E2E regressions cover direct,
+nested and method/static-call boundaries. Five Cargo feature configurations,
+all-target and unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass
+on AMD64. The S3 cold-kernel gate was not rerun because this machine has no
+exact PHP 8.2 oracle. Nine release runs of `bench_calls.php` measured medians
+of 0.3449 seconds for the preceding binary and 0.3385 seconds for the candidate,
+with the same computed result.
+
+The preceding AMD64 nullsafe-write checkpoint, based on `1755721`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,574 passes, 2,456 failures, 77
+skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds six exact passes without losing a previous pass or moving
+another failure category: `Zend/tests/nullsafe_operator/004.phpt` through
+`008.phpt` and `nullsafe_operator/020.phpt`. Assignment, compound assignment,
+pre/post increment and null-coalescing assignment now defer nullsafe
+write-context rejection to compilation and report PHP 8.2's fatal message with
+the source filename and line. The check walks ordinary property and array
+suffixes, so a nullsafe operator hidden earlier in the mutable receiver chain
+cannot escape validation; the right-hand expression is parsed but never
+executed. Original parser and E2E regressions cover direct and nested targets.
+Five Cargo feature configurations, all-target and unsafe checks, Composer S0,
+Symfony S1 and warmed-kernel S2 pass on AMD64. Nine release runs of
+`bench_calls.php` measured medians of 0.3415 seconds for the preceding binary
+and 0.3363 seconds for the candidate, with the same computed result.
 
 The preceding AMD64 nullsafe-static checkpoint, based on `6bf807c`, runs the same
 4,345-case PHP 8.2.33 corpus and records 1,568 passes, 2,462 failures, 77 skips,

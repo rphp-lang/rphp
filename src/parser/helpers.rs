@@ -847,7 +847,7 @@ impl Parser {
         )
     }
 
-    fn nullsafe_write_line(expr: &Expr) -> Option<usize> {
+    fn nullsafe_chain_line(expr: &Expr) -> Option<usize> {
         match expr {
             Expr::PropertyAccess {
                 object,
@@ -860,21 +860,32 @@ impl Parser {
                 nullsafe,
                 line,
                 ..
+            }
+            | Expr::MethodCall {
+                object,
+                nullsafe,
+                line,
+                ..
             } => {
                 if *nullsafe {
                     Some(*line)
                 } else {
-                    Self::nullsafe_write_line(object)
+                    Self::nullsafe_chain_line(object)
                 }
             }
-            Expr::ArrayAccess { array, .. } => Self::nullsafe_write_line(array),
-            Expr::DynamicStaticProperty { class, .. } => Self::nullsafe_write_line(class),
+            Expr::ArrayAccess { array, .. } => Self::nullsafe_chain_line(array),
+            Expr::DynamicStaticProperty { class, .. }
+            | Expr::DynamicStaticCall { class, .. } => Self::nullsafe_chain_line(class),
             _ => None,
         }
     }
 
     fn nullsafe_write_error(&mut self, line: usize) -> Expr {
         self.compile_error("Can't use nullsafe operator in write context", line)
+    }
+
+    fn nullsafe_reference_error(&mut self, line: usize) -> Expr {
+        self.compile_error("Cannot take reference of a nullsafe chain", line)
     }
 
     /// Check if an expression is a variable-like target (valid for isset/empty/unset).
@@ -895,6 +906,9 @@ impl Parser {
     }
 
     fn into_foreach_target(&mut self, expr: Expr) -> Result<ForeachTarget, String> {
+        if let Some(line) = Self::nullsafe_chain_line(&expr) {
+            return Ok(ForeachTarget::Target(self.nullsafe_write_error(line)));
+        }
         match expr {
             Expr::Variable { name, .. } => Ok(ForeachTarget::Variable(name)),
             target @ Expr::DynamicVariable { .. } => Ok(ForeachTarget::Target(target)),
