@@ -570,6 +570,32 @@ var_dump($calls, $shared);
 }
 
 #[test]
+fn magic_constants_use_the_ordinary_nullsafe_postfix_path() {
+    let output = run_php(
+        r#"<?php
+set_error_handler(function($level, $message) { echo "handled:$message\n"; });
+__LINE__;
+__LINE__?->field;
+__DIR__?->field;
+$calls = 0;
+function magicMember() { global $calls; $calls++; return 'dynamic'; }
+__FILE__?->{magicMember()};
+var_dump($calls);
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "handled:Attempt to read property \"field\" on int\n",
+            "handled:Attempt to read property \"field\" on string\n",
+            "handled:Attempt to read property \"dynamic\" on string\n",
+            "int(1)\n",
+        )
+    );
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_skips_or_evaluates_its_name_once() {
     let out = run_php(
         r#"<?php

@@ -7,8 +7,31 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `223bbc5`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,597 passes, 2,433 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `6d9d0c6`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,601 passes, 2,429 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds four exact passes without losing a previous pass or moving another failure
+category: `Zend/tests/gh9136_2.phpt`,
+`Zend/tests/nullsafe_operator/029.phpt`,
+`Zend/tests/prop_const_expr/lhs_non_object.phpt` and
+`Zend/tests/varSyntax/magic_const_deref.phpt`. Magic constants at statement
+level now enter the ordinary expression and postfix parser, including
+nullsafe property access. A nullsafe check short-circuits only a null receiver;
+non-null scalar property reads continue through the normal object-read opcode,
+which evaluates a dynamic property name once and emits PHP's exact property,
+receiver-type and source-location diagnostic. Scalar nullsafe method calls
+retain their fatal error. Original E2E coverage checks bare magic constants,
+integer and string receivers, exact handled warnings and one-time dynamic-name
+evaluation. Five Cargo feature configurations, all-target and unsafe checks,
+Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64. The S3 cold-kernel
+gate was not rerun because this machine has no exact PHP 8.2 oracle. Nine
+release runs of `bench_calls.php` measured medians of 0.361834 seconds for the
+preceding binary and 0.347734 seconds for the candidate, with the same computed
+result.
+
+The preceding AMD64 nullsafe foreach-reference checkpoint, based on `223bbc5`,
+runs the same 4,345-case PHP 8.2.33 corpus and records 1,597 passes, 2,433
+failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds six exact passes without losing a previous pass or moving another failure
 category: `Zend/tests/dead_array_type_inference.phpt`,
