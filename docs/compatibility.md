@@ -7,8 +7,29 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `555e262`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,584 passes, 2,446 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `b692f58`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,585 passes, 2,445 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds the exact pass `Zend/tests/generators/send_returns_current.phpt` without
+losing a previous pass or moving another failure category. The existing string
+reversal implementation is now exposed under PHP's `strrev()` name instead of
+the non-PHP `str_rev` spelling; its signature supports the ordinary positional,
+named and weak scalar-string paths. Two other tests now execute past the
+missing-symbol boundary and expose separate pre-existing nullsafe by-reference
+argument and re-entrant variable-variable writeback failures; they remain
+ordinary failures rather than being hidden as gains. Arbitrary binary strings
+whose byte reversal is not valid UTF-8 remain outside this checkpoint until
+the UTF-8-backed `Value` string representation is replaced or extended with a
+byte-string form. Five Cargo feature configurations, all-target and unsafe
+checks, Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64. The S3
+cold-kernel gate was not rerun because this machine has no exact PHP 8.2 oracle.
+Nine release runs of `bench_calls.php` measured medians of 0.3419 seconds for
+the preceding binary and 0.3424 seconds for the candidate, with the same
+computed result.
+
+The preceding AMD64 dynamic-nullsafe-property checkpoint, based on `555e262`,
+runs the same 4,345-case PHP 8.2.33 corpus and records 1,584 passes, 2,446
+failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds six exact passes without losing a previous pass or moving another failure
 category: `Zend/tests/bug81216.phpt`, `gh10570.phpt`,

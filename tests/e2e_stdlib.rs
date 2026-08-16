@@ -345,6 +345,16 @@ fn test_e2e_str_repeat() {
     assert_eq!(run_php("<?php echo str_repeat('ab', 3);"), "ababab");
 }
 
+#[test]
+fn strrev_is_registered_with_php_name_named_argument_and_scalar_coercion() {
+    assert_eq!(
+        run_php(
+            "<?php echo strrev('stressed'), '|', strrev(string: 'drawer'), '|', strrev(120), '|'; var_dump(function_exists('str_rev'));"
+        ),
+        "desserts|reward|021|bool(false)\n"
+    );
+}
+
 // === substr_count ===
 
 #[test]

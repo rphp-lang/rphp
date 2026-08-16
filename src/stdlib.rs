@@ -652,7 +652,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "cut_long_words"
     );
     reg!("nl2br", fn_nl2br, 1, 1, "string");
-    reg!("str_rev", fn_str_rev, 1, 1, "string");
+    reg!("strrev", fn_strrev, 1, 1, "string");
     reg!(
         "number_format",
         fn_number_format,
@@ -5133,13 +5133,16 @@ fn fn_nl2br(
     ret!(rv, Value::string(s.replace('\n', "<br />\n")));
 }
 
-fn fn_str_rev(
+fn fn_strrev(
     ed: *mut ExecuteData,
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    // PHP strrev reverses bytes, not Unicode codepoints
+    // The current Value string backend is UTF-8-backed, so retain valid
+    // internal strings by reversing represented characters. Exact reversal
+    // of arbitrary PHP binary strings requires the planned byte-string value
+    // representation and remains outside this checkpoint.
     let reversed: String = s.chars().rev().collect();
     ret!(rv, Value::string(reversed));
 }
