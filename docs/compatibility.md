@@ -7,7 +7,32 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 core-diagnostics checkpoint, based on `fadebc3`, runs the
+The current AMD64 illegal-array-offset checkpoint, based on `eed927c`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,619 passes, 2,411 failures, 77
+skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds six exact passes without losing a previous pass or moving
+another failure category: `Zend/tests/036.phpt`, `Zend/tests/038.phpt`,
+`Zend/tests/bug79790.phpt`, `Zend/tests/bug79947.phpt`,
+`Zend/tests/illegal_offset_unset_isset_empty.phpt` and
+`Zend/tests/init_array_illegal_offset_type.phpt`. Invalid array-key types now
+throw a catchable PHP `TypeError` instead of escaping as a VM fatal error.
+Literal construction, reads, writes, compound writes, references,
+`isset`/`empty`, `unset` and property-dimension writes use PHP's exact general
+or contextual message, attach the throwable origin and do not publish a partial
+mutation. A dedicated `empty()` bytecode flag distinguishes its diagnostic
+context from value-preserving silent probes such as null coalescing. Original
+E2E coverage checks every operation family and catches the exact messages.
+`$GLOBALS` symbol-table offsets and the missing uncaught source trace for a
+standalone invalid constant-expression key remain separate boundaries. Five
+Cargo feature configurations, all-target and unsafe checks, Composer S0,
+Symfony S1 and warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not
+rerun because this machine has no exact PHP 8.2 oracle. Nine alternating release
+runs of `bench_calls.php` measured medians of 0.342195 seconds for the preceding
+binary and 0.344369 seconds for the candidate. The directly affected
+`bench_hash_dynamic_string_array_loop.php` medians were 0.101398 and 0.101335
+seconds. Both retained identical computed results.
+
+The preceding AMD64 core-diagnostics checkpoint, based on `fadebc3`, runs the
 same 4,345-case PHP 8.2.33 corpus and records 1,613 passes, 2,417 failures, 77
 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
 crashes. It adds five exact passes without losing a previous pass or moving

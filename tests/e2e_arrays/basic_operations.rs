@@ -380,6 +380,39 @@ fn test_e2e_array_null_key_coercion() {
 }
 
 #[test]
+fn illegal_array_offsets_throw_catchable_contextual_type_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([
+    fn() => [new stdClass() => 1],
+    function() { $array = []; $array[[]] = 1; },
+    function() { $array = []; return $array[[]]; },
+] as $operation) {
+    try { $operation(); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+$array = [];
+try { isset($array[[]]); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { empty($array[[]]); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { unset($array[[]]); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { $holder = (object)['values' => []]; $holder->values[[]] = 1; } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { $reference =& $array[[]]; } catch (TypeError $error) { echo $error->getMessage(); }
+"#,
+        ),
+        concat!(
+            "Illegal offset type\n",
+            "Illegal offset type\n",
+            "Illegal offset type\n",
+            "Illegal offset type in isset or empty\n",
+            "Illegal offset type in isset or empty\n",
+            "Illegal offset type in unset\n",
+            "Illegal offset type\n",
+            "Illegal offset type",
+        )
+    );
+}
+
+#[test]
 fn test_e2e_array_empty_literal() {
     assert_eq!(
         run_php("<?php $a = []; if ($a) { echo 'yes'; } else { echo 'empty'; }"),

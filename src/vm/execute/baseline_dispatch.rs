@@ -245,6 +245,18 @@ fn throw_array_dimension_error<'a>(
     throw_in_frame(eg, frame, error)
 }
 
+fn throw_illegal_offset_type<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    message: &str,
+) -> ThrowResult<'a> {
+    let error = make_error_value("TypeError", message);
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    throw_in_frame(eg, frame, error)
+}
+
 /// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -265,6 +277,35 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             let opline_ptr: *const Instruction = (*frame).opline;
             (opline_ptr, &*opline_ptr)
         };
+        macro_rules! array_key_or_throw {
+            ($conversion:expr, $message:expr) => {
+                match $conversion {
+                    Ok(key) => key,
+                    Err(_) => {
+                        let instruction_index = (opline_ptr as usize
+                            - op_array.instructions.as_ptr() as usize)
+                            / std::mem::size_of::<Instruction>();
+                        match throw_illegal_offset_type(
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                            $message,
+                        ) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            };
+        }
         stats::inc_opcode(opline.opcode as usize);
 
         // Check for pending return or exception after finally block ends
@@ -3015,7 +3056,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline.result_type,
                             op_array,
                         );
-                        match value_to_array_key_ref(key_val)? {
+                        match array_key_or_throw!(
+                            value_to_array_key_ref(key_val),
+                            "Illegal offset type"
+                        ) {
                             ArrayKeyRef::Int(key) => php_arr.set_int(key, cloned_val),
                             ArrayKeyRef::String(key) => {
                                 if key_val.value_type() == ValueType::String {
@@ -3096,7 +3140,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let Some(arr) = arr_val.as_array() {
-                    let array_key = value_to_array_key_ref(idx_val)?;
+                    let array_key = array_key_or_throw!(
+                        value_to_array_key_ref(idx_val),
+                        if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0 {
+                            "Illegal offset type in isset or empty"
+                        } else {
+                            "Illegal offset type"
+                        }
+                    );
                     let fetched = match &array_key {
                         ArrayKeyRef::Int(key) => arr.get_int(*key),
                         ArrayKeyRef::String(key) => {
@@ -3272,7 +3323,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && opline._pad & FETCH_DIM_MUTABLE != 0
                         && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
                     {
-                        let array_key = value_to_array_key_ref(idx_val)?;
+                        let array_key = array_key_or_throw!(
+                            value_to_array_key_ref(idx_val),
+                            "Illegal offset type"
+                        );
                         let key = match array_key {
                             ArrayKeyRef::Int(key) => key.to_string(),
                             ArrayKeyRef::String(key) => format!("\"{key}\""),
@@ -3495,7 +3549,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
-                let key = value_to_array_key(idx_val)?;
+                let key =
+                    array_key_or_throw!(value_to_array_key(idx_val), "Illegal offset type");
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
                     unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
@@ -3675,7 +3730,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
-                let key = value_to_array_key(idx_val)?;
+                let key = array_key_or_throw!(
+                    value_to_array_key(idx_val),
+                    "Illegal offset type in unset"
+                );
                 match arr.value_type() {
                     ValueType::Array => {
                         arr.as_array_mut().unwrap().remove(&key);
@@ -4123,7 +4181,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     continue 'vm;
                 }
 
-                let arr_key = value_to_array_key(&key)?;
+                let arr_key =
+                    array_key_or_throw!(value_to_array_key(&key), "Illegal offset type");
                 if let Some(mut php_obj) = obj.as_object_mut() {
                     let caller_class = get_caller_class(frame, eg);
                     let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
