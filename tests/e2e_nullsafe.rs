@@ -530,6 +530,46 @@ fn nullsafe_destructuring_targets_fail_before_execution() {
 }
 
 #[test]
+fn nullsafe_by_reference_foreach_uses_a_detached_outer_snapshot() {
+    let output = run_php(
+        r#"<?php
+set_error_handler(function($level, $message) { echo "handled:$message\n"; });
+$null = null;
+foreach ($null?->items as &$value) {}
+
+$box = (object) ['items' => [1, 2]];
+foreach ($box?->items as &$value) { $value += 10; }
+unset($value);
+var_dump($box->items);
+
+$shared = 5;
+$box->items = [&$shared];
+foreach ($box?->items as &$value) { $value++; }
+unset($value);
+var_dump($shared, $box->items);
+
+$calls = 0;
+function selectBox($box) { global $calls; $calls++; return $box; }
+foreach (selectBox($box)?->items as &$value) { $value++; }
+unset($value);
+var_dump($calls, $shared);
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "handled:foreach() argument must be of type array|object, null given\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+            "int(6)\n",
+            "array(1) {\n  [0]=>\n  &int(6)\n}\n",
+            "int(1)\n",
+            "int(7)\n",
+        )
+    );
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_skips_or_evaluates_its_name_once() {
     let out = run_php(
         r#"<?php

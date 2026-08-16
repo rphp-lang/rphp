@@ -912,7 +912,6 @@ fn op_foreach_init<'a>(
             Some(arr) => arr.is_empty(),
             None if iterable.value_type() == ValueType::Object => false,
             None => {
-                eg.write_output(b"\nWarning: foreach() argument must be of type array|object, ");
                 let type_name = match arr_val.value_type() {
                     ValueType::Null => "null",
                     ValueType::True | ValueType::False => "bool",
@@ -921,8 +920,24 @@ fn op_foreach_init<'a>(
                     ValueType::String => "string",
                     _ => "unknown",
                 };
-                eg.write_output(type_name.as_bytes());
-                eg.write_output(b" given\n");
+                report_php_warning(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &format!(
+                        "foreach() argument must be of type array|object, {type_name} given"
+                    ),
+                    false,
+                )?;
+                if let Some(exception) = eg.exception.take() {
+                    return Ok(match throw_in_frame(eg, frame, exception) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
+                        }
+                        ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                    });
+                }
                 true
             }
         };
