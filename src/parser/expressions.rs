@@ -147,6 +147,9 @@ impl Parser {
                         nullsafe: false,
                         ..
                     }
+                    | Expr::StaticProperty { .. }
+                    | Expr::DynamicNamedStaticProperty { .. }
+                    | Expr::DynamicStaticProperty { .. }
             )
         {
             return Ok(Expr::AssignTargetReference {

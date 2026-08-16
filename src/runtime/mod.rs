@@ -1979,6 +1979,27 @@ impl ExecutorGlobals {
         self.static_property_values.get(storage_slot)
     }
 
+    #[inline(always)]
+    pub(crate) fn static_property_value_mut(&mut self, storage_slot: usize) -> Option<&mut Value> {
+        self.static_property_values.get_mut(storage_slot)
+    }
+
+    /// Reference assignment replaces the property location itself. This is
+    /// deliberately distinct from `set_static_property_value()`, which writes
+    /// through an already referenced property for ordinary `=` assignment.
+    #[inline(always)]
+    pub(crate) fn rebind_static_property_value(
+        &mut self,
+        storage_slot: usize,
+        value: Value,
+    ) -> bool {
+        let Some(current) = self.static_property_values.get_mut(storage_slot) else {
+            return false;
+        };
+        *current = value;
+        true
+    }
+
     /// A warmed static-property cache can skip the bounds branch: storage is
     /// append-only for the executor lifetime and cache slots are published
     /// only after checked resolution.

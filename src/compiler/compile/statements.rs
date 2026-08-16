@@ -333,6 +333,15 @@ impl Compiler {
                 bind._pad |= REFERENCE_RESULT_INTERNAL;
                 self.instructions.push(bind);
             }
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                self.compile_static_property_reference_fetch(
+                    static_property,
+                    destination,
+                    true,
+                )?;
+            }
             Expr::ArrayAccess { .. } => {
                 self.compile_array_element_reference_binding(source, destination, true)?;
             }
@@ -1208,6 +1217,21 @@ impl Compiler {
         if let Expr::Globals { line } = source {
             return Err(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
         }
+        if matches!(
+            target,
+            Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
+        ) && matches!(
+            source,
+            Expr::FunctionCall { .. }
+                | Expr::MethodCall { .. }
+                | Expr::StaticCall { .. }
+                | Expr::DynamicCall { .. }
+                | Expr::DynamicStaticCall { .. }
+        ) {
+            return self.compile_assignment_target_expression(target, source);
+        }
         let source_is_internal = !matches!(source, Expr::Variable { .. });
         let source = self.compile_array_element_reference_source(source)?;
 
@@ -1293,6 +1317,15 @@ impl Compiler {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
                 }
                 self.push_instruction_at_line(bind, *line);
+            }
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                self.compile_static_property_reference_assignment(
+                    static_property,
+                    source,
+                    source_is_internal,
+                )?;
             }
             Expr::ArrayAccess { .. } => {
                 let mut root = target;

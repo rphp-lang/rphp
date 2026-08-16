@@ -97,6 +97,12 @@ pub const STATIC_PROP_DYNAMIC_NAME: u16 = 1 << 5;
 /// Fetch static-property flag: the read is an `isset()`/`empty()`-style silent
 /// probe. This must not alias the late-static embedded-scope bit.
 pub const STATIC_PROP_SILENT: u16 = 1 << 6;
+/// Promote the resolved static-property storage slot to a stable reference
+/// cell and bind the result CV to that same cell.
+pub const STATIC_PROP_REFERENCE_FETCH: u16 = 1 << 7;
+/// Rebind the resolved static-property storage slot to the reference supplied
+/// in the instruction result operand instead of writing through an old alias.
+pub const STATIC_PROP_REFERENCE_BIND: u16 = 1 << 8;
 
 /// CreateClosure flag: PHP's `static function`/`static fn` form cannot bind
 /// an object, even when created inside an instance method.

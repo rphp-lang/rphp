@@ -1733,6 +1733,19 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         |(_, class_id)| *class_id,
     );
 
+    if opline._pad & STATIC_PROP_REFERENCE_FETCH != 0 {
+        return resolve_static_property_reference_fetch(
+            eg,
+            frame,
+            opline,
+            result_ptr,
+            cache,
+            class_id,
+            raw_class,
+            prop,
+        );
+    }
+
     if opline._pad & STATIC_PROP_DYNAMIC_NAME == 0
         && class_id != 0
         && cache.class_id == class_id
@@ -2159,6 +2172,9 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    if opline._pad & STATIC_PROP_REFERENCE_BIND != 0 {
+        return assign_static_property_reference::<LATE_STATIC>(eg, frame, op_array, opline);
+    }
     // Compact late-static frames already carry the called class ID. Check the
     // monomorphic untyped cache before decoding the two constant string
     // operands; a cache miss still takes the canonical resolver below.
@@ -2308,6 +2324,79 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         property,
         value,
     )
+}
+
+#[cold]
+#[inline(never)]
+fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: dispatch supplies a live frame and its current op-array/opline;
+    // compiler validation guarantees both property operands and the source CV
+    // are in bounds. The materialized cell remains owned by the source CV and
+    // static-property alias before this frame can release either reference.
+    unsafe {
+    let class_name = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+    let property_name = &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array);
+        debug_assert_eq!(opline.result_type, OpType::Cv);
+        let source = (*frame).cv_mut(opline.result as u32) as *mut Value;
+    let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
+    let dynamic_owner_value = dynamic_owner
+        .then(|| dynamic_static_property_owner(eg, class_name))
+        .transpose()?;
+    let raw_class = dynamic_owner_value
+        .as_ref()
+        .map_or_else(|| class_name.as_str().unwrap_or(""), |(name, _)| name);
+    let property = property_name.as_str().unwrap_or("");
+    let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+    let cache = &mut *(op_array.cache.as_ptr().add(ip)
+        as *mut crate::vm::instruction::InlineCache);
+    let class_id = dynamic_owner_value.as_ref().map_or_else(
+        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        |(_, class_id)| *class_id,
+    );
+    let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, true) {
+        Ok(resolved) => resolved,
+        Err(VmError::Fatal(message)) => {
+            return Ok(static_property_throw(eg, frame, "Error", message));
+        }
+        Err(error) => return Err(error),
+    };
+    let definition = &*resolved.definition;
+    let called_class = eg
+        .class_by_id(class_id)
+        .map_or(raw_class, |class| class.name.as_str());
+    let prepared = match prepare_property_assignment(
+        (&*source).dereferenced().clone(),
+        definition,
+        eg,
+        op_array.strict_types,
+        called_class,
+    ) {
+        Ok(value) => value,
+        Err(message) => {
+            return Ok(static_property_throw(eg, frame, "TypeError", message));
+        }
+    };
+
+    let binding = materialize_reference_alias(frame, source);
+    let target = binding.as_ref_ptr();
+    std::ptr::drop_in_place(target);
+    target.write(prepared);
+    let property_binding = if binding.is_owned_reference() {
+        binding.clone_owned_reference_alias()
+    } else {
+        Value::reference(binding.as_ref_ptr())
+    };
+    if !eg.rebind_static_property_value(resolved.storage_slot, property_binding) {
+        return Err(VmError::Fatal("Invalid static property storage slot".into()));
+    }
+    cache.set_property(class_id, resolved.storage_slot, 1);
+    Ok(ColdResult::Done)
+    }
 }
 
 #[inline(never)]
@@ -2525,6 +2614,78 @@ fn resolve_static_property_read_cache_miss<'a>(
     cache.set_property(class_id, resolved.storage_slot, 1);
     unsafe { frame_tmp_set(frame, result_ptr, value) };
     Ok(ColdResult::Done)
+}
+
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn resolve_static_property_reference_fetch<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    opline: &Instruction,
+    result_ptr: *mut Value,
+    cache: &mut crate::vm::instruction::InlineCache,
+    class_id: u32,
+    raw_class: &str,
+    property: &str,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: the resolved definition belongs to executor-global class
+    // storage, and result_ptr is the compiler-owned CV output slot in the live
+    // frame. Both stay valid for the duration of this cold dispatch.
+    unsafe {
+    let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, true) {
+        Ok(resolved) => resolved,
+        Err(VmError::Fatal(message)) => {
+            return Ok(static_property_throw(eg, frame, "Error", message));
+        }
+        Err(error) => return Err(error),
+    };
+    let definition = &*resolved.definition;
+    let initialize_null = eg
+        .static_property_value(resolved.storage_slot)
+        .is_some_and(Value::is_undef);
+    if initialize_null
+        && !property_type_matches_exact(
+            &Value::null(),
+            &definition.type_hint,
+            eg,
+            &definition.type_scope,
+            raw_class,
+        )
+    {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!(
+                "Cannot access uninitialized non-nullable property {}::${} by reference",
+                definition.declaring_class, definition.name
+            ),
+        ));
+    }
+
+    let slot = eg
+        .static_property_value_mut(resolved.storage_slot)
+        .ok_or_else(|| VmError::Fatal("Invalid static property storage slot".into()))?;
+    if initialize_null {
+        *slot = Value::null();
+    }
+    let mut binding = if slot.is_owned_reference() {
+        slot.clone_owned_reference_alias()
+    } else {
+        let current = std::mem::replace(slot, Value::undef());
+        let current = reference_initial_value(current);
+        let binding = Value::owned_reference(current);
+        *slot = binding.clone_owned_reference_alias();
+        binding
+    };
+    if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+        binding.mark_internal_reference_alias();
+    }
+    cache.set_property(class_id, resolved.storage_slot, 1);
+    frame_slot_set(frame, result_ptr, binding);
+    Ok(ColdResult::Done)
+    }
 }
 
 struct ResolvedStaticProperty {

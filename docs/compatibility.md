@@ -7,6 +7,35 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 static-property-reference checkpoint, based on `4b818a0`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,708 passes,
+2,322 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds the exact pass
+`Zend/tests/type_declarations/typed_properties_087.phpt` without losing a
+previous pass. Static properties can now be acquired and rebound through the
+same owned reference cells as other mutable l-values, including inherited,
+dynamic-owner and dynamic-name forms. Acquiring an uninitialized nullable or
+untyped property initializes it to `null`; an uninitialized non-nullable
+property throws PHP's dedicated `Error` instead. Reference assignment still
+validates the initial value before replacing typed property storage, so a
+failed call-source assignment leaves the property uninitialized.
+
+Original E2E tests cover shared writes through base and child names, dynamic
+owner/name rebinding, nullable initialization, the non-nullable diagnostic and
+failed typed initialization. The five Cargo feature configurations, all-target
+check, formatting and unsafe-policy gates pass, as do Composer S0, all four
+Symfony S1 component gates and warmed-kernel S2 on AMD64. The production unsafe
+inventory is 1,623 blocks and 289 functions, exactly within the existing
+ceilings. Forty-one alternating release pairs measured
+`bench_static_self_property.php` at baseline p10/median/p90 of
+0.158443/0.164086/0.168612 seconds and candidate
+0.156718/0.161713/0.167562 seconds (median -1.45 percent), with identical
+results. Full typed-reference constraints, including the remaining
+`typed_properties_068.phpt` and `typed_properties_082.phpt`, require reference-
+cell type metadata and remain a separate compatibility slice. S3 was not
+rerun; the preceding exact-PHP checkpoint's pre-existing cold `PhpDumper`
+array-state divergence remains the current boundary.
+
 The current AMD64 static-property-origin checkpoint, based on `8e1fb7b`, runs
 the default-feature 4,345-case PHP 8.2.33 corpus and records 1,707 passes,
 2,323 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero

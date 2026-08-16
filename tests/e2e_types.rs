@@ -384,6 +384,89 @@ var_dump($object);"#
 }
 
 #[test]
+fn static_property_references_share_storage_and_initialize_nullable_slots() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class StaticRefBase {
+    public static $value = 1;
+    public static ?int $nullable;
+}
+class StaticRefChild extends StaticRefBase {}
+$class = StaticRefChild::class;
+$name = "value";
+$first =& $class::$$name;
+$first = 2;
+echo StaticRefBase::$value, "|";
+$source = 3;
+$class::$$name =& $source;
+$source = 4;
+echo StaticRefChild::$value, "|";
+$fixed = 6;
+StaticRefChild::$value =& $fixed;
+$fixed = 7;
+echo StaticRefBase::$value, "|";
+$array = [&StaticRefBase::$value];
+$array[0] = 8;
+echo StaticRefChild::$value, "|";
+$nullable =& StaticRefChild::$nullable;
+var_dump($nullable);
+$nullable = 5;
+echo StaticRefBase::$nullable;
+"#,
+        ),
+        "2|4|7|8|NULL\n5"
+    );
+}
+
+#[test]
+fn non_nullable_static_property_cannot_be_acquired_by_reference_before_initialization() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class StaticNonNullableReference {
+    public static int $value;
+}
+try {
+    $value =& StaticNonNullableReference::$value;
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "Cannot access uninitialized non-nullable property StaticNonNullableReference::$value by reference"
+    );
+}
+
+#[test]
+fn typed_static_reference_assignment_from_a_call_preserves_failed_initialization() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function &staticStringReference() {
+    static $value = "invalid";
+    return $value;
+}
+class StaticCallReference {
+    public static int $typed;
+}
+try {
+    StaticCallReference::$typed =& staticStringReference();
+} catch (TypeError $error) {
+    echo $error->getMessage(), "|";
+}
+try {
+    var_dump(StaticCallReference::$typed);
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "Cannot assign string to property StaticCallReference::$typed of type int|Typed static property StaticCallReference::$typed must not be accessed before initialization"
+    );
+}
+
+#[test]
 fn compiler_reference_cvs_do_not_create_visible_aliases() {
     assert_eq!(
         run_php(

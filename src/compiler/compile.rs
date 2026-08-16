@@ -37,7 +37,8 @@ use crate::vm::instruction::{
     InlineCache, Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
     NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, OpType, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_SILENT, UNSET_DIM_NESTED,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -3594,6 +3595,74 @@ impl Compiler {
         }
     }
 
+    fn compile_static_property_reference_fetch(
+        &mut self,
+        expr: &Expr,
+        destination: u16,
+        internal_result: bool,
+    ) -> Result<(), String> {
+        let (class, class_type, property, property_type, late_static, dynamic_owner, line) = self
+            .compile_static_property_operands(expr)
+            .ok_or_else(|| "Expected static-property reference source".to_string())?;
+        let mut fetch = Instruction::new(if late_static {
+            OpCode::FetchLateStaticProp
+        } else {
+            OpCode::FetchStaticProp
+        });
+        fetch.op1 = class;
+        fetch.op1_type = class_type;
+        fetch.op2 = property;
+        fetch.op2_type = property_type;
+        fetch.result = destination;
+        fetch.result_type = OpType::Cv;
+        fetch._pad |= STATIC_PROP_REFERENCE_FETCH;
+        if internal_result {
+            fetch._pad |= REFERENCE_RESULT_INTERNAL;
+        }
+        if dynamic_owner {
+            fetch._pad |= STATIC_PROP_DYNAMIC_OWNER;
+        }
+        if property_type != OpType::Const {
+            fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
+        }
+        self.push_instruction_at_line(fetch, line);
+        Ok(())
+    }
+
+    fn compile_static_property_reference_assignment(
+        &mut self,
+        expr: &Expr,
+        source: u16,
+        source_is_internal: bool,
+    ) -> Result<(), String> {
+        let (class, class_type, property, property_type, late_static, dynamic_owner, line) = self
+            .compile_static_property_operands(expr)
+            .ok_or_else(|| "Expected static-property reference target".to_string())?;
+        let mut assign = Instruction::new(if late_static {
+            OpCode::AssignLateStaticProp
+        } else {
+            OpCode::AssignStaticProp
+        });
+        assign.op1 = class;
+        assign.op1_type = class_type;
+        assign.op2 = property;
+        assign.op2_type = property_type;
+        assign.result = source;
+        assign.result_type = OpType::Cv;
+        assign._pad |= STATIC_PROP_REFERENCE_BIND;
+        if source_is_internal {
+            assign._pad |= REFERENCE_RESULT_INTERNAL;
+        }
+        if dynamic_owner {
+            assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
+        }
+        if property_type != OpType::Const {
+            assign._pad |= STATIC_PROP_DYNAMIC_NAME;
+        }
+        self.push_instruction_at_line(assign, line);
+        Ok(())
+    }
+
     fn emit_string_cast(&mut self, operand: u16, operand_type: OpType) -> u16 {
         let result = self.alloc_tmp();
         let mut cast = Instruction::new(OpCode::Cast);
@@ -6631,6 +6700,20 @@ impl Compiler {
                         bind.result = destination;
                         bind.result_type = OpType::Cv;
                         self.push_instruction_at_line(bind, *line);
+                        (destination, OpType::Cv)
+                    }
+                    static_property @ (Expr::StaticProperty { .. }
+                    | Expr::DynamicNamedStaticProperty { .. }
+                    | Expr::DynamicStaticProperty { .. }) => {
+                        if let Err(error) = self.compile_static_property_reference_fetch(
+                            static_property,
+                            destination,
+                            false,
+                        ) {
+                            self.deferred_error = Some(error);
+                            let null = self.add_literal(Value::null());
+                            return (null, OpType::Const);
+                        }
                         (destination, OpType::Cv)
                     }
                     Expr::ArrayAccess { array, index, .. } => {
