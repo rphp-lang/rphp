@@ -61,7 +61,7 @@ catch (Error $error) { echo $error->getMessage(); }
 
     assert_eq!(
         output,
-        "Keys must be of type int|string during argument unpacking|stream-stopped|Only arrays and Traversables can be unpacked"
+        "Keys must be of type int|string during argument unpacking|stream-stopped|Only arrays and Traversables can be unpacked, bool given"
     );
 }
 

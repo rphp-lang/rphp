@@ -5318,8 +5318,26 @@ impl Compiler {
                     })
                     && let Some(line) = element.unpack_line
                 {
-                    self.deferred_error =
-                        Some(self.goto_error("Only arrays and Traversables can be unpacked", line));
+                    let value_type = self
+                        .statically_known_array_unpack_type(&element.value)
+                        .expect("filtered statically known unpack type");
+                    let given = match value_type {
+                        ValueType::Undef => "unknown",
+                        ValueType::Null => "null",
+                        ValueType::False | ValueType::True => "bool",
+                        ValueType::Long => "int",
+                        ValueType::Double => "float",
+                        ValueType::String => "string",
+                        ValueType::Array => "array",
+                        ValueType::Object => "object",
+                        ValueType::Resource => "resource",
+                        ValueType::Reference => "reference",
+                        ValueType::Closure => "Closure",
+                    };
+                    self.deferred_error = Some(self.goto_error(
+                        &format!("Only arrays and Traversables can be unpacked, {given} given"),
+                        line,
+                    ));
                 }
 
                 // The literal size and an unavoidable hash transition are

@@ -59,7 +59,7 @@ try {
 }
 "#,
         ),
-        "Error:Only arrays and Traversables can be unpacked"
+        "Error:Only arrays and Traversables can be unpacked, int given"
     );
 }
 
@@ -86,7 +86,7 @@ fn statically_known_scalar_unpack_operands_fail_during_compilation() {
         assert_eq!(
             error,
             format!(
-                "Only arrays and Traversables can be unpacked in /fixture/static-spread.php on line {line}"
+                "Only arrays and Traversables can be unpacked, int given in /fixture/static-spread.php on line {line}"
             )
         );
     }
@@ -108,7 +108,7 @@ foreach ([RUNTIME_SPREAD_SOURCE, $constructed] as $source) {
 }
 "#,
         ),
-        "Error:Only arrays and Traversables can be unpacked\nError:Only arrays and Traversables can be unpacked\n"
+        "Error:Only arrays and Traversables can be unpacked, int given\nError:Only arrays and Traversables can be unpacked, stdClass given\n"
     );
 }
 

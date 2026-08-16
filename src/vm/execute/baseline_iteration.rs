@@ -383,13 +383,17 @@ fn op_add_array_unpack<'a>(
         collect_unpack_traversable(eg, source, TraversableUnpackKind::Array)?
     };
     let Some(entries) = entries else {
+        let given = source
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| source.type_name().to_string());
         return Ok(unpack_error(
             eg,
             frame,
             op_array,
             instruction_index,
             is_root_frame,
-            "Only arrays and Traversables can be unpacked",
+            &format!("Only arrays and Traversables can be unpacked, {given} given"),
         ));
     };
     if let Some(exception) = eg.exception.take() {
@@ -506,11 +510,20 @@ fn op_add_call_unpack<'a>(
     // SAFETY: op2 is a compiler-allocated live operand. Non-constant operands
     // are mutable for the duration of this opcode, and any followed reference
     // target is owned by a still-live frame or reference cell.
-    let entries = unsafe {
+    // SAFETY: Reading its type before leaving this block cannot outlive or alias
+    // the operand mutation.
+    let (entries, invalid_given) = unsafe {
         if opline.op2_type == OpType::Const {
             let mut source =
                 (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone();
-            collect_source(eg, &mut source)?
+            let entries = collect_source(eg, &mut source)?;
+            let given = entries.is_none().then(|| {
+                source
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .unwrap_or_else(|| source.type_name().to_string())
+            });
+            (entries, given)
         } else {
             let source_ptr = (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
             let source_ptr = if (*source_ptr).is_reference() {
@@ -518,13 +531,22 @@ fn op_add_call_unpack<'a>(
             } else {
                 source_ptr
             };
-            collect_source(eg, &mut *source_ptr)?
+            let source = &mut *source_ptr;
+            let entries = collect_source(eg, source)?;
+            let given = entries.is_none().then(|| {
+                source
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .unwrap_or_else(|| source.type_name().to_string())
+            });
+            (entries, given)
         }
     };
 
     let entries = match entries {
         Some(entries) => entries,
         None => {
+            let given = invalid_given.expect("invalid unpack source type");
             return Ok(unpack_throw(
                 eg,
                 frame,
@@ -532,7 +554,7 @@ fn op_add_call_unpack<'a>(
                 usize::MAX,
                 false,
                 "TypeError",
-                "Only arrays and Traversables can be unpacked",
+                &format!("Only arrays and Traversables can be unpacked, {given} given"),
             ));
         }
     };
