@@ -32,50 +32,130 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
 
     crate::stdlib::flush_all_output_buffers(eg)?;
 
-    // Check for uncaught exception that propagated through execute_ex
+    // Check for uncaught exception that propagated through execute_ex.
     if let Some(exc) = eg.exception.take() {
-        let (class_name, message, located_trace) = if let Some(obj) = exc.as_object() {
-            let cls = obj.class_name.clone();
-            let msg = obj.get_property("message")
-                .map(|v| v.echo_to_string())
-                .unwrap_or_default();
-            let located_trace = obj
-                .get_property("file")
-                .and_then(Value::as_str)
-                .filter(|file| !file.is_empty())
-                .zip(obj.get_property("line").and_then(Value::as_long))
-                .filter(|(_, line)| *line > 0)
-                .zip(
-                    obj.get_property("trace")
-                        .and_then(Value::as_array)
-                        .cloned(),
-                )
-                .map(|((file, line), trace)| (file.to_string(), line, trace));
-            (cls, msg, located_trace)
-        } else {
-            (
-                std::rc::Rc::from("Exception"),
-                exc.echo_to_string(),
-                None,
-            )
-        };
-        let message_suffix = if message.is_empty() {
-            String::new()
-        } else {
-            format!(": {message}")
-        };
-        if let Some((file, line, trace)) = located_trace {
-            let trace = crate::vm::trace::format_throwable_trace(&trace);
-            return Err(VmError::Fatal(format!(
-                "Uncaught {class_name}{message_suffix} in {file}:{line}\nStack trace:\n{trace}\n  thrown in {file} on line {line}"
-            )));
-        }
-        return Err(VmError::Fatal(format!(
-            "Uncaught {class_name}{message_suffix}"
-        )));
+        return Err(VmError::Fatal(format_uncaught_throwable(eg, &exc)));
     }
 
     Ok(return_value)
+}
+
+#[cold]
+fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) -> String {
+    struct Segment {
+        class_name: String,
+        message: String,
+        location: Option<(String, i64, PhpArray)>,
+    }
+
+    fn snapshot(value: &Value) -> Option<Segment> {
+        let object = value.as_object()?;
+        let class_name = object.class_name.to_string();
+        let message = object
+            .get_property("message")
+            .map(Value::echo_to_string)
+            .unwrap_or_default();
+        let location = object
+            .get_property("file")
+            .and_then(Value::as_str)
+            .filter(|file| !file.is_empty())
+            .zip(object.get_property("line").and_then(Value::as_long))
+            .filter(|(_, line)| *line > 0)
+            .zip(
+                object
+                    .get_property("trace")
+                    .and_then(Value::as_array)
+                    .cloned(),
+            )
+            .map(|((file, line), trace)| (file.to_string(), line, trace));
+        Some(Segment {
+            class_name,
+            message,
+            location,
+        })
+    }
+
+    fn previous(eg: &ExecutorGlobals, value: &Value) -> Option<Value> {
+        let object = value.as_object()?;
+        let key = eg
+            .find_property_visibility(&object.class_name, "previous")
+            .map_or_else(
+                || "previous".to_string(),
+                |(_, declaring_class)| {
+                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
+                },
+            );
+        object
+            .get_property(&key)
+            .filter(|previous| {
+                previous
+                    .as_object()
+                    .is_some_and(|object| eg.class_is_a(&object.class_name, "Throwable"))
+            })
+            .cloned()
+    }
+
+    let Some(final_segment) = snapshot(thrown) else {
+        let message = thrown.echo_to_string();
+        return if message.is_empty() {
+            "Uncaught Exception".to_string()
+        } else {
+            format!("Uncaught Exception: {message}")
+        };
+    };
+    let final_location = final_segment
+        .location
+        .as_ref()
+        .map(|(file, line, _)| (file.clone(), *line));
+    let mut segments = vec![final_segment];
+    let mut seen = std::collections::HashSet::new();
+    if let Some(identity) = thrown.object_identity() {
+        seen.insert(identity);
+    }
+    let mut current = thrown.clone();
+    while let Some(candidate) = previous(eg, &current) {
+        let Some(identity) = candidate.object_identity() else {
+            break;
+        };
+        if !seen.insert(identity) {
+            break;
+        }
+        let Some(segment) = snapshot(&candidate) else {
+            break;
+        };
+        segments.push(segment);
+        current = candidate;
+    }
+    segments.reverse();
+
+    let mut rendered = String::new();
+    for (index, segment) in segments.into_iter().enumerate() {
+        if index == 0 {
+            rendered.push_str("Uncaught ");
+        } else {
+            rendered.push_str("\n\nNext ");
+        }
+        rendered.push_str(&segment.class_name);
+        if !segment.message.is_empty() {
+            rendered.push_str(": ");
+            rendered.push_str(&segment.message);
+        }
+        if let Some((file, line, trace)) = segment.location {
+            rendered.push_str(" in ");
+            rendered.push_str(&file);
+            rendered.push(':');
+            rendered.push_str(&line.to_string());
+            rendered.push_str("\nStack trace:\n");
+            rendered.push_str(&crate::vm::trace::format_throwable_trace(&trace));
+        }
+    }
+    if let Some((file, line)) = final_location {
+        rendered.push_str("\n  thrown in ");
+        rendered.push_str(&file);
+        rendered.push_str(" on line ");
+        rendered.push_str(&line.to_string());
+    }
+    rendered
 }
 
 /// Call a PHP function by FunctionCommon pointer with given arguments.

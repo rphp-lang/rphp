@@ -350,6 +350,21 @@ fn root_uncaught_throwable_rendering_omits_the_colon_for_an_empty_message() {
 }
 
 #[test]
+fn uncaught_throwable_renders_the_complete_previous_chain_oldest_first() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\n$root = new Error('root');\n$middle = new Exception('', 0, $root);\nthrow new RuntimeException('outer', 0, $middle);",
+        "/fixture/previous-chain.php",
+        "/fixture",
+    );
+
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message)
+            if message == "Uncaught Error: root in /fixture/previous-chain.php:2\nStack trace:\n#0 {main}\n\nNext Exception in /fixture/previous-chain.php:3\nStack trace:\n#0 {main}\n\nNext RuntimeException: outer in /fixture/previous-chain.php:4\nStack trace:\n#0 {main}\n  thrown in /fixture/previous-chain.php on line 4"
+    ));
+}
+
+#[test]
 fn runtime_constant_array_unpack_error_uses_the_spread_location() {
     let error = run_php_expect_error_with_source_context(
         "<?php\nconst NON_ARRAY_SOURCE = 17;\nconst ITEMS = [\n    ...NON_ARRAY_SOURCE,\n];",
