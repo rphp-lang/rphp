@@ -206,10 +206,10 @@ fn test_nl2br() {
     assert_eq!(run_php("<?php echo nl2br(\"a\\nb\");"), "a<br />\nb");
 }
 
-// === str_rev ===
+// === strrev ===
 #[test]
-fn test_str_rev() {
-    assert_eq!(run_php(r#"<?php echo str_rev("hello");"#), "olleh");
+fn test_strrev() {
+    assert_eq!(run_php(r#"<?php echo strrev("hello");"#), "olleh");
 }
 
 // === boolval ===
