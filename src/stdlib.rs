@@ -5911,6 +5911,13 @@ fn internal_value_to_string(
         report_internal_diagnostic(eg, ed, 2, "Warning", "Array to string conversion")?;
         return Ok(Some("Array".to_string()));
     }
+    if value.value_type() == ValueType::Closure {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "Object of class Closure could not be converted to string",
+        ));
+        return Ok(None);
+    }
     if value.value_type() != ValueType::Object {
         return Ok(Some(value.echo_to_string()));
     }
@@ -10875,11 +10882,7 @@ fn fn_time(
 
 /// exit($status = 0) / die($status = 0)
 /// If $status is int → exit with that code.  If string → print it, exit 0.
-fn fn_exit(
-    ed: *mut ExecuteData,
-    _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
+fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let status = arg_opt!(ed, 0);
     match status {
         None => Err(VmError::Exit(0)),
@@ -10887,8 +10890,13 @@ fn fn_exit(
             Err(VmError::Exit(v.as_long().unwrap_or(0) as i32))
         }
         Some(v) => {
-            // String argument: print it, exit 0
-            print!("{}", v.echo_to_string());
+            let Some(rendered) = internal_value_to_string(ed, eg, v)? else {
+                return Ok(());
+            };
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            print!("{rendered}");
             Err(VmError::Exit(0))
         }
     }

@@ -826,6 +826,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::Echo => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let val = val.dereferenced();
+                report_array_to_string_conversion!(val);
                 if val.value_type() == ValueType::Undef {
                     if opline.op1_type == OpType::Cv && opline.extended_value != 0 {
                         if let Some((_, name)) = op_array
@@ -862,13 +863,35 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         cursor.position() as usize
                     };
                     eg.write_output(&buf[..s]);
-                } else if val.value_type() == ValueType::Object {
-                    if let Some(result) = call_magic_method(eg, val, "__tostring", &[])? {
-                        let output = result.echo_to_string();
+                } else if matches!(val.value_type(), ValueType::Object | ValueType::Closure) {
+                    let class_name = if val.value_type() == ValueType::Closure {
+                        "Closure".to_string()
+                    } else {
+                        val.as_object()
+                            .map(|object| object.class_name.to_string())
+                            .unwrap_or_else(|| "object".to_string())
+                    };
+                    let conversion = if val.value_type() == ValueType::Closure {
+                        None
+                    } else {
+                        call_magic_method(eg, val, "__tostring", &[])?
+                    };
+                    resume_pending_exception!();
+                    if let Some(result) = conversion {
+                        let Some(output) = result.as_str() else {
+                            throw_operator!(
+                                "TypeError",
+                                &format!(
+                                    "{class_name}::__toString(): Return value must be of type string"
+                                )
+                            );
+                        };
                         eg.write_output(output.as_bytes());
                     } else {
-                        let output = val.echo_to_string();
-                        eg.write_output(output.as_bytes());
+                        throw_operator!(
+                            "Error",
+                            &format!("Object of class {class_name} could not be converted to string")
+                        );
                     }
                 } else {
                     let output = val.echo_to_string();
@@ -1719,7 +1742,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     1 => Value::double(val.to_float_val()), // (float)
                     2 => {                                   // (string)
                         report_array_to_string_conversion!(val);
-                        if val.value_type() == ValueType::Object {
+                        if matches!(val.value_type(), ValueType::Object | ValueType::Closure) {
+                            if val.value_type() == ValueType::Closure {
+                                throw_operator!(
+                                    "Error",
+                                    "Object of class Closure could not be converted to string"
+                                );
+                            }
                             let class_name = val
                                 .as_object()
                                 .map(|object| object.class_name.to_string())

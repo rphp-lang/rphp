@@ -1713,7 +1713,7 @@ impl Compiler {
                     echo.op1_type = op_type;
                     echo.extended_value = u32::try_from(*line)
                         .map_err(|_| "Echo source line exceeds bytecode range".to_string())?;
-                    self.instructions.push(echo);
+                    self.push_instruction_at_line(echo, *line);
                 }
             }
             Stmt::Assign { var, expr } => {

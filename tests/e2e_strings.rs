@@ -776,3 +776,29 @@ var_dump($protected);
         "\nWarning: Array to string conversion in test.php on line 7\nstring(5) \"Array\"\n\nWarning: Array to string conversion in test.php on line 9\nbool(true)\nstring(5) \"Array\"\n\nWarning: Array to string conversion in test.php on line 10\nstring(5) \"Array\"\nstring(5) \"probe\"\nbool(true)\nstring(5) \"probe\"\nArray to string conversion\nstring(5) \"Array\"\n",
     );
 }
+
+#[test]
+fn output_string_conversion_uses_tostring_and_throws_before_writing() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class GoodOutput {
+    public function __toString(): string { return 'good'; }
+}
+class InvalidOutput {
+    public function __toString() { return []; }
+}
+$good = new GoodOutput;
+echo $good, '|';
+print $good;
+try { echo new stdClass; } catch (Error $error) { echo "\n", $error->getMessage(); }
+try { echo new InvalidOutput; } catch (TypeError $error) { echo "\n", $error->getMessage(); }
+set_error_handler(function(int $level, string $message): never {
+    throw new Exception($message);
+});
+try { echo [1]; } catch (Exception $error) { echo "\n", $error->getMessage(); }
+"#,
+        ),
+        "good|good\nObject of class stdClass could not be converted to string\nInvalidOutput::__toString(): Return value must be of type string\nArray to string conversion",
+    );
+}

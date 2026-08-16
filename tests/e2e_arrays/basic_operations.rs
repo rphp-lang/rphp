@@ -12,8 +12,10 @@ fn natural_sort_constants_order_numeric_key_fragments() {
 
 #[test]
 fn test_e2e_array_echo_prints_array() {
-    // echo $arr prints "Array" (PHP behavior)
-    assert_eq!(run_php("<?php $a = [1, 2, 3]; echo $a;"), "Array");
+    assert_eq!(
+        run_php("<?php $a = [1, 2, 3]; echo $a;"),
+        "\nWarning: Array to string conversion in <main> on line 1\nArray"
+    );
 }
 
 // === Array access ===
