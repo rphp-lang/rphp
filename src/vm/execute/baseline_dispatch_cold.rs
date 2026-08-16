@@ -3081,27 +3081,11 @@ fn op_create_first_class_callable<'a>(
         });
     };
 
-    let bound_this = resolved.bound_this.or_else(|| {
-        resolved
-            .prepend_args
-            .first()
-            .filter(|value| value.value_type() == ValueType::Object)
-            .cloned()
-    });
-    let has_heap_captures = resolved.use_vars.iter().any(Value::needs_cleanup);
-    let closure = PhpClosure {
-        object_handle: 0,
-        func: resolved.func_ptr,
-        called_scope_class_id: resolved.called_scope_class_id,
-        is_static: bound_this.is_none(),
-        bound_this,
-        captures: resolved.use_vars,
-        has_heap_captures,
-    };
+    let closure = crate::stdlib::resolved_callback_into_closure(resolved, eg);
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    // SAFETY: result_ptr is the prepared compiler-owned result slot and is
-    // initialized exactly once with the newly owned closure.
-    unsafe { frame_tmp_set(frame, result_ptr, Value::closure(closure)) };
+    // SAFETY: `get_op_mut` returned the prepared compiler-owned result slot for
+    // this frame; it is initialized exactly once with the newly owned closure.
+    unsafe { frame_tmp_set(frame, result_ptr, closure) };
     Ok(ColdResult::Done)
 }
 

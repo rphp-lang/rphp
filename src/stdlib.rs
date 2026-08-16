@@ -1689,6 +1689,148 @@ fn fn_closure_bind_to(
     )
 }
 
+fn existing_closure_callable(callable: &Value) -> Option<Value> {
+    if callable.value_type() == ValueType::Closure {
+        return Some(callable.clone());
+    }
+    callable.as_array().and_then(|array| {
+        (array.len() == 2
+            && array
+                .get_value_at(1)
+                .and_then(Value::as_str)
+                .is_some_and(|method| method.eq_ignore_ascii_case("__invoke")))
+        .then(|| array.get_value_at(0))
+        .flatten()
+        .filter(|receiver| receiver.value_type() == ValueType::Closure)
+        .cloned()
+    })
+}
+
+fn get_calling_this(ed: *mut ExecuteData) -> Option<Value> {
+    if ed.is_null() {
+        return None;
+    }
+    // SAFETY: the synchronous internal method frame retains its live caller;
+    // a method signature with this_offset=1 owns an initialized CV 0 receiver.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        if caller.is_null() || (*caller).func.is_null() || (*(*caller).func).sig.this_offset != 1 {
+            return None;
+        }
+        ((*caller).cv(0).value_type() == ValueType::Object).then(|| (*caller).cv(0).clone())
+    }
+}
+
+fn resolve_relative_from_callable(
+    callable: &Value,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<ResolvedCallback>, VmError> {
+    let Some(name) = callable.as_str() else {
+        return Ok(None);
+    };
+    let Some((relative, method)) = name.rsplit_once("::") else {
+        return Ok(None);
+    };
+    if !relative.eq_ignore_ascii_case("self") && !relative.eq_ignore_ascii_case("parent") {
+        return Ok(None);
+    }
+    report_internal_deprecation(
+        eg,
+        ed,
+        &format!(
+            "Use of \"{}\" in callables is deprecated",
+            relative.to_ascii_lowercase()
+        ),
+    )?;
+
+    let Some(caller_class) = get_calling_scope_class(ed, eg) else {
+        return Ok(None);
+    };
+    let owner = if relative.eq_ignore_ascii_case("self") {
+        caller_class.to_string()
+    } else {
+        let Some(parent) = eg
+            .find_class(caller_class)
+            .and_then(|class| class.parent.clone())
+        else {
+            return Ok(None);
+        };
+        parent
+    };
+    let Some((visibility, is_static, func_ptr, declaring)) =
+        find_method_in_class_hierarchy(eg, &owner, method)
+    else {
+        return Ok(if relative.eq_ignore_ascii_case("self") {
+            resolve_magic_callback(eg, &owner, method, "__callStatic", None)
+        } else {
+            None
+        });
+    };
+    if !eg.check_visibility(Some(caller_class), declaring, visibility) {
+        return Ok(None);
+    }
+    let class_id = eg.class_id_of(&owner);
+    if is_static {
+        return Ok(Some(ResolvedCallback {
+            func_ptr,
+            prepend_args: vec![Value::null()],
+            use_vars: vec![],
+            called_scope_class_id: class_id,
+            bound_this: None,
+            is_magic_call: false,
+        }));
+    }
+    let Some(receiver) = get_calling_this(ed) else {
+        return Ok(None);
+    };
+    let compatible = receiver
+        .as_object()
+        .is_some_and(|object| eg.class_is_a(object.class_name.as_ref(), &owner));
+    if !compatible {
+        return Ok(None);
+    }
+    Ok(Some(ResolvedCallback {
+        func_ptr,
+        prepend_args: vec![receiver.clone()],
+        use_vars: vec![],
+        called_scope_class_id: receiver
+            .as_object()
+            .map_or(class_id, |object| object.class_id),
+        bound_this: Some(receiver),
+        is_magic_call: false,
+    }))
+}
+
+#[cold]
+#[inline(never)]
+fn fn_closure_from_callable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let callable = arg!(ed, 1);
+    if let Some(closure) = existing_closure_callable(callable) {
+        ret!(rv, closure);
+    }
+
+    let resolved = resolve_relative_from_callable(callable, ed, eg)?
+        .or_else(|| resolve_callback_at_callsite(callable, eg, ed));
+    let Some(resolved) = resolved else {
+        let caller_class = get_calling_scope_class(ed, eg);
+        let mut reason = first_class_callable_error(callable, eg, caller_class.as_deref());
+        if reason.starts_with("Non-static method ") {
+            reason.replace_range(..1, "n");
+        }
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!("Failed to create closure from callable: {reason}"),
+        ));
+        return Ok(());
+    };
+    ret!(rv, resolved_callback_into_closure(resolved, eg));
+}
+
 #[cold]
 #[inline(never)]
 fn take_closure_static_property_caches(source: &PhpClosure) -> Vec<(usize, InlineCache)> {
@@ -1768,6 +1910,37 @@ fn fn_closure_call(
         ));
         return Ok(());
     };
+    if let Some(declaring_class) = eg.declaring_class_of(source.func)
+        && source
+            .user_function()
+            .is_some_and(|function| function.common.sig.this_offset == 1)
+        && !eg.class_is_a(object.class_name.as_ref(), declaring_class)
+    {
+        let method = source
+            .user_function()
+            .map(|function| function.op_array.name.as_str())
+            .unwrap_or("unknown")
+            .rsplit_once("::")
+            .map_or_else(
+                || {
+                    source
+                        .user_function()
+                        .map_or("unknown", |function| function.op_array.name.as_str())
+                },
+                |(_, method)| method,
+            );
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "Cannot bind method {declaring_class}::{method}() to object of class {}",
+                object.class_name
+            ),
+        )?;
+        ret!(rv, Value::null());
+    }
     if source.user_function().is_some() && eg.class_is_internal(object.class_name.as_ref()) {
         report_internal_diagnostic(
             eg,
@@ -2805,6 +2978,14 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         1,
         "newThis",
         "newScope"
+    );
+    reg_method!(
+        "Closure",
+        "fromCallable",
+        fn_closure_from_callable,
+        2,
+        1,
+        "callback"
     );
     let closure_call = Box::new(make_internal_method_variadic(
         fn_closure_call,
@@ -8917,6 +9098,32 @@ impl ResolvedCallback {
     pub(crate) fn is_method(&self) -> bool {
         self.signature().this_offset == 1
     }
+}
+
+pub(crate) fn resolved_callback_into_closure(
+    resolved: ResolvedCallback,
+    eg: &ExecutorGlobals,
+) -> Value {
+    let is_method = resolved.is_method();
+    let bound_this = resolved.bound_this.or_else(|| {
+        resolved
+            .prepend_args
+            .first()
+            .filter(|value| value.value_type() == ValueType::Object)
+            .cloned()
+    });
+    let is_static =
+        bound_this.is_none() && !is_method && eg.declaring_class_of(resolved.func_ptr).is_some();
+    let has_heap_captures = resolved.use_vars.iter().any(Value::needs_cleanup);
+    Value::closure(PhpClosure {
+        object_handle: 0,
+        func: resolved.func_ptr,
+        called_scope_class_id: resolved.called_scope_class_id,
+        is_static,
+        bound_this,
+        captures: resolved.use_vars,
+        has_heap_captures,
+    })
 }
 
 #[inline]

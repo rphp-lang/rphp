@@ -7,6 +7,41 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 `Closure::fromCallable()` checkpoint, based on `4492764`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,672 passes,
+2,358 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds ten exact passes without losing a previous
+pass: `Zend/tests/bug81626.phpt`, `Zend/tests/closure_063.phpt`,
+`Zend/tests/closures/bug80929.phpt`,
+`Zend/tests/closures/closure_from_callable_basic.phpt`,
+`Zend/tests/closures/closure_from_callable_error.phpt`,
+`Zend/tests/closures/closure_from_callable_gc.phpt`,
+`Zend/tests/closures/closure_from_callable_lsb.phpt`,
+`Zend/tests/closures/closure_from_callable_non_static_statically.phpt`,
+`Zend/tests/closures/closure_from_callable_rebinding.phpt` and
+`Zend/tests/closures/closure_from_callable_reflection.phpt`.
+`Closure::fromCallable()` now preserves an existing Closure's identity and
+creates closures for functions, static methods, bound instance methods and
+magic static callbacks with PHP-compatible receiver, visibility and called
+scope. Deprecated `self::` and `parent::` callback strings retain their PHP 8.2
+lexical resolution and diagnostic, invalid callbacks raise the matching
+`TypeError`, and method closures reject rebinding to an incompatible object.
+First-class callables share the same closure-construction rule, including the
+ability to bind an ordinary function closure to an object. Original E2E
+coverage checks invocation, identity, binding, compatible rebinding, static
+and magic methods and the invalid non-static diagnostic. Five Cargo test
+configurations, all-target and unsafe checks, Composer S0, Symfony S1 and
+warmed-kernel S2 pass on AMD64; the production unsafe inventory is 1,621
+blocks, below the 1,623 ceiling. The S3 cold-kernel gate was not rerun because
+this machine has no exact PHP 8.2 oracle. Twenty-one alternating release pairs
+measured `bench_calls.php` at baseline p10/median/p90 of
+0.333631/0.337829/0.349077 seconds and candidate
+0.332684/0.336998/0.342547 seconds (median -0.25 percent), with identical
+computed results. `ReflectionFunction::getClosure()`, dynamic invocation of
+`[Closure, "__invoke"]`, dynamic-property-name parsing, `DateTime`, loose
+closure equality and complete Closure reflection metadata remain separate
+compatibility boundaries.
+
 The current AMD64 `Closure::call()` checkpoint, based on `bdef267`, runs the
 same default-feature 4,345-case PHP 8.2.33 corpus and records 1,662 passes,
 2,368 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero

@@ -27,6 +27,44 @@ fn closure_values_are_instances_of_closure() {
 }
 
 #[test]
+fn closure_from_callable_preserves_callable_shape_scope_and_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function add_pair(int $left, int $right): int { return $left + $right; }
+class CallableFactory {
+    private int $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function read(): int { return $this->value; }
+    public static function twice(int $value): int { return $value * 2; }
+    public static function __callStatic(string $name, array $args): string {
+        return $name . ':' . implode(',', $args);
+    }
+}
+class NonStaticOnly { public function read(): void {} }
+
+$function = Closure::fromCallable('add_pair');
+echo $function(2, 3), ':';
+$boundFunction = $function->bindTo(new stdClass);
+echo $boundFunction(4, 5), ':';
+
+$object = new CallableFactory(7);
+$method = Closure::fromCallable([$object, 'read']);
+echo $method(), ':', $method->call(new CallableFactory(9)), ':';
+echo Closure::fromCallable([CallableFactory::class, 'twice'])(6), ':';
+echo Closure::fromCallable([CallableFactory::class, 'missing'])('x'), ':';
+
+$existing = fn (): string => 'same';
+echo Closure::fromCallable($existing) === $existing ? 'identity:' : 'copy:';
+try { Closure::fromCallable([NonStaticOnly::class, 'read']); }
+catch (TypeError $error) { echo $error->getMessage(); }
+"#,
+        ),
+        "5:9:7:9:12:missing:x:identity:Failed to create closure from callable: non-static method NonStaticOnly::read() cannot be called statically"
+    );
+}
+
+#[test]
 fn variadic_closure_arguments_do_not_overwrite_captures() {
     let out = run_php(
         "<?php $captured = 'kept'; $closure = static function (...$args) use ($captured) { return $captured . ':' . implode(',', $args); }; echo $closure('a', 'b', 'c');",
