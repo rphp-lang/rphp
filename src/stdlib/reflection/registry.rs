@@ -23,7 +23,7 @@ use super::{
     class_is_instantiable, class_is_interface, class_is_internal, class_is_readonly,
     class_is_subclass_of, class_is_trait, class_is_user_defined,
     class_new_instance_without_constructor, class_new_lazy_ghost, function_construct,
-    function_get_closure_called_class, function_get_closure_this,
+    function_get_closure, function_get_closure_called_class, function_get_closure_this,
     function_get_number_of_parameters, function_get_number_of_required_parameters,
     function_get_parameters, function_get_return_type, function_get_tentative_return_type,
     function_has_return_type, function_has_tentative_return_type, function_is_anonymous,
@@ -390,6 +390,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         "ReflectionFunction",
         "getclosurecalledclass",
         function_get_closure_called_class,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunction",
+        "getclosure",
+        function_get_closure,
         1,
         0,
         []

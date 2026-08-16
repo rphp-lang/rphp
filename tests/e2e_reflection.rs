@@ -388,6 +388,32 @@ echo $static('x');
 }
 
 #[test]
+fn reflection_function_get_closure_preserves_identity_and_function_state() {
+    let out = run_php(
+        r#"<?php
+function reflectedStaticState() {
+    static $values = [];
+    $values[] = count($values);
+    return implode(',', $values);
+}
+
+$first = new ReflectionFunction('reflectedStaticState');
+$second = new ReflectionFunction('reflectedStaticState');
+echo $first->getClosure()(), '|';
+echo $second->getClosure()(), '|';
+echo reflectedStaticState(), '|';
+echo (new ReflectionFunction('strlen'))->getClosure()('abcd'), '|';
+
+$captured = 'kept';
+$closure = function () use ($captured) { return $captured; };
+$reflected = (new ReflectionFunction($closure))->getClosure();
+echo ($reflected === $closure ? 'same:' : 'copy:'), $reflected();
+"#,
+    );
+    assert_eq!(out, "0|0,1|0,1,2|4|same:kept");
+}
+
+#[test]
 fn reflected_method_closure_keeps_nested_captured_arguments_aligned() {
     let out = run_php(
         r#"<?php

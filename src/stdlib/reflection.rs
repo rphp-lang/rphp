@@ -231,6 +231,12 @@ fn function_construct(
             );
             object.set_property("__reflection_closure_this", closure_this);
             object.set_property(
+                "__reflection_closure",
+                target
+                    .as_closure()
+                    .map_or_else(Value::null, |_| target.clone()),
+            );
+            object.set_property(
                 "__reflection_closure_called_class",
                 called_class.map_or_else(Value::null, Value::string),
             );
@@ -249,6 +255,34 @@ fn reflected_function(ed: *mut ExecuteData) -> Option<&'static FunctionCommon> {
     // SAFETY: constructors store only registered FunctionCommon pointers;
     // ExecutorGlobals owns those allocations for the full request lifetime.
     (!pointer.is_null()).then(|| unsafe { &*pointer })
+}
+
+fn function_get_closure(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(closure) = reflected_property(ed, "__reflection_closure")
+        .filter(|value| value.value_type() == ValueType::Closure)
+    {
+        return return_value(rv, closure);
+    }
+    let Some(function) = reflected_function(ed) else {
+        reflection_exception(eg, "ReflectionFunction has no resolved function");
+        return Ok(());
+    };
+    return_value(
+        rv,
+        Value::closure(PhpClosure {
+            object_handle: 0,
+            func: function as *const FunctionCommon,
+            called_scope_class_id: 0,
+            is_static: false,
+            bound_this: None,
+            captures: vec![],
+            has_heap_captures: false,
+        }),
+    )
 }
 
 fn hint_metadata(hint: &ParamTypeHint) -> (&'static str, String, bool) {

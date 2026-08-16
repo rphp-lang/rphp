@@ -7,6 +7,30 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 `ReflectionFunction::getClosure()` checkpoint, based on
+`2fd6190`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
+1,673 passes, 2,357 failures, 77 skips, one upstream XFAIL, 237 unsupported
+cases, zero timeouts and zero crashes. It adds the exact pass
+`Zend/tests/bug75474.phpt` without losing a previous pass. Reflection of a
+named user or internal function now produces an invokable Closure while
+retaining the registered function identity, so independent reflected closures
+and direct calls share function-static state. Reflection constructed from an
+existing Closure returns that same Closure object and therefore preserves its
+receiver, lexical scope and captures. Original E2E coverage checks shared
+static state, internal invocation, captured values and strict identity. Five
+Cargo test configurations, all-target and unsafe checks, Composer S0, Symfony
+S1 and warmed-kernel S2 pass on AMD64; the production unsafe inventory remains
+1,621 blocks, below the 1,623 ceiling. The S3 cold-kernel gate was not rerun
+because this machine has no exact PHP 8.2 oracle. A 41-pair alternating release
+confirmation measured `bench_calls.php` at baseline p10/median/p90 of
+0.330568/0.335190/0.340155 seconds and candidate
+0.332254/0.336496/0.343031 seconds (median +0.39 percent), with identical
+computed results. The changed cold Reflection path is inactive in that
+workload; the movement is retained as explicit temporary binary-layout debt.
+Missing reflected internal functions, complete Closure metadata, SPL classes,
+attributes and remaining Closure binding behavior are separate compatibility
+boundaries.
+
 The current AMD64 `Closure::fromCallable()` checkpoint, based on `4492764`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,672 passes,
 2,358 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
