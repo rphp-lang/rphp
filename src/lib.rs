@@ -99,6 +99,11 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "PHP_SAPI" => Some(value::Value::string("cli")),
         "PHP_DEBUG" => Some(value::Value::bool(false)),
         "PHP_OS_FAMILY" => Some(value::Value::string(php_os_family())),
+        "ASSERT_ACTIVE" => Some(value::Value::long(1)),
+        "ASSERT_CALLBACK" => Some(value::Value::long(2)),
+        "ASSERT_BAIL" => Some(value::Value::long(3)),
+        "ASSERT_WARNING" => Some(value::Value::long(4)),
+        "ASSERT_EXCEPTION" => Some(value::Value::long(5)),
 
         // System
         "PHP_EOL" => Some(value::Value::string("\n".to_string())),

@@ -1078,6 +1078,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_scalar", fn_is_scalar, 1, 1, "value");
     reg!("function_exists", fn_function_exists, 1, 1, "function");
     reg!("assert", fn_assert, 2, 1, "assertion", "description");
+    reg!("assert_options", fn_assert_options, 2, 1, "what", "value");
 
     // --- Time functions ---
     reg!("microtime", fn_microtime, 1, 0, "as_float");
@@ -3513,6 +3514,9 @@ fn fn_assert(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if !eg.assertion_state.active {
+        ret!(rv, Value::bool(true));
+    }
     if arg!(ed, 0).is_truthy() {
         ret!(rv, Value::bool(true));
     }
@@ -3546,8 +3550,137 @@ fn fn_assert(
         .filter(|value| value.value_type() != ValueType::Null)
         .map(Value::echo_to_string)
         .unwrap_or_default();
-    eg.exception = Some(crate::value::make_error_value("AssertionError", &message));
-    Ok(())
+
+    let (file, line) = internal_call_source(ed);
+    let callback = eg.assertion_state.callback.clone();
+    let mut invalid_callback = None;
+    if let Some(callback) = callback {
+        if let Some(resolved) = resolve_callback_at_callsite(&callback, eg, ed) {
+            let mut arguments = vec![
+                Value::string(file.clone()),
+                Value::long(line as i64),
+                Value::null(),
+            ];
+            if !message.is_empty() {
+                arguments.push(Value::string(message.clone()));
+            }
+            let _ = call_resolved_with_values(eg, &resolved, &arguments)?;
+        } else {
+            let display = callback.echo_to_string();
+            invalid_callback = Some(format!(
+                "Invalid callback {display}, function \"{display}\" not found or invalid function name"
+            ));
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                invalid_callback.as_deref().unwrap_or_default(),
+            ));
+        }
+    }
+
+    if eg.assertion_state.exception {
+        eg.exception = Some(crate::value::make_error_value("AssertionError", &message));
+    } else if eg.assertion_state.warning {
+        let description = if message.is_empty() {
+            "Assertion"
+        } else {
+            &message
+        };
+        eg.write_output(
+            format!("\nWarning: assert(): {description} failed in {file} on line {line}\n")
+                .as_bytes(),
+        );
+    }
+
+    if eg.assertion_state.bail {
+        if let Some(exception) = eg.exception.take() {
+            let rendered = if let Some(invalid) = invalid_callback {
+                format!(
+                    "Uncaught Error: {invalid} in {file}:{line}\nStack trace:\n#0 {file}({line}): assert(false, '{}')\n#1 {{main}}\n  thrown in {file} on line {line}",
+                    message.replace('\\', "\\\\").replace('\'', "\\'")
+                )
+            } else {
+                crate::vm::execute::format_uncaught_throwable(eg, &exception)
+            };
+            eg.write_output(format!("\nWarning: {rendered}\n").as_bytes());
+        }
+        return Err(VmError::Exit(255));
+    }
+
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    ret!(rv, Value::bool(false));
+}
+
+fn assertion_option_bool(value: &Value) -> bool {
+    match value
+        .as_str()
+        .map(|value| value.trim().to_ascii_lowercase())
+    {
+        Some(value) if matches!(value.as_str(), "" | "0" | "off" | "no" | "false" | "none") => {
+            false
+        }
+        Some(_) => true,
+        None => value.is_truthy(),
+    }
+}
+
+fn fn_assert_options(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let what = arg_long!(ed, 0);
+    let value = arg_opt!(ed, 1).cloned();
+    match what {
+        1 => {
+            let previous = eg.assertion_state.active;
+            if let Some(value) = value.as_ref() {
+                eg.assertion_state.active = assertion_option_bool(value);
+            }
+            ret!(rv, Value::long(previous as i64));
+        }
+        2 => {
+            let previous = eg
+                .assertion_state
+                .callback
+                .clone()
+                .unwrap_or_else(Value::null);
+            if let Some(value) = value {
+                eg.assertion_state.callback =
+                    (value.value_type() != ValueType::Null).then_some(value);
+            }
+            ret!(rv, previous);
+        }
+        3 => {
+            let previous = eg.assertion_state.bail;
+            if let Some(value) = value.as_ref() {
+                eg.assertion_state.bail = assertion_option_bool(value);
+            }
+            ret!(rv, Value::long(previous as i64));
+        }
+        4 => {
+            let previous = eg.assertion_state.warning;
+            if let Some(value) = value.as_ref() {
+                eg.assertion_state.warning = assertion_option_bool(value);
+            }
+            ret!(rv, Value::long(previous as i64));
+        }
+        5 => {
+            let previous = eg.assertion_state.exception;
+            if let Some(value) = value.as_ref() {
+                eg.assertion_state.exception = assertion_option_bool(value);
+            }
+            ret!(rv, Value::long(previous as i64));
+        }
+        _ => {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "assert_options(): Argument #1 ($option) must be an ASSERT_* constant",
+            ));
+            Ok(())
+        }
+    }
 }
 
 // ============================================================================

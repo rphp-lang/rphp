@@ -35,9 +35,32 @@ foreach ([1, 2] as $value) {
     try { assert(false && $value < 3 |> (fn() => 4)); }
     catch (\AssertionError $error) { echo $error->getMessage(), "\n"; }
 }
+
 "#,
         ),
         "assert(false && $value < 3 |> (fn() => 4))\nassert(false && $value < 3 |> (fn() => 4))\n"
+    );
+}
+
+#[test]
+fn assert_options_preserve_request_local_state_and_callback_contract() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+@assert_options(ASSERT_EXCEPTION, 0);
+@assert_options(ASSERT_WARNING, 0);
+echo assert_options(ASSERT_ACTIVE), ":", assert_options(ASSERT_BAIL, 1), ":", assert_options(ASSERT_BAIL, 0), "\n";
+@assert_options(ASSERT_CALLBACK, function($file, $line, $code, $description = null) {
+    var_dump($file !== "", is_int($line), $code === null, $description);
+});
+var_dump(assert(false));
+var_dump(assert_options(ASSERT_CALLBACK, null) instanceof Closure);
+var_dump(assert_options(ASSERT_CALLBACK));
+@assert_options(ASSERT_ACTIVE, 0);
+var_dump(assert(false));
+"#,
+        ),
+        "1:0:1\nbool(true)\nbool(true)\nbool(true)\nstring(13) \"assert(false)\"\nbool(false)\nbool(true)\nNULL\nbool(true)\n"
     );
 }
 

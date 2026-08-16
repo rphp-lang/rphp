@@ -212,6 +212,26 @@ pub(crate) struct OutputBuffer {
 
 /// Minimal ExecutorGlobals for vertical slice.
 /// Will grow as we implement more features.
+pub(crate) struct AssertionState {
+    pub active: bool,
+    pub bail: bool,
+    pub warning: bool,
+    pub exception: bool,
+    pub callback: Option<crate::value::Value>,
+}
+
+impl Default for AssertionState {
+    fn default() -> Self {
+        Self {
+            active: true,
+            bail: false,
+            warning: true,
+            exception: true,
+            callback: None,
+        }
+    }
+}
+
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -244,6 +264,9 @@ pub struct ExecutorGlobals {
     pub regex_cache: crate::regex::RegexCache,
     /// Exception being thrown — None = no exception
     pub exception: Option<crate::value::Value>,
+    /// Legacy assert_options() settings are request-local and consulted only
+    /// by assert(), keeping ordinary call frames and dispatch paths unchanged.
+    pub(crate) assertion_state: AssertionState,
     /// Request-local error mask exposed by error_reporting(). Diagnostic
     /// routing is still intentionally minimal, but libraries observe the
     /// getter/setter contract while temporarily suppressing warnings.
@@ -474,6 +497,7 @@ impl ExecutorGlobals {
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
+            assertion_state: AssertionState::default(),
             error_reporting: 32767,
             error_suppression_frames: Vec::new(),
             error_handler: None,
@@ -555,6 +579,7 @@ impl ExecutorGlobals {
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
+            assertion_state: AssertionState::default(),
             error_reporting: 32767,
             error_suppression_frames: Vec::new(),
             error_handler: None,

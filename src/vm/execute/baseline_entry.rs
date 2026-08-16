@@ -41,7 +41,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
 }
 
 #[cold]
-fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) -> String {
+pub(crate) fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) -> String {
     struct Segment {
         class_name: String,
         message: String,
