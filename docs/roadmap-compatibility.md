@@ -124,6 +124,14 @@ and pipe chains, while weak calls retain their frame-free lowering and scalar
 coercions. Invalid array callbacks also report the canonical first-member
 diagnostic before iteration.
 
+The `9acedad` closure-trace checkpoint adds 11 exact passes with no lost pass:
+1,870 pass, 3,338 fail, 110 skip, one XFAIL, 280 unsupported, zero timeouts and
+zero crashes. Function and arrow tokens retain their declaration line through
+the AST, and anonymous callables expose PHP 8.5's source-, method- and nested-
+closure trace names. The metadata stays inside the existing immutable internal
+name, does not enlarge `OpArray`, remains hidden from closure dumps and magic
+constants, and preserves bound-closure `Closure->` rendering.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
