@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 1,881/5,599 with zero crashes or timeouts; implement `assert_options()` state and the remaining assertion compile-time diagnostics by their general roots. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 1,883/5,599 with zero crashes or timeouts; close the remaining assertion compile-time diagnostics and legacy deprecation behavior by their general roots. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
