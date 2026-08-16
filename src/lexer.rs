@@ -27,7 +27,9 @@ pub enum Token {
     True,     // true
     False,    // false
     ArrayKw,  // array
-    Foreach,  // foreach
+    Foreach {
+        line: usize,
+    }, // foreach
     As,       // as
     Isset,    // isset
     Empty,    // empty
@@ -595,7 +597,7 @@ impl<'a> Lexer<'a> {
                         "true" | "TRUE" => tokens.push(Token::True),
                         "false" | "FALSE" => tokens.push(Token::False),
                         "array" => tokens.push(Token::ArrayKw),
-                        "foreach" => tokens.push(Token::Foreach),
+                        "foreach" => tokens.push(Token::Foreach { line }),
                         "as" => tokens.push(Token::As),
                         "isset" => tokens.push(Token::Isset),
                         "empty" => tokens.push(Token::Empty),

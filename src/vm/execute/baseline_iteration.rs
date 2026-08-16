@@ -742,7 +742,7 @@ fn op_foreach_init<'a>(
     // SAFETY: ForeachInit's source operand and any promoted live alias use a
     // compiler-validated frame slot borrowed only until this opcode finishes.
     // A CV array is promoted to an owned cell before either side mutates it.
-    let (by_reference, live_array_alias) = unsafe {
+    let (init_ip, by_reference, live_array_alias) = unsafe {
         let init_ip =
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
         let by_reference = op_array
@@ -754,7 +754,7 @@ fn op_foreach_init<'a>(
             && opline.op1_type == OpType::Cv
             && (&*source).dereferenced().as_array().is_some())
         .then(|| materialize_reference_alias(frame, (*frame).cv_mut(opline.op1 as u32)));
-        (by_reference, live_array_alias)
+        (init_ip, by_reference, live_array_alias)
     };
     let source = live_array_alias.as_ref().unwrap_or_else(|| unsafe {
         &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
@@ -798,6 +798,25 @@ fn op_foreach_init<'a>(
         .ok_or_else(|| VmError::Fatal(format!("Call to undefined method {class_name}::getIterator()")))?;
         if let Some(exception) = eg.exception.take() {
             return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        let traversable = next
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .is_some_and(|returned_class| eg.class_is_a(&returned_class, "Traversable"));
+        if !traversable {
+            let error = make_error_value(
+                "Exception",
+                &format!(
+                    "Objects returned by {class_name}::getIterator() must be traversable or implement interface Iterator"
+                ),
+            );
+            attach_throwable_origin(&error, eg, frame, op_array, init_ip);
+            return Ok(match throw_in_frame(eg, frame, error) {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }

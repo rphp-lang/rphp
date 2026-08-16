@@ -2232,6 +2232,7 @@ impl Compiler {
                 self.emit_foreach_reference_source_writeback(writeback, array, array_type);
             }
             Stmt::Foreach {
+                line,
                 array,
                 value,
                 key,
@@ -2264,7 +2265,7 @@ impl Compiler {
                 init.result = arr_copy_tmp;
                 init.extended_value = pos_tmp as u32;
                 init.op2 = 0; // placeholder: jump target if empty
-                self.instructions.push(init);
+                self.push_instruction_at_line(init, *line);
 
                 // Loop start: ForeachNext fetches key/value, jumps if done
                 let loop_start = self.instructions.len();

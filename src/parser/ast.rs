@@ -701,6 +701,7 @@ pub enum Stmt {
         target: Expr,
     },
     Foreach {
+        line: usize,
         array: Expr,
         value: ForeachTarget,
         key: Option<ForeachTarget>,
