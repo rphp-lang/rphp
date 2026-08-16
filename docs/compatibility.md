@@ -7,6 +7,29 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 output-string-conversion checkpoint, based on `cb92f68`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,746 passes,
+2,284 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. Its exact pass-set delta is +2/-0:
+`Zend/tests/closure_015.phpt` and `die_string_cast_exception.phpt`.
+
+`echo`, `print` and `exit`/`die` now share PHP string-conversion behavior.
+Objects invoke `__toString`, propagate a method exception before validating the
+result, require a string return, and otherwise raise a catchable `Error` rather
+than printing an internal object description. Closures use the same named
+conversion error. Echoing an array reports `Array to string conversion` before
+writing `Array`, and a throwing user error handler prevents the write. Echo
+bytecode retains its source line for the diagnostic. Original coverage checks
+successful, missing and invalid `__toString` paths plus warning-handler order.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine alternating five-million-write generic-echo release pairs
+measured a 0.15-second median for both the preceding and candidate binaries,
+with identical SHA-256 output.
+
 The current AMD64 array-to-string diagnostic checkpoint, based on `b1d35db`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,744 passes,
 2,286 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
