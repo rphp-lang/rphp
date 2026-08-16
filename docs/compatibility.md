@@ -7,6 +7,32 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 throw-validation checkpoint, based on `fcbfed1`, runs the
+default-feature 4,345-case PHP 8.2.33 corpus and records 1,760 passes, 2,270
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. Its exact pass-set delta is +6/-0:
+`Zend/tests/bug33318.phpt`, `exception_004.phpt`, `exception_005.phpt`,
+`exception_006.phpt`, `generators/errors/generator_instantiate_error.phpt` and
+`instantiate_all_classes.phpt`.
+
+Throwing a scalar or a non-Throwable object now raises PHP's ordinary catchable
+`Error` at the throw opcode, with the PHP 8.2 message and source metadata.
+Attempts to instantiate interfaces, abstract classes or the internal-only
+`Generator` class use the same catchable error path at `new`. Uncaught cases
+therefore share normal Throwable file, line and trace rendering, while caught
+cases preserve surrounding finally/control flow. Original coverage checks
+scalar, null and object operands plus literal and runtime-named non-instantiable
+classes. Canonical naming through a noncanonical `class_alias()` remains a
+separate visible boundary.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine alternating 200,000-iteration valid caught-exception
+release pairs measured a 0.15-second median for both the preceding and
+candidate binaries, with identical output.
+
 The current AMD64 Throwable-chain rendering checkpoint, based on `106fa63`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,754 passes,
 2,276 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
