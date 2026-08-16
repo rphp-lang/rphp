@@ -35,6 +35,7 @@ impl<'a> Lexer<'a> {
     }
 
     pub(super) fn read_double_quoted_string(&mut self) -> Result<Vec<StringPart>, String> {
+        let opener = self.pos;
         self.pos += 1;
         let start = self.pos;
         while self.pos < self.src.len() {
@@ -47,7 +48,16 @@ impl<'a> Lexer<'a> {
         if self.pos >= self.src.len() {
             return Err("Unterminated string literal".into());
         }
-        let parts = Self::interpolate_string_content(&self.src[start..self.pos])?;
+        let content = &self.src[start..self.pos];
+        let source_line = if content.windows(2).any(|window| window == b"->") {
+            1 + self.src[..opener]
+                .iter()
+                .filter(|byte| **byte == b'\n')
+                .count()
+        } else {
+            0
+        };
+        let parts = Self::interpolate_string_content(content, source_line)?;
         self.pos += 1;
         Ok(parts)
     }
@@ -148,7 +158,15 @@ impl<'a> Lexer<'a> {
                         .map_err(|_| "Nowdoc content is not valid UTF-8".to_string())?;
                     return Ok(vec![StringPart::Literal(literal)]);
                 }
-                return Self::interpolate_string_content(&content);
+                let source_line = if content.windows(2).any(|window| window == b"->") {
+                    2 + self.src[..opener]
+                        .iter()
+                        .filter(|byte| **byte == b'\n')
+                        .count()
+                } else {
+                    0
+                };
+                return Self::interpolate_string_content(&content, source_line);
             }
 
             match newline {
@@ -214,7 +232,10 @@ impl<'a> Lexer<'a> {
         Ok(output)
     }
 
-    fn interpolate_string_content(content: &[u8]) -> Result<Vec<StringPart>, String> {
+    fn interpolate_string_content(
+        content: &[u8],
+        source_line: usize,
+    ) -> Result<Vec<StringPart>, String> {
         let mut parts = Vec::new();
         let mut current = String::new();
         let mut pos = 0;
@@ -314,15 +335,30 @@ impl<'a> Lexer<'a> {
                     }
                 }
             } else if content[pos] == b'$' {
+                let variable_offset = pos;
                 let next = content.get(pos + 1).copied().unwrap_or(0);
                 if Self::is_identifier_start(next) {
                     if !current.is_empty() {
                         parts.push(StringPart::Literal(std::mem::take(&mut current)));
                     }
                     pos += 1;
-                    parts.push(StringPart::Variable(Self::read_content_identifier(
-                        content, &mut pos,
-                    )?));
+                    let name = Self::read_content_identifier(content, &mut pos)?;
+                    if content.get(pos..pos + 2) == Some(b"->")
+                        && content
+                            .get(pos + 2)
+                            .is_some_and(|byte| Self::is_identifier_start(*byte))
+                    {
+                        pos += 2;
+                        let property = Self::read_content_identifier(content, &mut pos)?;
+                        let property_line = source_line
+                            + content[..variable_offset]
+                                .iter()
+                                .filter(|byte| **byte == b'\n')
+                                .count();
+                        parts.push(StringPart::PropertyAccess(name, property, property_line));
+                    } else {
+                        parts.push(StringPart::Variable(name));
+                    }
                 } else {
                     current.push('$');
                     pos += 1;
@@ -483,6 +519,13 @@ impl<'a> Lexer<'a> {
                     tokens.push(Token::Variable(name.clone(), 0));
                     tokens.push(Token::RParen);
                 }
+                StringPart::PropertyAccess(name, property, line) => {
+                    tokens.push(Token::LParen(0));
+                    tokens.push(Token::StringLiteral(String::new()));
+                    tokens.push(Token::Dot);
+                    Self::emit_property_access_tokens(tokens, name, property, *line);
+                    tokens.push(Token::RParen);
+                }
                 StringPart::ArrayAccess(name, index) => {
                     tokens.push(Token::LParen(0));
                     tokens.push(Token::StringLiteral(String::new()));
@@ -511,6 +554,9 @@ impl<'a> Lexer<'a> {
             match part {
                 StringPart::Literal(value) => tokens.push(Token::StringLiteral(value.clone())),
                 StringPart::Variable(name) => tokens.push(Token::Variable(name.clone(), 0)),
+                StringPart::PropertyAccess(name, property, line) => {
+                    Self::emit_property_access_tokens(tokens, name, property, *line);
+                }
                 StringPart::ArrayAccess(name, index) => {
                     Self::emit_array_access_tokens(tokens, name, index);
                 }
@@ -522,6 +568,21 @@ impl<'a> Lexer<'a> {
             }
         }
         tokens.push(Token::RParen);
+    }
+
+    fn emit_property_access_tokens(
+        tokens: &mut Vec<Token>,
+        name: &str,
+        property: &str,
+        line: usize,
+    ) {
+        if name == "this" {
+            tokens.push(Token::This(line));
+        } else {
+            tokens.push(Token::Variable(name.to_string(), line));
+        }
+        tokens.push(Token::Arrow);
+        tokens.push(Token::Identifier(property.to_string(), line));
     }
 
     fn emit_array_access_tokens(tokens: &mut Vec<Token>, name: &str, index: &str) {

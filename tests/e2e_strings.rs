@@ -209,6 +209,28 @@ fn test_string_interpolation_curly_brace() {
 }
 
 #[test]
+fn simple_property_interpolation_uses_normal_property_reads_and_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PropertyInterpolationProbe {
+    private $hidden = 'H';
+    public $shown = 'S';
+
+    public function render($other) {
+        echo "[$this->hidden][$this->shown][$other->shown]|";
+        echo "$this->missing|";
+        echo "$this->shown-tail";
+    }
+}
+(new PropertyInterpolationProbe())->render(new PropertyInterpolationProbe());
+"#,
+        ),
+        "[H][S][S]|\nWarning: Undefined property: PropertyInterpolationProbe::$missing in PropertyInterpolationProbe::render on line 8\n|S-tail"
+    );
+}
+
+#[test]
 fn test_string_interpolation_no_vars() {
     assert_eq!(run_php("<?php echo \"just a string\";"), "just a string");
 }
