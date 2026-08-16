@@ -808,7 +808,7 @@ function pipeMutate(int &$value): int { return ++$value; }
 try { 5 |> pipeMutate(...); } catch (Error $error) { echo $error->getMessage(); }
 "#,
         ),
-        "pipemutate(): Argument #1 ($value) cannot be passed by reference"
+        "pipeMutate(): Argument #1 ($value) could not be passed by reference"
     );
 }
 

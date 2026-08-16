@@ -435,7 +435,7 @@ try {
 function borrow_later(&$future) {}
 "#
         ),
-        "borrow_global(): Argument #1 ($slot) cannot be passed by reference|borrow_later(): Argument #1 ($future) cannot be passed by reference"
+        "borrow_global(): Argument #1 ($slot) could not be passed by reference|borrow_later(): Argument #1 ($future) could not be passed by reference"
     );
 }
 

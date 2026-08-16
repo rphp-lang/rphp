@@ -78,7 +78,7 @@ fn op_send_named<'a>(
                     let error = make_error_value(
                         "Error",
                         &format!(
-                            "{}(): Argument #{} (${}) cannot be passed by reference",
+                            "{}(): Argument #{} (${}) could not be passed by reference",
                             function_name,
                             variadic_index + 1,
                             parameter_name
@@ -157,7 +157,7 @@ fn op_send_named<'a>(
                             let error = make_error_value(
                                 "Error",
                                 &format!(
-                                    "{}(): Argument #{} (${}) cannot be passed by reference",
+                                    "{}(): Argument #{} (${}) could not be passed by reference",
                                     function_name,
                                     idx + 1,
                                     parameter_name

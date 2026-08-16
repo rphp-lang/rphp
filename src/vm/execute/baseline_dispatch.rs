@@ -2464,7 +2464,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let error = make_error_value(
                                 "Error",
                                 &format!(
-                                    "{}(): Argument #{} (${}) cannot be passed by reference",
+                                    "{}(): Argument #{} (${}) could not be passed by reference",
                                     function_name,
                                     parameter_index + 1,
                                     parameter_name
@@ -2578,7 +2578,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let error = make_error_value(
                             "Error",
                             &format!(
-                                "{}(): Argument #{} (${}) cannot be passed by reference",
+                                "{}(): Argument #{} (${}) could not be passed by reference",
                                 function_name,
                                 parameter_index + 1,
                                 parameter_name

@@ -505,11 +505,11 @@ observe(receiver('value')?->slot);
         output,
         concat!(
             "receiver:null\n",
-            "mutate(): Argument #1 ($slot) cannot be passed by reference\n",
+            "mutate(): Argument #1 ($slot) could not be passed by reference\n",
             "receiver:object\n",
-            "mutate(): Argument #1 ($slot) cannot be passed by reference\n",
+            "mutate(): Argument #1 ($slot) could not be passed by reference\n",
             "receiver:named\n",
-            "mutate(): Argument #1 ($slot) cannot be passed by reference\n",
+            "mutate(): Argument #1 ($slot) could not be passed by reference\n",
             "receiver:value\n",
             "NULL\n",
         )

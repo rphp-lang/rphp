@@ -2066,38 +2066,44 @@ fn called_class_id_for_frame(eg: &ExecutorGlobals, frame: *mut ExecuteData, dept
     if frame.is_null() || depth >= 64 {
         return 0;
     }
-    let common = unsafe { &*(*frame).func };
-    if common.sig.this_offset == 1 {
-        let receiver = unsafe { &*(*frame).cv(0) };
-        if receiver.value_type() == ValueType::Object {
-            return unsafe { receiver.object_class_id_unchecked() };
+    // SAFETY: every non-null frame comes from the live executor call chain.
+    // Its function, CV storage, predecessor, opline and OpArray remain valid
+    // until this cold metadata walk returns; the bounds check protects the
+    // only backwards instruction lookup.
+    unsafe {
+        let common = &*(*frame).func;
+        if common.sig.this_offset == 1 {
+            let receiver = &*(*frame).cv(0);
+            if receiver.value_type() == ValueType::Object {
+                return receiver.object_class_id_unchecked();
+            }
         }
-    }
 
-    let lexical_class_id = eg
-        .declaring_class_of(unsafe { (*frame).func })
-        .map_or(0, |class| eg.class_id_of(class));
-    let previous = unsafe { (*frame).prev_execute_data };
-    if previous.is_null() {
-        return lexical_class_id;
-    }
-    let previous_op_array = unsafe { (*previous).op_array() };
-    let resume_ptr = unsafe { (*previous).opline };
-    let base = previous_op_array.instructions.as_ptr();
-    let resume_index = unsafe { resume_ptr.offset_from(base) };
-    if resume_index <= 0 || resume_index as usize > previous_op_array.instructions.len() {
-        return lexical_class_id;
-    }
-    let do_fcall_ptr = unsafe { resume_ptr.sub(1) };
-    if unsafe { (*do_fcall_ptr).opcode } != OpCode::DoFcall {
-        return lexical_class_id;
-    }
-    let resolved =
-        static_site_called_class_id(eg, previous, previous_op_array, do_fcall_ptr, depth + 1);
-    if resolved == 0 {
-        lexical_class_id
-    } else {
-        resolved
+        let lexical_class_id = eg
+            .declaring_class_of((*frame).func)
+            .map_or(0, |class| eg.class_id_of(class));
+        let previous = (*frame).prev_execute_data;
+        if previous.is_null() {
+            return lexical_class_id;
+        }
+        let previous_op_array = (*previous).op_array();
+        let resume_ptr = (*previous).opline;
+        let base = previous_op_array.instructions.as_ptr();
+        let resume_index = resume_ptr.offset_from(base);
+        if resume_index <= 0 || resume_index as usize > previous_op_array.instructions.len() {
+            return lexical_class_id;
+        }
+        let do_fcall_ptr = resume_ptr.sub(1);
+        if (*do_fcall_ptr).opcode != OpCode::DoFcall {
+            return lexical_class_id;
+        }
+        let resolved =
+            static_site_called_class_id(eg, previous, previous_op_array, do_fcall_ptr, depth + 1);
+        if resolved == 0 {
+            lexical_class_id
+        } else {
+            resolved
+        }
     }
 }
 
@@ -2108,6 +2114,16 @@ fn called_class_id_for_frame(eg: &ExecutorGlobals, frame: *mut ExecuteData, dept
 /// are important for PHP semantics but cold for ordinary fixed-signature user
 /// calls, so outlining them keeps the baseline dispatch working set smaller.
 fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommon) -> &str {
+    // User functions retain their declaration spelling in the OpArray.  The
+    // executor's lookup table cannot provide it because PHP function lookup is
+    // case-insensitive and its keys are deliberately normalized to lowercase.
+    // SAFETY: registered call targets have a stable allocation and their
+    // common header discriminant identifies the enclosing function layout.
+    unsafe {
+        if (*function).fn_type == FunctionType::User {
+            return &(*(function as *const UserFunction)).op_array.name;
+        }
+    }
     eg.function_table
         .iter()
         .find_map(|(name, pointer)| std::ptr::eq(*pointer, function).then_some(name.as_str()))

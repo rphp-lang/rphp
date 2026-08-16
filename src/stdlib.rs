@@ -10554,7 +10554,7 @@ fn source_unpack_argument(
         eg.exception = Some(crate::value::make_error_value(
             "Error",
             &format!(
-                "{}(): Argument #{} (${}) cannot be passed by reference",
+                "{}(): Argument #{} (${}) could not be passed by reference",
                 function_name,
                 public_index + 1,
                 parameter_name,
