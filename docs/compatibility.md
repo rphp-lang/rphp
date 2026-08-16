@@ -7,6 +7,26 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 detached-callback reference-capture checkpoint, based on
+`dd49a9a`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
+1,748 passes, 2,282 failures, 77 skips, one upstream XFAIL, 237 unsupported
+cases, zero timeouts and zero crashes. Its exact pass-set delta is +1/-0:
+`Zend/tests/bug79793.phpt`.
+
+Borrowed callback invocation now preserves the identity of explicit trailing
+closure reference captures while continuing to clone public call arguments by
+value. Mutations made through `use (&$value)` therefore survive detached
+invocation by error handlers and internal callback consumers. Original
+coverage exercises both `set_error_handler()` and `array_map()`.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine alternating 500,000-iteration `array_map()` release pairs
+with a by-value closure capture measured a 0.20-second median for both the
+preceding and candidate binaries, with identical output.
+
 The current AMD64 compound-array-root diagnostic checkpoint, based on
 `fb19845`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
 1,747 passes, 2,283 failures, 77 skips, one upstream XFAIL, 237 unsupported
