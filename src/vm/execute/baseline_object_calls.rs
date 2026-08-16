@@ -1336,7 +1336,26 @@ fn op_bind_array_dim_ref<'a>(
             opline.op2_type,
             op_array,
         );
-        let key = value_to_array_key(index)?;
+        let key = match value_to_array_key(index) {
+            Ok(key) => key,
+            Err(_) => {
+                let instruction_index = (opline as *const Instruction)
+                    .offset_from(op_array.instructions.as_ptr())
+                    as usize;
+                return Ok(match throw_illegal_offset_type(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    "Illegal offset type",
+                ) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+        };
         let array_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
         let raw_type = (*array_ptr).dereferenced().value_type();
         if raw_type == ValueType::String {
