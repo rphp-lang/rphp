@@ -1,6 +1,22 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 #[cold]
+#[inline(never)]
+fn throw_invalid_dynamic_call_class<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+) -> ThrowResult<'a> {
+    let error = make_error_value(
+        "Error",
+        "Class name must be a valid object or a string",
+    );
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    throw_in_frame(eg, frame, error)
+}
+
+#[cold]
 fn enum_relational_result(
     eg: &ExecutorGlobals,
     left: &Value,
@@ -2993,16 +3009,60 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::InitArray => {
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 let capacity = opline.extended_value as usize;
-                let array = if opline._pad & ARRAY_INIT_HASH_HINT != 0 {
-                    PhpArray::with_hash_capacity(capacity)
-                } else {
-                    PhpArray::with_packed_capacity(capacity)
+                let array = match opline._pad {
+                    0 => PhpArray::with_packed_capacity(capacity),
+                    ARRAY_INIT_HASH_HINT => PhpArray::with_hash_capacity(capacity),
+                    flags => {
+                        if flags & ARRAY_INIT_DYNAMIC_CALL_CLASS != 0 {
+                            // SAFETY: the compiler stores the already-evaluated
+                            // class operand in this live frame and dispatch
+                            // supplies an instruction from this op-array.
+                            let (class_value, instruction_index) = unsafe {
+                                (
+                                    &*(*frame).get_op_ptr(
+                                        opline.op1 as u32,
+                                        opline.op1_type,
+                                        op_array,
+                                    ),
+                                    (opline as *const Instruction)
+                                        .offset_from(op_array.instructions.as_ptr())
+                                        as usize,
+                                )
+                            };
+                            let class_value = class_value.dereferenced();
+                            if class_value.as_str().is_none() && class_value.as_object().is_none() {
+                                match throw_invalid_dynamic_call_class(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    instruction_index,
+                                ) {
+                                    ThrowResult::Handled(new_frame, new_op_array) => {
+                                        frame = new_frame;
+                                        op_array = new_op_array;
+                                        continue 'vm;
+                                    }
+                                    ThrowResult::Unhandled(exception) => {
+                                        eg.exception = Some(exception);
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
+                        if flags & ARRAY_INIT_HASH_HINT != 0 {
+                            PhpArray::with_hash_capacity(capacity)
+                        } else {
+                            PhpArray::with_packed_capacity(capacity)
+                        }
+                    }
                 };
                 // SAFETY: InitArray's result is a compiler-owned TMP in this
                 // live frame; frame_tmp_set records its heap ownership.
-                unsafe { frame_tmp_set(frame, result_ptr, Value::array(array)) };
+                unsafe {
+                    let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                    frame_tmp_set(frame, result_ptr, Value::array(array));
+                }
             }
 
             OpCode::AddArrayElement => {

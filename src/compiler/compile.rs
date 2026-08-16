@@ -25,17 +25,17 @@ use crate::value::{
     canonical_decimal_array_key as canonical_string_literal_array_key,
 };
 use crate::vm::instruction::{
-    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION,
-    ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND, ASSIGN_DIM_REFERENCE, ASSIGN_DIM_UNSET_REBUILD,
-    ASSIGN_OBJ_MODIFY, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
-    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
-    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
-    FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
-    FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
-    FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC,
-    FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
-    KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_UNPACKED_ARGUMENTS, OpType, REFERENCE_RESULT_INTERNAL,
+    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS, ARRAY_INIT_HASH_HINT,
+    ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND,
+    ASSIGN_DIM_REFERENCE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_MODIFY,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
+    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
+    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS,
+    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
+    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS,
+    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE,
+    InlineCache, Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
+    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, OpType, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
     STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, UNSET_DIM_NESTED,
 };
@@ -6474,14 +6474,17 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
+                let (class_op, class_type) = self.compile_expr(class);
+                let receiver_patches = self.take_nullsafe_receiver_patches(class_op, class_type);
                 let callable = self.alloc_tmp();
                 let mut init = Instruction::new(OpCode::InitArray);
+                init.op1 = class_op;
+                init.op1_type = class_type;
                 init.result = callable;
                 init.result_type = OpType::Tmp;
                 init.extended_value = 2;
-                self.instructions.push(init);
-                let (class_op, class_type) = self.compile_expr(class);
-                let receiver_patches = self.take_nullsafe_receiver_patches(class_op, class_type);
+                init._pad |= ARRAY_INIT_DYNAMIC_CALL_CLASS;
+                self.push_instruction_at_line(init, *line);
                 let mut class_element = Instruction::new(OpCode::AddArrayElement);
                 class_element.op1 = callable;
                 class_element.op1_type = OpType::Tmp;
@@ -7492,7 +7495,7 @@ impl Compiler {
         init.op1 = callable;
         init.op1_type = callable_type;
         init.extended_value = args.len() as u32;
-        self.instructions.push(init);
+        self.push_instruction_at_line(init, line);
         if let Some(compiled_args) = compiled_args.as_deref() {
             self.emit_precompiled_runtime_call_args(args, compiled_args, 0, 0, true, true);
         } else {

@@ -191,6 +191,24 @@ continued"
     );
 }
 
+#[test]
+fn invalid_dynamic_call_preserves_source_line_and_validation_order() {
+    let source = "<?php\ntry {\n    $class = null;\n    $class::$undefinedMethod();\n} catch (Error $error) {\n    echo $error->getMessage();\n}\n";
+    let compiled = compile_source(source);
+    let init_index = compiled
+        .main
+        .instructions
+        .iter()
+        .position(|instruction| instruction.opcode == OpCode::InitDynamicCall)
+        .unwrap();
+
+    assert_eq!(compiled.main.source_line(init_index), Some(4));
+    assert_eq!(
+        run_php(source),
+        "Class name must be a valid object or a string"
+    );
+}
+
 // -- call_user_func with closure --
 
 #[test]
