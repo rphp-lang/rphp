@@ -7,6 +7,29 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 Throwable-chain rendering checkpoint, based on `106fa63`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,754 passes,
+2,276 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. Its exact pass-set delta is +3/-0:
+`Zend/tests/exception_007.phpt`, `throwable_001.phpt` and
+`throwable_002.phpt`.
+
+An uncaught Throwable now follows the private `previous` chain and renders it
+from the oldest cause to the final exception. Every segment retains its own
+class, optional message, creation file, line and trace; later segments use
+PHP's `Next` separator, while the final `thrown` location belongs only to the
+outermost exception. Identity tracking bounds malformed cyclic chains without
+changing ordinary acyclic output. Original coverage checks mixed Error and
+Exception subclasses, empty messages, ordering and per-segment origins.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine alternating 200,000-iteration caught-exception release
+pairs measured a 0.15-second median for both the preceding and candidate
+binaries, with identical output.
+
 The current AMD64 `ErrorException` metadata checkpoint, based on `fd8efb2`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,751 passes,
 2,279 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
