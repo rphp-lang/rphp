@@ -7,7 +7,30 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 explicit-Closure-invocation checkpoint, based on `172d52f`,
+The current AMD64 Closure-class-identity checkpoint, based on `7a0bf97`, runs
+the default-feature 4,345-case PHP 8.2.33 corpus and records 1,691 passes,
+2,339 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds two exact passes without losing a previous
+pass: `Zend/tests/bug52060.phpt` and `Zend/tests/bug77627.phpt`. Closure values
+now expose the built-in `Closure` class consistently through `get_class()`,
+case-insensitive `method_exists()`, `is_a()`, `is_subclass_of()`,
+`class_implements()`, `class_parents()` and `class_uses()`. Original E2E
+coverage checks class naming, `__invoke` declaration lookup, case folding,
+same-class versus subclass identity and the empty relation sets. The larger
+`Zend/tests/closure_020.phpt` now reaches the expected `is_a()` result and
+remains blocked only by the separate private-property fatal diagnostic and
+throwable-origin contract. Five Cargo test configurations, all-target and
+unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64; the
+production unsafe inventory remains 1,621 blocks, below the 1,623 ceiling.
+The S3 cold-kernel gate was not rerun because this machine has no exact PHP
+8.2 oracle. The change is confined to explicitly requested introspection
+builtins and does not alter `Value`, `PhpClosure`, callback dispatch or JIT
+layouts; ordinary call-path performance is therefore outside the changed
+execution path. Closure object-handle reuse, private-property throwable
+origins, Fiber/SPL dependencies and remaining binding diagnostics are separate
+compatibility boundaries.
+
+The preceding AMD64 explicit-Closure-invocation checkpoint, based on `172d52f`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,689 passes,
 2,341 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
 timeouts and zero crashes. It adds three exact passes without losing a

@@ -6049,6 +6049,9 @@ fn fn_get_class(
         ));
         return Ok(());
     }
+    if v.value_type() == ValueType::Closure {
+        ret!(rv, Value::string("Closure"));
+    }
     if let Some(obj) = v.as_object() {
         ret!(rv, Value::string(obj.class_name.as_ref()));
     }
@@ -6454,7 +6457,9 @@ fn fn_method_exists(
     let method_name = arg_str!(ed, 1);
 
     // Resolve the class name: from object or string
-    let (class_name, needs_autoload): (String, bool) = if let Some(obj) = first.as_object() {
+    let (class_name, needs_autoload): (String, bool) = if first.value_type() == ValueType::Closure {
+        ("Closure".to_string(), false)
+    } else if let Some(obj) = first.as_object() {
         (obj.class_name.to_string(), false)
     } else if let Some(s) = first.as_str() {
         (s.to_string(), true)
@@ -6471,7 +6476,11 @@ fn fn_method_exists(
 
     // method_exists() includes abstract and non-public declarations; callback
     // resolution deliberately uses the stricter callable-only helper below.
-    let found = method_declared_in_class_hierarchy(eg, &class_name, &method_name);
+    let found = method_declared_in_class_hierarchy(eg, &class_name, &method_name)
+        || (class_name.eq_ignore_ascii_case("Closure")
+            && eg
+                .function_table
+                .contains_key(&format!("closure::{}", method_name.to_ascii_lowercase())));
     ret!(rv, Value::bool(found));
 }
 
@@ -6533,6 +6542,9 @@ fn class_relation_operands(
     if let Some(object) = first.as_object() {
         return Ok(Some((object.class_name.to_string(), target)));
     }
+    if first.value_type() == ValueType::Closure {
+        return Ok(Some(("Closure".to_string(), target)));
+    }
     let allow_string = arg_opt!(ed, 2)
         .map(Value::is_truthy)
         .unwrap_or(default_allow_string);
@@ -6581,7 +6593,9 @@ fn fn_class_implements(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let value = arg!(ed, 0);
-    let class_name = if let Some(object) = value.as_object() {
+    let class_name = if value.value_type() == ValueType::Closure {
+        "Closure".to_string()
+    } else if let Some(object) = value.as_object() {
         object.class_name.to_string()
     } else if let Some(name) = value.as_str() {
         name.to_string()
@@ -6627,7 +6641,9 @@ fn fn_class_parents(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let value = arg!(ed, 0);
-    let class_name = if let Some(object) = value.as_object() {
+    let class_name = if value.value_type() == ValueType::Closure {
+        "Closure".to_string()
+    } else if let Some(object) = value.as_object() {
         object.class_name.to_string()
     } else if let Some(name) = value.as_str() {
         name.to_string()
@@ -6666,7 +6682,9 @@ fn fn_class_uses(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let value = arg!(ed, 0);
-    let class_name = if let Some(object) = value.as_object() {
+    let class_name = if value.value_type() == ValueType::Closure {
+        "Closure".to_string()
+    } else if let Some(object) = value.as_object() {
         object.class_name.to_string()
     } else if let Some(name) = value.as_str() {
         name.to_string()

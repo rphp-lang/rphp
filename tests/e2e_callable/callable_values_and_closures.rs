@@ -27,6 +27,26 @@ fn closure_values_are_instances_of_closure() {
 }
 
 #[test]
+fn closure_values_have_regular_object_class_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$closure = static function () {};
+echo get_class($closure), ':';
+echo method_exists($closure, '__invoke') ? 'method:' : 'missing:';
+echo method_exists($closure, '__INVOKE') ? 'case:' : 'missing:';
+echo is_a($closure, 'closure') ? 'is-a:' : 'not-a:';
+echo is_subclass_of($closure, Closure::class) ? 'subclass:' : 'same:';
+echo count(class_implements($closure)), ':';
+echo count(class_parents($closure)), ':';
+echo count(class_uses($closure));
+"#,
+        ),
+        "Closure:method:case:is-a:same:0:0:0"
+    );
+}
+
+#[test]
 fn closure_from_callable_preserves_callable_shape_scope_and_identity() {
     assert_eq!(
         run_php(
