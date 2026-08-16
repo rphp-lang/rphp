@@ -1934,6 +1934,14 @@ impl Compiler {
             }
             Stmt::Return { expr, line } => {
                 let (op, op_type, has_explicit_value) = if let Some(e) = expr {
+                    if self.returns_reference_context
+                        && let Some(line) = Self::nullsafe_chain_line(e)
+                    {
+                        return Err(self.goto_error(
+                            "Cannot take reference of a nullsafe chain",
+                            line,
+                        ));
+                    }
                     let (o, t) = if self.returns_reference_context
                         && matches!(
                             e,
