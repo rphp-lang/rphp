@@ -5428,8 +5428,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::NullSafeCheck => {
-                if op_nullsafe_check(eg, frame, op_array, opline)? {
-                    continue;
+                match op_nullsafe_check(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => continue,
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    ColdResult::Done => {}
+                    ColdResult::Return => unreachable!("nullsafe check cannot return a frame"),
                 }
             }
 

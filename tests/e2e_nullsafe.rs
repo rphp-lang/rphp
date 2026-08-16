@@ -1,6 +1,6 @@
 mod common;
 
-use common::{run_php, run_php_expect_error};
+use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
 fn nullsafe_method_on_null() {
@@ -241,4 +241,86 @@ $result = $x?->toString();
         "Expected error about non-object method call, got: {}",
         msg
     );
+}
+
+#[test]
+fn nullsafe_scalar_method_errors_are_catchable_and_type_specific() {
+    let out = run_php_with_source_context(
+        r#"<?php
+foreach ([false, [], 0, 0.0, ''] as $value) {
+    try {
+        $value?->missing();
+    } catch (Error $error) {
+        echo $error->getMessage(), "|", $error->getLine(), "\n";
+    }
+}
+"#,
+        "/virtual/nullsafe-scalar.php",
+        "/virtual",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Call to a member function missing() on bool|4\n",
+            "Call to a member function missing() on array|4\n",
+            "Call to a member function missing() on int|4\n",
+            "Call to a member function missing() on float|4\n",
+            "Call to a member function missing() on string|4\n",
+        )
+    );
+}
+
+#[test]
+fn ordinary_non_object_method_errors_use_php_82_type_names() {
+    let out = run_php_with_source_context(
+        r#"<?php
+foreach ([null, false, true, [], 1, 1.0, 'x'] as $value) {
+    try {
+        $value->missing();
+    } catch (Error $error) {
+        echo $error->getMessage(), "|", $error->getLine(), "\n";
+    }
+}
+"#,
+        "/virtual/non-object-method.php",
+        "/virtual",
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Call to a member function missing() on null|4\n",
+            "Call to a member function missing() on bool|4\n",
+            "Call to a member function missing() on bool|4\n",
+            "Call to a member function missing() on array|4\n",
+            "Call to a member function missing() on int|4\n",
+            "Call to a member function missing() on float|4\n",
+            "Call to a member function missing() on string|4\n",
+        )
+    );
+}
+
+#[test]
+fn nullsafe_short_circuit_spans_regular_postfixes_but_not_unrelated_arguments() {
+    let out = run_php(
+        r#"<?php
+class ChainProbe {
+    public function returnsNull() { return null; }
+    public function accept($value) { echo "accept|"; return $value; }
+}
+$null = null;
+var_dump($null?->returnsNull()->missing(expensive())[0]->property);
+$probe = new ChainProbe;
+var_dump($probe->accept($null?->returnsNull()));
+"#,
+    );
+    assert_eq!(out, concat!("NULL\n", "accept|NULL\n"));
+
+    let error = run_php_expect_error(
+        r#"<?php
+class ChainProbe { public function returnsNull() { return null; } }
+$probe = new ChainProbe;
+$probe?->returnsNull()->missing();
+"#,
+    );
+    assert!(format!("{error:?}").contains("missing"));
 }

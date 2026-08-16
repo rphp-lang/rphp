@@ -7,7 +7,34 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `523b670`, runs the same
+The current AMD64 convergence checkpoint, based on `d017413`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,567 passes, 2,463 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds eleven exact passes to the retained 1,556-pass checkpoint without losing a
+previous pass. Nullsafe method calls on scalar receivers now throw a located,
+catchable `Error` with the PHP 8.2 method and type names. Ordinary method calls
+on null and scalar receivers share that diagnostic contract. Compiler-owned
+nullsafe jumps follow the receiver spine across subsequent regular method,
+property and array postfixes, while nullsafe expressions in arguments retain
+independent short-circuit boundaries. Three still-failing type-declaration
+cases move from the runner's runtime category to its compile category only
+because the newly present runtime source path contains `type_declarations` and
+matches the runner's existing broad stage heuristic; their failure message and
+underlying missing Reflection/Closure methods are unchanged. Dynamic static
+`::` calls after a short-circuited receiver remain a separate boundary. Five
+Cargo feature configurations, all-target and unsafe checks, Composer S0,
+Symfony S1 and warmed-kernel S2 pass on AMD64. Nine release runs of
+`bench_calls.php` measured medians of 0.3387 seconds for the preceding binary
+and 0.3346 seconds for the candidate, with the same computed result.
+The exact additions are `Zend/tests/dereference_002.phpt`,
+`indirect_method_call_002.phpt`, `methods-on-non-objects-catch.phpt`,
+`methods-on-non-objects-usort.phpt`, `methods-on-non-objects.phpt`,
+`nullsafe_operator/002.phpt`, `nullsafe_operator/014.phpt`,
+`nullsafe_operator/constant_propagation.phpt`, `traits/bugs/alias01.phpt`,
+`varSyntax/constant_object_deref.phpt` and
+`varSyntax/method_call_on_string_literal.phpt`.
+
+The preceding AMD64 object-array checkpoint, based on `523b670`, runs the same
 4,345-case PHP 8.2.33 corpus and records 1,556 passes, 2,474 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds three exact passes to the retained 1,553-pass checkpoint without losing a

@@ -1532,6 +1532,10 @@ pub struct Compiler {
     /// context. Nested compilers use this only while lowering a default or
     /// initializer whose value could not be fully folded.
     compiling_constant_expression: bool,
+    /// Nullsafe jumps associated with a receiver TMP. A following regular
+    /// postfix remains part of the same short-circuiting chain, while
+    /// nullsafe expressions in arguments keep their own independent target.
+    nullsafe_receiver_patches: HashMap<u16, Vec<usize>>,
 }
 
 /// Get ref_args bitmask for built-in stdlib functions.
@@ -1653,7 +1657,29 @@ impl Compiler {
             implicit_return_value: Value::null(),
             known_constants: HashMap::new(),
             compiling_constant_expression: false,
+            nullsafe_receiver_patches: HashMap::new(),
         }
+    }
+
+    fn take_nullsafe_receiver_patches(&mut self, operand: u16, op_type: OpType) -> Vec<usize> {
+        if op_type == OpType::Tmp {
+            self.nullsafe_receiver_patches
+                .remove(&operand)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn publish_nullsafe_receiver_patches(&mut self, result: u16, patches: Vec<usize>) {
+        if patches.is_empty() {
+            return;
+        }
+        let target = self.instructions.len() as u16;
+        for &index in &patches {
+            self.instructions[index].op2 = target;
+        }
+        self.nullsafe_receiver_patches.insert(result, patches);
     }
 
     pub fn with_source_context(
@@ -5101,6 +5127,7 @@ impl Compiler {
                     return (result, OpType::Tmp);
                 }
                 let (arr_op, arr_type) = self.compile_expr(array);
+                let receiver_patches = self.take_nullsafe_receiver_patches(arr_op, arr_type);
                 let (idx_op, idx_type) = self.compile_expr(index);
                 let tmp = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchDimR);
@@ -5111,6 +5138,7 @@ impl Compiler {
                 fetch.result_type = OpType::Tmp;
                 fetch.result = tmp;
                 self.push_instruction_at_line(fetch, *line);
+                self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
                 (tmp, OpType::Tmp)
             }
             Expr::DynamicClassConstant {
@@ -5119,6 +5147,7 @@ impl Compiler {
                 dynamic_name,
             } => {
                 let (class_op, class_type) = self.compile_expr(class);
+                let receiver_patches = self.take_nullsafe_receiver_patches(class_op, class_type);
                 let (constant_op, constant_type) = self.compile_expr(constant);
                 let tmp = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchDynamicClassConst);
@@ -5136,6 +5165,7 @@ impl Compiler {
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
                 self.instructions.push(fetch);
+                self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
                 (tmp, OpType::Tmp)
             }
             Expr::DynamicNamedClassConstant {
@@ -5918,6 +5948,7 @@ impl Compiler {
                 line,
             } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
+                let mut receiver_patches = self.take_nullsafe_receiver_patches(obj_op, obj_type);
                 let tmp = self.alloc_tmp();
 
                 let nullsafe_patch = if *nullsafe {
@@ -5946,8 +5977,9 @@ impl Compiler {
                 self.push_instruction_at_line(fetch, *line);
 
                 if let Some(idx) = nullsafe_patch {
-                    self.instructions[idx].op2 = self.instructions.len() as u16;
+                    receiver_patches.push(idx);
                 }
+                self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
 
                 (tmp, OpType::Tmp)
             }
@@ -5958,6 +5990,7 @@ impl Compiler {
                 line,
             } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
+                let mut receiver_patches = self.take_nullsafe_receiver_patches(obj_op, obj_type);
                 let tmp = self.alloc_tmp();
                 let nullsafe_patch = if *nullsafe {
                     let mut check = Instruction::new(OpCode::NullSafeCheck);
@@ -5983,8 +6016,9 @@ impl Compiler {
                 fetch.result_type = OpType::Tmp;
                 self.push_instruction_at_line(fetch, *line);
                 if let Some(index) = nullsafe_patch {
-                    self.instructions[index].op2 = self.instructions.len() as u16;
+                    receiver_patches.push(index);
                 }
+                self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
                 (tmp, OpType::Tmp)
             }
             Expr::MethodCall {
@@ -6001,6 +6035,8 @@ impl Compiler {
                         .any(|argument| matches!(argument, CallArg::Unpack(_)))
                 {
                     let (obj_op, obj_type) = self.compile_expr(object);
+                    let mut receiver_patches =
+                        self.take_nullsafe_receiver_patches(obj_op, obj_type);
                     let tmp = self.alloc_tmp();
                     let nullsafe_patch = if *nullsafe {
                         let mut check = Instruction::new(OpCode::NullSafeCheck);
@@ -6010,8 +6046,9 @@ impl Compiler {
                         check.result = tmp;
                         check.result_type = OpType::Tmp;
                         check.extended_value = 1;
+                        check._pad = self.add_literal(Value::string(method.clone()));
                         let index = self.instructions.len();
-                        self.instructions.push(check);
+                        self.push_instruction_at_line(check, *line);
                         Some(index)
                     } else {
                         None
@@ -6048,8 +6085,9 @@ impl Compiler {
                     call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
                     self.push_instruction_at_line(call, *line);
                     if let Some(index) = nullsafe_patch {
-                        self.instructions[index].op2 = self.instructions.len() as u16;
+                        receiver_patches.push(index);
                     }
+                    self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
                     return (tmp, OpType::Tmp);
                 }
                 if args.iter().any(CallArg::contains_yield) {
@@ -6059,6 +6097,8 @@ impl Compiler {
                     // Evaluate the receiver and arguments first, then start
                     // the call protocol from their stable TMP/CV operands.
                     let (obj_op, obj_type) = self.compile_expr(object);
+                    let mut receiver_patches =
+                        self.take_nullsafe_receiver_patches(obj_op, obj_type);
                     let tmp = self.alloc_tmp();
                     let nullsafe_patch = if *nullsafe {
                         let mut check = Instruction::new(OpCode::NullSafeCheck);
@@ -6068,14 +6108,15 @@ impl Compiler {
                         check.result = tmp;
                         check.result_type = OpType::Tmp;
                         check.extended_value = 1;
+                        check._pad = self.add_literal(Value::string(method.clone()));
                         let index = self.instructions.len();
-                        self.instructions.push(check);
+                        self.push_instruction_at_line(check, *line);
                         Some(index)
                     } else {
                         None
                     };
                     let compiled_args = self.compile_call_args(args);
-                    return self.compile_method_call_from_operands(
+                    let result = self.compile_method_call_from_operands(
                         obj_op,
                         obj_type,
                         tmp,
@@ -6086,8 +6127,14 @@ impl Compiler {
                         generic_args,
                         *line,
                     );
+                    if let Some(index) = nullsafe_patch {
+                        receiver_patches.push(index);
+                    }
+                    self.publish_nullsafe_receiver_patches(result.0, receiver_patches);
+                    return result;
                 }
                 let (obj_op, obj_type) = self.compile_expr(object);
+                let mut receiver_patches = self.take_nullsafe_receiver_patches(obj_op, obj_type);
                 let tmp = self.alloc_tmp();
 
                 let nullsafe_patch = if *nullsafe {
@@ -6098,8 +6145,9 @@ impl Compiler {
                     check.result = tmp;
                     check.result_type = OpType::Tmp;
                     check.extended_value = 1; // 1 = method call (fatal on scalar)
+                    check._pad = self.add_literal(Value::string(method.clone()));
                     let idx = self.instructions.len();
-                    self.instructions.push(check);
+                    self.push_instruction_at_line(check, *line);
                     Some(idx)
                 } else {
                     None
@@ -6125,7 +6173,7 @@ impl Compiler {
                 init.op2_type = OpType::Const;
                 init.extended_value = args.len() as u32;
                 let init_index = self.instructions.len();
-                self.instructions.push(init);
+                self.push_instruction_at_line(init, *line);
 
                 self.emit_call_args(args, 1, 0, true, true);
 
@@ -6144,8 +6192,9 @@ impl Compiler {
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 if let Some(idx) = nullsafe_patch {
-                    self.instructions[idx].op2 = self.instructions.len() as u16;
+                    receiver_patches.push(idx);
                 }
+                self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
 
                 (tmp, OpType::Tmp)
             }
@@ -6301,6 +6350,7 @@ impl Compiler {
                 ) = self
                     .compile_static_property_operands(static_property)
                     .expect("matched static-property form");
+                let receiver_patches = self.take_nullsafe_receiver_patches(class_idx, class_type);
                 let tmp = self.alloc_tmp();
                 let mut fetch = Instruction::new(if dynamic_static_scope {
                     OpCode::FetchLateStaticProp
@@ -6320,6 +6370,7 @@ impl Compiler {
                     fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
                 self.instructions.push(fetch);
+                self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
                 (tmp, OpType::Tmp)
             }
             Expr::ClassConstant {
@@ -6366,6 +6417,8 @@ impl Compiler {
             } => {
                 // Compile the callable expression (e.g. $var, $arr[0])
                 let (callable_op, callable_type) = self.compile_expr(callable);
+                let receiver_patches =
+                    self.take_nullsafe_receiver_patches(callable_op, callable_type);
                 if generic_args.is_empty()
                     && args
                         .iter()
@@ -6383,6 +6436,7 @@ impl Compiler {
                     call.result_type = OpType::Tmp;
                     call._pad |= CALL_USER_FUNC_ARRAY_SOURCE_UNPACK;
                     self.push_instruction_at_line(call, *line);
+                    self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
                     return (tmp, OpType::Tmp);
                 }
                 let compiled_args = args
@@ -6423,6 +6477,7 @@ impl Compiler {
                 do_fcall.result_type = OpType::Tmp;
                 self.push_instruction_at_line(do_fcall, *line);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
+                self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
 
                 (tmp, OpType::Tmp)
             }
@@ -7340,7 +7395,7 @@ impl Compiler {
         init.op2 = method_idx;
         init.op2_type = OpType::Const;
         init.extended_value = args.len() as u32;
-        self.instructions.push(init);
+        self.push_instruction_at_line(init, line);
         self.emit_precompiled_runtime_call_args(args, compiled_args, 1, 0, true, true);
         self.emit_reified_argument_check(runtime_generic_check);
 
