@@ -343,19 +343,31 @@ impl<'a> Lexer<'a> {
                     }
                     pos += 1;
                     let name = Self::read_content_identifier(content, &mut pos)?;
-                    if content.get(pos..pos + 2) == Some(b"->")
+                    let (nullsafe, operator_len) = if content.get(pos..pos + 3) == Some(b"?->") {
+                        (true, 3)
+                    } else if content.get(pos..pos + 2) == Some(b"->") {
+                        (false, 2)
+                    } else {
+                        (false, 0)
+                    };
+                    if operator_len != 0
                         && content
-                            .get(pos + 2)
+                            .get(pos + operator_len)
                             .is_some_and(|byte| Self::is_identifier_start(*byte))
                     {
-                        pos += 2;
+                        pos += operator_len;
                         let property = Self::read_content_identifier(content, &mut pos)?;
                         let property_line = source_line
                             + content[..variable_offset]
                                 .iter()
                                 .filter(|byte| **byte == b'\n')
                                 .count();
-                        parts.push(StringPart::PropertyAccess(name, property, property_line));
+                        parts.push(StringPart::PropertyAccess(
+                            name,
+                            property,
+                            nullsafe,
+                            property_line,
+                        ));
                     } else {
                         parts.push(StringPart::Variable(name));
                     }
@@ -391,8 +403,14 @@ impl<'a> Lexer<'a> {
                     parts.push(StringPart::Variable(name));
                 } else {
                     let expression_end = Self::complex_interpolation_end(content, pos)?;
+                    let expression_line = source_line
+                        + content[..expression_start]
+                            .iter()
+                            .filter(|byte| **byte == b'\n')
+                            .count();
                     let tokens = Self::tokenize_interpolation_expression(
                         &content[expression_start..expression_end],
+                        expression_line,
                     )?;
                     pos = expression_end + 1;
                     parts.push(StringPart::Expression(tokens));
@@ -439,9 +457,13 @@ impl<'a> Lexer<'a> {
         Err("Unterminated complex string interpolation".into())
     }
 
-    fn tokenize_interpolation_expression(expression: &[u8]) -> Result<Vec<Token>, String> {
+    fn tokenize_interpolation_expression(
+        expression: &[u8],
+        source_line: usize,
+    ) -> Result<Vec<Token>, String> {
         let decoded = decode_php_source(expression);
-        let source = format!("<?php {decoded}");
+        let line_prefix = "\n".repeat(source_line.saturating_sub(1));
+        let source = format!("<?php {line_prefix}{decoded}");
         let mut tokens = Lexer::new(&source).tokenize()?;
         if tokens.first() != Some(&Token::OpenTag) || tokens.last() != Some(&Token::Eof) {
             return Err("Invalid complex string interpolation".into());
@@ -519,11 +541,11 @@ impl<'a> Lexer<'a> {
                     tokens.push(Token::Variable(name.clone(), 0));
                     tokens.push(Token::RParen);
                 }
-                StringPart::PropertyAccess(name, property, line) => {
+                StringPart::PropertyAccess(name, property, nullsafe, line) => {
                     tokens.push(Token::LParen(0));
                     tokens.push(Token::StringLiteral(String::new()));
                     tokens.push(Token::Dot);
-                    Self::emit_property_access_tokens(tokens, name, property, *line);
+                    Self::emit_property_access_tokens(tokens, name, property, *nullsafe, *line);
                     tokens.push(Token::RParen);
                 }
                 StringPart::ArrayAccess(name, index) => {
@@ -554,8 +576,8 @@ impl<'a> Lexer<'a> {
             match part {
                 StringPart::Literal(value) => tokens.push(Token::StringLiteral(value.clone())),
                 StringPart::Variable(name) => tokens.push(Token::Variable(name.clone(), 0)),
-                StringPart::PropertyAccess(name, property, line) => {
-                    Self::emit_property_access_tokens(tokens, name, property, *line);
+                StringPart::PropertyAccess(name, property, nullsafe, line) => {
+                    Self::emit_property_access_tokens(tokens, name, property, *nullsafe, *line);
                 }
                 StringPart::ArrayAccess(name, index) => {
                     Self::emit_array_access_tokens(tokens, name, index);
@@ -574,6 +596,7 @@ impl<'a> Lexer<'a> {
         tokens: &mut Vec<Token>,
         name: &str,
         property: &str,
+        nullsafe: bool,
         line: usize,
     ) {
         if name == "this" {
@@ -581,7 +604,11 @@ impl<'a> Lexer<'a> {
         } else {
             tokens.push(Token::Variable(name.to_string(), line));
         }
-        tokens.push(Token::Arrow);
+        tokens.push(if nullsafe {
+            Token::NullSafe
+        } else {
+            Token::Arrow
+        });
         tokens.push(Token::Identifier(property.to_string(), line));
     }
 

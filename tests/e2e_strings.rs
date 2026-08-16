@@ -1,6 +1,6 @@
 /// E2E tests: strings, concatenation, escapes, UTF-8, truthiness.
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 
 // === String basics ===
 
@@ -227,6 +227,37 @@ class PropertyInterpolationProbe {
 "#,
         ),
         "[H][S][S]|\nWarning: Undefined property: PropertyInterpolationProbe::$missing in PropertyInterpolationProbe::render on line 8\n|S-tail"
+    );
+}
+
+#[test]
+fn nullsafe_string_interpolation_matches_simple_and_braced_expression_boundaries() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class NullsafeInterpolationProbe {
+    public $shown = 'S';
+    public function show() { return 'M'; }
+}
+$null = null;
+$object = new NullsafeInterpolationProbe();
+var_dump("$null?->shown", "$null?->show()", "{$null?->shown}", "{$null?->show()}");
+var_dump("$object?->shown", "$object?->show()", "{$object?->shown}", "{$object?->show()}");
+"#,
+            "/virtual/nullsafe-interpolation.php",
+            "/virtual",
+        ),
+        concat!(
+            "string(0) \"\"\n",
+            "string(2) \"()\"\n",
+            "string(0) \"\"\n",
+            "string(0) \"\"\n",
+            "\nWarning: Undefined property: NullsafeInterpolationProbe::$show in /virtual/nullsafe-interpolation.php on line 9\n",
+            "string(1) \"S\"\n",
+            "string(2) \"()\"\n",
+            "string(1) \"S\"\n",
+            "string(1) \"M\"\n",
+        )
     );
 }
 

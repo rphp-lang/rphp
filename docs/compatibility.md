@@ -7,7 +7,27 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `65ba50a`, runs the same
+The current AMD64 convergence checkpoint, based on `44861ba`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,603 passes, 2,427 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds the exact pass `Zend/tests/nullsafe_operator/033.phpt` without losing a
+previous pass or moving another failure category. Simple double-quoted and
+heredoc interpolation now recognizes `?->` as the same property-only boundary
+as `->`: the selected property is converted to text, while following call
+parentheses remain literal text. Braced interpolation continues through the
+ordinary expression parser and now retains its physical source line when the
+embedded expression is re-lexed, so property and method diagnostics identify
+the original string line. Original lexer and E2E coverage checks null and
+object receivers, simple and braced forms, property/method boundaries, warning
+order and exact source location. Five Cargo feature configurations, all-target
+and unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64.
+The S3 cold-kernel gate was not rerun because this machine has no exact PHP 8.2
+oracle. Nine release runs of `bench_calls.php` measured medians of 0.341958
+seconds for the preceding binary and 0.344068 seconds for the candidate, with
+the same computed result.
+
+The preceding AMD64 referenced-nullsafe-receiver checkpoint, based on
+`65ba50a`, runs the same
 4,345-case PHP 8.2.33 corpus and records 1,602 passes, 2,428 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds the exact pass `Zend/tests/nullsafe_operator/040.phpt` without losing a
