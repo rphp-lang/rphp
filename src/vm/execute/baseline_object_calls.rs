@@ -170,15 +170,14 @@ fn op_new_obj<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: The compiler guarantees that this live frame owns NewObj's
     // operand/result slots and that opline addresses op_array's stable storage.
-    let (raw_name, ip, result_ptr) = unsafe {
+    let (class_operand, ip, result_ptr) = unsafe {
         (
-            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
-                .as_str()
-                .unwrap_or(""),
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
             (*frame).get_op_mut(opline.result as u32, opline.result_type),
         )
     };
+    let raw_name = class_operand.as_str().unwrap_or("");
     let ic = &op_array.cache[ip];
     let dynamic_static_scope = opline._pad & NEW_FLAG_DYNAMIC_STATIC_SCOPE != 0;
     let dynamic_class_name = opline._pad & NEW_FLAG_DYNAMIC_CLASS_NAME != 0;
@@ -205,6 +204,21 @@ fn op_new_obj<'a>(
             resolve_static_call_class(eg, frame, raw_name, true).ok_or_else(|| {
                 VmError::Fatal(format!("Cannot access {raw_name} when no class scope is active"))
             })?
+        } else if dynamic_class_name && class_operand.value_type() == ValueType::Object {
+            class_operand
+                .as_object()
+                .expect("object class operand must remain live")
+                .class_name
+                .to_string()
+        } else if dynamic_class_name && class_operand.value_type() != ValueType::String {
+            let error = make_error_value("Error", "Class name must be a valid object or a string");
+            attach_throwable_origin(&error, eg, frame, op_array, ip);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
         } else {
             raw_name.to_string()
         };

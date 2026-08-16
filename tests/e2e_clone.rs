@@ -171,3 +171,54 @@ for ($index = 0; $index < 64; ++$index) {
     );
     assert_eq!(output, "7".repeat(64));
 }
+
+#[test]
+fn nested_clone_wraps_assignment_before_each_clone() {
+    let output = run_php(
+        r#"<?php
+class CloneValue {
+    public int $value = 1;
+}
+$outer = clone clone $source = new CloneValue;
+$source->value = 2;
+echo $outer->value, "|", $source->value;
+"#,
+    );
+    assert_eq!(output, "1|2");
+}
+
+#[test]
+fn cloning_a_non_object_throws_a_catchable_error() {
+    let output = run_php(
+        r#"<?php
+try {
+    clone 42;
+} catch (Error $error) {
+    echo get_class($error), "|", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(output, "Error|__clone method called on non-object");
+}
+
+#[test]
+fn dynamic_new_accepts_an_object_and_rejects_other_non_strings() {
+    let output = run_php(
+        r#"<?php
+class DynamicClass {}
+$prototype = new DynamicClass;
+$copy = new $prototype;
+echo get_class($copy), "|";
+try {
+    $invalid = 42;
+    new $invalid;
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "DynamicClass|Class name must be a valid object or a string"
+    );
+}

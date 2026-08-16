@@ -6810,7 +6810,7 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
-            Expr::Clone(inner) => {
+            Expr::Clone { expr: inner, line } => {
                 let (src_op, src_type) = self.compile_expr(inner);
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::CloneObj);
@@ -6818,7 +6818,7 @@ impl Compiler {
                 instr.op1_type = src_type;
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 (tmp, OpType::Tmp)
             }
         }

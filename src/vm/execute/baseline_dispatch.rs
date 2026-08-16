@@ -3157,16 +3157,40 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if suppressed {
                         eg.end_error_suppression(frame as usize);
                     }
-                    let value = value?
-                    .ok_or_else(|| {
-                        let class_name = receiver
-                            .as_object()
-                            .map(|object| object.class_name.to_string())
-                            .unwrap_or_else(|| "object".to_string());
-                        VmError::Fatal(format!(
-                            "Cannot use object of type {class_name} as array"
-                        ))
-                    })?;
+                    let value = match value? {
+                        Some(value) => value,
+                        None => {
+                            let class_name = receiver
+                                .as_object()
+                                .map(|object| object.class_name.to_string())
+                                .unwrap_or_else(|| "object".to_string());
+                            let error = make_error_value(
+                                "Error",
+                                &format!("Cannot use object of type {class_name} as array"),
+                            );
+                            let instruction_index = (opline_ptr as usize
+                                - op_array.instructions.as_ptr() as usize)
+                                / std::mem::size_of::<Instruction>();
+                            attach_throwable_origin(
+                                &error,
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                            );
+                            match throw_in_frame(eg, frame, error) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    };
                     if let Some(exception) = eg.exception.take() {
                         match throw_in_frame(eg, frame, exception) {
                             ThrowResult::Handled(new_frame, new_op_array) => {
