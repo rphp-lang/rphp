@@ -178,6 +178,14 @@ gaps. All feature configurations and the unsafe-policy gate pass; no performance
 gate applies because formatting is confined to an explicitly requested cold
 Throwable path.
 
+The `ed6dab4` type-diagnostic checkpoint reaches 1,922 passes with 3,286
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. A separate cold-path renderer supplies concrete object class names and
+PHP's canonical `Traversable|array` spelling without changing hot type checks.
+The exact PHP 8.5.6 delta is +5/-0 with no remaining-failure stage movement;
+the full feature matrix and unsafe-policy gate pass, and no performance gate is
+required for cold error construction.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
