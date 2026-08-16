@@ -322,6 +322,58 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             };
         }
+        macro_rules! prepare_constrained_write {
+            ($constraints:expr, $value:expr) => {{
+                let value = $value;
+                let constraints = $constraints;
+                if constraints.is_empty() {
+                    value
+                } else {
+                    match prepare_reference_assignment(
+                        value,
+                        &constraints,
+                        eg,
+                        op_array.strict_types,
+                    ) {
+                        Ok(value) => value,
+                        Err(message) => {
+                            let instruction_index = (opline_ptr as usize
+                                - op_array.instructions.as_ptr() as usize)
+                                / std::mem::size_of::<Instruction>();
+                            match throw_illegal_offset_type(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                &message,
+                            ) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+            }};
+        }
+        macro_rules! prepare_reference_write {
+            ($cv:expr, $value:expr) => {{
+                let value = $value;
+                let reference = (*frame).cv($cv);
+                if reference.is_owned_reference() {
+                    let constraints = reference.reference_property_constraints();
+                    prepare_constrained_write!(constraints, value)
+                } else {
+                    value
+                }
+            }};
+        }
         stats::inc_opcode(opline.opcode as usize);
 
         // Check for pending return or exception after finally block ends
@@ -458,7 +510,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let movable_source = opline._pad & ASSIGN_CV_MOVE_SOURCE != 0
                             && opline.result_type == OpType::Unused
                             && matches!(opline.op2_type, OpType::Tmp | OpType::Var);
-                        let cloned = if movable_source {
+                        let mut cloned = if movable_source {
                             let source = (*frame)
                                 .get_op_mut(opline.op2 as u32, opline.op2_type);
                             let object_without_destructor = if (&*source).value_type()
@@ -494,6 +546,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                         };
+                        if destination_is_reference {
+                            cloned = prepare_reference_write!(opline.op1 as u32, cloned);
+                        }
                         if opline.result_type != OpType::Unused {
                             // Need two copies: one for dest, one for result
                             if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
@@ -579,6 +634,36 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::AssignConcat => {
+                // SAFETY: all operands and the optional reference-owning CV
+                // belong to this live frame. The constrained path computes
+                // and validates a detached result before mutating the target;
+                // the ordinary path preserves its existing COW discipline.
+                unsafe {
+                if opline.op1_type == OpType::Cv
+                    && !{
+                        (*frame)
+                            .cv(opline.op1 as u32)
+                            .reference_property_constraints()
+                            .is_empty()
+                    }
+                {
+                    let lhs = (&*(*frame).get_op_ptr(opline.op1 as u32, OpType::Cv, op_array))
+                    .echo_to_string();
+                    let rhs = (&*(*frame).get_op_ptr(
+                            opline.op2 as u32,
+                            opline.op2_type,
+                            op_array,
+                        ))
+                    .echo_to_string();
+                    let prepared = prepare_reference_write!(
+                        opline.op1 as u32,
+                        Value::string(lhs + &rhs)
+                    );
+                    let destination = (*frame).get_op_mut(opline.op1 as u32, OpType::Cv);
+                    slot_set(destination, prepared);
+                    (*frame).opline = opline_ptr.add(1);
+                    continue 'vm;
+                }
                 // $x .= expr: in-place string append
                 // COW: if dest is sole owner, push_str in place (no allocation).
                 // If shared, as_string_mut() detaches first.
@@ -592,7 +677,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // SAFETY: operand slots are initialized for this instruction;
                 // an exact self-source is cloned before the destination is
                 // mutably accessed, and a distinct slot stays live meanwhile.
-                let rhs = unsafe {
+                let rhs = {
                     let rhs_ptr = (*frame).get_op_ptr(
                         opline.op2 as u32,
                         opline.op2_type,
@@ -601,17 +686,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     self_rhs = self_source.then(|| (&*rhs_ptr).clone());
                     self_rhs.as_ref().unwrap_or(&*rhs_ptr)
                 };
-                let dest = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
-                let dest_ref = unsafe { &mut *dest };
+                let dest = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                let dest_ref = &mut *dest;
                 if dest_ref.value_type() == ValueType::String {
                     // Fast path: avoid echo_to_string() allocation when RHS is string
                     if rhs.value_type() == ValueType::String {
                         let rhs_s = rhs.as_str().unwrap();
-                        let s = unsafe { dest_ref.as_string_mut().unwrap_unchecked() };
+                        let s = dest_ref.as_string_mut().unwrap_unchecked();
                         s.push_str(rhs_s);
                     } else {
                         let rhs_str = rhs.echo_to_string();
-                        let s = unsafe { dest_ref.as_string_mut().unwrap_unchecked() };
+                        let s = dest_ref.as_string_mut().unwrap_unchecked();
                         s.push_str(&rhs_str);
                     }
                 } else {
@@ -623,7 +708,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     let mut new_s = lhs_str;
                     new_s.push_str(&rhs_str);
-                    unsafe { slot_set(dest, Value::string(new_s)) };
+                    slot_set(dest, Value::string(new_s));
+                }
                 }
             }
 
@@ -2844,18 +2930,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         old.clone()
                     };
-                    let new_val = increment_php_value(&old);
+                    let writeback_cv = if opline.op2_type == OpType::Cv {
+                        opline.op2 as u32
+                    } else {
+                        debug_assert_eq!(opline.op1_type, OpType::Cv);
+                        opline.op1 as u32
+                    };
+                    let new_val = prepare_reference_write!(writeback_cv, increment_php_value(&old));
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
                         slot_set(result_ptr, new_val.clone());
                     }
-                    let cv_ptr = if opline.op2_type == OpType::Cv {
-                        (*frame).get_op_mut(opline.op2 as u32, OpType::Cv)
-                    } else {
-                        debug_assert_eq!(opline.op1_type, OpType::Cv);
-                        (*frame).get_op_mut(opline.op1 as u32, OpType::Cv)
-                    };
+                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
                     slot_set(cv_ptr, new_val);
                 }
             }
@@ -2874,17 +2961,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         old.clone()
                     };
-                    let cv_ptr = if opline.op2_type == OpType::Cv {
-                        (*frame).get_op_mut(opline.op2 as u32, OpType::Cv)
+                    let writeback_cv = if opline.op2_type == OpType::Cv {
+                        opline.op2 as u32
                     } else {
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
-                        (*frame).get_op_mut(opline.op1 as u32, OpType::Cv)
+                        opline.op1 as u32
                     };
+                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
                     if let Some(n) = old.as_long() {
-                        let new_val = match n.checked_sub(1) {
+                        let new_val = prepare_reference_write!(writeback_cv, match n.checked_sub(1) {
                             Some(v) => Value::long(v),
                             None => Value::double(n as f64 - 1.0),
-                        };
+                        });
                         if opline.result_type != OpType::Unused {
                             let result_ptr =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -2901,9 +2989,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
                             slot_set(result_ptr, old.clone());
                         }
+                        let old = prepare_reference_write!(writeback_cv, old);
                         slot_set(cv_ptr, old);
                     } else if let Some(d) = old.to_double() {
-                        let new_val = Value::double(d - 1.0);
+                        let new_val = prepare_reference_write!(writeback_cv, Value::double(d - 1.0));
                         if opline.result_type != OpType::Unused {
                             let result_ptr =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -2934,18 +3023,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         old.clone()
                     };
-                    let new_val = increment_php_value(&old);
+                    let writeback_cv = if opline.op2_type == OpType::Cv {
+                        opline.op2 as u32
+                    } else {
+                        debug_assert_eq!(opline.op1_type, OpType::Cv);
+                        opline.op1 as u32
+                    };
+                    let new_val = prepare_reference_write!(writeback_cv, increment_php_value(&old));
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
                         slot_set(result_ptr, old.clone());
                     }
-                    let cv_ptr = if opline.op2_type == OpType::Cv {
-                        (*frame).get_op_mut(opline.op2 as u32, OpType::Cv)
-                    } else {
-                        debug_assert_eq!(opline.op1_type, OpType::Cv);
-                        (*frame).get_op_mut(opline.op1 as u32, OpType::Cv)
-                    };
+                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
                     slot_set(cv_ptr, new_val);
                 }
             }
@@ -2964,17 +3054,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         old.clone()
                     };
-                    let cv_ptr = if opline.op2_type == OpType::Cv {
-                        (*frame).get_op_mut(opline.op2 as u32, OpType::Cv)
+                    let writeback_cv = if opline.op2_type == OpType::Cv {
+                        opline.op2 as u32
                     } else {
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
-                        (*frame).get_op_mut(opline.op1 as u32, OpType::Cv)
+                        opline.op1 as u32
                     };
+                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
                     if let Some(n) = old.as_long() {
-                        let new_val = match n.checked_sub(1) {
+                        let new_val = prepare_reference_write!(writeback_cv, match n.checked_sub(1) {
                             Some(v) => Value::long(v),
                             None => Value::double(n as f64 - 1.0),
-                        };
+                        });
                         if opline.result_type != OpType::Unused {
                             let result_ptr =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -2990,9 +3081,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
                             slot_set(result_ptr, old.clone());
                         }
+                        let old = prepare_reference_write!(writeback_cv, old);
                         slot_set(cv_ptr, old);
                     } else if let Some(d) = old.to_double() {
-                        let new_val = Value::double(d - 1.0);
+                        let new_val = prepare_reference_write!(writeback_cv, Value::double(d - 1.0));
                         if opline.result_type != OpType::Unused {
                             let result_ptr =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -3458,7 +3550,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             | OpCode::UnsetGlobal
             | OpCode::BindGlobalRef
             | OpCode::AssignGlobalRef => {
-                op_global_dimension(eg, frame, op_array, opline)?;
+                match op_global_dimension(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::FetchDynamicVar
@@ -3484,7 +3587,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::AssignDim => 'assign_dim: {
                 // op1[op2] = result (value source encoded in result/result_type)
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let cloned_val = if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
+                let mut cloned_val = if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
                     if opline.result_type != OpType::Cv {
                         return Err(VmError::Fatal(
                             "Reference array assignment source must be a variable".into(),
@@ -3618,6 +3721,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     arr.as_array_mut().unwrap().set(key, cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
                     if let Some(element) = php_arr.get_key_mut(&key) {
+                        cloned_val = prepare_constrained_write!(
+                            element.reference_property_constraints(),
+                            cloned_val
+                        );
                         assignment_slot_set(element, cloned_val);
                     } else {
                         php_arr.set(key, cloned_val);
@@ -4038,11 +4145,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 val
                             }
                         };
-                        let cloned = val.clone();
+                        let mut cloned = val.clone();
                         unsafe {
                             let property = obj_val
                                 .object_property_slot_unchecked(ic.property_slot())
                                 as *mut Value;
+                            cloned = prepare_constrained_write!(
+                                (&*property).reference_property_constraints(),
+                                cloned
+                            );
                             assignment_slot_set(&mut *property, cloned);
                         };
                     } else if property_flags == 2
@@ -4073,9 +4184,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     let property = obj_val
                                         .object_property_slot_unchecked(ic.property_slot())
                                         as *mut Value;
+                                    let value = prepare_constrained_write!(
+                                        (&*property).reference_property_constraints(),
+                                        Value::long(source.raw_long())
+                                    );
                                     assignment_slot_set(
                                         &mut *property,
-                                        Value::long(source.raw_long()),
+                                        value,
                                     );
                                 }
                                 true
@@ -4118,11 +4233,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         declaration,
                                     )
                                     .map_err(VmError::Fatal)?;
-                                    let cloned = val.clone();
+                                    let mut cloned = val.clone();
                                     unsafe {
                                         let property = obj_val
                                             .object_property_slot_unchecked(ic.property_slot())
                                             as *mut Value;
+                                        cloned = prepare_constrained_write!(
+                                            (&*property).reference_property_constraints(),
+                                            cloned
+                                        );
                                         assignment_slot_set(&mut *property, cloned);
                                     };
                                     true

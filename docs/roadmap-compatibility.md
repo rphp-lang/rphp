@@ -47,15 +47,18 @@ caches plus fresh cached, deleted-cache, malformed-cache and concurrent cold
 publication transitions against PHP 8.2. It does not admit an HTTP adapter or
 a repeated-request lifecycle gate.
 
-The current pinned PHP 8.2 differential baseline is based on RPHP `4b818a0`
-against php-src 8.2.33 `651db3e`: 1,708 of 4,345 discovered `Zend/tests` and
-`tests/lang` cases pass in the current static-property-reference candidate,
-with one exact addition and no lost pass relative to that base. Static
+The current pinned PHP 8.2 differential baseline is based on RPHP `7aa97ae`
+against php-src 8.2.33 `651db3e`: 1,711 of 4,345 discovered `Zend/tests` and
+`tests/lang` cases pass in the current typed-reference candidate, with three
+exact additions and no lost pass relative to that base. Static
 properties now participate in owned l-value reference identity across
 inherited, dynamic-owner and dynamic-name forms; nullable/untyped
 uninitialized slots materialize `null`, while non-nullable slots raise the
-dedicated PHP error. Complete typed-reference constraints remain a separate
-representation slice. Object `var_dump()` observes property reference cells without an
+dedicated PHP error. Typed static properties add and remove constraints on the
+shared owned cell as aliases are rebound; CV, compound/inc-dec, array,
+dynamic-variable and global writes enforce the compatible constraint
+intersection without changing the compact `Value` layout. Typed instance
+property acquisition remains a separate slice. Object `var_dump()` observes property reference cells without an
 ordinary clone that dereferences them. Compiler-only array, property, dynamic-
 variable, append and nested-append CVs are excluded from PHP-visible alias
 cardinality, so they cannot retain a false `&` marker after the last visible

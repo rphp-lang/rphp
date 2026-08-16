@@ -467,6 +467,139 @@ try {
 }
 
 #[test]
+fn typed_static_reference_constraints_coerce_reject_and_detach_on_rebind() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ConstrainedStaticReference {
+    public static int $number = 1;
+    public static $loose = 2;
+}
+$alias =& ConstrainedStaticReference::$number;
+$alias = "3";
+var_dump($alias, ConstrainedStaticReference::$number);
+try {
+    $alias = null;
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+ConstrainedStaticReference::$number =& ConstrainedStaticReference::$loose;
+$alias = "detached";
+var_dump($alias, ConstrainedStaticReference::$number);
+"#,
+        ),
+        "int(3)\nint(3)\nCannot assign null to reference held by property ConstrainedStaticReference::$number of type int\nstring(8) \"detached\"\nint(2)\n"
+    );
+}
+
+#[test]
+fn one_reference_cell_enforces_the_intersection_of_compatible_property_types() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CompatibleStaticReferences {
+    public static int $exact = 1;
+    public static ?int $nullable = 2;
+    public static int|string $union = 3;
+}
+$alias =& CompatibleStaticReferences::$exact;
+CompatibleStaticReferences::$nullable =& $alias;
+CompatibleStaticReferences::$union =& $alias;
+$alias = "4";
+var_dump($alias, CompatibleStaticReferences::$exact, CompatibleStaticReferences::$nullable, CompatibleStaticReferences::$union);
+try {
+    CompatibleStaticReferences::$union = "invalid";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump($alias, CompatibleStaticReferences::$union);
+"#,
+        ),
+        "int(4)\nint(4)\nint(4)\nint(4)\nCannot assign string to reference held by property CompatibleStaticReferences::$exact of type int\nint(4)\nint(4)\n"
+    );
+}
+
+#[test]
+fn incompatible_typed_properties_cannot_hold_the_same_reference_cell() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class IncompatibleStaticReferences {
+    public static int $number = 5;
+    public static string $text = "5";
+}
+try {
+    IncompatibleStaticReferences::$number =& IncompatibleStaticReferences::$text;
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    IncompatibleStaticReferences::$text =& IncompatibleStaticReferences::$number;
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "Reference with value of type string held by property IncompatibleStaticReferences::$text of type string is not compatible with property IncompatibleStaticReferences::$number of type int\nReference with value of type int held by property IncompatibleStaticReferences::$number of type int is not compatible with property IncompatibleStaticReferences::$text of type string"
+    );
+}
+
+#[test]
+fn typed_static_property_keeps_a_reference_returned_from_a_call() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$shared = 6;
+function &sharedReference() {
+    return $GLOBALS['shared'];
+}
+class CallBoundStaticReference {
+    public static string $value = "initial";
+}
+CallBoundStaticReference::$value =& sharedReference();
+CallBoundStaticReference::$value = 7;
+var_dump(CallBoundStaticReference::$value, sharedReference());
+"#,
+        ),
+        "string(1) \"7\"\nstring(1) \"7\"\n"
+    );
+}
+
+#[test]
+fn typed_reference_constraints_follow_compound_container_and_global_alias_writes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class EscapedTypedReference {
+    public static int $value = 1;
+}
+$alias =& EscapedTypedReference::$value;
+try {
+    $alias .= "invalid";
+} catch (TypeError $error) {
+    echo "compound:", $error->getMessage(), "\n";
+}
+$alias++;
+$container = [&$alias];
+try {
+    $container[0] = "invalid";
+} catch (TypeError $error) {
+    echo "container:", $error->getMessage(), "\n";
+}
+$GLOBALS['escapedAlias'] =& $alias;
+try {
+    $GLOBALS['escapedAlias'] = "invalid";
+} catch (TypeError $error) {
+    echo "global:", $error->getMessage(), "\n";
+}
+var_dump($alias, EscapedTypedReference::$value);
+"#,
+        ),
+        "compound:Cannot assign string to reference held by property EscapedTypedReference::$value of type int\ncontainer:Cannot assign string to reference held by property EscapedTypedReference::$value of type int\nglobal:Cannot assign string to reference held by property EscapedTypedReference::$value of type int\nint(2)\nint(2)\n"
+    );
+}
+
+#[test]
 fn compiler_reference_cvs_do_not_create_visible_aliases() {
     assert_eq!(
         run_php(

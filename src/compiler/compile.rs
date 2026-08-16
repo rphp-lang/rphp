@@ -3633,6 +3633,7 @@ impl Compiler {
         &mut self,
         expr: &Expr,
         source: u16,
+        source_type: OpType,
         source_is_internal: bool,
     ) -> Result<(), String> {
         let (class, class_type, property, property_type, late_static, dynamic_owner, line) = self
@@ -3648,7 +3649,7 @@ impl Compiler {
         assign.op2 = property;
         assign.op2_type = property_type;
         assign.result = source;
-        assign.result_type = OpType::Cv;
+        assign.result_type = source_type;
         assign._pad |= STATIC_PROP_REFERENCE_BIND;
         if source_is_internal {
             assign._pad |= REFERENCE_RESULT_INTERNAL;

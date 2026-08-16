@@ -467,22 +467,84 @@ fn op_dynamic_variable<'a>(
             write_fetch_dim_result(frame, result, value);
         }
         OpCode::AssignDynamicVar => {
-            let value = unsafe {
+            let mut value = unsafe {
                 (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone()
             };
             if let Some(cv) = direct_cv {
+                // SAFETY: direct_cv was resolved from this live owner frame;
+                // validation finishes before the dereferenced target write.
                 unsafe {
                     let raw = (*owner).cv_mut(cv);
                     if raw.is_reference() {
+                        let constraints = raw.reference_property_constraints();
+                        value = match prepare_reference_assignment(
+                            value,
+                            &constraints,
+                            eg,
+                            op_array.strict_types,
+                        ) {
+                            Ok(value) => value,
+                            Err(message) => {
+                                return Ok(static_property_throw(
+                                    eg,
+                                    frame,
+                                    "TypeError",
+                                    message,
+                                ));
+                            }
+                        };
                         slot_set((*owner).get_op_mut(cv, OpType::Cv), value);
                     } else {
                         frame_slot_set(owner, raw, value);
                     }
                 }
             } else if global_scope {
+                let constraints = eg
+                    .globals
+                    .get(&name)
+                    .map(Value::reference_property_constraints)
+                    .unwrap_or_default();
+                value = match prepare_reference_assignment(
+                    value,
+                    &constraints,
+                    eg,
+                    op_array.strict_types,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return Ok(static_property_throw(
+                            eg,
+                            frame,
+                            "TypeError",
+                            message,
+                        ));
+                    }
+                };
                 globals_assign(&mut eg.globals, &name, value);
                 eg.dirty_globals.insert(name);
             } else {
+                let constraints = eg
+                    .dynamic_variables
+                    .get(&(owner as usize))
+                    .and_then(|variables| variables.get(&name))
+                    .map(Value::reference_property_constraints)
+                    .unwrap_or_default();
+                value = match prepare_reference_assignment(
+                    value,
+                    &constraints,
+                    eg,
+                    op_array.strict_types,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return Ok(static_property_throw(
+                            eg,
+                            frame,
+                            "TypeError",
+                            message,
+                        ));
+                    }
+                };
                 let variables = eg.dynamic_variables.entry(owner as usize).or_default();
                 globals_assign(variables, &name, value);
             }
@@ -2165,6 +2227,73 @@ fn op_unset_static_prop<'a>(
     ))
 }
 
+#[cold]
+#[inline(never)]
+fn prepare_other_static_reference_constraints(
+    eg: &ExecutorGlobals,
+    storage_slot: usize,
+    value: Value,
+    strict: bool,
+) -> Result<Value, String> {
+    let mut constraints = eg
+        .static_property_value(storage_slot)
+        .map(Value::reference_property_constraints)
+        .unwrap_or_default();
+    constraints.retain(|constraint| constraint.owner != storage_slot);
+    prepare_reference_assignment(value, &constraints, eg, strict)
+}
+
+#[cold]
+#[inline(never)]
+fn commit_constrained_static_property_value<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    storage_slot: usize,
+    value: Value,
+    strict: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    let value = match prepare_other_static_reference_constraints(
+        eg,
+        storage_slot,
+        value,
+        strict,
+    ) {
+        Ok(value) => value,
+        Err(message) => {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                message,
+            ));
+        }
+    };
+    // SAFETY: every caller supplies a checked inline-cache storage slot owned
+    // by this executor; reference validation completes before mutation.
+    unsafe { eg.set_static_property_value_unchecked(storage_slot, value) };
+    Ok(ColdResult::Done)
+}
+
+#[inline(always)]
+fn commit_cached_static_property_value<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    storage_slot: usize,
+    value: Value,
+    strict: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    if !eg
+        .static_property_value(storage_slot)
+        .is_some_and(Value::is_owned_reference)
+    {
+        // SAFETY: cache-hit callers provide a published append-only storage
+        // slot; the non-reference guard preserves the ordinary direct write.
+        unsafe { eg.set_static_property_value_unchecked(storage_slot, value) };
+        return Ok(ColdResult::Done);
+    }
+    commit_constrained_static_property_value(eg, frame, storage_slot, value, strict)
+}
+
 #[inline(always)]
 fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
@@ -2201,8 +2330,13 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
             };
             let value = clone_static_property_value(source);
             if flags == 3 || value.value_type() == ValueType::Long {
-                unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
-                return Ok(ColdResult::Done);
+                return commit_cached_static_property_value(
+                    eg,
+                    frame,
+                    cache.property_slot(),
+                    value,
+                    op_array.strict_types,
+                );
             }
         }
     }
@@ -2244,8 +2378,13 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         && cache.class_id == class_id
     {
         if cache.property_flags() == 3 {
-            unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
-            return Ok(ColdResult::Done);
+            return commit_cached_static_property_value(
+                eg,
+                frame,
+                cache.property_slot(),
+                value,
+                op_array.strict_types,
+            );
         }
         if cache.property_flags() == 1 {
             let tag = cache.typed_static_property_tag();
@@ -2253,10 +2392,13 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
             if tag == crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT
                 && value_type == ValueType::Long
             {
-                unsafe {
-                    eg.set_static_property_value_unchecked(cache.property_slot(), value)
-                };
-                return Ok(ColdResult::Done);
+                return commit_cached_static_property_value(
+                    eg,
+                    frame,
+                    cache.property_slot(),
+                    value,
+                    op_array.strict_types,
+                );
             }
             #[cfg(feature = "php-generics-reified")]
             let reified_contract = if tag
@@ -2272,10 +2414,13 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
                     eg.static_generic_property_contract_remembers(reified_contract, &value)
                 }
             {
-                unsafe {
-                    eg.set_static_property_value_unchecked(cache.property_slot(), value)
-                };
-                return Ok(ColdResult::Done);
+                return commit_cached_static_property_value(
+                    eg,
+                    frame,
+                    cache.property_slot(),
+                    value,
+                    op_array.strict_types,
+                );
             }
             if tag == crate::vm::instruction::InlineCache::TYPED_PROPERTY_FLOAT
                 && value_type == ValueType::Long
@@ -2297,10 +2442,13 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
                 _ => false,
             };
             if fast_match {
-                unsafe {
-                    eg.set_static_property_value_unchecked(cache.property_slot(), value)
-                };
-                return Ok(ColdResult::Done);
+                return commit_cached_static_property_value(
+                    eg,
+                    frame,
+                    cache.property_slot(),
+                    value,
+                    op_array.strict_types,
+                );
             }
             return validate_cached_typed_static_property(
                 eg,
@@ -2341,8 +2489,20 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     unsafe {
     let class_name = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
     let property_name = &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array);
-        debug_assert_eq!(opline.result_type, OpType::Cv);
-        let source = (*frame).cv_mut(opline.result as u32) as *mut Value;
+        let source = if opline.result_type == OpType::Cv {
+            (*frame).cv_mut(opline.result as u32) as *mut Value
+        } else {
+            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+        };
+        if opline.result_type != OpType::Cv && !(&*source).is_reference() {
+            report_php_notice(
+                eg,
+                frame,
+                op_array,
+                opline,
+                "Only variables should be assigned by reference",
+            )?;
+        }
     let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
     let dynamic_owner_value = dynamic_owner
         .then(|| dynamic_static_property_owner(eg, class_name))
@@ -2369,9 +2529,13 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     let called_class = eg
         .class_by_id(class_id)
         .map_or(raw_class, |class| class.name.as_str());
-    let prepared = match prepare_property_assignment(
-        (&*source).dereferenced().clone(),
+    let binding = materialize_reference_alias(frame, source);
+    let constraints = binding.reference_property_constraints();
+    let current = (&*binding.as_ref_ptr()).clone();
+    let prepared = match prepare_typed_property_reference_attachment(
+        current,
         definition,
+        &constraints,
         eg,
         op_array.strict_types,
         called_class,
@@ -2382,7 +2546,9 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
         }
     };
 
-    let binding = materialize_reference_alias(frame, source);
+    if let Some(previous) = eg.static_property_value(resolved.storage_slot) {
+        previous.remove_reference_property_constraint(resolved.storage_slot);
+    }
     let target = binding.as_ref_ptr();
     std::ptr::drop_in_place(target);
     target.write(prepared);
@@ -2391,6 +2557,18 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     } else {
         Value::reference(binding.as_ref_ptr())
     };
+    if definition.is_typed() && property_binding.is_owned_reference() {
+        property_binding.add_reference_property_constraint(
+            crate::value::ReferencePropertyConstraint {
+                owner: resolved.storage_slot,
+                declaring_class: definition.declaring_class.clone(),
+                property: definition.name.clone(),
+                type_scope: definition.type_scope.clone(),
+                called_class: called_class.to_string(),
+                type_hint: definition.type_hint.clone(),
+            },
+        );
+    }
     if !eg.rebind_static_property_value(resolved.storage_slot, property_binding) {
         return Err(VmError::Fatal("Invalid static property storage slot".into()));
     }
@@ -2470,8 +2648,13 @@ fn validate_cached_typed_static_property<'a>(
     if !reified_contract.is_null() {
         unsafe { eg.remember_static_generic_property_contract(reified_contract, &value) };
     }
-    unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
-    Ok(ColdResult::Done)
+    commit_cached_static_property_value(
+        eg,
+        frame,
+        cache.property_slot(),
+        value,
+        op_array.strict_types,
+    )
 }
 
 #[cold]
@@ -2537,6 +2720,22 @@ fn assign_static_property_cache_miss<'a>(
         eg.cache_static_generic_property_contract(resolved.definition, &value)
     } else {
         std::ptr::null()
+    };
+    value = match prepare_other_static_reference_constraints(
+        eg,
+        resolved.storage_slot,
+        value,
+        op_array.strict_types,
+    ) {
+        Ok(value) => value,
+        Err(message) => {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                message,
+            ));
+        }
     };
     if !eg.set_static_property_value(resolved.storage_slot, value) {
         return Err(VmError::Fatal("Invalid static property storage slot".into()));
@@ -2681,6 +2880,19 @@ fn resolve_static_property_reference_fetch<'a>(
     };
     if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
         binding.mark_internal_reference_alias();
+    }
+    if definition.is_typed() && binding.is_owned_reference() {
+        let called_class = eg
+            .class_by_id(class_id)
+            .map_or(raw_class, |class| class.name.as_str());
+        binding.add_reference_property_constraint(crate::value::ReferencePropertyConstraint {
+            owner: resolved.storage_slot,
+            declaring_class: definition.declaring_class.clone(),
+            property: definition.name.clone(),
+            type_scope: definition.type_scope.clone(),
+            called_class: called_class.to_string(),
+            type_hint: definition.type_hint.clone(),
+        });
     }
     cache.set_property(class_id, resolved.storage_slot, 1);
     frame_slot_set(frame, result_ptr, binding);
@@ -2882,12 +3094,12 @@ fn set_global_snapshot_entry(snapshot: &mut PhpArray, name: &str, value: Value) 
 }
 
 #[inline(never)]
-fn op_global_dimension(
+fn op_global_dimension<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     let scope_vars = if !op_array.main_scope_vars.is_empty() {
         &op_array.main_scope_vars
     } else {
@@ -2925,7 +3137,7 @@ fn op_global_dimension(
 
             let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
             write_fetch_dim_result(frame, result, Value::array(snapshot));
-            return Ok(());
+            return Ok(ColdResult::Done);
         }
 
         let key = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
@@ -2953,8 +3165,34 @@ fn op_global_dimension(
                 write_fetch_dim_result(frame, result, value);
             }
             OpCode::AssignGlobal => {
-                let value =
+                let mut value =
                     (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone();
+                let mut constraints = eg
+                    .globals
+                    .get(&name)
+                    .map(Value::reference_property_constraints)
+                    .unwrap_or_default();
+                if constraints.is_empty()
+                    && let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name)
+                {
+                    constraints = (*frame).cv(*cv).reference_property_constraints();
+                }
+                value = match prepare_reference_assignment(
+                    value,
+                    &constraints,
+                    eg,
+                    op_array.strict_types,
+                ) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        return Ok(static_property_throw(
+                            eg,
+                            frame,
+                            "TypeError",
+                            message,
+                        ));
+                    }
+                };
                 globals_assign(&mut eg.globals, &name, value.clone());
                 eg.dirty_globals.insert(name.clone());
                 if let Some((cv, _)) = scope_vars.iter().find(|(_, variable)| variable == &name) {
@@ -3041,7 +3279,7 @@ fn op_global_dimension(
             _ => unreachable!("op_global_dimension called for a non-global opcode"),
         }
     }
-    Ok(())
+    Ok(ColdResult::Done)
 }
 
 #[inline(never)]

@@ -139,6 +139,97 @@ fn prepare_property_assignment(
     ))
 }
 
+#[cold]
+#[inline(never)]
+fn prepare_reference_assignment(
+    value: Value,
+    constraints: &[crate::value::ReferencePropertyConstraint],
+    eg: &ExecutorGlobals,
+    strict: bool,
+) -> Result<Value, String> {
+    if constraints.is_empty() {
+        return Ok(value);
+    }
+
+    let mut candidates = Vec::with_capacity(constraints.len() + 1);
+    candidates.push(value.clone());
+    for constraint in constraints {
+        if let Some(coerced) =
+            coerce_property_value(&value, &constraint.type_hint, !strict)
+        {
+            candidates.push(coerced);
+        }
+    }
+    if let Some(candidate) = candidates.into_iter().find(|candidate| {
+        constraints.iter().all(|constraint| {
+            property_type_matches_exact(
+                candidate,
+                &constraint.type_hint,
+                eg,
+                &constraint.type_scope,
+                &constraint.called_class,
+            )
+        })
+    }) {
+        return Ok(candidate);
+    }
+
+    let constraint = constraints
+        .iter()
+        .find(|constraint| {
+            !property_type_matches_exact(
+                &value,
+                &constraint.type_hint,
+                eg,
+                &constraint.type_scope,
+                &constraint.called_class,
+            )
+        })
+        .unwrap_or(&constraints[0]);
+    Err(format!(
+        "Cannot assign {} to reference held by property {}::${} of type {}",
+        value.type_name(),
+        constraint.declaring_class,
+        constraint.property,
+        constraint.type_hint.display_name()
+    ))
+}
+
+#[cold]
+#[inline(never)]
+fn prepare_typed_property_reference_attachment(
+    value: Value,
+    definition: &crate::compiler::compile::PropertyDefinition,
+    constraints: &[crate::value::ReferencePropertyConstraint],
+    eg: &ExecutorGlobals,
+    strict: bool,
+    called_class: &str,
+) -> Result<Value, String> {
+    let original_type = value.type_name();
+    let prepared = prepare_property_assignment(value, definition, eg, strict, called_class)?;
+    if let Some(existing) = constraints.iter().find(|constraint| {
+        !property_type_matches_exact(
+            &prepared,
+            &constraint.type_hint,
+            eg,
+            &constraint.type_scope,
+            &constraint.called_class,
+        )
+    }) {
+        return Err(format!(
+            "Reference with value of type {} held by property {}::${} of type {} is not compatible with property {}::${} of type {}",
+            original_type,
+            existing.declaring_class,
+            existing.property,
+            existing.type_hint.display_name(),
+            definition.declaring_class,
+            definition.name,
+            definition.type_hint.display_name()
+        ));
+    }
+    Ok(prepared)
+}
+
 /// Whether a warmed instance-property write cache can accept this exact value
 /// without scalar coercion. Generic definitions retain their own runtime
 /// boundary because a substituted contract may be stricter than its erased

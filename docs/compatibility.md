@@ -7,6 +7,49 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 typed-reference-constraint checkpoint, based on `7aa97ae`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,711 passes,
+2,319 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds the exact passes
+`Zend/tests/type_declarations/typed_properties_068.phpt` and
+`Zend/tests/type_declarations/typed_properties_082.phpt`, plus compound static
+property reference assignment in
+`Zend/tests/type_declarations/typed_properties_102.phpt`, without losing a
+previous pass. The compact 16-byte `Value` layout is unchanged: the existing
+heap-owned reference cell now carries the typed-property constraints of every
+property alias that holds it. Compatible nullable and union constraints compose
+as an intersection; incompatible property types reject rebinding before either
+cell changes. Rebinding a property removes only that property's constraint from
+the old cell.
+
+Writes through CV, compound/inc-dec, array, dynamic-variable and global aliases
+validate and weakly coerce against the shared constraints before mutation.
+Diagnostics distinguish an ordinary property write from a write through a
+reference held by a typed property, and call results declared by reference can
+become the property cell without a value-only detour. Original E2E tests cover
+coercion, rejection without mutation, multiple compatible and incompatible
+properties, call-return binding, escaped container/global aliases and
+constraint removal after rebind.
+
+The five Cargo feature configurations, all-target check, formatting and unsafe
+policy pass, as do Composer S0, all four Symfony S1 gates and warmed-kernel S2
+on AMD64. Consolidating the touched dispatch regions lowers the production
+unsafe inventory from 1,623 to 1,614 blocks while retaining 289 unsafe
+functions. Twenty-one alternating release pairs measured
+`bench_binary_assign_loop.php` at baseline p10/median/p90 of
+0.742980/0.765674/0.785737 seconds and candidate
+0.724232/0.739269/0.776922 seconds; `bench_static_self_property.php` at
+0.157578/0.161757/0.163799 and 0.156428/0.160949/0.164837 seconds; and
+`bench_calls.php` at 0.340791/0.346270/0.351421 and
+0.337340/0.342806/0.351303 seconds. The additional reference-state guard on
+static writes is measurable: `bench_static_self_property_write.php` moves from
+a 0.112475-second median to 0.113967 seconds (+1.33 percent), and its typed
+counterpart moves from 0.113995 to 0.115863 seconds (+1.64 percent). Every
+result checksum is identical. This bounded cost is retained for baseline
+correctness; optimizing it must not bypass constraint attachment. Typed
+instance-property reference acquisition and the static-local reference-return
+edge remain separate compatibility clusters.
+
 The current AMD64 static-property-reference checkpoint, based on `4b818a0`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,708 passes,
 2,322 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero

@@ -54,7 +54,7 @@ pub(crate) fn php_byte_string_binary(
 
 #[cfg(feature = "resource-lifetime")]
 use crate::resource_handle::ResourceHandle;
-use crate::vm::function::{FunctionCommon, FunctionType, UserFunction};
+use crate::vm::function::{FunctionCommon, FunctionType, ParamTypeHint, UserFunction};
 use crate::vm::generator::GeneratorRef;
 use crate::vm::stats;
 
@@ -3903,6 +3903,21 @@ pub struct Value {
 struct OwnedReference {
     value: UnsafeCell<Value>,
     internal_aliases: Cell<usize>,
+    property_constraints: RefCell<Vec<ReferencePropertyConstraint>>,
+}
+
+/// A typed property that currently owns one alias of an `OwnedReference`.
+/// Keeping this metadata beside the shared cell preserves the compact Value
+/// layout while allowing every alias write to enforce the intersection of all
+/// property types holding the reference.
+#[derive(Clone, Debug)]
+pub(crate) struct ReferencePropertyConstraint {
+    pub(crate) owner: usize,
+    pub(crate) declaring_class: String,
+    pub(crate) property: String,
+    pub(crate) type_scope: String,
+    pub(crate) called_class: String,
+    pub(crate) type_hint: ParamTypeHint,
 }
 
 const _: [(); 16] = [(); std::mem::size_of::<Value>()];
@@ -4823,6 +4838,7 @@ impl Value {
         let target = Rc::new(OwnedReference {
             value: UnsafeCell::new(value),
             internal_aliases: Cell::new(0),
+            property_constraints: RefCell::new(Vec::new()),
         });
         Self {
             data: ValueData {
@@ -4881,6 +4897,43 @@ impl Value {
         // SAFETY: `owned_reference()` stores exactly an `Rc<OwnedReference>`
         // raw pointer, and ManuallyDrop leaves its existing strong owner intact.
         unsafe { std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const OwnedReference)) }
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn reference_property_constraints(&self) -> Vec<ReferencePropertyConstraint> {
+        if !self.is_owned_reference() {
+            return Vec::new();
+        }
+        self.owned_reference_rc()
+            .property_constraints
+            .borrow()
+            .clone()
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn add_reference_property_constraint(
+        &self,
+        constraint: ReferencePropertyConstraint,
+    ) {
+        debug_assert!(self.is_owned_reference());
+        let reference = self.owned_reference_rc();
+        let mut constraints = reference.property_constraints.borrow_mut();
+        constraints.retain(|existing| existing.owner != constraint.owner);
+        constraints.push(constraint);
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn remove_reference_property_constraint(&self, owner: usize) {
+        if !self.is_owned_reference() {
+            return;
+        }
+        self.owned_reference_rc()
+            .property_constraints
+            .borrow_mut()
+            .retain(|constraint| constraint.owner != owner);
     }
 
     /// Exclude one compiler-owned CV from PHP-visible reference cardinality.

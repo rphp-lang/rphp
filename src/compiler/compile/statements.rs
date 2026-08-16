@@ -1230,7 +1230,14 @@ impl Compiler {
                 | Expr::DynamicCall { .. }
                 | Expr::DynamicStaticCall { .. }
         ) {
-            return self.compile_assignment_target_expression(target, source);
+            let (source, source_type) = self.compile_expr(source);
+            self.compile_static_property_reference_assignment(
+                target,
+                source,
+                source_type,
+                false,
+            )?;
+            return Ok((source, source_type));
         }
         let source_is_internal = !matches!(source, Expr::Variable { .. });
         let source = self.compile_array_element_reference_source(source)?;
@@ -1324,6 +1331,7 @@ impl Compiler {
                 self.compile_static_property_reference_assignment(
                     static_property,
                     source,
+                    OpType::Cv,
                     source_is_internal,
                 )?;
             }
