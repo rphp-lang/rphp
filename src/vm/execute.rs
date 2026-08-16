@@ -2178,6 +2178,31 @@ fn too_few_arguments_error(
     make_error_value("ArgumentCountError", &message)
 }
 
+fn too_many_internal_arguments_error(
+    eg: &ExecutorGlobals,
+    function: *const FunctionCommon,
+    signature: &crate::vm::function::SignatureInfo,
+    supplied: u32,
+) -> Value {
+    debug_assert!(!signature.is_variadic);
+    let maximum = signature.public_arity();
+    let relation = if maximum == signature.required_num_args {
+        "exactly"
+    } else {
+        "at most"
+    };
+    let noun = if maximum == 1 {
+        "argument"
+    } else {
+        "arguments"
+    };
+    let name = displayed_function_name(eg, function);
+    make_error_value(
+        "ArgumentCountError",
+        &format!("{name}() expects {relation} {maximum} {noun}, {supplied} given"),
+    )
+}
+
 #[cold]
 #[inline(never)]
 fn execute_full_call<'a>(
@@ -2239,8 +2264,9 @@ fn execute_full_call<'a>(
         }
     }
 
-    let func_common = unsafe { &*(*call).func };
-    let num_args = unsafe { (*call).num_args };
+    // SAFETY: `call` is the live compiler-sized frame linked from `frame`; its
+    // registered function descriptor remains valid for the synchronous call.
+    let (func_common, num_args) = unsafe { (&*(*call).func, (*call).num_args) };
     let public_max = func_common.sig.public_arity();
     if num_args < func_common.sig.required_num_args {
         let error = too_few_arguments_error(
@@ -2262,11 +2288,20 @@ fn execute_full_call<'a>(
         && !func_common.sig.is_variadic
         && num_args > public_max
     {
-        let function_name = registered_function_name(eg, unsafe { (*call).func });
-        return Err(VmError::Fatal(format!(
-            "Too many arguments to {}, {} passed and at most {} expected",
-            function_name, num_args, public_max
-        )));
+        let error = too_many_internal_arguments_error(
+            eg,
+            func_common as *const FunctionCommon,
+            &func_common.sig,
+            num_args,
+        );
+        // SAFETY: `call` is the live pending call owned by `frame`; its
+        // compiler-sized slots were initialized by the preceding sends.
+        unsafe { cleanup_frame_slots(call) };
+        pop_vm_call_frame(eg, call);
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+            ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+        });
     }
 
     // Named arguments can leave holes even when the public count is correct.

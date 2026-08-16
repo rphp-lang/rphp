@@ -4788,7 +4788,7 @@ impl Compiler {
                             if opcode == OpCode::DirectInternalCall1 {
                                 call.extended_value = direct_kind as u32;
                             }
-                            self.instructions.push(call);
+                            self.push_instruction_at_line(call, *line);
                             return (tmp, OpType::Tmp);
                         }
                     }
@@ -4819,7 +4819,7 @@ impl Compiler {
                             call.result = tmp;
                             call.result_type = OpType::Tmp;
                             call.extended_value = direct_kind as u32;
-                            self.instructions.push(call);
+                            self.push_instruction_at_line(call, *line);
                             return (tmp, OpType::Tmp);
                         }
                     }
@@ -4867,6 +4867,7 @@ impl Compiler {
                                     init.op1 = callback_op;
                                     init.op1_type = callback_type;
                                     init.extended_value = elements.len() as u32;
+                                    init._pad = 1;
                                     self.instructions.push(init);
 
                                     for (index, element) in elements.iter().enumerate() {

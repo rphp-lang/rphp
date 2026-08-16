@@ -124,14 +124,20 @@ echo get_class($obj);
 }
 
 #[test]
-fn test_get_class_with_non_object_returns_false() {
+fn test_get_class_with_non_object_throws_type_error() {
     let out = run_php(
         r#"<?php
-$result = get_class("hello");
-var_dump($result);
+try {
+    get_class("hello");
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
 "#,
     );
-    assert_eq!(out, "bool(false)\n");
+    assert_eq!(
+        out,
+        "get_class(): Argument #1 ($object) must be of type object, string given"
+    );
 }
 
 #[test]

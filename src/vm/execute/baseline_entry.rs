@@ -449,9 +449,9 @@ where
             }
         }
     }
-    // SAFETY: every detached-call entry receives a resolved, live function
-    // descriptor which remains registered for the synchronous frame lifetime.
-    let signature = unsafe { &(*func_ptr).sig };
+    // SAFETY: the detached-call boundary receives a resolved registered
+    // function descriptor that remains live for the synchronous invocation.
+    let (signature, function_type) = unsafe { (&(*func_ptr).sig, (*func_ptr).fn_type) };
     let this_offset = signature.this_offset as usize;
     let positional_public_num_args = num_args.saturating_sub(this_offset + capture_count);
     let public_num_args = positional_public_num_args
@@ -486,6 +486,18 @@ where
             )
         };
         eg.exception = Some(make_error_value("ArgumentCountError", &message));
+        return Ok((Value::null(), None));
+    }
+    if function_type == FunctionType::Internal
+        && !signature.is_variadic
+        && public_num_args > signature.public_arity() as usize
+    {
+        eg.exception = Some(too_many_internal_arguments_error(
+            eg,
+            func_ptr,
+            signature,
+            public_num_args as u32,
+        ));
         return Ok((Value::null(), None));
     }
     let capture_destination = signature.parameter_cv_count() as usize;
