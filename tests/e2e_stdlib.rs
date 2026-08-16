@@ -814,6 +814,32 @@ fn test_e2e_var_dump_bool() {
     assert_eq!(run_php("<?php var_dump(false);"), "bool(false)\n");
 }
 
+#[test]
+fn var_dump_objects_expose_visibility_uninitialized_and_dynamic_properties() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DumpParent {
+    private $same = 'parent';
+    protected $guard = 'protected';
+    public $open = 'public';
+    public int $typed;
+    public $removed = 'gone';
+}
+class DumpChild extends DumpParent {
+    private $same = 'child';
+    public $nullable;
+}
+$value = new DumpChild();
+unset($value->removed);
+$value->dynamic = 'dynamic';
+var_dump($value);
+"#,
+        ),
+        "object(DumpChild)#1 (6) {\n  [\"same\":\"DumpParent\":private]=>\n  string(6) \"parent\"\n  [\"guard\":protected]=>\n  string(9) \"protected\"\n  [\"open\"]=>\n  string(6) \"public\"\n  [\"typed\"]=>\n  uninitialized(int)\n  [\"same\":\"DumpChild\":private]=>\n  string(5) \"child\"\n  [\"nullable\"]=>\n  NULL\n  [\"dynamic\"]=>\n  string(7) \"dynamic\"\n}\n"
+    );
+}
+
 // === print_r ===
 
 #[test]
