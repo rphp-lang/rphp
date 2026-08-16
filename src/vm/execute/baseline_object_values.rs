@@ -21,40 +21,30 @@ fn op_nullsafe_check<'a>(
             let target = opline.op2 as usize;
             (*frame).opline = op_array.instructions.as_ptr().add(target);
             return Ok(ColdResult::Continue);
-        } else if is_non_object {
+        } else if is_non_object && opline.extended_value == 1 {
             // extended_value: 0 = property access (warning + null), 1 = method call (fatal)
-            if opline.extended_value == 1 {
-                let method = op_array
-                    .literals
-                    .get(opline._pad as usize)
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                let error = make_error_value(
-                    "Error",
-                    &format!(
-                        "Call to a member function {method}() on {}",
-                        val.dereferenced().type_name()
-                    ),
-                );
-                let instruction_index = (opline as *const Instruction)
-                    .offset_from(op_array.instructions.as_ptr())
-                    as usize;
-                attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-                return Ok(match throw_in_frame(eg, frame, error) {
-                    ThrowResult::Handled(new_frame, new_op_array) => {
-                        ColdResult::NewFrame(new_frame, new_op_array)
-                    }
-                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                });
-            } else {
-                // Property access on scalar: warning + null (like PHP)
-                eg.write_output(b"Warning: Attempt to read property on non-object\n");
-                let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                frame_result_set(frame, result_ptr, opline.result_type, Value::null());
-                let target = opline.op2 as usize;
-                (*frame).opline = op_array.instructions.as_ptr().add(target);
-                return Ok(ColdResult::Continue);
-            }
+            let method = op_array
+                .literals
+                .get(opline._pad as usize)
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let error = make_error_value(
+                "Error",
+                &format!(
+                    "Call to a member function {method}() on {}",
+                    val.dereferenced().type_name()
+                ),
+            );
+            let instruction_index = (opline as *const Instruction)
+                .offset_from(op_array.instructions.as_ptr())
+                as usize;
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
         }
         Ok(ColdResult::Done)
     }
