@@ -2638,7 +2638,11 @@ impl ExecutorGlobals {
         // Slow path: allocate lowercase string
         let lower = name.to_lowercase();
         if lower != name {
-            let found = self.function_table.get(&lower).copied();
+            let found = self
+                .function_table
+                .get(&lower)
+                .copied()
+                .or_else(|| self.find_inherited_function(&lower));
             if found.is_some() {
                 stats::inc_find_function_lower_hit();
             } else {
@@ -2646,9 +2650,33 @@ impl ExecutorGlobals {
             }
             found
         } else {
-            stats::inc_find_function_miss();
-            None
+            let found = self.find_inherited_function(name);
+            if found.is_none() {
+                stats::inc_find_function_miss();
+            }
+            found
         }
+    }
+
+    /// Eager top-level registration can observe a parent name before a
+    /// preceding runtime `class_alias()` publishes it. Ordinary inheritance
+    /// is flattened into `function_table`; on that rare miss, follow the now
+    /// resolvable parent chain without adding work to exact-hit dispatch.
+    #[cold]
+    fn find_inherited_function(&self, name: &str) -> Option<*const FunctionCommon> {
+        let (class_name, method) = name.split_once("::")?;
+        let mut class = self.find_class(class_name)?;
+        for _ in 0..self.class_table.len() {
+            let parent_name = class.parent.as_deref()?;
+            if let Some(function) = self
+                .function_table
+                .get(&format!("{}::{method}", parent_name.to_ascii_lowercase()))
+            {
+                return Some(*function);
+            }
+            class = self.find_class(parent_name)?;
+        }
+        None
     }
 
     /// Define a constant. Returns error if already defined.

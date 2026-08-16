@@ -616,6 +616,33 @@ echo ProductAlias::make() instanceof AliasedProduct ? 'ok' : 'fail';
 }
 
 #[test]
+fn method_lookup_follows_later_parents_and_runtime_aliases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class EarlyLinkedChild extends LaterLinkedParent {}
+class LaterLinkedParent {
+    public static function linkedMethod() { echo 'linked|'; }
+}
+EarlyLinkedChild::linkedMethod();
+class CanonicalAliasParent {
+    public function __construct() { echo get_called_class(), '|'; }
+    public function instanceMethod() { echo get_class(), '|'; }
+    public static function staticMethod() { echo get_class(); }
+}
+class_alias(CanonicalAliasParent::class, 'ProjectedAliasParent');
+class AliasChild extends ProjectedAliasParent {}
+class AliasGrandchild extends AliasChild {}
+$child = new AliasGrandchild;
+$child->instanceMethod();
+AliasGrandchild::staticMethod();
+"#,
+        ),
+        "linked|AliasGrandchild|CanonicalAliasParent|CanonicalAliasParent"
+    );
+}
+
+#[test]
 fn class_alias_autoloads_original_and_supports_alias_chains() {
     let dir = TempPhpDir::new();
     let class_file = dir.write(
