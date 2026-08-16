@@ -100,6 +100,13 @@ collector for Generator, IteratorAggregate and Iterator, also accepts arrays,
 and implements preserve/reindex key behavior. This closes the pipe generator
 chain; remaining users are blocked by earlier independent SPL/Reflection gaps.
 
+The `5a4b509` destructuring-write checkpoint adds one exact pass with no lost
+pass: 1,854 pass, 3,354 fail, 110 skip, one XFAIL, 280 unsupported, zero
+timeouts and zero crashes. Calls and pipe expressions in destructuring targets
+now parse as complete expressions and retain PHP 8.5's compile-time function-
+result write-context diagnostic, including in dead code. Ordinary assignment
+and runtime call paths are unchanged.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
