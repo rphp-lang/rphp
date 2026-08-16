@@ -2017,6 +2017,46 @@ fn op_init_method_call<'a>(
     Ok(ColdResult::Done)
 }
 #[inline(never)]
+fn class_callback_requires_instance(
+    eg: &ExecutorGlobals,
+    class: &str,
+    method: &str,
+) -> bool {
+    if let Some((_, is_static, _)) = eg.find_method_info(class, method) {
+        return !is_static;
+    }
+    if eg.find_method_info(class, "__callStatic").is_some() {
+        return false;
+    }
+    eg.find_method_info(class, "__call")
+        .is_some_and(|(_, is_static, _)| !is_static)
+}
+
+// InitStaticCall uses the low bit of a cached FunctionCommon pointer to retain
+// the resolved method's staticness without growing the per-instruction cache.
+const _: () = assert!(std::mem::align_of::<FunctionCommon>() >= 2);
+
+fn throw_non_static_callback_error<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    class: &str,
+    method: &str,
+) -> ColdResult<'a> {
+    let error = make_error_value(
+        "Error",
+        &format!("Non-static method {class}::{method}() cannot be called statically"),
+    );
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    match throw_in_frame(eg, frame, error) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(error) => ColdResult::Unhandled(error),
+    }
+}
+
 fn op_init_static_call<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -2026,20 +2066,27 @@ fn op_init_static_call<'a>(
     // Inline cache: static calls have constant class+method — cache resolved func_ptr.
     // Visibility is checked on first resolve only (same instruction = same caller context).
     let dynamic_scope = opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0;
-    let class_name = unsafe {
-        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-    };
-    let method_name = unsafe {
-        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+    let (class_name, method_name, ip) = unsafe {
+        (
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+        )
     };
     let raw_class = class_name.as_str().unwrap_or("").to_string();
     let method = method_name.as_str().unwrap_or("").to_string();
     let class = resolve_static_call_class(eg, frame, &raw_class, dynamic_scope)
         .unwrap_or_else(|| raw_class.clone());
-    let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
     let cached = op_array.cache[ip].func;
-    let func_ptr = if !cached.is_null() {
-        cached
+    let (func_ptr, method_is_non_static) = if !cached.is_null() {
+        let tagged = cached as usize;
+        if tagged & 1 == 0 {
+            // Keep the overwhelmingly common static-method cache hit as the
+            // original pointer without an unconditional mask operation.
+            (cached, false)
+        } else {
+            ((tagged & !1usize) as *const FunctionCommon, true)
+        }
     } else {
         if eg.find_class(&class).is_none() {
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &class)?;
@@ -2066,6 +2113,11 @@ fn op_init_static_call<'a>(
         let resolved = match eg.find_function(&full_name) {
             Some(ptr) => ptr,
             None => {
+                if class_callback_requires_instance(eg, &class, &method) {
+                    return Ok(throw_non_static_callback_error(
+                        eg, frame, op_array, ip, &class, &method,
+                    ));
+                }
                 let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", raw_class, method));
                 match throw_in_frame(eg, frame, err) {
                     ThrowResult::Handled(new_frame, new_op_array) => {
@@ -2077,16 +2129,20 @@ fn op_init_static_call<'a>(
                 }
             }
         };
+        let method_info = eg.find_method_info(&class, &method);
+        let method_is_non_static = method_info
+            .as_ref()
+            .is_some_and(|(_, is_static, _)| !is_static);
 
         // Visibility check on first resolve for each dynamic class.
-        if let Some((vis, defining_class)) = eg.find_method_visibility(&class, &method) {
-            if vis != Visibility::Public {
+        if let Some((vis, _, defining_class)) = method_info.as_ref() {
+            if *vis != Visibility::Public {
                 let caller_class = if dynamic_scope {
                     resolve_static_call_class(eg, frame, "self", true)
                 } else {
                     get_caller_class(frame, eg)
                 };
-                if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                if !eg.check_visibility(caller_class.as_deref(), defining_class, *vis) {
                     let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
                     return Err(VmError::Fatal(format!(
                         "Call to {} method {}::{}() from scope {}",
@@ -2104,14 +2160,36 @@ fn op_init_static_call<'a>(
             unsafe {
                 let cache = &mut *(op_array.cache.as_ptr().add(ip)
                     as *mut crate::vm::instruction::InlineCache);
-                cache.func = resolved;
+                // FunctionCommon is pointer-aligned, so InitStaticCall owns
+                // the otherwise-zero low bit as its non-static marker. This
+                // keeps the warmed scalar-call path at one cache load.
+                cache.func = ((resolved as usize) | usize::from(method_is_non_static))
+                    as *const FunctionCommon;
             }
         }
-        resolved
+        (resolved, method_is_non_static)
     };
 
     let num_args = opline.extended_value;
     let common = unsafe { &*func_ptr };
+    let target_is_instance = method_is_non_static
+        || (common.sig.this_offset == 1
+            && matches!(raw_class.to_ascii_lowercase().as_str(), "self" | "parent"));
+    if method_is_non_static {
+        let compatible_this = unsafe {
+            get_caller_class(frame, eg).is_some()
+                && (*frame).num_cvs != 0
+                && (*frame)
+                    .cv(0)
+                    .as_object()
+                    .is_some_and(|receiver| eg.class_is_a(&receiver.class_name, &class))
+        };
+        if !compatible_this {
+            return Ok(throw_non_static_callback_error(
+                eg, frame, op_array, ip, &class, &method,
+            ));
+        }
+    }
     if common.fn_type == FunctionType::User && num_args == common.sig.public_arity() {
         let user = unsafe { &*(func_ptr as *const UserFunction) };
         if let Some(plan) = user.scalar_long_plan.as_deref()
@@ -2146,11 +2224,6 @@ fn op_init_static_call<'a>(
     );
     unsafe {
         (*frame).call = call;
-        let target_is_instance = eg
-            .find_method_info(&class, &method)
-            .is_some_and(|(_, is_static, _)| !is_static)
-            || (common.sig.this_offset == 1
-                && matches!(raw_class.to_ascii_lowercase().as_str(), "self" | "parent"));
         let mut initialized_receiver = false;
         if target_is_instance && (*frame).num_cvs != 0 {
             let receiver = (*frame).cv(0);
@@ -2602,10 +2675,10 @@ fn op_init_dynamic_call<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         }
-        if let Some(class_name) = class_name
-            && eg.find_class(&class_name).is_none()
+        if let Some(class_name) = class_name.as_deref()
+            && eg.find_class(class_name).is_none()
         {
-            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?;
+            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name)?;
             if let Some(exception) = eg.exception.take() {
                 return Ok(match throw_in_frame(eg, frame, exception) {
                     ThrowResult::Handled(new_frame, new_op_array) => {
@@ -2624,6 +2697,19 @@ fn op_init_dynamic_call<'a>(
                     ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
                 });
             }
+        }
+        if let Some(class_name) = class_name.as_deref()
+            && let Some(method) = callable_array.get_value_at(1).and_then(Value::as_str)
+            && class_callback_requires_instance(eg, class_name, method)
+        {
+            return Ok(throw_non_static_callback_error(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                class_name,
+                method,
+            ));
         }
         let Some(resolved) = resolve_user_call_at_opline(eg, frame, op_array, opline) else {
             let error = make_error_value("Error", "Array is not callable");
@@ -2666,6 +2752,19 @@ fn op_init_dynamic_call<'a>(
         return Ok(ColdResult::Done);
     } else if let Some(func_name) = callable.as_str() {
         // Simple string function call: $func = "my_func"; $func()
+        if let Some((class_name, method)) = func_name.rsplit_once("::") {
+            let class_name = class_name.trim_start_matches('\\');
+            if class_callback_requires_instance(eg, class_name, method) {
+                return Ok(throw_non_static_callback_error(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    class_name,
+                    method,
+                ));
+            }
+        }
         if let Some(normalized) = scope_introspection_function_name(func_name) {
             let error = make_error_value(
                 "Error",

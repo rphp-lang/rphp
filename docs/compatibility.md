@@ -7,6 +7,33 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 non-static-class-callback checkpoint, based on `30bbd40`,
+runs the same 4,345-case PHP 8.2.33 corpus and records 1,632 passes, 2,398
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. It adds four exact passes without losing a previous pass:
+`Zend/tests/dynamic_call_non_static.phpt`,
+`Zend/tests/incompat_ctx_user.phpt`,
+`Zend/tests/indirect_call_array_005.phpt` and
+`Zend/tests/indirect_call_string_003.phpt`. Direct non-static `Class::method()`
+calls now require a compatible current receiver and preserve PHP's permitted
+`self` and `parent` instance forwarding. Dynamic class-array and class-string
+callbacks never borrow the caller's receiver and throw a catchable PHP `Error`
+with the exact non-static-method diagnostic; instance-only `__call` fallbacks
+follow the same rule while `__callStatic` remains eligible. Original E2E
+coverage checks compatible, inherited, incompatible, array, string and magic
+boundaries. The absent `ArrayIterator::current` implementation, visibility and
+first-class-callable behavior remain separate boundaries. Five Cargo test
+configurations, all-target and unsafe checks, Composer S0, Symfony S1 and
+warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not rerun because
+this machine has no exact PHP 8.2 oracle. Twenty-one alternating release pairs
+measured `bench_calls.php` medians of 0.344594 seconds for the preceding binary
+and 0.344486 seconds for the candidate (-0.03 percent). The late-static and
+static-`self` microbenchmarks moved from 0.153653 to 0.155800 seconds (+1.40
+percent) and from 0.455137 to 0.501345 seconds (+10.15 percent), respectively,
+with identical computed results. This is explicit temporary performance debt
+for the later whole-runtime optimization phase, not an unmeasured claim of
+neutral cost.
+
 The current AMD64 dynamic-call-source checkpoint, based on `cb0211d`, runs the
 same 4,345-case PHP 8.2.33 corpus and records 1,628 passes, 2,402 failures, 77
 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero

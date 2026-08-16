@@ -209,6 +209,51 @@ fn invalid_dynamic_call_preserves_source_line_and_validation_order() {
     );
 }
 
+#[test]
+fn non_static_class_callbacks_require_a_compatible_receiver() {
+    let out = run_php(
+        r#"<?php
+class ReceiverBase {
+    public function method() { echo get_class($this), "\n"; }
+    public function compatible() { ReceiverBase::method(); self::method(); }
+}
+class ReceiverChild extends ReceiverBase {
+    public function inherited() { ReceiverBase::method(); parent::method(); }
+}
+class IncompatibleReceiver {
+    public function call() { ReceiverBase::method(); }
+}
+class MagicInstanceOnly {
+    public function __call($name, $arguments) {}
+}
+
+(new ReceiverBase)->compatible();
+(new ReceiverChild)->inherited();
+
+$callbacks = [
+    ['ReceiverBase', 'method'],
+    'ReceiverBase::method',
+    ['MagicInstanceOnly', 'missing'],
+    'MagicInstanceOnly::missing',
+];
+foreach ($callbacks as $callback) {
+    try { $callback(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+}
+try { (new IncompatibleReceiver)->call(); }
+catch (Error $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "ReceiverBase\nReceiverBase\nReceiverChild\nReceiverChild\n\
+Non-static method ReceiverBase::method() cannot be called statically\n\
+Non-static method ReceiverBase::method() cannot be called statically\n\
+Non-static method MagicInstanceOnly::missing() cannot be called statically\n\
+Non-static method MagicInstanceOnly::missing() cannot be called statically\n\
+Non-static method ReceiverBase::method() cannot be called statically"
+    );
+}
+
 // -- call_user_func with closure --
 
 #[test]
