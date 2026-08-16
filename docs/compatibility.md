@@ -7,6 +7,28 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 compound-array-root diagnostic checkpoint, based on
+`fb19845`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
+1,747 passes, 2,283 failures, 77 skips, one upstream XFAIL, 237 unsupported
+cases, zero timeouts and zero crashes. Its exact pass-set delta is +1/-0:
+`Zend/tests/assign_dim_op_undef.phpt`.
+
+Array compound assignment and array-element increment/decrement now diagnose
+an undefined root before reading the key and missing dimension. The lowering
+keeps this read-modify-write contract separate from silent mutation and
+reference-materialization contexts, so passing an undefined element by
+reference still initializes it without the root warning. Original coverage
+checks the PHP order `undefined root`, `undefined key variable`, `undefined
+array key` and the resulting autovivified element.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine alternating five-million-iteration defined array-compound
+release pairs measured a 0.08-second median for both the preceding and
+candidate binaries, with identical output.
+
 The current AMD64 output-string-conversion checkpoint, based on `cb92f68`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,746 passes,
 2,284 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
