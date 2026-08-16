@@ -755,13 +755,63 @@ fn op_fetch_obj_r_slow<'a>(
         return Ok(ColdResult::Done);
     }
 
-    // A magic accessor may rebind the CV/global that supplied the receiver.
-    // Keep one opcode-local owner across the complete __isset → __get
-    // sequence so later phases still address the original object.
+    // Property-name conversion and magic accessors may rebind the CV/global
+    // slots that supplied either operand. Keep opcode-local owners before any
+    // re-entrant call so later phases still address the original values.
     let receiver = obj_val.clone();
     let obj_val = &receiver;
+    let property_name_owner = prop_name.dereferenced().clone();
 
-    let name = prop_name.as_str().unwrap_or("");
+    let name = if property_name_owner.value_type() == ValueType::Object {
+        let class_name = property_name_owner
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| "object".to_string());
+        let rendered = call_magic_method(eg, &property_name_owner, "__tostring", &[])?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
+        let Some(rendered) = rendered else {
+            return Ok(object_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Object of class {class_name} could not be converted to string"),
+            ));
+        };
+        let Some(rendered) = rendered.as_str() else {
+            return Ok(object_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                format!("{class_name}::__toString(): Return value must be of type string"),
+            ));
+        };
+        rendered.to_string()
+    } else {
+        if property_name_owner.value_type() == ValueType::Array {
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                "Array to string conversion",
+                opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
+        }
+        property_name_owner
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| property_name_owner.echo_to_string())
+    };
     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
 
     if let Some(obj) = obj_val.as_object() {
@@ -779,14 +829,14 @@ fn op_fetch_obj_r_slow<'a>(
         let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
 
         // Resolve storage key (mangled for private properties)
-        let mut key = crate::runtime::resolve_property_key(eg, &obj.class_name, name, effective_caller);
+        let mut key = crate::runtime::resolve_property_key(eg, &obj.class_name, &name, effective_caller);
 
         // Determine if property is public (for caching)
         let mut is_public = true;
         let mut property_accessible = true;
         let mut force_dynamic = false;
         // Visibility check
-        if let Some((vis, defining_class)) = eg.find_property_visibility(&obj.class_name, name) {
+        if let Some((vis, defining_class)) = eg.find_property_visibility(&obj.class_name, &name) {
             if vis != Visibility::Public {
                 is_public = false;
                 // Skip check if the caller owns the defining class AND
@@ -797,7 +847,7 @@ fn op_fetch_obj_r_slow<'a>(
                 // Also skip if caller's class declares its own private
                 // with same name AND the receiver is in scope.
                 let caller_has_own = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
-                    if let Some((Visibility::Private, ref dc)) = eg.find_property_visibility(cc, name) {
+                    if let Some((Visibility::Private, ref dc)) = eg.find_property_visibility(cc, &name) {
                         dc.eq_ignore_ascii_case(cc)
                     } else {
                         false
@@ -844,7 +894,7 @@ fn op_fetch_obj_r_slow<'a>(
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let mut flags: u32 = 1; // read-safe
                 let writable = eg.class_table.get(obj.class_name.as_ref()).is_none_or(|cd| {
-                    !cd.is_enum && !cd.readonly_props.iter().any(|prop| prop == name)
+                    !cd.is_enum && !cd.readonly_props.iter().any(|prop| prop == &name)
                 });
                 if writable {
                     flags |= 2;
@@ -911,10 +961,10 @@ fn op_fetch_obj_r_slow<'a>(
                 let magic_set = call_guarded_property_magic_method(
                     eg,
                     obj_val,
-                    name,
+                    &name,
                     PROPERTY_GUARD_ISSET,
                     "__isset",
-                    &[Value::string(name)],
+                    &[Value::string(name.clone())],
                 )?;
                 if let Some(result) = take_magic_exception(eg, frame) {
                     return Ok(result);
@@ -926,7 +976,7 @@ fn op_fetch_obj_r_slow<'a>(
             }
             // Property not found (or accepted by __isset) — try __get.
             if name.starts_with('\0')
-                && property_guard_active(obj_val, name, PROPERTY_GUARD_GET)
+                && property_guard_active(obj_val, &name, PROPERTY_GUARD_GET)
             {
                 return Ok(object_property_throw(
                     eg,
@@ -938,10 +988,10 @@ fn op_fetch_obj_r_slow<'a>(
             let magic_value = call_guarded_property_magic_method(
                 eg,
                 obj_val,
-                name,
+                &name,
                 PROPERTY_GUARD_GET,
                 "__get",
-                &[Value::string(name)],
+                &[Value::string(name.clone())],
             )?;
             if let Some(result) = take_magic_exception(eg, frame) {
                 return Ok(result);

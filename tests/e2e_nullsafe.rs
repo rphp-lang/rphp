@@ -427,3 +427,62 @@ fn nullsafe_reference_unset_and_foreach_targets_fail_during_compilation() {
         );
     }
 }
+
+#[test]
+fn braced_dynamic_nullsafe_property_skips_or_evaluates_its_name_once() {
+    let out = run_php(
+        r#"<?php
+$calls = 0;
+function memberName() {
+    global $calls;
+    $calls++;
+    return 'value';
+}
+class DynamicNullsafeBox { public $value = 'ok'; }
+class StringPropertyName {
+    public function __toString() { echo "convert\n"; return 'value'; }
+}
+class InvalidPropertyName {}
+class RebindingPropertyName {
+    public function __toString() {
+        global $box;
+        $box = null;
+        return 'value';
+    }
+}
+$null = null;
+var_dump($null?->{memberName()});
+var_dump($calls);
+$box = new DynamicNullsafeBox;
+var_dump($box?->{memberName()});
+var_dump($calls);
+var_dump($box->{new StringPropertyName});
+try {
+    $box->{new InvalidPropertyName};
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+$box = new DynamicNullsafeBox;
+var_dump($box->{new RebindingPropertyName});
+var_dump($box);
+$dynamic = new stdClass;
+$dynamic->{90} = 'ninety';
+var_dump($dynamic->{90});
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "NULL\n",
+            "int(0)\n",
+            "string(2) \"ok\"\n",
+            "int(1)\n",
+            "convert\n",
+            "string(2) \"ok\"\n",
+            "Object of class InvalidPropertyName could not be converted to string\n",
+            "string(2) \"ok\"\n",
+            "NULL\n",
+            "string(6) \"ninety\"\n",
+        )
+    );
+}

@@ -7,7 +7,30 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `7ed185b`, runs the same
+The current AMD64 convergence checkpoint, based on `555e262`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,584 passes, 2,446 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds six exact passes without losing a previous pass or moving another failure
+category: `Zend/tests/bug81216.phpt`, `gh10570.phpt`,
+`prop_const_expr/basic_nullsafe.phpt`, `prop_const_expr/rhs_object.phpt`,
+`prop_const_expr/rhs_object_nullsafe.phpt` and
+`type_declarations/typed_properties_086.phpt`. Braced dynamic nullsafe property
+reads now retain the nullsafe AST flag and skip property-name evaluation when
+the receiver is null. The baseline object-read path converts scalar, array and
+object property names according to the ordinary PHP path, including one
+`__toString()` call or a catchable `Error` for an unconvertible object. It owns
+both operands across that re-entrant conversion, so rebinding the receiver
+cannot change the object already selected for the read. Original parser and
+E2E regressions cover short-circuiting, one-time evaluation, integer names,
+successful and failed object conversion, and receiver rebinding. Five Cargo
+feature configurations, all-target and unsafe checks, Composer S0, Symfony S1
+and warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not rerun
+because this machine has no exact PHP 8.2 oracle. Nine release runs measured
+`bench_calls.php` medians of 0.3488 seconds for the preceding binary and 0.3499
+seconds for the candidate; the directly relevant `bench_declared_property_reads.php`
+medians were 0.3893 and 0.3905 seconds. Both retained identical results.
+
+The preceding AMD64 nullsafe-context checkpoint, based on `7ed185b`, runs the same
 4,345-case PHP 8.2.33 corpus and records 1,578 passes, 2,452 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds four exact passes without losing a previous pass or moving another
