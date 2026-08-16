@@ -150,6 +150,13 @@ detached callback dispatch. The full feature matrix and unsafe-policy gate
 pass; seven ten-million dynamic-call release controls move from a 1.26-second
 preceding median to 1.24 seconds with identical output.
 
+The `1f679c6` invalid-unpack diagnostic checkpoint reaches 1,889 passes with
+3,319 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. Rejected array and argument unpack operands now name their PHP
+scalar type or concrete object class across compile-time and catchable runtime
+paths. The exact PHP 8.5.6 delta is +3/-0; valid unpack execution is unchanged,
+and the full feature matrix plus unsafe-policy gate pass.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
