@@ -695,3 +695,34 @@ echo isset($GLOBALS["\0finally_jump"]) ? "bad" : "C";
         "ABC"
     );
 }
+
+#[test]
+fn class_keyword_is_ascii_case_insensitive_without_folding_contextual_names() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function choose($MaTcH) {
+    return $MaTcH;
+}
+
+ClAsS KeywordProbe {
+    public $MaTcH = 'property';
+
+    public function RuN() {
+        foreach ([1, 2] as $value) {
+            if ($value == 1) {
+                continue;
+            }
+            echo $this->MaTcH, ':', $value, '|';
+        }
+    }
+}
+
+$probe = new KeywordProbe();
+$probe->RuN();
+echo choose(MaTcH: 'named');
+"#,
+        ),
+        "property:2|named"
+    );
+}

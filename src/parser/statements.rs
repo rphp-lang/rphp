@@ -918,12 +918,19 @@ impl Parser {
                 Ok(Stmt::Throw { expr, line })
             }
             Token::Class | Token::Abstract | Token::Final => self.parse_class(),
+            Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("class") => {
+                self.parse_class()
+            }
             Token::Identifier(ref name, _)
                 if name.eq_ignore_ascii_case("readonly")
-                    && matches!(
+                    && (matches!(
                         self.peek_at(1),
                         Token::Class | Token::Abstract | Token::Final
-                    ) =>
+                    ) || matches!(
+                        self.peek_at(1),
+                        Token::Identifier(ref keyword, _)
+                            if keyword.eq_ignore_ascii_case("class")
+                    )) =>
             {
                 self.parse_class()
             }
