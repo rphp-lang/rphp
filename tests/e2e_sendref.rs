@@ -490,6 +490,36 @@ echo $x;
     assert_eq!(out, "142");
 }
 
+#[test]
+fn runtime_resolved_method_reference_updates_property_lvalue() {
+    let out = run_php(
+        r#"<?php
+class Collector {
+    public array $calls = [];
+
+    function collect(array &$calls): array {
+        $calls['service'] = [1, true];
+        return $calls;
+    }
+
+    function observe(array $calls): void {
+        $calls['detached'] = true;
+    }
+
+    function run(): array {
+        $returned = $this->collect($this->calls);
+        $this->observe($this->calls);
+        return [$this->calls, $returned];
+    }
+}
+
+$collector = new Collector();
+echo json_encode($collector->run());
+"#,
+    );
+    assert_eq!(out, r#"[{"service":[1,true]},{"service":[1,true]}]"#);
+}
+
 // ============================================================
 // Static call by-ref (SendVarEx)
 // ============================================================

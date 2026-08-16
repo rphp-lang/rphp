@@ -30,15 +30,16 @@ use crate::vm::instruction::{
     ASSIGN_DIM_REFERENCE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_MODIFY,
     CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
     CALL_FLAG_EXACT_SCALAR_ARGS, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS,
-    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
-    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS,
-    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE,
-    InlineCache, Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
-    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_REFERENCE_BIND, OpType,
-    REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS,
-    SEND_FLAG_NONREFERENCEABLE, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, UNSET_DIM_NESTED,
+    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY,
+    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
+    FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
+    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
+    OBJ_PROP_REFERENCE_BIND, OpType, REFERENCE_RESULT_INTERNAL,
+    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -7343,6 +7344,61 @@ impl Compiler {
                         self.instructions.push(send);
                     }
                 }
+                CallArg::Positional(expr)
+                    if (!use_var_ex
+                        && i < 64
+                        && ref_args & (1u64 << i) != 0
+                        && matches!(
+                            expr,
+                            Expr::DynamicVariable { .. }
+                                | Expr::PropertyAccess {
+                                    nullsafe: false,
+                                    ..
+                                }
+                                | Expr::DynamicPropertyAccess {
+                                    nullsafe: false,
+                                    ..
+                                }
+                                | Expr::StaticProperty { .. }
+                                | Expr::DynamicNamedStaticProperty { .. }
+                                | Expr::DynamicStaticProperty { .. }
+                        ))
+                        || (use_var_ex
+                            && (matches!(
+                                expr,
+                                Expr::DynamicVariable { .. }
+                                    | Expr::StaticProperty { .. }
+                                    | Expr::DynamicNamedStaticProperty { .. }
+                                    | Expr::DynamicStaticProperty { .. }
+                            ) || matches!(
+                                expr,
+                                Expr::PropertyAccess {
+                                    object,
+                                    nullsafe: false,
+                                    ..
+                                } | Expr::DynamicPropertyAccess {
+                                    object,
+                                    nullsafe: false,
+                                    ..
+                                } if matches!(object.as_ref(), Expr::Variable { name, .. } if name == "this")
+                            ))) =>
+                {
+                    let source = self
+                        .compile_array_element_reference_source(expr)
+                        .expect("matched mutable call argument must compile as a reference source");
+                    let mut send = Instruction::new(if use_var_ex {
+                        OpCode::SendVarEx
+                    } else {
+                        OpCode::SendRef
+                    });
+                    send.op1 = source;
+                    send.op1_type = OpType::Cv;
+                    send.op2 = (i as u32 + cv_offset) as u16;
+                    if set_extended_value {
+                        send.extended_value = i as u32;
+                    }
+                    self.instructions.push(send);
+                }
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
                     let nonreferenceable = Self::nullsafe_chain_line(expr).is_some();
@@ -7786,6 +7842,7 @@ impl Compiler {
                     fetch.op2 = idx_literal;
                     fetch.result_type = OpType::Tmp;
                     fetch.result = fetch_tmp;
+                    fetch._pad |= FETCH_DIM_DESTRUCTURE;
                     self.push_instruction_at_line(fetch, source_line);
                     // assign to CV
                     let cv_idx = self.resolve_cv(var_name);
@@ -7820,6 +7877,7 @@ impl Compiler {
                     fetch.op2 = idx_literal;
                     fetch.result_type = OpType::Tmp;
                     fetch.result = fetch_tmp;
+                    fetch._pad |= FETCH_DIM_DESTRUCTURE;
                     self.push_instruction_at_line(fetch, source_line);
 
                     match target {
@@ -7947,6 +8005,7 @@ impl Compiler {
                     fetch.op2 = idx_literal;
                     fetch.result_type = OpType::Tmp;
                     fetch.result = fetch_tmp;
+                    fetch._pad |= FETCH_DIM_DESTRUCTURE;
                     self.instructions.push(fetch);
 
                     if let Expr::Variable { name, .. } = target {
@@ -8010,6 +8069,7 @@ impl Compiler {
                         fetch.op2 = idx_literal;
                         fetch.result_type = OpType::Tmp;
                         fetch.result = sub_tmp;
+                        fetch._pad |= FETCH_DIM_DESTRUCTURE;
                         self.push_instruction_at_line(fetch, source_line);
                         let nested_start = self.instructions.len();
                         self.compile_list_targets(
@@ -8039,6 +8099,7 @@ impl Compiler {
                     fetch.op2 = key_op;
                     fetch.result_type = OpType::Tmp;
                     fetch.result = fetch_tmp;
+                    fetch._pad |= FETCH_DIM_DESTRUCTURE;
                     self.push_instruction_at_line(fetch, source_line);
                     let cv_idx = self.resolve_cv(var);
                     let mut assign = Instruction::new(OpCode::AssignCv);
@@ -8092,6 +8153,7 @@ impl Compiler {
                         fetch.op2 = key;
                         fetch.result_type = OpType::Tmp;
                         fetch.result = sub;
+                        fetch._pad |= FETCH_DIM_DESTRUCTURE;
                         self.push_instruction_at_line(fetch, source_line);
                         let nested_start = self.instructions.len();
                         self.compile_list_targets(

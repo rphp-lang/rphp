@@ -115,10 +115,31 @@ ceilings. Forty-one alternating release pairs measured
 results. Full typed-reference constraints, including the remaining
 `typed_properties_068.phpt` and `typed_properties_082.phpt`, require reference-
 cell type metadata and remain a separate compatibility slice. S3 was not
-rerun; the preceding exact-PHP checkpoint's pre-existing cold `PhpDumper`
-array-state divergence remains the current boundary.
+rerun at that checkpoint; its pre-existing cold `PhpDumper` array-state
+divergence was the next boundary.
 
-The current AMD64 static-property-origin checkpoint, based on `8e1fb7b`, runs
+The current AMD64 Symfony S3 service-map checkpoint, based on `2b2b6df`,
+passes the complete pinned FrameworkBundle 7.4.16 cold-build gate against PHP
+8.2.33. Runtime-resolved method calls now preserve a mutable `$this` property
+when the selected parameter is by-reference while retaining ordinary by-value
+call behavior. List and short destructuring of null and non-array scalar values
+produce null elements without ordinary offset warnings; missing keys in actual
+arrays retain their diagnostics. These two general PHP contracts remove the
+`PhpDumper` service-call and synthetic-service warnings without vendor patches.
+
+The default-feature 4,345-case PHP 8.2.33 corpus records 1,725 passes, 2,305
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. Relative to the exact `2b2b6df` base it adds three passes
+without losing a previous pass: `Zend/tests/bug39304.phpt`,
+`Zend/tests/foreach_list_002.phpt` and `Zend/tests/list_005.phpt`. Formatting,
+unsafe policy, all-target/all-feature checking, all five Cargo CI feature
+configurations, Composer S0 and Symfony S1 through S3 pass on AMD64. The
+existing native order-pipeline control also remains compiled and green; a
+broader eager property-reference approach was rejected because it displaced
+that established native region. Runtime-resolved external object-property
+arguments remain a separate compatibility boundary.
+
+The preceding AMD64 static-property-origin checkpoint, based on `8e1fb7b`, runs
 the default-feature 4,345-case PHP 8.2.33 corpus and records 1,707 passes,
 2,323 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
 timeouts and zero crashes. It adds four exact passes without losing a previous

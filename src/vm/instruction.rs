@@ -182,6 +182,11 @@ pub const FETCH_DIM_MUTABLE: u16 = 1 << 3;
 /// PHP's shared `isset or empty` wording.
 pub const FETCH_DIM_EMPTY: u16 = 1 << 4;
 
+/// `FetchDimR` is reading one element for list/short destructuring. PHP keeps
+/// missing-array-key diagnostics, but a null or scalar destructuring source
+/// yields null elements without the ordinary scalar-offset warning.
+pub const FETCH_DIM_DESTRUCTURE: u16 = 1 << 5;
+
 /// `FetchDynamicVar` reads the symbol-table entry without reporting an
 /// undefined-variable diagnostic. Unlike `FETCH_DIM_ISSET`, the fetched value
 /// is preserved; this is required by `??=` and by mutations rooted at a

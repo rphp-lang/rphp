@@ -33,6 +33,37 @@ echo "$a $b";
 }
 
 #[test]
+fn destructuring_null_yields_null_elements_without_offset_warnings() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$source = null;
+var_dump(!([$first, $second] = $source));
+var_dump($first, $second);
+if (([$third, $fourth] = $source)) echo "truthy\n";
+var_dump($third, $fourth);
+"#
+        ),
+        "bool(true)\nNULL\nNULL\nNULL\nNULL\n"
+    );
+}
+
+#[test]
+fn destructuring_non_array_scalars_yields_null_without_offset_warnings() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([1, true, 1.5, 'text'] as $source) {
+    [$first, $second] = $source;
+    var_dump($first, $second);
+}
+"#
+        ),
+        "NULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\n"
+    );
+}
+
+#[test]
 fn destructuring_spread_is_a_located_compile_error() {
     let source = r#"<?php
 $marker = 'must-not-run';

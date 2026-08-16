@@ -244,6 +244,11 @@ distinguishes writing through an existing alias from rebinding a CV. In
 particular, a by-reference `foreach` target is rebound for each listener, so
 Symfony EventDispatcher preserves every lazy listener and RouterListener
 publishes a valid compiled route cache.
+The cold build also preserves a `$this` property passed to a runtime-resolved
+by-reference method parameter, and destructuring a null or other non-array
+scalar source yields null elements without scalar-offset diagnostics. These
+contracts keep `PhpDumper`'s recursive call map live and permit its synthetic
+`kernel` and `service_container` entries to remain null without warnings.
 
 ### C5 — Request/response and repeated runtime (S4)
 

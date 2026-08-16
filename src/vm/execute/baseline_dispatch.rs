@@ -3356,9 +3356,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     write_fetch_dim_result(frame, result_ptr, val);
                 } else if let Some(s) = arr_val.as_str() {
-                    // String offset access: $s[0] — PHP strings are byte-oriented
-                    let bytes = s.as_bytes();
-                    if let Some(idx) = idx_val.as_long() {
+                    if opline._pad & FETCH_DIM_DESTRUCTURE != 0 {
+                        write_fetch_dim_result(frame, result_ptr, Value::null());
+                    } else {
+                        // String offset access: $s[0] — PHP strings are byte-oriented
+                        let bytes = s.as_bytes();
+                        if let Some(idx) = idx_val.as_long() {
                         let pos = if idx >= 0 {
                             idx as usize
                         } else {
@@ -3398,16 +3401,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             Value::string("")
                         };
                         write_fetch_dim_result(frame, result_ptr, val);
-                    } else {
-                        write_fetch_dim_result(
-                            frame,
-                            result_ptr,
-                            if opline._pad & FETCH_DIM_ISSET != 0 {
-                                Value::bool(false)
-                            } else {
-                                Value::null()
-                            },
-                        );
+                        } else {
+                            write_fetch_dim_result(
+                                frame,
+                                result_ptr,
+                                if opline._pad & FETCH_DIM_ISSET != 0 {
+                                    Value::bool(false)
+                                } else {
+                                    Value::null()
+                                },
+                            );
+                        }
                     }
                 } else if matches!(arr_val.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr_val.clone();
@@ -3505,6 +3509,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     } else if arr_val.value_type() != ValueType::Undef
+                        && opline._pad & FETCH_DIM_DESTRUCTURE == 0
                         && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
                     {
                         report_php_warning(
