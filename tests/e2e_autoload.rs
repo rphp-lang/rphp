@@ -530,6 +530,29 @@ var_dump(class_alias('OriginalClass', 'aliasclass'));
 }
 
 #[test]
+fn class_alias_uses_canonical_identity_in_new_diagnostics_and_dynamic_instanceof() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class CanonicalTemplate {}
+interface CanonicalContract {}
+class_alias(CanonicalTemplate::class, 'TemplateProjection');
+class_alias(CanonicalContract::class, 'ContractProjection');
+foreach (['TemplateProjection', 'ContractProjection'] as $class) {
+    try { new $class; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+}
+class CanonicalValue {}
+class_alias(CanonicalValue::class, 'ValueProjection');
+$canonical = new CanonicalValue;
+$projected = new ValueProjection;
+var_dump($canonical instanceof $projected, $projected instanceof $canonical);
+"#,
+        ),
+        "Cannot instantiate abstract class CanonicalTemplate\nCannot instantiate interface CanonicalContract\nbool(true)\nbool(true)\n"
+    );
+}
+
+#[test]
 fn an_included_alias_can_participate_in_a_later_override_contract() {
     let dir = TempPhpDir::new();
     let aliases = dir.write(

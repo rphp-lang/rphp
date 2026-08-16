@@ -2980,7 +2980,16 @@ fn op_instanceof(
 ) {
     let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let class_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let raw_target = class_name.as_str().unwrap_or("");
+    // PHP accepts an object on the right side and uses its canonical runtime
+    // class. This matters for aliases: the object's layout retains the
+    // declared class identity rather than the spelling used at construction.
+    let object_target = class_name
+        .as_object()
+        .map(|object| object.class_name.clone());
+    let raw_target = object_target
+        .as_deref()
+        .or_else(|| class_name.as_str())
+        .unwrap_or("");
     let dynamic_target = (opline._pad & INSTANCEOF_DYNAMIC_STATIC_SCOPE != 0)
         .then(|| resolve_static_call_class(eg, frame, raw_target, true))
         .flatten();

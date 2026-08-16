@@ -353,7 +353,7 @@ fn op_new_obj_resolved<'a>(
                 frame,
                 op_array,
                 ip,
-                &format!("Cannot instantiate interface {name}"),
+                &format!("Cannot instantiate interface {}", class_def.name),
             ));
         }
         if class_def.is_abstract {
@@ -362,13 +362,13 @@ fn op_new_obj_resolved<'a>(
                 frame,
                 op_array,
                 ip,
-                &format!("Cannot instantiate abstract class {name}"),
+                &format!("Cannot instantiate abstract class {}", class_def.name),
             ));
         }
         if class_def.is_enum {
             let err = make_error_value("Error", &format!(
                 "Cannot instantiate enum {}",
-                name
+                class_def.name
             ));
             match throw_in_frame(eg, frame, err) {
                 ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
