@@ -7,7 +7,28 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 PHP-8.2-get-class checkpoint, based on `413bd3c`, runs the
+The current AMD64 core-diagnostics checkpoint, based on `fadebc3`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,613 passes, 2,417 failures, 77
+skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
+crashes. It adds five exact passes without losing a previous pass or moving
+another failure category: `Zend/tests/008.phpt`, `Zend/tests/015.phpt`,
+`Zend/tests/018.phpt`, `Zend/tests/nowdoc_015.phpt` and
+`tests/lang/bug21094.phpt`. Runtime constant functions now reject invalid name
+types, report built-in and user-constant collisions through the ordinary PHP
+warning path, and throw a catchable `Error` for an undefined `constant()` name.
+Unhandled `trigger_error()` notice, warning and deprecation levels now emit the
+PHP 8.2 diagnostic with the physical caller file and line; eligible handlers,
+including object-method handlers and `E_USER_ERROR`, receive the same source
+metadata exactly once. Original E2E coverage checks exception types and
+messages, handler masks, collision returns, unhandled formatting and source
+lines. Five Cargo feature configurations, all-target and unsafe checks,
+Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64. The S3 cold-kernel
+gate was not rerun because this machine has no exact PHP 8.2 oracle. Nine
+alternating release runs of `bench_calls.php` measured medians of 0.342488
+seconds for the preceding binary and 0.347672 seconds for the candidate, with
+the same computed result.
+
+The preceding AMD64 PHP-8.2-get-class checkpoint, based on `413bd3c`, runs the
 same 4,345-case PHP 8.2.33 corpus and records 1,608 passes, 2,422 failures, 77
 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts and zero
 crashes. It adds the exact passes `Zend/tests/009.phpt` and
