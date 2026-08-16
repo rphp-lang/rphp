@@ -488,6 +488,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
     reg_var!("array_map", fn_array_map, 2, "callback", "array");
     reg!("array_filter", fn_array_filter, 2, 1, "array", "callback");
+    reg!(
+        "iterator_to_array",
+        fn_iterator_to_array,
+        2,
+        1,
+        "iterator",
+        "preserve_keys"
+    );
     // compact() requires caller scope access (not yet implemented) — intentionally not registered
 
     // --- String functions ---
@@ -3646,6 +3654,48 @@ fn fn_array_reverse(
     } else {
         ret!(rv, Value::null());
     }
+}
+
+fn fn_iterator_to_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let source = arg!(ed, 0).dereferenced();
+    let preserve_keys = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
+    let entries = if let Some(array) = source.as_array() {
+        array
+            .iter()
+            .map(|(key, value)| (key, value.dereferenced().clone()))
+            .collect()
+    } else if let Some(entries) = crate::vm::execute::collect_traversable_entries(eg, source)? {
+        entries
+    } else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "iterator_to_array(): Argument #1 ($iterator) must be of type Traversable|array, {} given",
+                source.type_name()
+            ),
+        ));
+        ret!(rv, Value::null());
+    };
+
+    if eg.exception.is_some() {
+        ret!(rv, Value::null());
+    }
+    let mut result = PhpArray::new();
+    for (key, value) in entries {
+        if preserve_keys {
+            match key {
+                ArrayKey::Int(key) => result.set_int(key, value),
+                ArrayKey::String(key) => result.set_str(&key, value),
+            }
+        } else {
+            result.push(value);
+        }
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_is_list(

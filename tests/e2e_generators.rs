@@ -27,6 +27,27 @@ echo $g->current();
 }
 
 #[test]
+fn iterator_to_array_collects_generators_and_controls_key_preservation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function keyedValues(): Generator {
+    yield 4 => 'first';
+    yield 'name' => 'middle';
+    yield 4 => 'last';
+}
+var_dump(iterator_to_array(keyedValues()));
+var_dump(iterator_to_array(keyedValues(), false));
+"#,
+        ),
+        concat!(
+            "array(2) {\n  [4]=>\n  string(4) \"last\"\n  [\"name\"]=>\n  string(6) \"middle\"\n}\n",
+            "array(3) {\n  [0]=>\n  string(5) \"first\"\n  [1]=>\n  string(6) \"middle\"\n  [2]=>\n  string(4) \"last\"\n}\n",
+        )
+    );
+}
+
+#[test]
 fn test_generator_foreach() {
     assert_eq!(
         run_php(

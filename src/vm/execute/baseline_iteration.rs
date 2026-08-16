@@ -311,6 +311,15 @@ fn collect_unpack_traversable(
     Ok(Some(entries))
 }
 
+/// Collect one canonical Traversable for stdlib consumers that need the same
+/// Generator, IteratorAggregate and Iterator semantics as foreach/unpacking.
+pub(crate) fn collect_traversable_entries(
+    eg: &mut ExecutorGlobals,
+    source: &Value,
+) -> Result<Option<Vec<(ArrayKey, Value)>>, VmError> {
+    collect_unpack_traversable(eg, source, TraversableUnpackKind::Array)
+}
+
 fn append_array_unpack_entry(
     target: &mut PhpArray,
     key: ArrayKey,
