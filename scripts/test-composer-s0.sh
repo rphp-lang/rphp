@@ -22,7 +22,8 @@ sha256_file() {
 }
 
 if [[ ! -f "${composer_phar}" ]]; then
-    curl -fsSL "${composer_url}" -o "${download_candidate}"
+    curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+        "${composer_url}" -o "${download_candidate}"
     if [[ "$(sha256_file "${download_candidate}")" != "${composer_sha256}" ]]; then
         echo "error: downloaded Composer ${composer_version} checksum mismatch" >&2
         exit 1
