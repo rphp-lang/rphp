@@ -7,9 +7,35 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `f5a697f`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,591 passes, 2,439 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `223bbc5`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,597 passes, 2,433 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds six exact passes without losing a previous pass or moving another failure
+category: `Zend/tests/dead_array_type_inference.phpt`,
+`Zend/tests/foreach_over_null.phpt`, `Zend/tests/foreach_undefined.phpt`,
+`Zend/tests/nullsafe_operator/023.phpt`, `tests/lang/bug27439.phpt` and
+`tests/lang/foreachLoop.003.phpt`. A by-reference `foreach` over a nullsafe
+receiver now iterates a detached outer value and deliberately discards its
+writeback. Ordinary element mutations therefore do not convert or modify the
+source property, while interior reference cells retain their shared effects.
+The receiver is evaluated once and a null result follows the normal foreach
+warning path. That path now uses the common PHP diagnostic dispatcher, adding
+source location, error-handler invocation and exception propagation instead
+of writing an unlocated warning directly. Original E2E coverage checks null
+and object receivers, detached writes, interior references, one-time receiver
+evaluation and handled warnings; existing scalar foreach expectations now
+assert the PHP-compatible location. Five Cargo feature configurations,
+all-target and unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass
+on AMD64. The S3 cold-kernel gate was not rerun because this machine has no
+exact PHP 8.2 oracle. Nine release runs measured `bench_calls.php` medians of
+0.344343 seconds for the preceding binary and 0.346679 seconds for the
+candidate; `bench_foreach.php` medians were 0.017796 and 0.018245 seconds.
+Both retained the same computed results.
+
+The preceding AMD64 nullsafe-destructuring checkpoint, based on `f5a697f`,
+runs the same 4,345-case PHP 8.2.33 corpus and records 1,591 passes, 2,439
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. It
 adds the exact pass `Zend/tests/nullsafe_operator/021.phpt` without losing a
 previous pass or moving another failure category. Short and `list()`
 destructuring assignments now reject a target whose writable receiver spine

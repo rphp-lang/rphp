@@ -342,6 +342,16 @@ impl Compiler {
         source: &Expr,
         silent_fetch: bool,
     ) -> Result<(u16, OpType, ForeachArrayWriteback), String> {
+        // A nullsafe chain is readable but never referenceable. PHP still
+        // permits it as a by-reference foreach source by iterating a detached
+        // value: element writes stay in that snapshot, while any interior
+        // reference cells copied with the array retain their shared effects.
+        // The outer property/container is therefore deliberately not written
+        // back after iteration.
+        if Self::nullsafe_chain_line(source).is_some() {
+            let (value, value_type) = self.compile_expr(source);
+            return Ok((value, value_type, ForeachArrayWriteback::Discard));
+        }
         match source {
             Expr::CompileError { message, line } => Err(self.goto_error(message, *line)),
             Expr::Globals { line } => Err(self.goto_error(

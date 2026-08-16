@@ -651,7 +651,7 @@ fn test_e2e_foreach_int_key_value_sum() {
 fn test_e2e_foreach_int_warns() {
     assert_eq!(
         run_php("<?php foreach (42 as $v) { echo $v; } echo 'after';"),
-        "\nWarning: foreach() argument must be of type array|object, int given\nafter"
+        "\nWarning: foreach() argument must be of type array|object, int given in <main> on line 1\nafter"
     );
 }
 
@@ -659,7 +659,7 @@ fn test_e2e_foreach_int_warns() {
 fn test_e2e_foreach_null_warns() {
     assert_eq!(
         run_php("<?php foreach (null as $v) { echo $v; } echo 'after';"),
-        "\nWarning: foreach() argument must be of type array|object, null given\nafter"
+        "\nWarning: foreach() argument must be of type array|object, null given in <main> on line 1\nafter"
     );
 }
 
@@ -667,7 +667,7 @@ fn test_e2e_foreach_null_warns() {
 fn test_e2e_foreach_string_warns() {
     assert_eq!(
         run_php("<?php foreach ('abc' as $v) { echo $v; } echo 'after';"),
-        "\nWarning: foreach() argument must be of type array|object, string given\nafter"
+        "\nWarning: foreach() argument must be of type array|object, string given in <main> on line 1\nafter"
     );
 }
 
@@ -675,7 +675,7 @@ fn test_e2e_foreach_string_warns() {
 fn test_e2e_foreach_bool_warns() {
     assert_eq!(
         run_php("<?php foreach (true as $v) { echo $v; } echo 'after';"),
-        "\nWarning: foreach() argument must be of type array|object, bool given\nafter"
+        "\nWarning: foreach() argument must be of type array|object, bool given in <main> on line 1\nafter"
     );
 }
 
