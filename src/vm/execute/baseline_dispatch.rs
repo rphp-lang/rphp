@@ -463,6 +463,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             };
         }
+        macro_rules! report_array_to_string_conversion {
+            ($value:expr) => {
+                if $value.dereferenced().value_type() == ValueType::Array {
+                    report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "Array to string conversion",
+                        false,
+                    )?;
+                    resume_pending_exception!();
+                }
+            };
+        }
         stats::inc_opcode(opline.opcode as usize);
 
         // Check for pending return or exception after finally block ends
@@ -723,6 +738,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::AssignConcat => {
+                report_array_to_string_conversion!(unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                });
+                report_array_to_string_conversion!(unsafe {
+                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+                });
                 // SAFETY: all operands and the optional reference-owning CV
                 // belong to this live frame. The constrained path computes
                 // and validates a detached result before mutating the target;
@@ -1437,6 +1458,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Concat => {
+                report_array_to_string_conversion!(unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                });
+                report_array_to_string_conversion!(unsafe {
+                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+                });
                 op_concat(eg, frame, op_array, opline)?;
             }
 
@@ -1691,11 +1718,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     0 => Value::long(val.to_long_val()),    // (int)
                     1 => Value::double(val.to_float_val()), // (float)
                     2 => {                                   // (string)
+                        report_array_to_string_conversion!(val);
                         if val.value_type() == ValueType::Object {
-                            if let Some(result) = call_magic_method(eg, val, "__tostring", &[])? {
-                                Value::string(result.echo_to_string())
+                            let class_name = val
+                                .as_object()
+                                .map(|object| object.class_name.to_string())
+                                .unwrap_or_else(|| "object".to_string());
+                            let conversion = call_magic_method(eg, val, "__tostring", &[])?;
+                            resume_pending_exception!();
+                            if let Some(result) = conversion {
+                                let Some(rendered) = result.as_str() else {
+                                    throw_operator!(
+                                        "TypeError",
+                                        &format!(
+                                            "{class_name}::__toString(): Return value must be of type string"
+                                        )
+                                    );
+                                };
+                                Value::string(rendered)
                             } else {
-                                Value::string(val.echo_to_string())
+                                throw_operator!(
+                                    "Error",
+                                    &format!(
+                                        "Object of class {class_name} could not be converted to string"
+                                    )
+                                );
                             }
                         } else {
                             Value::string(val.echo_to_string())

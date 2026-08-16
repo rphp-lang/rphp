@@ -740,3 +740,39 @@ fn test_html_entity_decode_named_numeric_and_utf8() {
         "a&b!! ž"
     );
 }
+#[test]
+fn array_string_conversions_warn_and_internal_settype_preserves_php_mutation_order() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class StringableProbe {
+    public function __toString(): string { return 'probe'; }
+}
+
+$array = [1];
+var_dump((string) $array);
+$array = [2];
+var_dump(settype($array, 'string'), $array);
+var_dump(strval([3]));
+$object = new StringableProbe;
+var_dump((string) $object);
+var_dump(settype($object, 'string'), $object);
+
+$protected = [4];
+set_error_handler(function(int $level, string $message): never {
+    throw new Exception($message);
+});
+try {
+    settype($protected, 'string');
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+restore_error_handler();
+var_dump($protected);
+"#,
+            "test.php",
+            "",
+        ),
+        "\nWarning: Array to string conversion in test.php on line 7\nstring(5) \"Array\"\n\nWarning: Array to string conversion in test.php on line 9\nbool(true)\nstring(5) \"Array\"\n\nWarning: Array to string conversion in test.php on line 10\nstring(5) \"Array\"\nstring(5) \"probe\"\nbool(true)\nstring(5) \"probe\"\nArray to string conversion\nstring(5) \"Array\"\n",
+    );
+}

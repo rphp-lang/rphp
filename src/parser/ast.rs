@@ -206,6 +206,7 @@ pub enum Expr {
         // (int)$x, (string)$x, etc.
         cast_type: CastType,
         expr: Box<Expr>,
+        line: usize,
     },
     Isset(Vec<Expr>), // isset($a, $b)
     Empty(Box<Expr>), // empty($a)

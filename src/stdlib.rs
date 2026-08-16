@@ -5837,9 +5837,13 @@ fn fn_intval(
 fn fn_strval(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::string(arg!(ed, 0).echo_to_string()));
+    let value = arg!(ed, 0);
+    let Some(rendered) = internal_value_to_string(ed, eg, value)? else {
+        return Ok(());
+    };
+    ret!(rv, Value::string(rendered));
 }
 
 fn fn_floatval(
@@ -5861,7 +5865,7 @@ fn fn_boolval(
 fn fn_settype(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let type_name = arg_str!(ed, 1);
@@ -5869,7 +5873,12 @@ fn fn_settype(
     let new_val = match type_name.as_ref() {
         "int" | "integer" => Value::long(val.to_long_val()),
         "float" | "double" => Value::double(val.to_float_val()),
-        "string" => Value::string(val.echo_to_string()),
+        "string" => {
+            let Some(rendered) = internal_value_to_string(ed, eg, val)? else {
+                return Ok(());
+            };
+            Value::string(rendered)
+        }
         "bool" | "boolean" => Value::bool(val.is_truthy()),
         "array" => {
             if val.value_type() == ValueType::Array {
@@ -5890,6 +5899,45 @@ fn fn_settype(
         ptr.write(new_val);
     }
     ret!(rv, Value::bool(true));
+}
+
+fn internal_value_to_string(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<String>, VmError> {
+    let value = value.dereferenced();
+    if value.value_type() == ValueType::Array {
+        report_internal_diagnostic(eg, ed, 2, "Warning", "Array to string conversion")?;
+        return Ok(Some("Array".to_string()));
+    }
+    if value.value_type() != ValueType::Object {
+        return Ok(Some(value.echo_to_string()));
+    }
+
+    let class_name = value
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_else(|| "object".to_string());
+    let rendered = crate::vm::execute::call_object_string_conversion(eg, value)?;
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    let Some(rendered) = rendered else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Object of class {class_name} could not be converted to string"),
+        ));
+        return Ok(None);
+    };
+    let Some(rendered) = rendered.as_str() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!("{class_name}::__toString(): Return value must be of type string"),
+        ));
+        return Ok(None);
+    };
+    Ok(Some(rendered.to_string()))
 }
 
 fn fn_is_array(

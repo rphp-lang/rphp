@@ -5388,7 +5388,11 @@ impl Compiler {
                 }
                 result
             }
-            Expr::Cast { cast_type, expr } => {
+            Expr::Cast {
+                cast_type,
+                expr,
+                line,
+            } => {
                 let (inner_op, inner_type) = self.compile_expr(expr);
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::Cast);
@@ -5397,7 +5401,7 @@ impl Compiler {
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
                 instr.extended_value = *cast_type as u32;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::Isset(args) => {

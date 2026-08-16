@@ -534,8 +534,7 @@ fn call_guarded_property_magic_method(
     result
 }
 
-/// Reuse PHP object string conversion from feature-only internal handlers.
-#[cfg(any(feature = "stream-line", feature = "stream-registry"))]
+/// Reuse PHP object string conversion from internal handlers.
 pub(crate) fn call_object_string_conversion(
     eg: &mut ExecutorGlobals,
     object: &Value,

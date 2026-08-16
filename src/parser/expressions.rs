@@ -693,7 +693,7 @@ impl Parser {
                     line,
                 })
             }
-            Token::LParen(_) => {
+            Token::LParen(line) => {
                 // Check for type cast: (int), (string), (float), (bool), (array), (object)
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
                 let cast_type = match &next {
@@ -721,6 +721,7 @@ impl Parser {
                         return Ok(Expr::Cast {
                             cast_type: ct,
                             expr: Box::new(expr),
+                            line,
                         });
                     }
                 }
