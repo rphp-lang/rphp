@@ -66,7 +66,9 @@ fn op_send_named<'a>(
         let is_ref = func_common.sig.is_param_by_ref(variadic_index);
         let value = if is_ref {
             unsafe {
-                if opline._pad & SEND_FLAG_NONREFERENCEABLE != 0 {
+                if opline._pad & SEND_FLAG_NONREFERENCEABLE != 0
+                    && !func_common.sig.is_param_prefer_ref(variadic_index)
+                {
                     let parameter_name = func_common
                         .sig
                         .param_names
@@ -139,7 +141,8 @@ fn op_send_named<'a>(
 
                 if is_ref
                     && (opline.op1_type == OpType::Cv
-                        || opline._pad & SEND_FLAG_NONREFERENCEABLE != 0)
+                        || (opline._pad & SEND_FLAG_NONREFERENCEABLE != 0
+                            && !func_common.sig.is_param_prefer_ref(idx)))
                 {
                     // By-reference: same logic as SendRef
                     let argument = unsafe {

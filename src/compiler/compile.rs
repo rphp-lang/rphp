@@ -1545,6 +1545,7 @@ pub struct Compiler {
 /// Returns 0 for unknown/non-ref functions.
 fn builtin_ref_args(name: &str) -> u64 {
     match name {
+        "array_multisort" => u64::MAX,
         "sort"
         | "rsort"
         | "shuffle"

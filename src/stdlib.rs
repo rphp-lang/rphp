@@ -15,7 +15,8 @@ use std::fmt::Write as _;
 use crate::compiler::compile::{ClassConstantDefinition, PropertyDefinition};
 use crate::compiler::{
     make_direct_internal_function, make_internal_function, make_internal_function_ref,
-    make_internal_function_variadic, make_internal_method, make_internal_method_variadic,
+    make_internal_function_variadic, make_internal_function_variadic_prefer_ref,
+    make_internal_method, make_internal_method_variadic,
 };
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
@@ -397,6 +398,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
+    macro_rules! reg_var_prefer_ref {
+        ($name:expr, $handler:expr, $min_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_function_variadic_prefer_ref(
+                $handler,
+                $min_args,
+                pn![$($pnames),*],
+            ));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
+    }
+
     // --- Array functions (by-ref: arg 0) ---
     reg!("count", fn_count, 1, 1, "value");
     reg!("sizeof", fn_count, 1, 1, "value");
@@ -464,6 +478,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("array_column", fn_array_column, 2, 2, "array", "column_key");
     reg_ref!("sort", fn_sort, 2, 1, 0b1, "array", "flags");
     reg_ref!("rsort", fn_rsort, 2, 1, 0b1, "array", "flags");
+    reg_var_prefer_ref!("array_multisort", fn_array_multisort, 1, "array", "rest");
     reg!(
         "array_search",
         fn_array_search,
@@ -4191,6 +4206,203 @@ fn fn_rsort(
     } else {
         ret!(rv, Value::bool(false));
     }
+}
+
+const SORT_REGULAR: i64 = 0;
+const SORT_NUMERIC: i64 = 1;
+const SORT_STRING: i64 = 2;
+const SORT_DESC: i64 = 3;
+const SORT_ASC: i64 = 4;
+const SORT_LOCALE_STRING: i64 = 5;
+
+struct MultisortColumn {
+    entries: Vec<(ArrayKey, Value)>,
+    direction: i64,
+    flags: i64,
+    destination: *mut Value,
+}
+
+fn multisort_value_cmp(left: &Value, right: &Value, flags: i64) -> std::cmp::Ordering {
+    match flags & !SORT_FLAG_CASE {
+        SORT_NUMERIC => left
+            .to_double()
+            .partial_cmp(&right.to_double())
+            .unwrap_or(std::cmp::Ordering::Equal),
+        SORT_STRING | SORT_LOCALE_STRING => {
+            let left = left.echo_to_string();
+            let right = right.echo_to_string();
+            if flags & SORT_FLAG_CASE != 0 {
+                left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
+            } else {
+                left.cmp(&right)
+            }
+        }
+        SORT_NATURAL => natural_string_cmp(
+            &left.echo_to_string(),
+            &right.echo_to_string(),
+            flags & SORT_FLAG_CASE != 0,
+        ),
+        _ => cmp_val(compare_values(left, right)),
+    }
+}
+
+fn multisort_array_value(value: &Value) -> Option<Vec<(ArrayKey, Value)>> {
+    value.as_array().map(|array| {
+        array
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    })
+}
+
+fn multisort_rebuild(entries: &[(ArrayKey, Value)], order: &[usize]) -> Value {
+    let mut result = PhpArray::new();
+    for &index in order {
+        let (key, value) = &entries[index];
+        match key {
+            ArrayKey::Int(_) => result.push(value.clone()),
+            ArrayKey::String(key) => result.set_str(key, value.clone()),
+        }
+    }
+    Value::array(result)
+}
+
+/// array_multisort(array &$array, mixed &...$rest): bool
+///
+/// Arrays form lexicographic sort columns. Direction and comparison flags
+/// following an array apply to that column; all columns are permuted together.
+fn fn_array_multisort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    // SAFETY: the registered signature requires CV 0 and the internal handler
+    // is called only while its ExecuteData frame and argument slots are live.
+    let first_raw = unsafe { (*ed).cv_mut(0) as *mut Value };
+    // SAFETY: `first_raw` is the initialized CV established above; reference
+    // arguments keep their target alive for the complete synchronous call.
+    let first_value = unsafe { (&*first_raw).dereferenced() };
+    if first_value.is_undef() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ArgumentCountError",
+            "array_multisort() expects at least 1 argument, 0 given",
+        ));
+        return Ok(());
+    }
+    let Some(first_entries) = multisort_array_value(first_value) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "array_multisort(): Argument #1 ($array) must be of type array, {} given",
+                first_value.type_name()
+            ),
+        ));
+        return Ok(());
+    };
+    // SAFETY: the raw CV is live, and an explicit reference owns or borrows a
+    // target whose lifetime covers this handler invocation.
+    let first_destination = unsafe {
+        if (*first_raw).is_reference() {
+            (*first_raw).as_ref_ptr()
+        } else {
+            first_raw
+        }
+    };
+    let mut columns = vec![MultisortColumn {
+        entries: first_entries,
+        direction: SORT_ASC,
+        flags: SORT_REGULAR,
+        destination: first_destination,
+    }];
+    let expected_len = columns[0].entries.len();
+
+    if let Some(rest) = arg!(ed, 1).as_array() {
+        for (offset, argument) in rest.values().enumerate() {
+            let value = argument.dereferenced();
+            if let Some(entries) = multisort_array_value(value) {
+                if entries.len() != expected_len {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "ValueError",
+                        "Array sizes are inconsistent",
+                    ));
+                    return Ok(());
+                }
+                // SAFETY: each reference stored in the live variadic bucket
+                // retains its target through the synchronous handler call.
+                let destination = if argument.is_reference() {
+                    unsafe { argument.as_ref_ptr() }
+                } else {
+                    std::ptr::null_mut()
+                };
+                columns.push(MultisortColumn {
+                    entries,
+                    direction: SORT_ASC,
+                    flags: SORT_REGULAR,
+                    destination,
+                });
+                continue;
+            }
+
+            let Some(flag) = value.as_long() else {
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    &format!(
+                        "array_multisort(): Argument #{} must be an array or a sort flag",
+                        offset + 2
+                    ),
+                ));
+                return Ok(());
+            };
+            let column = columns.last_mut().expect("the first sort column exists");
+            if matches!(flag, SORT_ASC | SORT_DESC) {
+                column.direction = flag;
+            } else if matches!(
+                flag & !SORT_FLAG_CASE,
+                SORT_REGULAR | SORT_NUMERIC | SORT_STRING | SORT_LOCALE_STRING | SORT_NATURAL
+            ) {
+                column.flags = flag;
+            } else {
+                eg.exception = Some(crate::value::make_error_value(
+                    "ValueError",
+                    &format!(
+                        "array_multisort(): Argument #{} is an invalid sort flag",
+                        offset + 2
+                    ),
+                ));
+                return Ok(());
+            }
+        }
+    }
+
+    let mut order: Vec<usize> = (0..expected_len).collect();
+    order.sort_by(|left, right| {
+        for column in &columns {
+            let ordering = multisort_value_cmp(
+                &column.entries[*left].1,
+                &column.entries[*right].1,
+                column.flags,
+            );
+            let ordering = if column.direction == SORT_DESC {
+                ordering.reverse()
+            } else {
+                ordering
+            };
+            if ordering != std::cmp::Ordering::Equal {
+                return ordering;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+
+    for column in columns {
+        let sorted = multisort_rebuild(&column.entries, &order);
+        if !column.destination.is_null() {
+            // SAFETY: destinations are either the live fixed CV or targets of
+            // reference handles retained by the live variadic argument array.
+            unsafe { *column.destination = sorted };
+        }
+    }
+    ret!(rv, Value::bool(true));
 }
 
 fn fn_array_search(
@@ -10562,17 +10774,54 @@ fn call_resolved_with_php_array(
     if resolved.is_magic_call {
         return call_magic_resolved_with_array(eg, &resolved, args.clone());
     }
+    // SAFETY: callback resolution returns a registered immutable descriptor
+    // retained by ExecutorGlobals for the complete detached invocation.
+    let sig = unsafe { &(*resolved.func_ptr).sig };
+    let prepare_argument = |index: usize, value: &Value| {
+        let reference_index = if index < sig.public_arity() as usize {
+            index
+        } else if sig.is_variadic {
+            sig.public_arity() as usize
+        } else {
+            index
+        };
+        if sig.is_param_by_ref(reference_index as u32) && value.is_owned_reference() {
+            value.clone_owned_reference_alias()
+        } else if sig.is_param_by_ref(reference_index as u32) && value.is_reference() {
+            // SAFETY: the source argument array remains live until the
+            // synchronous detached callback returns.
+            Value::reference(unsafe { value.as_ref_ptr() })
+        } else {
+            value.clone()
+        }
+    };
     if !args.has_string_keys() {
-        return call_resolved_with_array(eg, &resolved, args);
+        let normalized = args
+            .values()
+            .enumerate()
+            .map(|(index, value)| prepare_argument(index, value))
+            .collect::<Vec<_>>();
+        let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
+        return call_resolved_owned_iter(
+            eg,
+            &resolved,
+            num_args,
+            resolved
+                .prepend_args
+                .iter()
+                .cloned()
+                .chain(normalized)
+                .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+        );
     }
 
-    let sig = unsafe { &(*resolved.func_ptr).sig };
     let param_names = &sig.param_names;
     let num_params = sig.public_arity() as usize;
     let required = sig.required_num_args as usize;
 
     let mut positional = vec![Value::undef(); num_params];
     let mut extra_positional: Vec<Value> = Vec::new();
+    let mut named_variadic: Vec<(String, Value)> = Vec::new();
     let mut pos_cursor = 0usize;
     let mut seen_named = false;
 
@@ -10589,10 +10838,15 @@ fn call_resolved_with_php_array(
                             ));
                             return Ok(Value::null());
                         }
-                        positional[idx] = val.clone();
+                        positional[idx] = prepare_argument(idx, val);
                     } else {
-                        extra_positional.push(val.clone());
+                        extra_positional.push(prepare_argument(idx, val));
                     }
+                } else if sig.is_variadic {
+                    named_variadic.push((
+                        name.clone(),
+                        prepare_argument(sig.public_arity() as usize, val),
+                    ));
                 } else {
                     eg.exception = Some(crate::value::make_error_value(
                         "Error",
@@ -10610,10 +10864,11 @@ fn call_resolved_with_php_array(
                     return Ok(Value::null());
                 }
                 if pos_cursor < num_params {
-                    positional[pos_cursor] = val.clone();
+                    positional[pos_cursor] = prepare_argument(pos_cursor, val);
                     pos_cursor += 1;
                 } else {
-                    extra_positional.push(val.clone());
+                    extra_positional.push(prepare_argument(pos_cursor, val));
+                    pos_cursor += 1;
                 }
             }
         }
@@ -10621,6 +10876,9 @@ fn call_resolved_with_php_array(
 
     for i in 0..required {
         if positional[i].is_undef() {
+            if sig.is_variadic && !named_variadic.is_empty() {
+                continue;
+            }
             let name = param_names.get(i).map(|s| s.as_str()).unwrap_or("?");
             eg.exception = Some(crate::value::make_error_value(
                 "ArgumentCountError",
@@ -10641,7 +10899,7 @@ fn call_resolved_with_php_array(
     normalized.extend(extra_positional);
 
     let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
-    call_resolved_owned_iter(
+    call_resolved_owned_iter_with_named(
         eg,
         &resolved,
         num_args,
@@ -10651,6 +10909,7 @@ fn call_resolved_with_php_array(
             .cloned()
             .chain(normalized)
             .chain(resolved.use_vars.iter().cloned()),
+        named_variadic,
     )
 }
 

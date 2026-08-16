@@ -2583,8 +2583,20 @@ fn execute_full_call<'a>(
         let extra_count = num_args.saturating_sub(public_max);
         let mut variadic_arr = PhpArray::new();
         let cv_start = func_common.sig.variadic_cv_index;
+        let variadic_by_reference = func_common.sig.is_param_by_ref(public_max);
         for i in 0..extra_count {
-            let arg = unsafe { (*call).cv(cv_start + i) }.clone();
+            // SAFETY: the compiler-sized pending call frame contains the
+            // complete supplied variadic prefix through `num_args`.
+            let argument = unsafe { (*call).cv(cv_start + i) };
+            let arg = if variadic_by_reference && argument.is_owned_reference() {
+                argument.clone_owned_reference_alias()
+            } else if variadic_by_reference && argument.is_reference() {
+                // SAFETY: the source call-frame argument remains live while
+                // the packed variadic array is built and invoked synchronously.
+                Value::reference(unsafe { argument.as_ref_ptr() })
+            } else {
+                argument.clone()
+            };
             variadic_arr.push(arg);
         }
         if let Some(named_extras) = pending_named {

@@ -507,6 +507,29 @@ fn user_sorts_preserve_keys_and_compare_values_or_keys() {
     );
 }
 
+#[test]
+fn array_multisort_permutates_columns_and_preserves_preferred_references() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$primary = ['first' => 2, 7 => 1, 'tie' => 1];
+$secondary = ['first' => 'b', 7 => 'z', 'tie' => 'a'];
+var_dump(array_multisort($primary, SORT_ASC, SORT_NUMERIC, $secondary, SORT_DESC, SORT_STRING));
+echo implode(',', array_keys($primary)), ':', implode(',', $primary), '|';
+echo implode(',', array_keys($secondary)), ':', implode(',', $secondary), '|';
+$callback = array_multisort(...);
+$direct = [3, 1, 2];
+$callback($direct);
+echo implode(',', $direct), '|';
+$forwarded = ['row1' => 2, 'row2' => 1];
+$arguments = [&$forwarded];
+call_user_func_array('array_multisort', $arguments);
+echo implode(',', array_keys($forwarded));"#,
+        ),
+        "bool(true)\n0,tie,first:1,1,2|0,tie,first:z,a,b|1,2,3|row2,row1"
+    );
+}
+
 // === shuffle / array_rand (just ensure no crash) ===
 #[test]
 fn test_shuffle_runs() {

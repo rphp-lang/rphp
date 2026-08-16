@@ -972,6 +972,7 @@ pub fn make_user_function_full(
                 is_variadic,
                 variadic_cv_index,
                 ref_args,
+                prefer_ref_args: 0,
                 returns_reference: false,
                 this_offset: 0,
                 param_type_hints: vec![],
@@ -1166,6 +1167,7 @@ pub(crate) fn make_user_function_typed_with_return_mode(
                 is_variadic,
                 variadic_cv_index,
                 ref_args,
+                prefer_ref_args: 0,
                 returns_reference,
                 this_offset: 0,
                 param_type_hints,
@@ -5592,6 +5594,7 @@ pub fn make_internal_function(
                 is_variadic: false,
                 variadic_cv_index: 0,
                 ref_args: 0,
+                prefer_ref_args: 0,
                 returns_reference: false,
                 this_offset: 0,
                 param_type_hints: vec![],
@@ -5761,6 +5764,7 @@ pub fn make_internal_method(
                 is_variadic: false,
                 variadic_cv_index: 0,
                 ref_args: 0,
+                prefer_ref_args: 0,
                 returns_reference: false,
                 this_offset: 1,
                 param_type_hints: vec![],
@@ -5806,6 +5810,7 @@ pub fn make_internal_method_variadic(
                 is_variadic: true,
                 variadic_cv_index,
                 ref_args: 0,
+                prefer_ref_args: 0,
                 returns_reference: false,
                 this_offset: 1,
                 param_type_hints: vec![],
@@ -5848,6 +5853,7 @@ pub fn make_internal_function_ref(
                 is_variadic: false,
                 variadic_cv_index: 0,
                 ref_args,
+                prefer_ref_args: 0,
                 returns_reference: false,
                 this_offset: 0,
                 param_type_hints: vec![],
@@ -5889,6 +5895,56 @@ pub fn make_internal_function_variadic(
                 is_variadic: true,
                 variadic_cv_index: required_num_args,
                 ref_args: 0,
+                prefer_ref_args: 0,
+                returns_reference: false,
+                this_offset: 0,
+                param_type_hints: vec![],
+                param_names,
+                return_type_hint: ParamTypeHint::None,
+            },
+            frame: FrameLayout {
+                num_cvs,
+                num_temps: 0,
+                total_slots,
+            },
+            plan: CallPlan::without_flags(
+                CallStrategy::Full,
+                ReturnStrategy::Full,
+                CleanupMode::ScanAll,
+            ),
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
+        },
+        handler,
+        direct_handler: None,
+    }
+}
+
+/// Create a variadic internal function whose fixed and variadic parameters
+/// use PHP's legacy prefer-reference calling convention.
+pub fn make_internal_function_variadic_prefer_ref(
+    handler: InternalFunctionHandler,
+    required_num_args: u32,
+    param_names: Vec<String>,
+) -> InternalFunction {
+    let num_cvs = required_num_args + 1;
+    let variadic_cv_index = required_num_args;
+    let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs;
+    let reference_args = if variadic_cv_index < 63 {
+        (1u64 << (variadic_cv_index + 1)) - 1
+    } else {
+        u64::MAX
+    };
+    InternalFunction {
+        common: FunctionCommon {
+            fn_type: FunctionType::Internal,
+            sig: SignatureInfo {
+                num_args: required_num_args,
+                required_num_args,
+                is_variadic: true,
+                variadic_cv_index,
+                ref_args: reference_args,
+                prefer_ref_args: reference_args,
                 returns_reference: false,
                 this_offset: 0,
                 param_type_hints: vec![],

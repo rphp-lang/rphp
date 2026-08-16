@@ -1108,6 +1108,10 @@ pub struct SignatureInfo {
     /// Bitmask: bit N = 1 means parameter N is pass-by-reference.
     /// Supports up to 64 parameters.
     pub ref_args: u64,
+    /// Subset of `ref_args` accepted by value when no writable variable is
+    /// available. PHP uses this legacy prefer-reference contract for
+    /// `array_multisort()` while ordinary `&$param` declarations remain strict.
+    pub prefer_ref_args: u64,
     /// Whether the declaration uses `function &name()` return-by-reference syntax.
     pub returns_reference: bool,
     /// Number of hidden CV slots before explicit args (0 for functions, 1 for methods with $this).
@@ -1134,6 +1138,11 @@ impl SignatureInfo {
     #[inline]
     pub fn is_param_by_ref(&self, idx: u32) -> bool {
         idx < 64 && (self.ref_args & (1u64 << idx)) != 0
+    }
+
+    #[inline]
+    pub fn is_param_prefer_ref(&self, idx: u32) -> bool {
+        idx < 64 && (self.prefer_ref_args & (1u64 << idx)) != 0
     }
 
     /// CV index for a public parameter at 0-based index `idx`.

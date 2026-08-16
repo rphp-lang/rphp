@@ -2454,7 +2454,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if opline._pad & (SEND_FLAG_GLOBALS | SEND_FLAG_NONREFERENCEABLE) != 0 {
                         let common = &*(*call).func;
                         let parameter_index = opline.extended_value as usize;
-                        if common.sig.is_param_by_ref(parameter_index as u32) {
+                        if common.sig.is_param_by_ref(parameter_index as u32)
+                            && !common
+                                .sig
+                                .is_param_prefer_ref(parameter_index as u32)
+                        {
                             let parameter_name = common
                                 .sig
                                 .param_names
