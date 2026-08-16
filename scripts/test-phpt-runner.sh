@@ -123,6 +123,7 @@ if ($profile !== [
 require $argv[1];
 if (classify_failure("Parse error: emitted by user code", 0) !== "output"
     || classify_failure("Parse error: emitted by the parser", 1) !== "parse"
+    || classify_failure("Fatal error: Uncaught Error: broken in /tmp/type_declarations/default.php:7\nStack trace:\n#0 {main}", 255) !== "runtime"
     || expectation_profile(["EXPECT" => "Error is ordinary user data"]) !== "ordinary"
     || expectation_profile(["EXPECTF" => "Fatal error: broken in %s on line %d"]) !== "diagnostic"
     || expectation_profile(["EXPECT" => "prefix\nWarning: broken"]) !== "diagnostic"

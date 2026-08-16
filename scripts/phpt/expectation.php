@@ -139,6 +139,13 @@ function classify_failure(string $output, int $exitCode): string
     if ($exitCode !== 0 && preg_match('/(?:^|\n)Parse error:/i', $output) === 1) {
         return 'parse';
     }
+    // A rendered uncaught Throwable necessarily reached runtime. Check this
+    // before compile-diagnostic keywords: source paths such as
+    // `type_declarations/foo.php` must not turn a runtime Error into a compile
+    // failure merely because the conservative fallback scans the full line.
+    if ($exitCode !== 0 && preg_match('/(?:^|\n)Fatal error:\s+Uncaught\s+/i', $output) === 1) {
+        return 'runtime';
+    }
     if ($exitCode !== 0
         && preg_match('/(?:^|\n)Fatal error:.*(?:compile|unsupported|declaration|default)/i', $output) === 1
     ) {

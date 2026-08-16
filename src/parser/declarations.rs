@@ -1235,7 +1235,9 @@ impl Parser {
             Expr::DynamicNamedStaticProperty { property, .. } => {
                 Self::collect_free_vars(property, bound, out);
             }
-            Expr::DynamicStaticProperty { class, property } => {
+            Expr::DynamicStaticProperty {
+                class, property, ..
+            } => {
                 Self::collect_free_vars(class, bound, out);
                 Self::collect_free_vars(property, bound, out);
             }

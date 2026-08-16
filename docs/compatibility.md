@@ -7,6 +7,37 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 static-property-origin checkpoint, based on `8e1fb7b`, runs
+the default-feature 4,345-case PHP 8.2.33 corpus and records 1,707 passes,
+2,323 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds four exact passes without losing a previous
+pass: `Zend/tests/exception_013.phpt`, `Zend/tests/objects_029.phpt`,
+`Zend/tests/objects_030.phpt` and `tests/lang/041.phpt`. Static-property source
+lines now survive the parser and every ordinary, dynamic, coalesce, foreach,
+array-root and unset compiler path, so the existing shared throwable boundary
+records the correct file, line and trace for read, write and unset errors.
+Original E2E coverage checks undeclared, inaccessible and uninitialized reads,
+an undeclared write and unset against the exact PHP 8.2.33 result. The PHPT
+runner also classifies a rendered `Fatal error: Uncaught ...` as runtime before
+scanning conservative compile keywords; this corrects 49 false compile labels
+caused by words in source paths, without changing their pass/fail status. The
+execution profile therefore records 509 front-end rejections and 3,521 runtime-
+reaching cases instead of the previous 561 and 3,469.
+
+Five Cargo configurations, the two default-feature generics combinations,
+all-target, formatting and unsafe checks, Composer S0, Symfony S1 and warmed-
+kernel S2 pass on AMD64; the production unsafe inventory remains 1,621 blocks
+and 289 functions within the 1,623/289 ceilings. An exact PHP 8.2.33 S3 run
+still exposes the pre-existing cold `PhpDumper` array-state divergence on both
+the parent and candidate, so this checkpoint makes no new S3 claim. Forty-one
+alternating release pairs measured `bench_static_self_property.php` at baseline
+p10/median/p90 of 0.160518/0.164225/0.169785 seconds and candidate
+0.159540/0.163147/0.168556 seconds (median -0.66 percent), with identical
+results. Successful static-property opcodes, inline caches, runtime frames and
+value/object layouts are unchanged; only sparse compiler source metadata is
+added. Static-property reference binding and the cold Symfony array-state
+boundary remain separate compatibility work.
+
 The current AMD64 property-modify-origin checkpoint, based on `3c889f9`, runs
 the default-feature 4,345-case PHP 8.2.33 corpus and records 1,703 passes,
 2,327 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero

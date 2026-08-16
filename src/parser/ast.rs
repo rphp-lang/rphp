@@ -304,16 +304,19 @@ pub enum Expr {
         // ClassName::$prop
         class_name: String,
         property: String,
+        line: usize,
     },
     DynamicNamedStaticProperty {
         // ClassName::$$name or ClassName::${expression}
         class_name: String,
         property: Box<Expr>,
+        line: usize,
     },
     DynamicStaticProperty {
         // $class::$prop, $class::$$name, or expression::${expression}
         class: Box<Expr>,
         property: Box<Expr>,
+        line: usize,
     },
     ClassConstant {
         // ClassName::CONSTANT, self::CONSTANT, parent::CONSTANT, static::CONSTANT
@@ -464,7 +467,9 @@ impl Expr {
                 object, property, ..
             } => object.contains_yield() || property.contains_yield(),
             Expr::DynamicNamedStaticProperty { property, .. } => property.contains_yield(),
-            Expr::DynamicStaticProperty { class, property } => {
+            Expr::DynamicStaticProperty {
+                class, property, ..
+            } => {
                 class.contains_yield() || property.contains_yield()
             }
             Expr::Cast { expr, .. }
@@ -842,6 +847,7 @@ pub enum Stmt {
         class_name: String,
         property: String,
         expr: Expr,
+        line: usize,
     },
     AssignObjArrayDim {
         // $obj->prop[$key] = expr

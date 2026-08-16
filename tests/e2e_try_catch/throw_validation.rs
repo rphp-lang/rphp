@@ -275,6 +275,18 @@ fn bound_closure_property_modify_errors_keep_the_origin_and_closure_trace_name()
 }
 
 #[test]
+fn static_property_errors_keep_each_operation_source_line() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nclass StaticOrigin {\n    private static int $secret = 1;\n    public static int $typed;\n}\n$probes = [\n    function() { return StaticOrigin::$missing; },\n    function() { return StaticOrigin::$secret; },\n    function() { return StaticOrigin::$typed; },\n    function() { StaticOrigin::$missing = 1; },\n    function() { unset(StaticOrigin::$missing); },\n];\nforeach ($probes as $probe) {\n    try { $probe(); } catch (Throwable $error) {\n        echo get_class($error), '|', $error->getMessage(), '|', $error->getFile(), ':', $error->getLine(), \"\\n\";\n    }\n}",
+            "/fixture/static-property-origin.php",
+            "/fixture",
+        ),
+        "Error|Access to undeclared static property StaticOrigin::$missing|/fixture/static-property-origin.php:7\nError|Cannot access private property StaticOrigin::$secret|/fixture/static-property-origin.php:8\nError|Typed static property StaticOrigin::$typed must not be accessed before initialization|/fixture/static-property-origin.php:9\nError|Access to undeclared static property StaticOrigin::$missing|/fixture/static-property-origin.php:10\nError|Attempt to unset static property StaticOrigin::$missing|/fixture/static-property-origin.php:11\n"
+    );
+}
+
+#[test]
 fn multiline_calls_use_the_named_callable_line_and_staticness() {
     assert_eq!(
         run_php_with_source_context(

@@ -23,6 +23,7 @@ enum ArrayRootWriteback {
         property_type: OpType,
         late_static: bool,
         dynamic_owner: bool,
+        line: usize,
     },
 }
 
@@ -57,6 +58,7 @@ enum CoalesceWrite {
         property_type: OpType,
         late_static: bool,
         dynamic_owner: bool,
+        line: usize,
     },
     Array(MutableArrayPath),
 }
@@ -89,6 +91,7 @@ pub(super) enum ForeachArrayWriteback {
         property_type: OpType,
         late_static: bool,
         dynamic_owner: bool,
+        line: usize,
     },
     Array(MutableArrayPath),
 }
@@ -467,6 +470,7 @@ impl Compiler {
                     property_type,
                     late_static,
                     dynamic_owner,
+                    line,
                 ) = self
                     .compile_static_property_operands(static_property)
                     .expect("matched static-property form");
@@ -491,7 +495,7 @@ impl Compiler {
                 if property_type != OpType::Const {
                     fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, line);
                 Ok((
                     current,
                     OpType::Tmp,
@@ -502,6 +506,7 @@ impl Compiler {
                         property_type,
                         late_static,
                         dynamic_owner,
+                        line,
                     },
                 ))
             }
@@ -646,6 +651,7 @@ impl Compiler {
                 property_type,
                 late_static,
                 dynamic_owner,
+                line,
             } => {
                 let mut assign = Instruction::new(if late_static {
                     OpCode::AssignLateStaticProp
@@ -664,7 +670,7 @@ impl Compiler {
                 if property_type != OpType::Const {
                     assign._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, line);
             }
             ForeachArrayWriteback::Array(path) => {
                 let &(container, container_type) = path.containers.last().unwrap();
@@ -781,6 +787,7 @@ impl Compiler {
                     property_type,
                     late_static,
                     dynamic_owner,
+                    line,
                 ) = self
                     .compile_static_property_operands(static_property)
                     .expect("matched static-property form");
@@ -803,7 +810,7 @@ impl Compiler {
                 if property_type != OpType::Const {
                     fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, line);
                 (
                     current,
                     OpType::Tmp,
@@ -814,6 +821,7 @@ impl Compiler {
                         property_type,
                         late_static,
                         dynamic_owner,
+                        line,
                     },
                 )
             }
@@ -926,6 +934,7 @@ impl Compiler {
                 property_type,
                 late_static,
                 dynamic_owner,
+                line,
             } => {
                 let mut assign = Instruction::new(if late_static {
                     OpCode::AssignLateStaticProp
@@ -944,7 +953,7 @@ impl Compiler {
                 if property_type != OpType::Const {
                     assign._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, line);
             }
             CoalesceWrite::Array(path) => {
                 let &(container, container_type) = path.containers.last().unwrap();
@@ -1006,6 +1015,7 @@ impl Compiler {
                 property_type: OpType,
                 late_static: bool,
                 dynamic_owner: bool,
+                line: usize,
             },
             Array(MutableArrayPath),
         }
@@ -1068,6 +1078,7 @@ impl Compiler {
                     property_type,
                     late_static,
                     dynamic_owner,
+                    line,
                 ) = self
                     .compile_static_property_operands(static_property)
                     .expect("matched static-property form");
@@ -1078,6 +1089,7 @@ impl Compiler {
                     property_type,
                     late_static,
                     dynamic_owner,
+                    line,
                 }
             }
             Expr::ArrayAccess { .. } => {
@@ -1142,6 +1154,7 @@ impl Compiler {
                 property_type,
                 late_static,
                 dynamic_owner,
+                line,
             } => {
                 let mut assign = Instruction::new(if late_static {
                     OpCode::AssignLateStaticProp
@@ -1160,7 +1173,7 @@ impl Compiler {
                 if property_type != OpType::Const {
                     assign._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, line);
             }
             WriteTarget::Array(path) => {
                 let &(container, container_type) = path.containers.last().unwrap();
@@ -1465,6 +1478,7 @@ impl Compiler {
                     property_type,
                     late_static,
                     dynamic_owner,
+                    line,
                 ) = self
                     .compile_static_property_operands(static_property)
                     .expect("matched static-property form");
@@ -1489,7 +1503,7 @@ impl Compiler {
                 if property_type != OpType::Const {
                     fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, line);
                 (
                     (container, OpType::Tmp),
                     ArrayRootWriteback::Static {
@@ -1499,6 +1513,7 @@ impl Compiler {
                         property_type,
                         late_static,
                         dynamic_owner,
+                        line,
                     },
                     indices,
                 )
@@ -1623,6 +1638,7 @@ impl Compiler {
                 property_type,
                 late_static,
                 dynamic_owner,
+                line,
             } => {
                 let mut instruction = Instruction::new(if late_static {
                     OpCode::AssignLateStaticProp
@@ -1639,7 +1655,10 @@ impl Compiler {
                 if property_type != OpType::Const {
                     instruction._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                instruction
+                instruction.result = path.root.0;
+                instruction.result_type = path.root.1;
+                self.push_instruction_at_line(instruction, line);
+                return;
             }
         };
         writeback.result = path.root.0;
@@ -2719,6 +2738,7 @@ impl Compiler {
                                 property_type,
                                 late_static,
                                 dynamic_owner,
+                                line,
                             ) = self
                                 .compile_static_property_operands(static_property)
                                 .expect("matched static-property form");
@@ -2736,7 +2756,7 @@ impl Compiler {
                             if property_type != OpType::Const {
                                 unset._pad |= STATIC_PROP_DYNAMIC_NAME;
                             }
-                            self.instructions.push(unset);
+                            self.push_instruction_at_line(unset, line);
                         }
                         _ => return Err("unset() requires a variable".into()),
                     }
@@ -2900,6 +2920,7 @@ impl Compiler {
                 class_name,
                 property,
                 expr,
+                line,
             } => {
                 let (val_op, val_type) = self.compile_expr(expr);
                 let (resolved, dynamic_static_scope) =
@@ -2917,7 +2938,7 @@ impl Compiler {
                 assign.op2_type = OpType::Const;
                 assign.result = val_op;
                 assign.result_type = val_type;
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, *line);
             }
             Stmt::AssignObjArrayDim {
                 object,

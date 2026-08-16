@@ -1143,10 +1143,11 @@ impl Parser {
             Expr::StaticProperty {
                 class_name,
                 property,
-            } => Some((class_name.clone(), property.clone())),
+                line,
+            } => Some((class_name.clone(), property.clone(), *line)),
             _ => None,
         };
-        if let Some((class_name, property)) = static_property {
+        if let Some((class_name, property, line)) = static_property {
             if self.peek() == Token::Assign {
                 self.advance();
                 let value = self.parse_expr()?;
@@ -1155,6 +1156,7 @@ impl Parser {
                     class_name,
                     property,
                     expr: value,
+                    line,
                 });
             }
             if let Some(op) = Self::compound_assign_op(&self.peek()) {
@@ -1169,6 +1171,7 @@ impl Parser {
                         left: Box::new(expr),
                         right: Box::new(right),
                     },
+                    line,
                 });
             }
         }
@@ -1431,10 +1434,12 @@ impl Parser {
                 Expr::StaticProperty {
                     class_name,
                     property,
+                    line,
                 } => Ok(Stmt::AssignStaticProp {
                     class_name,
                     property,
                     expr: *expr,
+                    line,
                 }),
                 target @ (Expr::DynamicNamedStaticProperty { .. }
                 | Expr::DynamicStaticProperty { .. }) => {

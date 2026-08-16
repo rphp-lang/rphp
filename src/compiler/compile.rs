@@ -3543,11 +3543,12 @@ impl Compiler {
     fn compile_static_property_operands(
         &mut self,
         expr: &Expr,
-    ) -> Option<(u16, OpType, u16, OpType, bool, bool)> {
+    ) -> Option<(u16, OpType, u16, OpType, bool, bool, usize)> {
         match expr {
             Expr::StaticProperty {
                 class_name,
                 property,
+                line,
             } => {
                 let (resolved, late_static) = self.resolve_static_member_owner(class_name);
                 Some((
@@ -3557,11 +3558,13 @@ impl Compiler {
                     OpType::Const,
                     late_static,
                     false,
+                    *line,
                 ))
             }
             Expr::DynamicNamedStaticProperty {
                 class_name,
                 property,
+                line,
             } => {
                 let (resolved, late_static) = self.resolve_static_member_owner(class_name);
                 let class = self.add_literal(Value::string(resolved));
@@ -3574,13 +3577,18 @@ impl Compiler {
                     OpType::Tmp,
                     late_static,
                     false,
+                    *line,
                 ))
             }
-            Expr::DynamicStaticProperty { class, property } => {
+            Expr::DynamicStaticProperty {
+                class,
+                property,
+                line,
+            } => {
                 let (class, class_type) = self.compile_expr(class);
                 let (property, property_type) = self.compile_expr(property);
                 let property = self.emit_string_cast(property, property_type);
-                Some((class, class_type, property, OpType::Tmp, false, true))
+                Some((class, class_type, property, OpType::Tmp, false, true, *line))
             }
             _ => None,
         }
@@ -3750,9 +3758,9 @@ impl Compiler {
             static_property @ (Expr::StaticProperty { .. }
             | Expr::DynamicNamedStaticProperty { .. }
             | Expr::DynamicStaticProperty { .. }) => {
-                let (class, class_type, property, property_type, late_static, dynamic_owner) = self
-                    .compile_static_property_operands(static_property)
-                    .expect("matched static-property form");
+                let (class, class_type, property, property_type, late_static, dynamic_owner, line) =
+                    self.compile_static_property_operands(static_property)
+                        .expect("matched static-property form");
                 let result = self.alloc_tmp();
                 let mut fetch = Instruction::new(if late_static {
                     OpCode::FetchLateStaticProp
@@ -3772,7 +3780,7 @@ impl Compiler {
                 if property_type != OpType::Const {
                     fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, line);
                 (result, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index, .. } => {
@@ -6387,6 +6395,7 @@ impl Compiler {
                     prop_type,
                     dynamic_static_scope,
                     dynamic_owner,
+                    line,
                 ) = self
                     .compile_static_property_operands(static_property)
                     .expect("matched static-property form");
@@ -6409,7 +6418,7 @@ impl Compiler {
                 if prop_type != OpType::Const {
                     fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, line);
                 self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
                 (tmp, OpType::Tmp)
             }
@@ -7786,6 +7795,7 @@ impl Compiler {
                                 property_type,
                                 late_static,
                                 dynamic_owner,
+                                line,
                             ) = self
                                 .compile_static_property_operands(static_property)
                                 .expect("matched static-property form");
@@ -7806,7 +7816,7 @@ impl Compiler {
                             if property_type != OpType::Const {
                                 assign._pad |= STATIC_PROP_DYNAMIC_NAME;
                             }
-                            self.instructions.push(assign);
+                            self.push_instruction_at_line(assign, line);
                         }
                         Expr::ArrayAccess { .. } => {
                             let mut root = target;

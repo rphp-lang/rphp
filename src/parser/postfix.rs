@@ -162,6 +162,7 @@ impl Parser {
             return Ok(Expr::DynamicNamedStaticProperty {
                 class_name,
                 property: Box::new(property),
+                line: dollar_line,
             });
         }
         if let Token::Variable(_, _) = self.peek() {
@@ -191,6 +192,7 @@ impl Parser {
             return Ok(Expr::StaticProperty {
                 class_name,
                 property,
+                line: property_line,
             });
         }
 
@@ -334,6 +336,7 @@ impl Parser {
                             expr = Expr::DynamicStaticProperty {
                                 class: Box::new(expr),
                                 property: Box::new(property),
+                                line: dollar_line,
                             };
                         }
                         continue;
@@ -357,6 +360,7 @@ impl Parser {
                             expr = Expr::DynamicStaticProperty {
                                 class: Box::new(expr),
                                 property: Box::new(Expr::StringLiteral(member_name)),
+                                line: member_line,
                             };
                         }
                         continue;
