@@ -1046,6 +1046,12 @@ impl Parser {
             return Err("Expected writable variable after '&' in destructuring".into());
         }
         let target = self.parse_empty_dimension_target_prefix()?;
+        if let Some(line) = Self::nullsafe_chain_line(&target) {
+            return Ok(self.compile_error(
+                "Cannot assign reference to non referenceable value",
+                line,
+            ));
+        }
         match target {
             Expr::Variable { ref name, .. } if name == "this" => {
                 Err("Cannot re-assign $this".into())
@@ -1128,30 +1134,45 @@ impl Parser {
                 Token::Variable(_, _) | Token::This(_) | Token::Dollar(_)
             ) {
                 let target = self.parse_empty_dimension_target_prefix()?;
+                let nullsafe_line = Self::nullsafe_chain_line(&target);
                 if matches!(self.peek(), Token::LBracket(_))
                     && self.peek_at(1) == Token::RBracket
                 {
-                    if !matches!(
-                        &target,
-                        Expr::Variable { .. }
-                            | Expr::ArrayAccess { .. }
-                            | Expr::PropertyAccess {
-                                nullsafe: false,
-                                ..
-                            }
-                            | Expr::DynamicPropertyAccess {
-                                nullsafe: false,
-                                ..
-                            }
-                            | Expr::StaticProperty { .. }
-                            | Expr::DynamicNamedStaticProperty { .. }
-                            | Expr::DynamicStaticProperty { .. }
-                    ) {
-                        return Err("Invalid array append destructuring target".into());
+                    if let Some(line) = nullsafe_line {
+                        self.advance();
+                        self.advance();
+                        targets.push(ListTarget::Target(self.compile_error(
+                            "Assignments can only happen to writable values",
+                            line,
+                        )));
+                    } else {
+                        if !matches!(
+                            &target,
+                            Expr::Variable { .. }
+                                | Expr::ArrayAccess { .. }
+                                | Expr::PropertyAccess {
+                                    nullsafe: false,
+                                    ..
+                                }
+                                | Expr::DynamicPropertyAccess {
+                                    nullsafe: false,
+                                    ..
+                                }
+                                | Expr::StaticProperty { .. }
+                                | Expr::DynamicNamedStaticProperty { .. }
+                                | Expr::DynamicStaticProperty { .. }
+                        ) {
+                            return Err("Invalid array append destructuring target".into());
+                        }
+                        self.advance();
+                        self.advance();
+                        targets.push(ListTarget::AppendTarget(target));
                     }
-                    self.advance();
-                    self.advance();
-                    targets.push(ListTarget::AppendTarget(target));
+                } else if let Some(line) = nullsafe_line {
+                    targets.push(ListTarget::Target(self.compile_error(
+                        "Assignments can only happen to writable values",
+                        line,
+                    )));
                 } else {
                     match target {
                         Expr::Variable { name: var, .. } if var == "this" => {
