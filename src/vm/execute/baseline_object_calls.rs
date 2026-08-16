@@ -276,7 +276,13 @@ fn op_new_obj<'a>(
             });
         }
         if !loaded {
-            return Err(VmError::Fatal(format!("Uncaught Error: Class \"{name}\" not found")));
+            return Ok(new_object_validation_error(
+                eg,
+                frame,
+                op_array,
+                ip,
+                &format!("Class \"{name}\" not found"),
+            ));
         }
     }
     // Literal object creation is monomorphic in ordinary PHP code. After the

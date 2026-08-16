@@ -60,6 +60,27 @@ foreach ([Contract::class, Template::class, Generator::class] as $class) {
 }
 
 #[test]
+fn missing_classes_raise_located_catchable_errors_at_new() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+foreach (['MissingLiteral', 'MissingDynamic'] as $class) {
+    try {
+        if ($class === 'MissingLiteral') { new MissingLiteral; }
+        else { new $class; }
+    } catch (Error $error) {
+        echo $error->getMessage(), '@', $error->getFile(), ':', $error->getLine(), "\n";
+    }
+}
+"#,
+            "/fixture/missing-class.php",
+            "/fixture",
+        ),
+        "Class \"MissingLiteral\" not found@/fixture/missing-class.php:4\nClass \"MissingDynamic\" not found@/fixture/missing-class.php:5\n"
+    );
+}
+
+#[test]
 fn test_throw_error_subclass_is_ok() {
     // User-defined class extending Error should be throwable
     assert_eq!(
