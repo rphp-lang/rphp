@@ -107,6 +107,15 @@ now parse as complete expressions and retain PHP 8.5's compile-time function-
 result write-context diagnostic, including in dead code. Ordinary assignment
 and runtime call paths are unchanged.
 
+The `8f5744b` baseline-assert checkpoint adds three exact passes with no lost
+pass: 1,857 pass, 3,351 fail, 110 skip, one XFAIL, 280 unsupported, zero
+timeouts and zero crashes. The global builtin works through ordinary,
+namespaced-fallback and first-class callable dispatch, returns true on success,
+raises the built-in `AssertionError` on failure, preserves a supplied Throwable
+and validates invalid descriptions. Compile-time assertion source text,
+`assert_options()` and CLI-controlled assertion elimination remain explicit
+follow-up work.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
