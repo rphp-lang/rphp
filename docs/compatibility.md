@@ -7,6 +7,30 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 `ErrorException` metadata checkpoint, based on `fd8efb2`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,751 passes,
+2,279 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. Its exact pass-set delta is +3/-0:
+`Zend/tests/ErrorException_construct.phpt`, `bug41209.phpt` and
+`undef_var_in_verify_return.phpt`.
+
+`ErrorException` now participates in the built-in Throwable hierarchy with its
+protected severity state, `getSeverity()` and PHP's six-parameter constructor.
+The constructor preserves its creation origin by default, applies nullable
+filename and line overrides in PHP order, retains the previous throwable, and
+accepts the public named arguments. Original coverage checks default, partial,
+complete and named metadata forms. The separate upstream `getSeverity()` PHPT
+remains classified unsupported because it requires the not-yet-admitted CLI
+per-test INI surface.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine alternating 200,000-instance ordinary `Exception`
+construction release pairs measured medians of 0.13 seconds for the preceding
+binary and 0.12 seconds for the candidate, with identical output.
+
 The current AMD64 detached-callback reference-capture checkpoint, based on
 `dd49a9a`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
 1,748 passes, 2,282 failures, 77 skips, one upstream XFAIL, 237 unsupported
