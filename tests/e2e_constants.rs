@@ -1,6 +1,33 @@
 mod common;
 use common::*;
 
+#[test]
+fn runtime_constant_functions_validate_names_and_report_collisions() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+set_error_handler(function($level, $message, $file, $line) { echo "$level:$message:$line\n"; });
+try { define([], 1); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+var_dump(define('TRUE', 1));
+var_dump(define('runtime name', 2));
+var_dump(define('runtime name', 3));
+try { constant('missing runtime name'); } catch (Error $error) { echo $error->getMessage(); }
+"#,
+            "/virtual/constants.php",
+            "/virtual",
+        ),
+        concat!(
+            "define(): Argument #1 ($constant_name) must be of type string, array given\n",
+            "2:Constant TRUE already defined:4\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "2:Constant runtime name already defined:6\n",
+            "bool(false)\n",
+            "Undefined constant \"missing runtime name\"",
+        )
+    );
+}
+
 // ============================================================================
 // class-like constants
 // ============================================================================

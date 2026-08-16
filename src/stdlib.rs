@@ -6594,11 +6594,35 @@ fn fn_define(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let name_value = arg!(ed, 0).dereferenced();
+    if matches!(
+        name_value.value_type(),
+        ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource
+    ) {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "define(): Argument #1 ($constant_name) must be of type string, {} given",
+                name_value.type_name()
+            ),
+        ));
+        ret!(rv, Value::null());
+    }
     let name = arg_str!(ed, 0);
     if name.is_empty() {
         ret!(rv, Value::bool(false));
     }
     let val = arg!(ed, 1).clone();
+    if eg.find_constant(&name).is_some() {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!("Constant {name} already defined"),
+        )?;
+        ret!(rv, Value::bool(false));
+    }
     let result = eg.define_constant(&name, val);
     ret!(rv, Value::bool(result.is_ok()));
 }
@@ -6625,7 +6649,14 @@ fn fn_constant(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
-    ret!(rv, eg.find_constant(&name).unwrap_or(Value::null()));
+    if let Some(value) = eg.find_constant(&name) {
+        ret!(rv, value);
+    }
+    eg.exception = Some(crate::value::make_error_value(
+        "Error",
+        &format!("Undefined constant \"{name}\""),
+    ));
+    ret!(rv, Value::null());
 }
 
 // ============================================================================
@@ -6815,17 +6846,27 @@ fn report_internal_deprecation(
     ed: *mut ExecuteData,
     message: &str,
 ) -> Result<(), VmError> {
-    let (file, line) = internal_call_source(ed);
-    let handled = dispatch_php_error(eg, ed, 8192, message, &file, line)?;
-    if !handled && eg.error_reporting & 8192 != 0 {
-        eg.write_output(format!("\nDeprecated: {message} in {file} on line {line}\n").as_bytes());
-    }
-    Ok(())
+    report_internal_diagnostic(eg, ed, 8192, "Deprecated", message).map(|_| ())
 }
 
-/// Raise one of PHP's user-generated diagnostics. Recoverable diagnostics are
-/// deliberately quiet when no handler claims them, matching RPHP's existing
-/// warning policy while still exposing the observable handler contract.
+fn report_internal_diagnostic(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    level: i64,
+    label: &str,
+    message: &str,
+) -> Result<bool, VmError> {
+    let (file, line) = internal_call_source(ed);
+    let handled = dispatch_php_error(eg, ed, level, message, &file, line)?;
+    if !handled && eg.error_reporting & level != 0 {
+        eg.write_output(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
+    }
+    Ok(handled)
+}
+
+/// Raise one of PHP's user-generated diagnostics. Eligible handlers receive
+/// the physical callsite; unhandled recoverable levels use the same metadata
+/// for PHP's standard diagnostic output.
 fn fn_trigger_error(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -6844,12 +6885,20 @@ fn fn_trigger_error(
         return Ok(());
     }
 
-    if dispatch_php_error(eg, ed, level, &message, "", 0)? {
-        ret!(rv, Value::bool(true));
-    }
     if level == E_USER_ERROR {
+        let (file, line) = internal_call_source(ed);
+        if dispatch_php_error(eg, ed, level, &message, &file, line)? {
+            ret!(rv, Value::bool(true));
+        }
         return Err(VmError::Fatal(message));
     }
+    let label = match level {
+        E_USER_WARNING => "Warning",
+        E_USER_NOTICE => "Notice",
+        E_USER_DEPRECATED => "Deprecated",
+        _ => unreachable!(),
+    };
+    report_internal_diagnostic(eg, ed, level, label, &message)?;
     ret!(rv, Value::bool(true));
 }
 

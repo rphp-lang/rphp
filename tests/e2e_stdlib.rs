@@ -1033,10 +1033,32 @@ fn test_error_handler_api_is_available_for_warning_guards() {
 #[test]
 fn trigger_error_routes_allowed_levels_through_the_registered_handler() {
     assert_eq!(
-        run_php(
-            "<?php function handleUserError($level, $message, $file, $line) { echo $level, ':', $message, ':', strlen($file), ':', $line; return true; } set_error_handler('handleUserError', E_USER_WARNING); var_dump(trigger_error('careful', E_USER_WARNING)); var_dump(user_error('quiet', E_USER_NOTICE));"
+        run_php_with_source_context(
+            "<?php function handleUserError($level, $message, $file, $line) { echo $level, ':', $message, ':', strlen($file), ':', $line; return true; } set_error_handler('handleUserError', E_USER_WARNING); var_dump(trigger_error('careful', E_USER_WARNING)); var_dump(user_error('quiet', E_USER_NOTICE));",
+            "/virtual/core.php",
+            "/virtual",
         ),
-        "512:careful:0:0bool(true)\nbool(true)\n"
+        concat!(
+            "512:careful:17:1bool(true)\n",
+            "\nNotice: quiet in /virtual/core.php on line 1\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+#[test]
+fn trigger_error_emits_unhandled_php_82_user_diagnostics_at_the_callsite() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\ntrigger_error('notice');\ntrigger_error('warning', E_USER_WARNING);\ntrigger_error('old', E_USER_DEPRECATED);",
+            "/virtual/core.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nNotice: notice in /virtual/core.php on line 2\n",
+            "\nWarning: warning in /virtual/core.php on line 3\n",
+            "\nDeprecated: old in /virtual/core.php on line 4\n",
+        )
     );
 }
 
