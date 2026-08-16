@@ -1988,6 +1988,28 @@ fn fn_closure_call(
     ret!(rv, result);
 }
 
+#[cold]
+#[inline(never)]
+fn fn_closure_invoke(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let source = arg!(ed, 0);
+    let Some(resolved) = resolve_callback(source, eg, None) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "Failed to invoke closure",
+        ));
+        return Ok(());
+    };
+    let arguments = arg!(ed, 1)
+        .as_array()
+        .cloned()
+        .unwrap_or_else(PhpArray::new);
+    ret!(rv, call_resolved_with_array(eg, &resolved, &arguments)?);
+}
+
 fn fn_array_iterator_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,
@@ -2998,6 +3020,17 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.method_declaring_class
         .insert(closure_call_ptr, "Closure".to_string());
     funcs.push(closure_call);
+    let closure_invoke = Box::new(make_internal_method_variadic(
+        fn_closure_invoke,
+        0,
+        vec!["args".to_string()],
+    ));
+    let closure_invoke_ptr = &closure_invoke.common as *const FunctionCommon;
+    eg.function_table
+        .insert("closure::__invoke".to_string(), closure_invoke_ptr);
+    eg.method_declaring_class
+        .insert(closure_invoke_ptr, "Closure".to_string());
+    funcs.push(closure_invoke);
 
     // Canonical iterator hierarchy used by generator return contracts,
     // instanceof and the iterable pseudo-type.

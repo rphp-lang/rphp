@@ -86,6 +86,31 @@ catch (Error $error) { echo $error->getMessage(); }
 }
 
 #[test]
+fn closure_explicit_invoke_forwards_positional_named_and_dynamic_calls() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$suffix = '!';
+$closure = function (string $value, string $tail = '?') use ($suffix): string {
+    return $value . $suffix . $tail;
+};
+echo $closure->__invoke('direct', '.'), '|';
+$method = '__INVOKE';
+echo $closure->{$method}(value: 'named'), '|';
+
+class ExplicitInvokeReceiver {
+    private string $value = 'method';
+    public function callback(): Closure { return $this->read(...); }
+    private function read(string $tail): string { return $this->value . $tail; }
+}
+echo (new ExplicitInvokeReceiver())->callback()->__invoke('!');
+"#,
+        ),
+        "direct!.|named!?|method!"
+    );
+}
+
+#[test]
 fn closure_var_dump_reports_function_receiver_captures_and_parameters() {
     assert_eq!(
         run_php(

@@ -7,6 +7,32 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 explicit-Closure-invocation checkpoint, based on `172d52f`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,689 passes,
+2,341 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds three exact passes without losing a
+previous pass: `Zend/tests/bug69212.phpt`,
+`Zend/tests/call_user_func_003.phpt` and `Zend/tests/closure_013.phpt`.
+`Closure::__invoke()` is now a registered variadic method whose cold handler
+forwards positional and named arguments through the same receiver-, scope- and
+capture-aware callback path as ordinary Closure invocation. Direct and dynamic
+case-insensitive method syntax works for anonymous closures and first-class
+bound method closures, including private method scope. Original E2E coverage
+checks default and named arguments, lexical captures, dynamic method spelling
+and a bound private method. Five Cargo test configurations, all-target and
+unsafe checks, Composer S0, Symfony S1 and warmed-kernel S2 pass on AMD64; the
+production unsafe inventory remains 1,621 blocks, below the 1,623 ceiling. The
+S3 cold-kernel gate was not rerun because this machine has no exact PHP 8.2
+oracle. The preceding binary rejects the new
+`bench_closure_explicit_invoke.php` workload; 21 candidate runs measured
+p10/median/p90 of 0.106465/0.108349/0.110535 seconds with one stable checksum.
+As an unaffected call-path control, 21 alternating release pairs measured
+`bench_calls.php` at baseline 0.333776/0.338475/0.341823 seconds and candidate
+0.334091/0.336399/0.340974 seconds (median -0.61 percent), with identical
+computed results. Complete by-reference invocation, Closure `is_a` identity,
+private-property throwable origins, Fiber/SPL dependencies and remaining
+binding diagnostics are separate compatibility boundaries.
+
 The current AMD64 Closure-debug-info checkpoint, based on `d3977b4`, runs the
 default-feature 4,345-case PHP 8.2.33 corpus and records 1,686 passes, 2,344
 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
