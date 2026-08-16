@@ -7,6 +7,30 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 Closure-`__invoke`-array checkpoint, based on `84e1270`,
+runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,674 passes,
+2,356 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds the exact pass `Zend/tests/bug78689.phpt`
+without losing a previous pass. A two-element `[Closure, "__invoke"]` array is
+now a regular callback for direct dynamic calls, stdlib callback consumers and
+`Closure::fromCallable()`, including case-insensitive method spelling, lexical
+captures and strict preservation of the original Closure identity. Other
+method names retain PHP's `Call to undefined method Closure::method()` error.
+Original E2E coverage checks direct and `call_user_func` invocation,
+`is_callable`, identity, captures, case folding and the negative diagnostic.
+Five Cargo test configurations, all-target and unsafe checks, Composer S0,
+Symfony S1 and warmed-kernel S2 pass on AMD64; the production unsafe inventory
+remains 1,621 blocks, below the 1,623 ceiling. The S3 cold-kernel gate was not
+rerun because this machine has no exact PHP 8.2 oracle. The preceding binary
+rejects the newly added `bench_closure_invoke_array.php` workload; 21 candidate
+runs measured p10/median/p90 of 0.030047/0.030429/0.030881 seconds with one
+stable checksum. As an unaffected call-path control, 21 alternating release
+pairs measured `bench_calls.php` at baseline 0.331043/0.335047/0.339307 seconds
+and candidate 0.331849/0.335320/0.339843 seconds (median +0.08 percent), with
+identical computed results. General Closure reflection metadata and the
+remaining object-`__invoke`, binding and reference-warning cases remain
+separate compatibility boundaries.
+
 The current AMD64 `ReflectionFunction::getClosure()` checkpoint, based on
 `2fd6190`, runs the default-feature 4,345-case PHP 8.2.33 corpus and records
 1,673 passes, 2,357 failures, 77 skips, one upstream XFAIL, 237 unsupported

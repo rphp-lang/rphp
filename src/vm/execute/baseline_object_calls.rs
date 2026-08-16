@@ -2677,9 +2677,13 @@ fn op_init_dynamic_call<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         }
-        if callable_array
+        let closure_receiver = callable_array
             .get_value_at(0)
-            .is_some_and(|class| class.as_str().is_none() && class.as_object().is_none())
+            .is_some_and(|receiver| receiver.value_type() == ValueType::Closure);
+        if !closure_receiver
+            && callable_array
+                .get_value_at(0)
+                .is_some_and(|class| class.as_str().is_none() && class.as_object().is_none())
         {
             let error = make_error_value(
                 "Error",
@@ -2769,7 +2773,16 @@ fn op_init_dynamic_call<'a>(
             ));
         }
         let Some(resolved) = resolve_user_call_at_opline(eg, frame, op_array, opline) else {
-            let error = make_error_value("Error", "Array is not callable");
+            let message = if closure_receiver {
+                let method = callable_array
+                    .get_value_at(1)
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                format!("Call to undefined method Closure::{method}()")
+            } else {
+                "Array is not callable".to_string()
+            };
+            let error = make_error_value("Error", &message);
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             return Ok(match throw_in_frame(eg, frame, error) {
                 ThrowResult::Handled(new_frame, new_op_array) => {

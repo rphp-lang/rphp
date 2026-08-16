@@ -65,6 +65,27 @@ catch (TypeError $error) { echo $error->getMessage(); }
 }
 
 #[test]
+fn closure_invoke_array_is_a_regular_callback_and_preserves_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$suffix = '!';
+$closure = function (string $value) use ($suffix): string { return $value . $suffix; };
+$callback = [$closure, '__INVOKE'];
+echo $callback('direct'), ':';
+echo call_user_func($callback, 'helper'), ':';
+echo is_callable($callback) ? 'callable:' : 'missing:';
+$reflected = Closure::fromCallable($callback);
+echo $reflected === $closure ? 'same:' : 'copy:';
+try { [$closure, 'missing'](); }
+catch (Error $error) { echo $error->getMessage(); }
+"#,
+        ),
+        "direct!:helper!:callable:same:Call to undefined method Closure::missing()"
+    );
+}
+
+#[test]
 fn variadic_closure_arguments_do_not_overwrite_captures() {
     let out = run_php(
         "<?php $captured = 'kept'; $closure = static function (...$args) use ($captured) { return $captured . ':' . implode(',', $args); }; echo $closure('a', 'b', 'c');",

@@ -9345,6 +9345,11 @@ fn resolve_callback(
             let obj_val = arr.get_value_at(0)?;
             let method_val = arr.get_value_at(1)?;
             let method_name = method_val.as_str()?;
+            if obj_val.value_type() == ValueType::Closure
+                && method_name.eq_ignore_ascii_case("__invoke")
+            {
+                return resolve_callback(obj_val, eg, caller_class);
+            }
             if let Some(obj) = obj_val.as_object() {
                 // Instance method: [$obj, "method"]
                 // Public: always callable. Private/protected: only from declaring scope.
