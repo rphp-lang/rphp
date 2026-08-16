@@ -141,6 +141,15 @@ through first-class callables and PHP 8.5 pipe forwarders. All feature matrices
 and the unsafe-policy gate pass; seven five-million-concatenation release runs
 retain the 0.31-second median and exact output.
 
+The `68e380b` array-multisort checkpoint adds five exact passes with no lost
+pass: 1,877 pass, 3,331 fail, 110 skip, one XFAIL, 280 unsupported, zero
+timeouts and zero crashes. `array_multisort()` supplies multi-column ordering,
+sort flags, PHP key rebuilding and its legacy prefer-reference signature.
+Variadic packing and `call_user_func_array()` retain explicit aliases through
+detached callback dispatch. The full feature matrix and unsafe-policy gate
+pass; seven ten-million dynamic-call release controls move from a 1.26-second
+preceding median to 1.24 seconds with identical output.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
