@@ -2159,7 +2159,7 @@ impl ExecutorGlobals {
         &mut self,
         original: &str,
         alias: &str,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
         let original = original.strip_prefix('\\').unwrap_or(original);
         let alias = alias.strip_prefix('\\').unwrap_or(alias);
         if self
@@ -2178,6 +2178,7 @@ impl ExecutorGlobals {
             .find(|(registered, _)| registered.eq_ignore_ascii_case(original))
             .map(|(_, class)| class.clone())
             .ok_or_else(|| format!("Class \"{}\" not found", original))?;
+        let aliases_interface = class.is_interface;
 
         // Registration has already flattened inherited and trait-composed
         // methods under the canonical class prefix. Alias that effective
@@ -2200,7 +2201,65 @@ impl ExecutorGlobals {
             );
         }
         self.class_table.insert(alias.to_string(), class);
-        Ok(())
+        Ok(aliases_interface
+            .then(|| self.duplicate_interface_identity_error())
+            .flatten())
+    }
+
+    /// Runtime aliases can make two differently spelled interface edges refer
+    /// to one canonical identity after top-level declarations were eagerly
+    /// registered. Recheck unique class IDs, including inherited interfaces,
+    /// only on this cold alias-publication boundary.
+    fn duplicate_interface_identity_error(&self) -> Option<String> {
+        fn visit_interface(
+            eg: &ExecutorGlobals,
+            name: &str,
+            seen: &mut std::collections::HashSet<u32>,
+            depth: usize,
+        ) -> Option<String> {
+            if depth > eg.class_table.len() {
+                return None;
+            }
+            let interface = eg.find_class(name)?;
+            if !interface.is_interface {
+                return None;
+            }
+            if !seen.insert(interface.class_id) {
+                return Some(interface.name.clone());
+            }
+            interface
+                .implements
+                .iter()
+                .find_map(|parent| visit_interface(eg, parent, seen, depth.saturating_add(1)))
+        }
+
+        for class_id in 1..self.next_class_id {
+            let Some(class) = self.class_by_id(class_id) else {
+                continue;
+            };
+            if class.implements.len() < 2 {
+                continue;
+            }
+            let mut seen = std::collections::HashSet::new();
+            let duplicate = class
+                .implements
+                .iter()
+                .find_map(|interface| visit_interface(self, interface, &mut seen, 0));
+            if let Some(interface) = duplicate {
+                let kind = if class.is_interface {
+                    "Interface"
+                } else if class.is_enum {
+                    "Enum"
+                } else {
+                    "Class"
+                };
+                return Some(format!(
+                    "{kind} {} cannot implement previously implemented interface {interface}",
+                    class.name
+                ));
+            }
+        }
+        None
     }
 
     /// Match a class name used by interned property metadata in one concrete

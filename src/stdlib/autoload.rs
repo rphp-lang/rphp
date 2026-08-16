@@ -428,7 +428,13 @@ pub(crate) fn fn_class_alias(
     };
 
     match eg.register_class_alias(&original, &alias) {
-        Ok(()) => ret!(rv, Value::bool(true)),
+        Ok(None) => ret!(rv, Value::bool(true)),
+        Ok(Some(message)) => {
+            let (file, line) = super::internal_call_source(ed);
+            Err(VmError::Fatal(format!(
+                "{message} in {file} on line {line}"
+            )))
+        }
         Err(_) => {
             report_class_alias_warning(
                 ed,

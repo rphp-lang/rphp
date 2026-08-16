@@ -1,6 +1,6 @@
 mod common;
 
-use common::{run_php, run_php_with_source_context};
+use common::{run_php, run_php_expect_error_with_source_context, run_php_with_source_context};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -747,6 +747,39 @@ var_dump($implementation instanceof ContractAlias);
             "bool(true)\n",
             "trait|bool(true)\n"
         )
+    );
+}
+
+#[test]
+fn class_alias_rejects_duplicate_canonical_interface_identity() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+interface CanonicalAliasInterface {}
+class_alias(CanonicalAliasInterface::class, 'ProjectedAliasInterface');
+interface DuplicateAliasInterface extends CanonicalAliasInterface, ProjectedAliasInterface {}
+"#,
+        "/fixture/alias-interface.php",
+        "/fixture",
+    );
+    assert_eq!(
+        error.to_string(),
+        "Interface DuplicateAliasInterface cannot implement previously implemented interface CanonicalAliasInterface in /fixture/alias-interface.php on line 3"
+    );
+
+    let transitive = run_php_expect_error_with_source_context(
+        r#"<?php
+interface AliasRootInterface {}
+class_alias(AliasRootInterface::class, 'ProjectedRootInterface');
+interface AliasLeftInterface extends AliasRootInterface {}
+interface AliasRightInterface extends ProjectedRootInterface {}
+interface AliasDiamondInterface extends AliasLeftInterface, AliasRightInterface {}
+"#,
+        "/fixture/alias-interface-transitive.php",
+        "/fixture",
+    );
+    assert_eq!(
+        transitive.to_string(),
+        "Interface AliasDiamondInterface cannot implement previously implemented interface AliasRootInterface in /fixture/alias-interface-transitive.php on line 3"
     );
 }
 
