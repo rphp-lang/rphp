@@ -347,7 +347,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 "Only variables should be assigned by reference",
                             )?;
                         }
-                        let binding = materialize_reference_alias(frame, source);
+                        let mut binding = materialize_reference_alias(frame, source);
+                        if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                            binding.mark_internal_reference_alias();
+                        }
                         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
                         frame_slot_set(frame, destination, binding);
                     } else {
@@ -2983,7 +2986,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 // result = op1[op2]
-                let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let arr_val = unsafe {
+                    (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+                        .dereferenced()
+                };
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
@@ -3143,7 +3149,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     }
-                    write_fetch_dim_result(frame, result_ptr, value);
+                    write_fetch_dim_result(frame, result_ptr, value.dereferenced().clone());
                 } else {
                     if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)
                         && opline._pad & FETCH_DIM_MUTABLE != 0
@@ -3607,7 +3613,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BindArrayDimRef => {
-                op_bind_array_dim_ref(frame, op_array, opline)?;
+                match op_bind_array_dim_ref(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::AssignObjProp => {

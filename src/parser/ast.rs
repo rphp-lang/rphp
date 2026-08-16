@@ -2,22 +2,79 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListTarget {
     Variable(String),
+    Reference(Expr),
     Target(Expr),
     AppendTarget(Expr),
     Skip,                                     // empty slot: list(,$b)
     Nested(Vec<ListTarget>),                  // nested destructuring
     KeyedVariable { key: Expr, var: String }, // explicit key: [0 => $a, 2 => $c]
+    KeyedReference { key: Expr, target: Expr },
+    KeyedNested { key: Expr, targets: Vec<ListTarget> },
 }
 
 impl ListTarget {
+    pub(crate) fn source_line(&self) -> usize {
+        fn expression_line(expression: &Expr) -> usize {
+            match expression {
+                Expr::Variable { line, .. }
+                | Expr::DynamicVariable { line, .. }
+                | Expr::Globals { line }
+                | Expr::CompileError { line, .. }
+                | Expr::ArrayAccess { line, .. }
+                | Expr::PropertyAccess { line, .. }
+                | Expr::DynamicPropertyAccess { line, .. } => *line,
+                _ => 0,
+            }
+        }
+
+        match self {
+            ListTarget::Variable(_) | ListTarget::Skip => 0,
+            ListTarget::Reference(target)
+            | ListTarget::Target(target)
+            | ListTarget::AppendTarget(target) => expression_line(target),
+            ListTarget::Nested(targets) | ListTarget::KeyedNested { targets, .. } => targets
+                .iter()
+                .map(ListTarget::source_line)
+                .find(|line| *line != 0)
+                .unwrap_or(0),
+            ListTarget::KeyedVariable { key, .. } => expression_line(key),
+            ListTarget::KeyedReference { key, target } => {
+                let target_line = expression_line(target);
+                if target_line != 0 {
+                    target_line
+                } else {
+                    expression_line(key)
+                }
+            }
+        }
+    }
+
     pub(crate) fn contains_yield(&self) -> bool {
         match self {
             ListTarget::Variable(_) | ListTarget::Skip => false,
-            ListTarget::Target(target) | ListTarget::AppendTarget(target) => {
+            ListTarget::Reference(target)
+            | ListTarget::Target(target)
+            | ListTarget::AppendTarget(target) => {
                 target.contains_yield()
             }
             ListTarget::Nested(targets) => targets.iter().any(ListTarget::contains_yield),
             ListTarget::KeyedVariable { key, .. } => key.contains_yield(),
+            ListTarget::KeyedReference { key, target } => {
+                key.contains_yield() || target.contains_yield()
+            }
+            ListTarget::KeyedNested { key, targets } => {
+                key.contains_yield() || targets.iter().any(ListTarget::contains_yield)
+            }
+        }
+    }
+
+    pub(crate) fn contains_reference(&self) -> bool {
+        match self {
+            ListTarget::Reference(_) | ListTarget::KeyedReference { .. } => true,
+            ListTarget::Nested(targets) | ListTarget::KeyedNested { targets, .. } => {
+                targets.iter().any(ListTarget::contains_reference)
+            }
+            _ => false,
         }
     }
 }

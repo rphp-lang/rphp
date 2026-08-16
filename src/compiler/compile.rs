@@ -34,8 +34,8 @@ use crate::vm::instruction::{
     FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT,
     INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
-    OpType, REFERENCE_RESULT_INTERNAL, SEND_FLAG_GLOBALS, STATIC_PROP_DYNAMIC_NAME,
-    STATIC_PROP_DYNAMIC_OWNER,
+    OpType, REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
 };
 use crate::vm::opcode::OpCode;
 
@@ -6677,24 +6677,39 @@ impl Compiler {
                 (assigned, assigned_type)
             }
             Expr::ListAssign { targets, expr } => {
-                let (rhs, rhs_type) = self.compile_expr(expr);
-                // Preserve a CV before the targets can overwrite it. Const and
-                // temporary operands are immutable/uniquely numbered, so the
-                // extra copy is unnecessary for the common literal/call RHS.
-                let (retained, retained_type) = if rhs_type == OpType::Cv {
-                    let retained = self.alloc_tmp();
-                    let mut assign = Instruction::new(OpCode::AssignCv);
-                    assign.op1 = retained;
-                    assign.op1_type = OpType::Tmp;
-                    assign.op2 = rhs;
-                    assign.op2_type = rhs_type;
-                    self.instructions.push(assign);
-                    (retained, OpType::Tmp)
-                } else {
-                    (rhs, rhs_type)
+                let contains_reference = targets.iter().any(ListTarget::contains_reference);
+                let (retained, retained_type, writeback, diagnose_nonreferenceable) = match self
+                    .compile_list_assignment_source(
+                        expr,
+                        contains_reference,
+                        targets
+                            .iter()
+                            .map(ListTarget::source_line)
+                            .find(|line| *line != 0)
+                            .unwrap_or(0),
+                    ) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        self.deferred_error = Some(error);
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    }
                 };
-                if let Err(error) = self.compile_list_targets(targets, retained, retained_type, 0) {
+                if let Err(error) = self.compile_list_targets(
+                    targets,
+                    retained,
+                    retained_type,
+                    0,
+                    diagnose_nonreferenceable,
+                ) {
                     self.deferred_error = Some(error);
+                }
+                if contains_reference {
+                    self.emit_foreach_reference_source_writeback(
+                        writeback,
+                        retained,
+                        retained_type,
+                    );
                 }
                 (retained, retained_type)
             }
@@ -7425,12 +7440,65 @@ impl Compiler {
     }
 
     /// Compile list destructuring targets. Each target gets a FetchDimR + AssignCv.
+    fn compile_list_reference_target(
+        &mut self,
+        target: &Expr,
+        array: u16,
+        array_type: OpType,
+        key: u16,
+        key_type: OpType,
+        diagnose_nonreferenceable: bool,
+    ) -> Result<(), String> {
+        let internal_name = format!("\0list_reference_{}", self.next_cv);
+        let source = self.resolve_cv(&internal_name);
+        let mut bind_source = Instruction::new(OpCode::BindArrayDimRef);
+        bind_source.op1 = array;
+        bind_source.op1_type = array_type;
+        bind_source.op2 = key;
+        bind_source.op2_type = key_type;
+        bind_source.result = source;
+        bind_source.result_type = OpType::Cv;
+        bind_source._pad |= REFERENCE_RESULT_INTERNAL;
+        if diagnose_nonreferenceable {
+            bind_source._pad |= REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE;
+        }
+        let line = match target {
+            Expr::Variable { line, .. }
+            | Expr::DynamicVariable { line, .. }
+            | Expr::ArrayAccess { line, .. }
+            | Expr::PropertyAccess { line, .. }
+            | Expr::DynamicPropertyAccess { line, .. }
+            | Expr::CompileError { line, .. } => *line,
+            _ => 0,
+        };
+        self.push_instruction_at_line(bind_source, line);
+
+        if let Expr::Variable { name, .. } = target {
+            let destination = self.resolve_cv(name);
+            let mut bind = Instruction::new(OpCode::BindCvRef);
+            bind.op1 = source;
+            bind.op1_type = OpType::Cv;
+            bind.result = destination;
+            bind.result_type = OpType::Cv;
+            self.instructions.push(bind);
+            self.definitely_defined_cvs.insert(destination);
+        } else {
+            let source_expr = Expr::Variable {
+                name: internal_name,
+                line: 0,
+            };
+            self.compile_target_reference_assignment(target, &source_expr)?;
+        }
+        Ok(())
+    }
+
     fn compile_list_targets(
         &mut self,
         targets: &[crate::parser::ListTarget],
         array: u16,
         array_type: OpType,
         start_index: usize,
+        diagnose_nonreferenceable: bool,
     ) -> Result<(), String> {
         use crate::parser::ListTarget;
         let mut idx = start_index;
@@ -7457,6 +7525,18 @@ impl Compiler {
                     assign.op2 = fetch_tmp;
                     self.instructions.push(assign);
                     self.definitely_defined_cvs.insert(cv_idx);
+                    idx += 1;
+                }
+                ListTarget::Reference(target) => {
+                    let key = self.add_literal(Value::long(idx as i64));
+                    self.compile_list_reference_target(
+                        target,
+                        array,
+                        array_type,
+                        key,
+                        OpType::Const,
+                        diagnose_nonreferenceable,
+                    )?;
                     idx += 1;
                 }
                 ListTarget::Target(target) => {
@@ -7625,17 +7705,49 @@ impl Compiler {
                 ListTarget::Nested(inner_targets) => {
                     // Fetch the sub-array at this index
                     let idx_literal = self.add_literal(Value::long(idx as i64));
-                    let sub_tmp = self.alloc_tmp();
-                    let mut fetch = Instruction::new(OpCode::FetchDimR);
-                    fetch.op1_type = array_type;
-                    fetch.op1 = array;
-                    fetch.op2_type = OpType::Const;
-                    fetch.op2 = idx_literal;
-                    fetch.result_type = OpType::Tmp;
-                    fetch.result = sub_tmp;
-                    self.instructions.push(fetch);
-                    // Recurse
-                    self.compile_list_targets(inner_targets, sub_tmp, OpType::Tmp, 0)?;
+                    if inner_targets.iter().any(ListTarget::contains_reference) {
+                        let sub_name = format!("\0list_nested_reference_{}", self.next_cv);
+                        let sub = self.resolve_cv(&sub_name);
+                        let mut bind = Instruction::new(OpCode::BindArrayDimRef);
+                        bind.op1_type = array_type;
+                        bind.op1 = array;
+                        bind.op2_type = OpType::Const;
+                        bind.op2 = idx_literal;
+                        bind.result_type = OpType::Cv;
+                        bind.result = sub;
+                        bind._pad |= REFERENCE_RESULT_INTERNAL;
+                        self.instructions.push(bind);
+                        self.compile_list_targets(
+                            inner_targets,
+                            sub,
+                            OpType::Cv,
+                            0,
+                            diagnose_nonreferenceable,
+                        )?;
+                    } else {
+                        let sub_tmp = self.alloc_tmp();
+                        let mut fetch = Instruction::new(OpCode::FetchDimR);
+                        fetch.op1_type = array_type;
+                        fetch.op1 = array;
+                        fetch.op2_type = OpType::Const;
+                        fetch.op2 = idx_literal;
+                        fetch.result_type = OpType::Tmp;
+                        fetch.result = sub_tmp;
+                        self.instructions.push(fetch);
+                        let nested_start = self.instructions.len();
+                        self.compile_list_targets(
+                            inner_targets,
+                            sub_tmp,
+                            OpType::Tmp,
+                            0,
+                            diagnose_nonreferenceable,
+                        )?;
+                        for instruction in &mut self.instructions[nested_start..] {
+                            if instruction.opcode == OpCode::FetchDimR {
+                                instruction._pad |= FETCH_DIM_SILENT;
+                            }
+                        }
+                    }
                     idx += 1;
                 }
                 ListTarget::KeyedVariable { key, var } => {
@@ -7659,6 +7771,63 @@ impl Compiler {
                     self.instructions.push(assign);
                     self.definitely_defined_cvs.insert(cv_idx);
                     // Don't increment idx for keyed — they use explicit keys
+                }
+                ListTarget::KeyedReference { key, target } => {
+                    let (key, key_type) = self.compile_expr(key);
+                    self.compile_list_reference_target(
+                        target,
+                        array,
+                        array_type,
+                        key,
+                        key_type,
+                        diagnose_nonreferenceable,
+                    )?;
+                }
+                ListTarget::KeyedNested { key, targets } => {
+                    let (key, key_type) = self.compile_expr(key);
+                    if targets.iter().any(ListTarget::contains_reference) {
+                        let sub_name = format!("\0list_nested_reference_{}", self.next_cv);
+                        let sub = self.resolve_cv(&sub_name);
+                        let mut bind = Instruction::new(OpCode::BindArrayDimRef);
+                        bind.op1_type = array_type;
+                        bind.op1 = array;
+                        bind.op2_type = key_type;
+                        bind.op2 = key;
+                        bind.result_type = OpType::Cv;
+                        bind.result = sub;
+                        bind._pad |= REFERENCE_RESULT_INTERNAL;
+                        self.instructions.push(bind);
+                        self.compile_list_targets(
+                            targets,
+                            sub,
+                            OpType::Cv,
+                            0,
+                            diagnose_nonreferenceable,
+                        )?;
+                    } else {
+                        let sub = self.alloc_tmp();
+                        let mut fetch = Instruction::new(OpCode::FetchDimR);
+                        fetch.op1_type = array_type;
+                        fetch.op1 = array;
+                        fetch.op2_type = key_type;
+                        fetch.op2 = key;
+                        fetch.result_type = OpType::Tmp;
+                        fetch.result = sub;
+                        self.instructions.push(fetch);
+                        let nested_start = self.instructions.len();
+                        self.compile_list_targets(
+                            targets,
+                            sub,
+                            OpType::Tmp,
+                            0,
+                            diagnose_nonreferenceable,
+                        )?;
+                        for instruction in &mut self.instructions[nested_start..] {
+                            if instruction.opcode == OpCode::FetchDimR {
+                                instruction._pad |= FETCH_DIM_SILENT;
+                            }
+                        }
+                    }
                 }
             }
         }

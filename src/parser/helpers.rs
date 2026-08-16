@@ -978,6 +978,38 @@ impl Parser {
 
     /// Parse comma-separated list targets (variables, skips, nested brackets).
     /// `end_token` is `)` for list() or `]` for short syntax.
+    fn parse_list_reference_target(&mut self) -> Result<Expr, String> {
+        if !matches!(
+            self.peek(),
+            Token::Variable(_, _) | Token::This(_) | Token::Dollar(_)
+        ) {
+            return Err("Expected writable variable after '&' in destructuring".into());
+        }
+        let target = self.parse_empty_dimension_target_prefix()?;
+        match target {
+            Expr::Variable { ref name, .. } if name == "this" => {
+                Err("Cannot re-assign $this".into())
+            }
+            Expr::Globals { line } => Ok(self.compile_error(
+                "Cannot assign reference to non referenceable value",
+                line,
+            )),
+            target @ (Expr::Variable { .. }
+            | Expr::DynamicVariable { .. }
+            | Expr::ArrayAccess { .. }
+            | Expr::PropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::DynamicPropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => Ok(target),
+            _ => Err("Invalid reference destructuring assignment target".into()),
+        }
+    }
+
     pub(super) fn parse_list_targets(
         &mut self,
         end_token: &Token,
@@ -1006,6 +1038,11 @@ impl Parser {
                     line,
                 );
                 targets.push(ListTarget::Target(error));
+            }
+            else if self.peek() == Token::Ampersand {
+                self.advance();
+                let target = self.parse_list_reference_target()?;
+                targets.push(ListTarget::Reference(target));
             }
             // Check for nested: list(...) or [...]
             else if matches!(self.peek(), Token::LBracket(_)) {
@@ -1084,27 +1121,60 @@ impl Parser {
                         _ => return Err("Invalid destructuring assignment target".into()),
                     }
                 }
-            } else if matches!(self.peek(), Token::Integer(_) | Token::StringLiteral(_)) {
-                // Explicit key: 0 => $var, 'key' => $var
+            } else if matches!(
+                self.peek(),
+                Token::Integer(_) | Token::StringLiteral(_) | Token::LParen(_)
+            ) {
+                // Explicit key: constants and parenthesized expressions such
+                // as `($array['marker'] = 1) => &$target` are evaluated in
+                // source order before the referenced dimension is selected.
                 let key_expr = self.parse_expr()?;
                 self.expect(&Token::DoubleArrow)?;
-                let (var_name, line) = match self.advance() {
-                    Token::Variable(n, line) => (n, line),
-                    other => {
-                        return Err(format!(
-                            "Expected variable after '=>' in list, got {:?}",
-                            other
-                        ));
-                    }
-                };
-                if var_name == "GLOBALS" {
-                    let error = self.globals_modification_error(line);
-                    targets.push(ListTarget::Target(error));
-                } else {
-                    targets.push(ListTarget::KeyedVariable {
+                if self.peek() == Token::Ampersand {
+                    self.advance();
+                    let target = self.parse_list_reference_target()?;
+                    targets.push(ListTarget::KeyedReference {
                         key: key_expr,
-                        var: var_name,
+                        target,
                     });
+                } else if matches!(self.peek(), Token::LBracket(_)) {
+                    self.advance();
+                    let nested = self.parse_list_targets(&Token::RBracket)?;
+                    self.expect(&Token::RBracket)?;
+                    targets.push(ListTarget::KeyedNested {
+                        key: key_expr,
+                        targets: nested,
+                    });
+                } else if matches!(self.peek(), Token::Identifier(name, _) if name == "list")
+                    && matches!(self.peek_at(1), Token::LParen(_))
+                {
+                    self.advance();
+                    self.expect_lparen()?;
+                    let nested = self.parse_list_targets(&Token::RParen)?;
+                    self.expect(&Token::RParen)?;
+                    targets.push(ListTarget::KeyedNested {
+                        key: key_expr,
+                        targets: nested,
+                    });
+                } else {
+                    let (var_name, line) = match self.advance() {
+                        Token::Variable(n, line) => (n, line),
+                        other => {
+                            return Err(format!(
+                                "Expected variable after '=>' in list, got {:?}",
+                                other
+                            ));
+                        }
+                    };
+                    if var_name == "GLOBALS" {
+                        let error = self.globals_modification_error(line);
+                        targets.push(ListTarget::Target(error));
+                    } else {
+                        targets.push(ListTarget::KeyedVariable {
+                            key: key_expr,
+                            var: var_name,
+                        });
+                    }
                 }
             } else {
                 return Err(format!(
