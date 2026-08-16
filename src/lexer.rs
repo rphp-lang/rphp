@@ -156,7 +156,8 @@ pub enum Token {
 enum StringPart {
     Literal(String),
     Variable(String),
-    ArrayAccess(String, String), // var_name, index (string or integer literal)
+    PropertyAccess(String, String, usize), // var_name, property_name, source line
+    ArrayAccess(String, String),           // var_name, index (string or integer literal)
     Expression(Vec<Token>),
 }
 
