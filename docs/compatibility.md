@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `523f934`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,819 pass, 3,389 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `4b419b2`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,835 pass, 3,373 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-34.927%; 82.277% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +4/-0:
+35.234%; 82.853% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +20/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -24,6 +24,14 @@ stack, while comparing an array or object with itself remains true.
 Array removal also preserves the internal cursor's logical entry across
 packed-to-hash transitions and ordered-entry compaction, allowing a subsequent
 append to become current when the last prior entry was removed.
+
+The PHP 8.5 pipe operator now has a distinct token and precedence layer between
+concatenation and comparisons. Its baseline lowering evaluates the input, then
+the callable expression, then invokes it with one non-referenceable argument.
+This admits 16 of the 30 pinned pipe tests, including mixed callable styles,
+namespaces, chaining, exceptions and precedence. The remaining pipe tests stay
+visible as generator, assertion rendering, arrow-function diagnostic and
+general call/type-diagnostic work; one CLI-INI case remains unsupported.
 
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
