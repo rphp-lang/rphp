@@ -1569,22 +1569,33 @@ fn builtin_ref_args(name: &str) -> u64 {
 }
 
 impl Compiler {
-    fn expression_contains_nullsafe_chain(expr: &Expr) -> bool {
+    fn nullsafe_chain_line(expr: &Expr) -> Option<usize> {
         match expr {
             Expr::PropertyAccess {
-                object, nullsafe, ..
+                object,
+                nullsafe,
+                line,
+                ..
             }
             | Expr::DynamicPropertyAccess {
-                object, nullsafe, ..
+                object,
+                nullsafe,
+                line,
+                ..
             }
             | Expr::MethodCall {
-                object, nullsafe, ..
-            } => *nullsafe || Self::expression_contains_nullsafe_chain(object),
-            Expr::ArrayAccess { array, .. } => Self::expression_contains_nullsafe_chain(array),
+                object,
+                nullsafe,
+                line,
+                ..
+            } => (*nullsafe)
+                .then_some(*line)
+                .or_else(|| Self::nullsafe_chain_line(object)),
+            Expr::ArrayAccess { array, .. } => Self::nullsafe_chain_line(array),
             Expr::DynamicStaticProperty { class, .. } | Expr::DynamicStaticCall { class, .. } => {
-                Self::expression_contains_nullsafe_chain(class)
+                Self::nullsafe_chain_line(class)
             }
-            _ => false,
+            _ => None,
         }
     }
 
@@ -7229,7 +7240,7 @@ impl Compiler {
                 }
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
-                    let nonreferenceable = Self::expression_contains_nullsafe_chain(expr);
+                    let nonreferenceable = Self::nullsafe_chain_line(expr).is_some();
                     let opcode = if nonreferenceable {
                         OpCode::SendVal
                     } else {
@@ -7288,7 +7299,7 @@ impl Compiler {
                     // initialize only the argument slots that no preceding
                     // positional send could have written.
                     send.extended_value = i as u32;
-                    if Self::expression_contains_nullsafe_chain(value) {
+                    if Self::nullsafe_chain_line(value).is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                     }
                     self.instructions.push(send);
@@ -7548,7 +7559,7 @@ impl Compiler {
         for (index, (arg, (op, op_type, name_idx))) in args.iter().zip(compiled_args).enumerate() {
             match arg {
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                    let nonreferenceable = Self::expression_contains_nullsafe_chain(expr);
+                    let nonreferenceable = Self::nullsafe_chain_line(expr).is_some();
                     let opcode = if nonreferenceable {
                         OpCode::SendVal
                     } else {
@@ -7578,7 +7589,7 @@ impl Compiler {
                     send.op2 = name_idx.expect("compiled named argument must retain its name");
                     send.op2_type = OpType::Const;
                     send.extended_value = index as u32;
-                    if Self::expression_contains_nullsafe_chain(arg.expr()) {
+                    if Self::nullsafe_chain_line(arg.expr()).is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                     }
                     self.instructions.push(send);

@@ -474,6 +474,25 @@ observe(receiver('value')?->slot);
 }
 
 #[test]
+fn nullsafe_chains_cannot_be_returned_from_reference_declarations() {
+    for source in [
+        "<?php\necho 'unreachable';\nfunction &pick($value) { return $value?->slot; }\n",
+        "<?php\necho 'unreachable';\nclass Picker { function &pick($value) { return $value->inner?->slot; } }\n",
+        "<?php\necho 'unreachable';\n$pick = function &($value) { return $value?->slot; };\n",
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "/virtual/nullsafe-reference-return.php",
+            "/virtual",
+        );
+        assert_eq!(
+            format!("{error:?}"),
+            "Fatal(\"Cannot take reference of a nullsafe chain in /virtual/nullsafe-reference-return.php on line 3\")"
+        );
+    }
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_skips_or_evaluates_its_name_once() {
     let out = run_php(
         r#"<?php

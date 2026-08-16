@@ -7,8 +7,26 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 convergence checkpoint, based on `465e80b`, runs the same
-4,345-case PHP 8.2.33 corpus and records 1,589 passes, 2,441 failures, 77 skips,
+The current AMD64 convergence checkpoint, based on `483575d`, runs the same
+4,345-case PHP 8.2.33 corpus and records 1,590 passes, 2,440 failures, 77 skips,
+one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
+adds the exact pass `Zend/tests/nullsafe_operator/017.phpt` without losing a
+previous pass or moving another failure category. Functions, methods and
+closures declared to return by reference now reject any nullsafe receiver
+chain during compilation with PHP 8.2's located fatal diagnostic. The shared
+compiler walk follows ordinary property, array and dynamic-static postfixes
+back to the originating nullsafe operator; compilation fails before top-level
+side effects execute. Ordinary returns and non-nullsafe reference-return
+aliasing remain unchanged. Original E2E coverage checks all three declaration
+forms, a nested receiver spine, source location and pre-execution failure.
+Five Cargo feature configurations, all-target and unsafe checks, Composer S0,
+Symfony S1 and warmed-kernel S2 pass on AMD64. The S3 cold-kernel gate was not
+rerun because this machine has no exact PHP 8.2 oracle. Nine release runs of
+`bench_calls.php` measured medians of 0.337833 seconds for the preceding binary
+and 0.342665 seconds for the candidate, with the same computed result.
+
+The preceding AMD64 nullsafe-argument checkpoint, based on `465e80b`, runs the
+same 4,345-case PHP 8.2.33 corpus and records 1,589 passes, 2,441 failures, 77 skips,
 one upstream XFAIL, 237 unsupported cases, zero timeouts and zero crashes. It
 adds the exact pass `Zend/tests/nullsafe_operator/016.phpt` without losing a
 previous pass or moving another failure category. A nullsafe chain used as a
