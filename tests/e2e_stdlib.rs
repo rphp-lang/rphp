@@ -3,6 +3,28 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn assert_callable_uses_boolean_result_description_and_global_namespace_fallback() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace Example;
+$check = assert(...);
+var_dump($check(true));
+foreach ([[false], [false, "reason"]] as $arguments) {
+    try { $check(...$arguments); }
+    catch (\AssertionError $error) { echo "[", $error->getMessage(), "]"; }
+}
+try { $check(false, new \Exception("preserved")); }
+catch (\Throwable $error) { echo "[", get_class($error), ":", $error->getMessage(), "]"; }
+try { $check(false, []); }
+catch (\TypeError $error) { echo "[", $error->getMessage(), "]"; }
+"#,
+        ),
+        "bool(true)\n[][reason][Exception:preserved][assert(): Argument #2 ($description) must be of type Throwable|string|null, array given]"
+    );
+}
+
+#[test]
 fn addcslashes_preserves_php_reference_escaping_rules() {
     assert_eq!(
         run_php(

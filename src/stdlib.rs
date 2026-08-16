@@ -58,9 +58,10 @@ const BUILTIN_EXCEPTION_SUBCLASSES: &[(&str, &str)] = &[
     ("UnexpectedValueException", "RuntimeException"),
 ];
 
-const BUILTIN_ARITHMETIC_ERROR_SUBCLASSES: &[(&str, &str)] = &[
+const BUILTIN_ERROR_SUBCLASSES: &[(&str, &str)] = &[
     ("ArithmeticError", "Error"),
     ("DivisionByZeroError", "ArithmeticError"),
+    ("AssertionError", "Error"),
 ];
 
 // ============================================================================
@@ -1061,6 +1062,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_callable", fn_is_callable, 1, 1, "value");
     reg!("is_scalar", fn_is_scalar, 1, 1, "value");
     reg!("function_exists", fn_function_exists, 1, 1, "function");
+    reg!("assert", fn_assert, 2, 1, "assertion", "description");
 
     // --- Time functions ---
     reg!("microtime", fn_microtime, 1, 0, "as_float");
@@ -2877,7 +2879,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     })
     .unwrap();
 
-    for &(name, parent) in BUILTIN_ARITHMETIC_ERROR_SUBCLASSES {
+    for &(name, parent) in BUILTIN_ERROR_SUBCLASSES {
         eg.register_class(ClassDef {
             name: name.to_string(),
             source_file: None,
@@ -3045,6 +3047,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             "Error",
             "ArithmeticError",
             "DivisionByZeroError",
+            "AssertionError",
             "TypeError",
             "CompileError",
             "ParseError",
@@ -3488,6 +3491,48 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     reg_method!("Generator", "getreturn", fn_generator_get_return, 1, 0);
 
     funcs
+}
+
+fn fn_assert(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if arg!(ed, 0).is_truthy() {
+        ret!(rv, Value::bool(true));
+    }
+
+    let description = arg_opt!(ed, 1).map(Value::dereferenced);
+    if let Some(object) = description.and_then(Value::as_object) {
+        if eg.class_is_a(object.class_name.as_ref(), "Throwable") {
+            eg.exception = description.cloned();
+            return Ok(());
+        }
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "assert(): Argument #2 ($description) must be of type Throwable|string|null, {} given",
+                object.class_name
+            ),
+        ));
+        return Ok(());
+    }
+    if let Some(description) = description.filter(|value| value.value_type() == ValueType::Array) {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "assert(): Argument #2 ($description) must be of type Throwable|string|null, {} given",
+                description.type_name()
+            ),
+        ));
+        return Ok(());
+    }
+    let message = description
+        .filter(|value| value.value_type() != ValueType::Null)
+        .map(Value::echo_to_string)
+        .unwrap_or_default();
+    eg.exception = Some(crate::value::make_error_value("AssertionError", &message));
+    Ok(())
 }
 
 // ============================================================================

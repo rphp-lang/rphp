@@ -424,10 +424,10 @@ impl ExecutorGlobals {
         // generic runtime surfaces. Reserve the next hash-table envelope so
         // installing that fixed set never rehashes stored function pointers.
         self.function_table.reserve(512);
-        self.class_table.reserve(64);
+        self.class_table.reserve(65);
         self.method_declaring_class.reserve(256);
-        self.class_by_id.reserve(64);
-        self.static_property_slots_by_class.reserve(64);
+        self.class_by_id.reserve(65);
+        self.static_property_slots_by_class.reserve(65);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
