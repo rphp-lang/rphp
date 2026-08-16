@@ -7,7 +7,33 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 detached-throwable-trace checkpoint, based on `b8f28d3`,
+The current AMD64 property-modify-origin checkpoint, based on `3c889f9`, runs
+the default-feature 4,345-case PHP 8.2.33 corpus and records 1,703 passes,
+2,327 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
+timeouts and zero crashes. It adds three exact passes without losing a previous
+pass: `Zend/tests/bug38624.phpt`, `Zend/tests/closure_038.phpt` and
+`Zend/tests/closure_039.phpt`. The shared mutable-property source/writeback
+compiler now carries the property-token line through `FetchObjR` and
+`AssignObjProp`, including dynamic properties, so compound and increment/
+decrement visibility failures retain their creation origin. Throwable trace
+formatting additionally identifies an anonymous closure frame with a live
+bound `$this` as `Closure->{closure}()`, while unbound closures retain the
+ordinary `{closure}()` form. Original E2E coverage checks the exact origin and
+bound-Closure trace for an inaccessible pre-increment. Five Cargo test
+configurations, all-target and unsafe checks, Composer S0, Symfony S1 and
+warmed-kernel S2 pass on AMD64; the production unsafe inventory remains 1,621
+blocks, below the 1,623 ceiling. The S3 cold-kernel gate was not rerun because
+this machine has no exact PHP 8.2 oracle. Forty-one alternating release pairs
+measured `bench_property.php` at baseline p10/median/p90 of
+0.739691/0.744723/0.757043 seconds and candidate
+0.752086/0.759542/0.775840 seconds (median +1.99 percent), with identical
+checksums. No successful property opcode, cache, frame, object or value layout
+changed; the measured binary-layout movement is retained as explicit temporary
+performance debt under the current compatibility-first priority. Static-
+property origins, deeper multi-detached trace extension and remaining mutable
+array/static writebacks are separate compatibility boundaries.
+
+The preceding AMD64 detached-throwable-trace checkpoint, based on `b8f28d3`,
 runs the default-feature 4,345-case PHP 8.2.33 corpus and records 1,700 passes,
 2,330 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero
 timeouts and zero crashes. It adds two exact passes without losing a previous

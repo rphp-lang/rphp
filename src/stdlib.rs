@@ -7924,6 +7924,22 @@ pub(crate) unsafe fn collect_debug_backtrace(
                     entry.set_str("object", object.clone());
                 }
             }
+        } else if name == "{closure}"
+            && function.fn_type() == FunctionType::User
+            && let Some((this_cv, _)) = function
+                .as_user()
+                .op_array
+                .all_cvs
+                .iter()
+                .find(|(_, candidate)| candidate == "this")
+            && (*frame).cv(*this_cv).dereferenced().as_object().is_some()
+        {
+            entry.set_str("function", Value::string(name));
+            entry.set_str("class", Value::string("Closure"));
+            entry.set_str("type", Value::string("->"));
+            if include_object {
+                entry.set_str("object", (*frame).cv(*this_cv).dereferenced().clone());
+            }
         } else {
             entry.set_str("function", Value::string(name));
         }

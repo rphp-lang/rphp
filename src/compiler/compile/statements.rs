@@ -80,6 +80,7 @@ pub(super) enum ForeachArrayWriteback {
         object_type: OpType,
         property: u16,
         property_type: OpType,
+        line: usize,
     },
     StaticProperty {
         class: u16,
@@ -396,7 +397,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
                 let property = self.add_literal(Value::string(property.clone()));
@@ -411,7 +412,7 @@ impl Compiler {
                 if silent_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 Ok((
                     current,
                     OpType::Tmp,
@@ -420,6 +421,7 @@ impl Compiler {
                         object_type,
                         property,
                         property_type: OpType::Const,
+                        line: *line,
                     },
                 ))
             }
@@ -427,7 +429,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: false,
-                ..
+                line,
             } => {
                 let (object, object_type) = self.compile_property_modify_base(object);
                 let (property, property_type) = self.compile_expr(property);
@@ -442,7 +444,7 @@ impl Compiler {
                 if silent_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 Ok((
                     current,
                     OpType::Tmp,
@@ -451,6 +453,7 @@ impl Compiler {
                         object_type,
                         property,
                         property_type,
+                        line: *line,
                     },
                 ))
             }
@@ -625,6 +628,7 @@ impl Compiler {
                 object_type,
                 property,
                 property_type,
+                line,
             } => {
                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                 assign.op1 = object;
@@ -633,7 +637,7 @@ impl Compiler {
                 assign.op2_type = property_type;
                 assign.result = array;
                 assign.result_type = array_type;
-                self.instructions.push(assign);
+                self.push_instruction_at_line(assign, line);
             }
             ForeachArrayWriteback::StaticProperty {
                 class,

@@ -260,6 +260,21 @@ fn nested_uncaught_trace_uses_each_callers_source_line() {
 }
 
 #[test]
+fn bound_closure_property_modify_errors_keep_the_origin_and_closure_trace_name() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\nclass BoundTrace {\n    private int $value = 1;\n    public function make() {\n        return function() { return ++$this->value; };\n    }\n}\n$closure = (new BoundTrace)->make();\n$bound = $closure->bindTo(new BoundTrace, null);\n$bound();",
+        "/fixture/bound-closure-trace.php",
+        "/fixture",
+    );
+
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message)
+            if message == "Uncaught Error: Cannot access private property BoundTrace::$value in /fixture/bound-closure-trace.php:5\nStack trace:\n#0 /fixture/bound-closure-trace.php(10): Closure->{closure}()\n#1 {main}\n  thrown in /fixture/bound-closure-trace.php on line 5"
+    ));
+}
+
+#[test]
 fn multiline_calls_use_the_named_callable_line_and_staticness() {
     assert_eq!(
         run_php_with_source_context(
