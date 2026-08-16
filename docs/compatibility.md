@@ -7,6 +7,29 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The current AMD64 canonical class-alias checkpoint, based on `d283542`, runs
+the default-feature 4,345-case PHP 8.2.33 corpus and records 1,762 passes, 2,268
+failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
+and zero crashes. Its exact pass-set delta is +2/-0:
+`Zend/tests/class_alias_001.phpt` and `class_alias_008.phpt`.
+
+Objects created through `class_alias()` retain the original declaration's
+canonical class identity in non-instantiable interface, abstract-class and
+enum diagnostics. A dynamic `instanceof $object` target now resolves through
+the RHS object's canonical runtime class, so aliases compare as the same class
+without changing object identity or strict equality. Original coverage checks
+both directions of object-target `instanceof` plus runtime-named alias
+instantiation. Remaining alias warning localization, namespace resolution and
+inherited-method publication are separate visible boundaries.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting and unsafe policy pass; the production unsafe inventory remains
+1,623 blocks and 289 functions. Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The manually dispatched cold-kernel S3 frontier
+was not rerun. Nine alternating five-million-iteration dynamic-string
+`instanceof` release pairs measured a 0.36-second median for both the preceding
+and candidate binaries, with identical output.
+
 The current AMD64 throw-validation checkpoint, based on `fcbfed1`, runs the
 default-feature 4,345-case PHP 8.2.33 corpus and records 1,760 passes, 2,270
 failures, 77 skips, one upstream XFAIL, 237 unsupported cases, zero timeouts
