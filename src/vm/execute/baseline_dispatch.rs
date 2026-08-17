@@ -5735,7 +5735,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
                 if !op_array.static_vars.is_empty() {
                     let func_name = op_array.name.clone();
-                    for (cv_idx, var_name) in &op_array.static_vars {
+                    for (cv_idx, var_name, _) in &op_array.static_vars {
                         // SAFETY: `cv_idx` comes from this frame's validated
                         // op array and the frame remains live until return.
                         // Inspect the raw CV wrapper. `get_op_mut` follows PHP

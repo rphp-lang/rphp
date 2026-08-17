@@ -9270,10 +9270,11 @@ fn var_dump_value_inner(
                     static_values.set_str(name, capture.clone_closure_capture());
                 }
                 let runtime_statics = eg.static_vars.get(&function.op_array.name);
-                for (_, name) in &function.op_array.static_vars {
+                for (_, name, default) in &function.op_array.static_vars {
                     let value = runtime_statics
                         .and_then(|values| values.get(name))
                         .cloned()
+                        .or_else(|| default.clone())
                         .unwrap_or_else(Value::null);
                     static_values.set_str(name, value);
                 }

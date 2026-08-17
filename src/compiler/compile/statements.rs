@@ -3262,6 +3262,9 @@ impl Compiler {
                     instr.op2_type = OpType::Const;
                     instr.op2 = name_idx;
                     instr.extended_value = func_name_idx as u32;
+                    let debug_default = default.as_ref().and_then(|expr| {
+                        self.eval_const_expr_in_source(expr, &HashMap::new()).ok()
+                    });
                     if let Some(def_expr) = default {
                         let (def_op, def_type) = self.compile_constant_expression(def_expr);
                         instr.result_type = def_type;
@@ -3270,7 +3273,8 @@ impl Compiler {
                         instr.result_type = OpType::Unused;
                     }
                     self.instructions.push(instr);
-                    self.static_vars.push((cv_idx as u32, var_name.clone()));
+                    self.static_vars
+                        .push((cv_idx as u32, var_name.clone(), debug_default));
                     self.definitely_defined_cvs.insert(cv_idx);
                 }
             }

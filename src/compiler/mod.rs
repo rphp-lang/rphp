@@ -51,8 +51,9 @@ pub struct OpArray {
     pub is_generator: bool,
     /// CVs bound to global variables via explicit `global $x;`: (cv_index, variable_name)
     pub global_vars: Vec<(u32, String)>,
-    /// CVs bound to static variables: (cv_index, variable_name)
-    pub static_vars: Vec<(u32, String)>,
+    /// CVs bound to static variables: (cv_index, variable_name,
+    /// compile-time-known initial value). Dynamic initializers have no value.
+    pub static_vars: Vec<(u32, String, Option<Value>)>,
     /// Function name (for static variable storage key)
     pub name: String,
     /// Canonical source unit used by runtime diagnostics. Empty for synthetic
@@ -143,7 +144,12 @@ impl OpArray {
                 *slot = true;
             }
         }
-        for &(cv, _) in self.global_vars.iter().chain(&self.static_vars) {
+        for &(cv, _) in &self.global_vars {
+            if let Some(slot) = may_reference.get_mut(cv as usize) {
+                *slot = true;
+            }
+        }
+        for &(cv, _, _) in &self.static_vars {
             if let Some(slot) = may_reference.get_mut(cv as usize) {
                 *slot = true;
             }

@@ -1811,7 +1811,7 @@ pub struct Compiler {
     /// CVs bound to global variables
     global_vars: Vec<(u32, String)>,
     /// CVs bound to static variables
-    static_vars: Vec<(u32, String)>,
+    static_vars: Vec<(u32, String, Option<Value>)>,
     /// Current function name (for static variable keying)
     current_function_name: String,
     /// Direct variable operands returned from a declaration using `function

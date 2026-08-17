@@ -196,6 +196,28 @@ object(Closure)#2 (6) {
 }
 
 #[test]
+fn closure_var_dump_reports_known_static_defaults_before_first_call() {
+    let output = run_php_with_source_context(
+        r#"<?php
+$closure = function () {
+    static $known = [];
+    static $dynamic = strlen('ab');
+    $known[] = ++$dynamic;
+};
+var_dump($closure);
+$closure();
+var_dump($closure);
+"#,
+        "closure-static-debug.php",
+        ".",
+    );
+    assert!(output.contains("[\"known\"]=>\n    array(0)"));
+    assert!(output.contains("[\"dynamic\"]=>\n    NULL"));
+    assert!(output.contains("[\"known\"]=>\n    array(1)"));
+    assert!(output.ends_with("[\"dynamic\"]=>\n    int(3)\n  }\n}\n"));
+}
+
+#[test]
 fn variadic_closure_arguments_do_not_overwrite_captures() {
     let out = run_php(
         "<?php $captured = 'kept'; $closure = static function (...$args) use ($captured) { return $captured . ':' . implode(',', $args); }; echo $closure('a', 'b', 'c');",
