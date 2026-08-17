@@ -406,6 +406,18 @@ specialized lanes range from -1.409% to +1.636%, within their five-percent
 ceiling. Abstract properties, by-reference hooks, parent-hook calls and
 Reflection remain next.
 
+The `7c0c535` abstract-property-hook checkpoint reaches 2,161 passes with 3,047
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Abstract class, trait and interface properties retain body-less getter
+and setter requirements as non-executable hook contracts; plain properties,
+partial concrete overrides and readonly interface implementations are validated
+against those capabilities. The exact PHP 8.5.6 delta is +43/-0. All five
+feature configurations, all-target and unsafe gates pass. Abstract capability
+flags share the existing cold source metadata word and validation helpers are
+cold/non-inlined; the final ordinary property A/B workload is +0.571%, while
+specialized lanes range from -0.774% to +1.218%. General by-reference hooks,
+parent-hook calls and Reflection remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
