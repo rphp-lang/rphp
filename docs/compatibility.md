@@ -8,7 +8,7 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `376f559`. Across all 5,599 unmodified `Zend/tests` and
+`fcc29c8` and RPHP `0bbe72f`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 2,264 pass, 2,944 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
 43.472%; 88.402% of attempted cases reach runtime. Relative to the initial
@@ -16,6 +16,20 @@ The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+The canonical baseline and internal diagnostic routers now retain PHP's
+request-local last unhandled error for `error_get_last()`, while
+`error_clear_last()` resets it. Diagnostics hidden by `@` or the reporting mask
+remain observable, a user handler that accepts a diagnostic leaves the prior
+record intact, and returned arrays are detached snapshots. The exact pass set
+is unchanged (+0/-0), but both strict and weak union-type checking PHPTs move
+from a missing-function runtime failure to their later, independent union
+coercion and eval-closure diagnostic output differences. All five Cargo feature
+configurations, all-target, unsafe, Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass. Legacy warnings that still bypass the canonical routers
+are not claimed by this checkpoint. The new state is cold request metadata and
+does not alter values, objects, call frames or generated native code, so no
+runtime performance benchmark applies.
 
 Anonymous class names exposed through `get_class()` now use PHP 8.5's parent-
 or first-interface-derived public prefix and retain a request-unique opaque
