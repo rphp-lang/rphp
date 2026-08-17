@@ -268,6 +268,16 @@ inventory from 1,623 to 1,620. The 100-pair hot `strlen()` internal-call gate
 measured -3.762%, within the one-percent regression ceiling without claiming
 the negative sample as an optimization.
 
+The `258f03f` reentrant Generator checkpoint reaches 1,992 passes with 3,216
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. `Generator::next()`, `send()` and `throw()` now expose a catchable
+PHP `Error` while an instance is already running, and escaped traces join their
+internal prefix to the detached generator and live caller continuation. The
+exact PHP 8.5.6 delta is +3/-0. All five CI feature configurations, the
+all-target check and unsafe gate pass. The 200-pair generator resume control
+measured -1.216%, within the one-percent regression ceiling without claiming
+the negative sample as an optimization.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
