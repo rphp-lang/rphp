@@ -278,6 +278,15 @@ all-target check and unsafe gate pass. The 200-pair generator resume control
 measured -1.216%, within the one-percent regression ceiling without claiming
 the negative sample as an optimization.
 
+The `2b90e00` generator self-delegation checkpoint reaches 1,993 passes with
+3,215 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. A running generator now rejects `yield from` itself with PHP
+8.5's catchable `Error` before any conflicting state borrow or partial
+delegation, removing the prior Rust panic. The exact PHP 8.5.6 delta is +1/-0.
+All five CI feature configurations, the all-target check and unsafe gate pass.
+The 200-pair generator resume control measured +0.436%, within the one-percent
+regression ceiling.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `258f03f`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,992 pass, 3,216 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `2b90e00`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,993 pass, 3,215 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-38.249%; 82.796% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +177/-0. The first four gains are
+38.268%; 82.796% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +178/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -101,6 +101,13 @@ generator, outer method and user caller continuation without changing the
 ordinary resume path. This adds three exact PHP 8.5.6 passes with no lost pass.
 The 200-pair generator resume gate measured -1.216% against the prior binary;
 no speedup is claimed, but the one-percent regression ceiling is satisfied.
+
+A generator that attempts to `yield from` itself while it is running now fails
+at the delegation boundary with PHP 8.5's catchable `Error`. The identity guard
+runs before either generator state is borrowed, eliminating the prior public
+Rust `RefCell` panic without creating a partial delegation. This adds one exact
+PHP 8.5.6 pass with no lost pass. The 200-pair generator resume control measured
++0.436%, within the one-percent regression ceiling.
 
 Recursive array identity and loose object comparison now track active compound
 values and enforce a bounded comparison depth. Cycles between distinct values
