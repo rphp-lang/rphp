@@ -681,3 +681,22 @@ try { $box->value = new stdClass(); } catch (TypeError $error) { echo '|', $erro
         "NULL\nBoth|acceptDnf(): Argument #1 ($value) must be of type (Left&Right)|null, stdClass given, called in <main> on line 12|Cannot assign stdClass to property Box::$value of type (Left&Right)|null"
     );
 }
+
+#[test]
+fn implicit_nullable_defaults_warn_and_normalize_callable_contracts() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function legacy(false $value = null) { var_dump($value); }
+class LegacyBox { public function accept(Countable&Iterator $value = null) { var_dump($value); } }
+$closure = function (callable $value = null) { var_dump($value); };
+legacy(null);
+(new LegacyBox())->accept(null);
+$closure(null);
+"#,
+            "implicit-nullable.php",
+            ".",
+        ),
+        "\nDeprecated: legacy(): Implicitly marking parameter $value as nullable is deprecated, the explicit nullable type must be used instead in implicit-nullable.php on line 2\n\nDeprecated: LegacyBox::accept(): Implicitly marking parameter $value as nullable is deprecated, the explicit nullable type must be used instead in implicit-nullable.php on line 3\n\nDeprecated: {closure:implicit-nullable.php:4}(): Implicitly marking parameter $value as nullable is deprecated, the explicit nullable type must be used instead in implicit-nullable.php on line 4\nNULL\nNULL\nNULL\n"
+    );
+}

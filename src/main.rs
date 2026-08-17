@@ -163,6 +163,7 @@ fn main() {
     let main_func = make_user_function(result.main);
     let mut eg = ExecutorGlobals::new();
     eg.generic_metadata = result.generic_metadata;
+    eg.emit_compile_deprecations(&result.deprecations);
     if let Some(executed_file) = executed_file {
         eg.record_included_file(executed_file);
     }

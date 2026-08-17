@@ -155,12 +155,21 @@ use super::{
 };
 use crate::vm::function::{CallStrategy, ParamTypeHint, UserFunction};
 
+/// One declaration-time deprecation emitted before the compiled unit runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompileDeprecation {
+    pub message: String,
+    pub file: String,
+    pub line: usize,
+}
+
 /// Result of compiling a script — main OpArray + declared functions + class defs.
 pub struct CompileResult {
     pub main: OpArray,
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
     pub generic_metadata: GenericMetadata,
+    pub deprecations: Vec<CompileDeprecation>,
 }
 
 impl CompileResult {
@@ -1753,6 +1762,8 @@ pub struct Compiler {
     /// Globally numbered explicit type-argument sites shared by every nested
     /// compiler in this compilation unit. This is cold compiler state only.
     generic_use_sites: Rc<RefCell<Vec<PendingGenericUseSite>>>,
+    /// Declaration-time deprecations shared by nested function compilers.
+    compile_deprecations: Rc<RefCell<Vec<CompileDeprecation>>>,
     /// Deferred error from compile_expr (which can't return Result)
     deferred_error: Option<String>,
     /// ref_args for functions known from parent scope (inherited by child compilers)
@@ -1949,6 +1960,7 @@ impl Compiler {
             generic_declarations: Vec::new(),
             generic_inheritances: Vec::new(),
             generic_use_sites: Rc::new(RefCell::new(Vec::new())),
+            compile_deprecations: Rc::new(RefCell::new(Vec::new())),
             deferred_error: None,
             known_ref_args: HashMap::new(),
             strict_types: false,
@@ -2080,6 +2092,7 @@ impl Compiler {
     fn child_compiler(&self) -> Self {
         let mut child = Self::new();
         child.generic_use_sites = Rc::clone(&self.generic_use_sites);
+        child.compile_deprecations = Rc::clone(&self.compile_deprecations);
         // Nested op arrays still compile in the same file scope. Keeping this
         // context here prevents methods and closures from silently losing
         // namespace aliases or strict-types semantics when their bytecode is
@@ -2988,6 +3001,7 @@ impl Compiler {
             functions: self.functions,
             class_defs: self.class_defs,
             generic_metadata,
+            deprecations: self.compile_deprecations.borrow().clone(),
         })
     }
 
@@ -3740,8 +3754,30 @@ impl Compiler {
             if param.is_ref && i < 64 {
                 ref_args |= 1u64 << i;
             }
-            // Collect type hint
-            let hint = self.convert_type_hint(&param.type_hint);
+            // PHP 8.5 accepts legacy `T $value = null` declarations while
+            // deprecating their spelling. The callable contract itself is
+            // nullable, which must be visible to calls and variance checks.
+            let implicitly_nullable = matches!(param.default, Some(crate::parser::Expr::Null))
+                && param
+                    .type_hint
+                    .as_ref()
+                    .is_some_and(|hint| !Self::declared_type_allows_null(hint));
+            let mut hint = self.convert_type_hint(&param.type_hint);
+            if implicitly_nullable {
+                let callable = func_compiler.declaration_diagnostic_name();
+                func_compiler
+                    .compile_deprecations
+                    .borrow_mut()
+                    .push(CompileDeprecation {
+                        message: format!(
+                            "{callable}(): Implicitly marking parameter ${} as nullable is deprecated, the explicit nullable type must be used instead",
+                            param.name
+                        ),
+                        file: func_compiler.source_file.clone(),
+                        line: param.line,
+                    });
+                hint = ParamTypeHint::Nullable(Box::new(hint));
+            }
             type_hints.push(hint);
             // Collect param name
             param_names.push(param.name.clone());
@@ -3804,6 +3840,24 @@ impl Compiler {
             param_names,
             return_type_hint: crate::vm::function::ParamTypeHint::None,
         })
+    }
+
+    fn declared_type_allows_null(hint: &crate::parser::TypeHint) -> bool {
+        use crate::parser::TypeHint;
+        match hint {
+            TypeHint::Mixed | TypeHint::Null | TypeHint::Nullable(_) => true,
+            TypeHint::Union(parts) => parts.iter().any(Self::declared_type_allows_null),
+            _ => false,
+        }
+    }
+
+    fn declaration_diagnostic_name(&self) -> String {
+        self.current_function_name
+            .starts_with("__closure_")
+            .then(|| self.current_function_name.split_once('@'))
+            .flatten()
+            .map(|(_, public)| public.to_string())
+            .unwrap_or_else(|| self.current_function_name.clone())
     }
 
     fn generator_return_type_accepts(hint: &ParamTypeHint) -> bool {

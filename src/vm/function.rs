@@ -1064,6 +1064,9 @@ impl ParamTypeHint {
                 ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable") => {
                     "Traversable|array|null".to_string()
                 }
+                ParamTypeHint::Intersection(_) => {
+                    format!("({})|null", inner.diagnostic_display_name())
+                }
                 inner => format!("?{}", inner.diagnostic_display_name()),
             },
             ParamTypeHint::Union(parts) => {

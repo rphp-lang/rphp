@@ -441,6 +441,24 @@ pub(crate) enum ClassAliasRegistrationError {
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
 
 impl ExecutorGlobals {
+    pub fn emit_compile_deprecations(
+        &mut self,
+        diagnostics: &[crate::compiler::compile::CompileDeprecation],
+    ) {
+        for diagnostic in diagnostics {
+            self.record_last_error(8192, &diagnostic.message, &diagnostic.file, diagnostic.line);
+            if self.error_reporting & 8192 != 0 {
+                self.write_output(
+                    format!(
+                        "\nDeprecated: {} in {} on line {}\n",
+                        diagnostic.message, diagnostic.file, diagnostic.line
+                    )
+                    .as_bytes(),
+                );
+            }
+        }
+    }
+
     pub(crate) fn record_last_error(&mut self, level: i64, message: &str, file: &str, line: usize) {
         self.last_error = Some(PhpErrorRecord {
             level,

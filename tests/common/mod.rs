@@ -64,6 +64,7 @@ fn run_php_with_compiler(
     let main_func = make_user_function(result.main);
     let (mut eg, buf) = make_eg_with_capture();
     eg.generic_metadata = generic_metadata;
+    eg.emit_compile_deprecations(&result.deprecations);
     // Register stdlib functions
     let _stdlib = stdlib::register_stdlib(&mut eg);
     // Register user-declared functions
@@ -90,6 +91,7 @@ pub fn run_php_silent(source: &str) {
     let main_func = make_user_function(result.main);
     let (mut eg, _buf) = make_eg_with_capture();
     eg.generic_metadata = generic_metadata;
+    eg.emit_compile_deprecations(&result.deprecations);
     let _stdlib = stdlib::register_stdlib(&mut eg);
     for (name, func) in &result.functions {
         eg.register_function(name, &func.common as *const FunctionCommon)

@@ -181,6 +181,7 @@ fn execute_source_unit(
     if record_included {
         eg.record_included_file(canonical.clone());
     }
+    eg.emit_compile_deprecations(&compile_result.deprecations);
 
     // Includes are separate compilation units, but both generic runtimes and
     // Reflection consume one executor-wide interned metadata graph. Merge the
