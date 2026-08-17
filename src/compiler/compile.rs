@@ -1654,6 +1654,20 @@ impl ClassDef {
         self.name.starts_with("class@anonymous#")
     }
 
+    /// Project the compact request-unique runtime key to PHP's public
+    /// parent/interface-derived anonymous name. The bytes after NUL remain an
+    /// opaque identity suffix to userland.
+    pub fn anonymous_public_name(&self) -> Option<String> {
+        self.is_anonymous().then(|| {
+            let base = self
+                .parent
+                .as_deref()
+                .or_else(|| self.implements.first().map(String::as_str))
+                .unwrap_or("class");
+            format!("{base}@anonymous\0{}", self.name)
+        })
+    }
+
     #[inline]
     pub fn method_is_abstract(&self, method_name: &str) -> bool {
         self.abstract_methods

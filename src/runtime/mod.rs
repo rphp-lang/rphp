@@ -1462,6 +1462,14 @@ impl ExecutorGlobals {
         }
         if !missing.is_empty() {
             let count = missing.len();
+            if let Some(public_name) = class_def.anonymous_public_name() {
+                let public_name = public_name.split('\0').next().unwrap_or(&public_name);
+                return Err(format!(
+                    "Class {public_name} must implement {count} abstract {} ({})",
+                    if count == 1 { "method" } else { "methods" },
+                    missing.join(", ")
+                ));
+            }
             let (method_word, remaining_word) = if count == 1 {
                 ("method", "method")
             } else {
@@ -2464,7 +2472,12 @@ impl ExecutorGlobals {
             .or_else(|| {
                 self.class_table
                     .iter()
-                    .find(|(registered, _)| registered.eq_ignore_ascii_case(name))
+                    .find(|(registered, class)| {
+                        registered.eq_ignore_ascii_case(name)
+                            || class
+                                .anonymous_public_name()
+                                .is_some_and(|public| public.eq_ignore_ascii_case(name))
+                    })
                     .map(|(_, class)| class.as_ref())
             })
     }
@@ -2489,7 +2502,12 @@ impl ExecutorGlobals {
         let class = self
             .class_table
             .iter()
-            .find(|(registered, _)| registered.eq_ignore_ascii_case(original))
+            .find(|(registered, class)| {
+                registered.eq_ignore_ascii_case(original)
+                    || class
+                        .anonymous_public_name()
+                        .is_some_and(|public| public.eq_ignore_ascii_case(original))
+            })
             .map(|(_, class)| class.clone())
             .ok_or(ClassAliasRegistrationError::NameConflict)?;
         let aliases_interface = class.is_interface;

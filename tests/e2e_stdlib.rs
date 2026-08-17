@@ -3,6 +3,33 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn strstr_is_binary_safe_and_supports_the_before_needle_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([
+    ["left:right:right", ":", false],
+    ["left:right:right", ":", true],
+    ["abc", "", false],
+    ["abc", "", true],
+    ["a\0b", "\0", false],
+    ["a\0b", "\0", true],
+    ["abc", "missing", false],
+] as [$haystack, $needle, $before]) {
+    var_dump(strstr($haystack, $needle, $before));
+}
+"#,
+        ),
+        "string(12) \":right:right\"\nstring(4) \"left\"\nstring(3) \"abc\"\nstring(0) \"\"\nstring(2) \"\0b\"\nstring(1) \"a\"\nbool(false)\n"
+    );
+}
+
+#[test]
+fn json_preserve_zero_fraction_constant_matches_php_85() {
+    assert_eq!(run_php("<?php echo JSON_PRESERVE_ZERO_FRACTION;"), "1024");
+}
+
+#[test]
 fn assert_callable_uses_boolean_result_description_and_global_namespace_fallback() {
     assert_eq!(
         run_php(

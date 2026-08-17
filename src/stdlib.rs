@@ -568,6 +568,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "case_insensitive"
     );
     reg!("strpos", fn_strpos, 3, 2, "haystack", "needle", "offset");
+    reg!(
+        "strstr",
+        fn_strstr,
+        3,
+        2,
+        "haystack",
+        "needle",
+        "before_needle"
+    );
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
     reg!("strrchr", fn_strrchr, 2, 2, "haystack", "needle");
     reg!("strtr", fn_strtr, 3, 2, "string", "from", "to");
@@ -5382,6 +5391,31 @@ fn fn_strpos(
     );
 }
 
+fn fn_strstr(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let haystack = php_string_to_bytes(arg_str!(ed, 0).as_ref());
+    let needle = php_string_to_bytes(arg_str!(ed, 1).as_ref());
+    let position = if needle.is_empty() {
+        Some(0)
+    } else {
+        haystack
+            .windows(needle.len())
+            .position(|candidate| candidate == needle)
+    };
+    let Some(position) = position else {
+        ret!(rv, Value::bool(false));
+    };
+    let bytes = if arg_opt!(ed, 2).is_some_and(Value::is_truthy) {
+        &haystack[..position]
+    } else {
+        &haystack[position..]
+    };
+    ret!(rv, Value::string(bytes_to_php_string(bytes)));
+}
+
 fn fn_strrpos(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -6751,7 +6785,14 @@ fn fn_get_class(
         ret!(rv, Value::string("Closure"));
     }
     if let Some(obj) = v.as_object() {
-        ret!(rv, Value::string(obj.class_name.as_ref()));
+        let class_name = if obj.class_name.starts_with("class@anonymous#") {
+            eg.class_by_id(obj.class_id)
+                .and_then(|class| class.anonymous_public_name())
+                .unwrap_or_else(|| obj.class_name.to_string())
+        } else {
+            obj.class_name.to_string()
+        };
+        ret!(rv, Value::string(class_name));
     }
     eg.exception = Some(crate::value::make_error_value(
         "TypeError",

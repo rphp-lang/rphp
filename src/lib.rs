@@ -221,6 +221,7 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "JSON_NUMERIC_CHECK" => Some(value::Value::long(32)),
         "JSON_UNESCAPED_SLASHES" => Some(value::Value::long(64)),
         "JSON_UNESCAPED_UNICODE" => Some(value::Value::long(256)),
+        "JSON_PRESERVE_ZERO_FRACTION" => Some(value::Value::long(1024)),
         "JSON_THROW_ON_ERROR" => Some(value::Value::long(4_194_304)),
         "FILTER_VALIDATE_INT" => Some(value::Value::long(257)),
         "FILTER_VALIDATE_BOOL" => Some(value::Value::long(258)),

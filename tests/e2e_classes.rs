@@ -3,6 +3,41 @@ mod common;
 use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
+fn anonymous_get_class_names_use_parent_or_first_interface_and_remain_aliasable() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace Contracts { interface First {} interface Second {} class ParentClass {} }
+namespace Consumer {
+    $plain = new class {};
+    $child = new class extends \Contracts\ParentClass implements \Contracts\First {};
+    $implementation = new class implements \Contracts\First, \Contracts\Second {};
+    foreach ([$plain, $child, $implementation] as $object) {
+        echo strstr(get_class($object), "\0", true), "\n";
+    }
+    class_alias(get_class($plain), "ProjectedAnonymousAlias");
+    echo strstr(get_class(new \ProjectedAnonymousAlias()), "\0", true), "\n";
+}
+"#,
+        ),
+        "class@anonymous\nContracts\\ParentClass@anonymous\nContracts\\First@anonymous\nclass@anonymous\n"
+    );
+}
+
+#[test]
+fn anonymous_class_names_its_inherited_abstract_requirements() {
+    let error = run_php_expect_error(
+        "<?php abstract class Requirement { abstract public function first(); abstract public function second(); } new class extends Requirement {};",
+    );
+    assert!(
+        error.to_string().contains(
+            "Class Requirement@anonymous must implement 2 abstract methods (Requirement::first, Requirement::second)"
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn anonymous_classes_compose_traits_and_hide_internal_identity() {
     assert_eq!(
         run_php(

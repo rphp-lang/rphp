@@ -257,7 +257,13 @@ fn op_new_obj<'a>(
                 )));
             }
         }
-        eg.register_class(class_def).map_err(VmError::Fatal)?;
+        if let Err(error) = eg.register_class(class_def) {
+            let line = op_array.source_line(ip).unwrap_or(0);
+            return Err(VmError::Fatal(format!(
+                "{error} in {} on line {line}",
+                op_array.name
+            )));
+        }
     }
 
     if !literal_cache_hit
