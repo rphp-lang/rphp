@@ -958,6 +958,11 @@ fn op_fetch_obj_r_slow<'a>(
             eg.instance_property_definition(obj.class_id, slot)
         });
         let has_get_hook = definition.is_some_and(|definition| definition.has_get_hook);
+        let write_only_property = definition.is_some_and(|definition| {
+            definition.has_set_hook
+                && !definition.has_get_hook
+                && !definition.set_hook_is_backed
+        });
         let typed_property = definition
             .filter(|definition| definition.is_typed())
             .map(|definition| (definition.type_scope.clone(), definition.name.clone()));
@@ -984,7 +989,22 @@ fn op_fetch_obj_r_slow<'a>(
             ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
-        if has_get_hook && !property_guard_active(obj_val, &name, PROPERTY_GUARD_GET) {
+        if write_only_property && !property_guard_active(obj_val, &name, PROPERTY_GUARD_SET) {
+            let class_name = obj_val
+                .as_object()
+                .map(|object| object.class_name.to_string())
+                .unwrap_or_else(|| "object".to_string());
+            return Ok(object_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Property {class_name}::${name} is write-only"),
+            ));
+        }
+        if has_get_hook
+            && !property_guard_active(obj_val, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(obj_val, &name, PROPERTY_GUARD_SET)
+        {
             let hook_name = format!("${name}::get");
             let hook_value = call_guarded_property_magic_method(
                 eg,
@@ -1146,6 +1166,25 @@ fn op_isset_obj<'a>(
                 && !defining_class.eq_ignore_ascii_case(&object_ref.class_name)
                 && !eg.check_visibility(effective_caller, &defining_class, visibility)
         });
+    let write_only_property = if accessible && !hidden_parent_private {
+        let key = crate::runtime::resolve_property_key(
+            eg,
+            &object_ref.class_name,
+            name,
+            effective_caller,
+        );
+        object_ref
+            .property_slot(&key)
+            .and_then(|slot| eg.instance_property_definition(object_ref.class_id, slot))
+            .is_some_and(|definition| {
+                definition.has_set_hook
+                    && !definition.has_get_hook
+                    && !definition.set_hook_is_backed
+            })
+    } else {
+        false
+    };
+    let object_class_name = object_ref.class_name.clone();
     let property_state = if hidden_parent_private {
         object_ref
             .get_dynamic_property_with_position(name)
@@ -1164,6 +1203,15 @@ fn op_isset_obj<'a>(
         None
     };
     drop(object_ref);
+
+    if write_only_property && !property_guard_active(object, name, PROPERTY_GUARD_SET) {
+        return Ok(object_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Property {object_class_name}::${name} is write-only"),
+        ));
+    }
 
     let set = match property_state {
         Some(set) => set,
@@ -1884,12 +1932,14 @@ fn op_assign_obj_prop<'a>(
         let declared_slot = property_accessible
             .then(|| php_obj.property_slot(&key))
             .flatten();
-        let definition = declared_slot.and_then(|slot| {
-            eg.instance_property_definition(php_obj.class_id, slot)
-        });
+        let definition = declared_slot
+            .and_then(|slot| eg.instance_property_definition(php_obj.class_id, slot));
         let getter_only_property = definition.is_some_and(|definition| {
-            definition.has_get_hook && !definition.get_hook_is_backed
+            definition.has_get_hook
+                && !definition.has_set_hook
+                && !definition.get_hook_is_backed
         });
+        let has_set_hook = definition.is_some_and(|definition| definition.has_set_hook);
         let property_constraints = if force_dynamic {
             php_obj
                 .get_dynamic_property_with_position(&key)
@@ -1909,6 +1959,26 @@ fn op_assign_obj_prop<'a>(
             property_accessible && php_obj.contains_property(&key)
         };
         drop(php_obj);
+        if has_set_hook
+            && !property_guard_active(obj, &name, PROPERTY_GUARD_SET)
+            && !property_guard_active(obj, &name, PROPERTY_GUARD_GET)
+        {
+            let hook_name = format!("${name}::set");
+            let hook_value = call_guarded_property_magic_method(
+                eg,
+                obj,
+                &name,
+                PROPERTY_GUARD_SET,
+                &hook_name,
+                std::slice::from_ref(&assigned),
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
+            if hook_value.is_some() {
+                return Ok(ColdResult::Done);
+            }
+        }
         if getter_only_property {
             return Ok(object_property_throw(
                 eg,
@@ -1925,6 +1995,11 @@ fn op_assign_obj_prop<'a>(
                 format!("Cannot create dynamic property Generator::${name}"),
             ));
         }
+        // A setter may execute arbitrary user code. Reacquire the stable
+        // class-table definition after that call; inline caches must never
+        // retain pointers to task-local snapshots.
+        let definition = declared_slot
+            .and_then(|slot| eg.instance_property_definition(object_class_id, slot));
         if let Some(definition_ref) = definition {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             if let Some(declaration) = definition_ref.generic_declaration

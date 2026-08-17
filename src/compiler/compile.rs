@@ -1315,6 +1315,8 @@ pub struct PropertyDefinition {
     pub has_get_hook: bool,
     /// The getter directly accesses `$this` backing storage for this property.
     pub get_hook_is_backed: bool,
+    pub has_set_hook: bool,
+    pub set_hook_is_backed: bool,
     /// Runtime-local class declaration used by warmed instance-property
     /// writes. Registration rewrites inherited definitions to the concrete
     /// receiver declaration, so one cached definition pointer carries both
@@ -1351,6 +1353,8 @@ impl PropertyDefinition {
             source_line: 0,
             has_get_hook: false,
             get_hook_is_backed: false,
+            has_set_hook: false,
+            set_hook_is_backed: false,
         }
     }
 
@@ -1379,6 +1383,8 @@ impl PropertyDefinition {
             source_line: 0,
             has_get_hook: false,
             get_hook_is_backed: false,
+            has_set_hook: false,
+            set_hook_is_backed: false,
         }
     }
 
@@ -2171,7 +2177,10 @@ impl Compiler {
                 .iter()
                 // Property hooks reuse method bytecode and ordinary method
                 // LSP validation, but they are not generic class methods.
-                .filter(|method| !(method.name.starts_with('$') && method.name.ends_with("::get")))
+                .filter(|method| {
+                    !(method.name.starts_with('$')
+                        && (method.name.ends_with("::get") || method.name.ends_with("::set")))
+                })
                 .map(|method| PendingGenericMethodMetadata {
                     name: method.name.clone(),
                     parameters: method.generic_params.clone(),

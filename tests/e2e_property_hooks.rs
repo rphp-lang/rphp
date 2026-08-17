@@ -72,3 +72,65 @@ var_dump(get_class_methods(SecretHook::class));
         "array(1) {\n  [0]=>\n  string(7) \"visible\"\n}\n"
     );
 }
+
+#[test]
+fn setter_hook_receives_assigned_value_and_virtual_property_is_write_only() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Sink {
+    public $last;
+    public $value { set { $this->last = $value * 2; } }
+}
+$sink = new Sink();
+$sink->value = 21;
+var_dump($sink->last);
+try { var_dump($sink->value); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { var_dump(isset($sink->value)); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        "int(42)\nProperty Sink::$value is write-only\nProperty Sink::$value is write-only\n"
+    );
+}
+
+#[test]
+fn explicit_setter_parameter_can_transform_backing_storage() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Labels {
+    public string $value {
+        set(string|array $incoming) {
+            $this->value = is_array($incoming) ? join(':', $incoming) : $incoming;
+        }
+    }
+}
+$labels = new Labels();
+var_dump($labels->value = ['a', 'b']);
+var_dump($labels->value);
+"#,
+        ),
+        "array(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"b\"\n}\nstring(3) \"a:b\"\n"
+    );
+}
+
+#[test]
+fn accesses_inside_either_hook_use_the_same_backing_slot() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Guarded {
+    public $value {
+        get { $this->value = 40; return $this->value + 2; }
+        set { $this->value = $value; }
+    }
+}
+$guarded = new Guarded();
+var_dump($guarded->value);
+$guarded->value = 9;
+var_dump($guarded->value);
+"#,
+        ),
+        "int(42)\nint(42)\n"
+    );
+}

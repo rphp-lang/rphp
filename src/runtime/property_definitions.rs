@@ -214,6 +214,8 @@ fn property_definitions_are_compatible(
         && left.is_readonly == right.is_readonly
         && left.has_get_hook == right.has_get_hook
         && left.get_hook_is_backed == right.get_hook_is_backed
+        && left.has_set_hook == right.has_set_hook
+        && left.set_hook_is_backed == right.set_hook_is_backed
         && match (&left.default, &right.default) {
             (None, None) => true,
             (Some(left), Some(right)) => left.structurally_equal(right),

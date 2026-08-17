@@ -1080,6 +1080,8 @@ pub struct ClassProperty {
     pub is_readonly: bool,
     /// An explicit PHP 8.4+ `get` hook is compiled as an engine-owned method.
     pub has_get_hook: bool,
+    /// An explicit PHP 8.4+ `set` hook is compiled as an engine-owned method.
+    pub has_set_hook: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -3625,7 +3625,24 @@ impl Compiler {
                         && compiled_methods.iter().any(|(method, _, _, _, function)| {
                             method.eq_ignore_ascii_case(&format!("${}::get", prop.name))
                                 && function.op_array.instructions.iter().any(|instruction| {
-                                    instruction.opcode == OpCode::FetchObjR
+                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
+                                        && instruction.op1_type == OpType::Cv
+                                        && instruction.op1 == 0
+                                        && instruction.op2_type == OpType::Const
+                                        && function
+                                            .op_array
+                                            .literals
+                                            .get(instruction.op2 as usize)
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|name| name == prop.name)
+                                })
+                        });
+                    definition.has_set_hook = prop.has_set_hook;
+                    definition.set_hook_is_backed = prop.has_set_hook
+                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
+                            method.eq_ignore_ascii_case(&format!("${}::set", prop.name))
+                                && function.op_array.instructions.iter().any(|instruction| {
+                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
                                         && instruction.op1_type == OpType::Cv
                                         && instruction.op1 == 0
                                         && instruction.op2_type == OpType::Const
@@ -4052,7 +4069,24 @@ impl Compiler {
                         && compiled_methods.iter().any(|(method, _, _, _, function)| {
                             method.eq_ignore_ascii_case(&format!("${}::get", prop.name))
                                 && function.op_array.instructions.iter().any(|instruction| {
-                                    instruction.opcode == OpCode::FetchObjR
+                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
+                                        && instruction.op1_type == OpType::Cv
+                                        && instruction.op1 == 0
+                                        && instruction.op2_type == OpType::Const
+                                        && function
+                                            .op_array
+                                            .literals
+                                            .get(instruction.op2 as usize)
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|name| name == prop.name)
+                                })
+                        });
+                    definition.has_set_hook = prop.has_set_hook;
+                    definition.set_hook_is_backed = prop.has_set_hook
+                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
+                            method.eq_ignore_ascii_case(&format!("${}::set", prop.name))
+                                && function.op_array.instructions.iter().any(|instruction| {
+                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
                                         && instruction.op1_type == OpType::Cv
                                         && instruction.op1 == 0
                                         && instruction.op2_type == OpType::Const

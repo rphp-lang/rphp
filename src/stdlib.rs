@@ -6797,7 +6797,7 @@ fn collect_composed_trait_methods(
         return;
     };
     for (name, visibility, _, _, _) in &trait_def.methods {
-        if name.starts_with('$') && name.ends_with("::get") {
+        if name.starts_with('$') && (name.ends_with("::get") || name.ends_with("::set")) {
             continue;
         }
         for adaptation in adaptation_owner.trait_aliases.iter().filter(|adaptation| {
@@ -6854,7 +6854,7 @@ fn collect_visible_class_methods(
         return;
     };
     for (name, visibility, _, _, _) in &class.methods {
-        if name.starts_with('$') && name.ends_with("::get") {
+        if name.starts_with('$') && (name.ends_with("::get") || name.ends_with("::set")) {
             continue;
         }
         if seen.insert(name.to_ascii_lowercase())

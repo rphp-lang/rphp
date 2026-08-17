@@ -64,6 +64,7 @@ impl Parser {
                 is_static: modifiers.is_static,
                 is_readonly: modifiers.is_readonly,
                 has_get_hook: false,
+                has_set_hook: false,
             });
             if self.peek() != Token::Comma {
                 break;
@@ -84,30 +85,53 @@ impl Parser {
                     Token::Identifier(name, line) => (name, line),
                     other => return Err(format!("Expected property hook, got {other:?}")),
                 };
-                if !hook.eq_ignore_ascii_case("get") {
+                if !hook.eq_ignore_ascii_case("get") && !hook.eq_ignore_ascii_case("set") {
                     return Err(format!("Unsupported property hook {hook}"));
                 }
-                if property.has_get_hook {
-                    return Err(format!("Cannot redeclare property hook get"));
+                let is_get = hook.eq_ignore_ascii_case("get");
+                if (is_get && property.has_get_hook) || (!is_get && property.has_set_hook) {
+                    return Err(format!("Cannot redeclare property hook {hook}"));
                 }
+                let params = if is_get {
+                    Vec::new()
+                } else if matches!(self.peek(), Token::LParen(_)) {
+                    self.expect_lparen()?;
+                    let params = self.parse_param_list()?;
+                    self.expect(&Token::RParen)?;
+                    if params.len() != 1 {
+                        return Err("Property set hook must accept exactly one parameter".into());
+                    }
+                    params
+                } else {
+                    vec![Param {
+                        name: "value".to_string(),
+                        line: hook_line,
+                        default: None,
+                        is_variadic: false,
+                        is_ref: false,
+                        type_hint: property.type_hint.clone(),
+                        promotion: None,
+                    }]
+                };
                 self.expect(&Token::LBrace)?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
-                property.has_get_hook = true;
+                property.has_get_hook |= is_get;
+                property.has_set_hook |= !is_get;
                 hook_methods.push(ClassMethod {
                     line: hook_line,
                     visibility: property.visibility,
-                    name: format!("${}::get", property.name),
-                    params: Vec::new(),
+                    name: format!("${}::{}", property.name, if is_get { "get" } else { "set" }),
+                    params,
                     body,
                     is_static: false,
                     is_final: false,
                     is_abstract: false,
                     returns_by_ref: false,
-                    return_type: property.type_hint.clone(),
+                    return_type: is_get.then(|| property.type_hint.clone()).flatten(),
                     generic_params: Vec::new(),
                 });
             }
