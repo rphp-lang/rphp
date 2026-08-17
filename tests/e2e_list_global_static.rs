@@ -79,7 +79,7 @@ $marker = 'must-not-run';
         .compile(&statements)
     {
         Ok(_) => panic!("destructuring spread must fail during compilation"),
-        Err(error) => error,
+        Err(error) => error.message,
     };
 
     assert_eq!(
@@ -356,7 +356,7 @@ fn globals_root_is_readable_but_not_a_mutation_target() {
         let statements = Parser::new(tokens).parse().expect("source must parse");
         match Compiler::new().compile(&statements) {
             Ok(_) => panic!("forbidden GLOBALS target must fail during compilation"),
-            Err(error) => error,
+            Err(error) => error.message,
         }
     }
 

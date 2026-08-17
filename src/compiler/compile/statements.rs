@@ -3830,7 +3830,7 @@ impl Compiler {
                     };
                     let default = default
                         .map(|value| {
-                            normalize_property_default(value, &type_hint).ok_or_else(|| {
+                            normalize_typed_declaration_default(value, &type_hint).ok_or_else(|| {
                                 format!(
                                     "Cannot use default value for property {}::${} of type {}",
                                     name,
@@ -4468,7 +4468,7 @@ impl Compiler {
                     };
                     let default = default
                         .map(|value| {
-                            normalize_property_default(value, &type_hint).ok_or_else(|| {
+                            normalize_typed_declaration_default(value, &type_hint).ok_or_else(|| {
                                 format!(
                                     "Cannot use default value for trait property {}::${} of type {}",
                                     name,
@@ -5163,7 +5163,7 @@ impl Compiler {
                 } else {
                     let value = value.expect("resolved class constant");
                     let value_type = value.value_type();
-                    normalize_property_default(value, &type_hint).ok_or_else(|| {
+                    normalize_typed_declaration_default(value, &type_hint).ok_or_else(|| {
                         format!(
                             "Cannot use value of type {:?} for class constant {}::{} of type {}",
                             value_type,

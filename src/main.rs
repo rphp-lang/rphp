@@ -156,13 +156,20 @@ fn main() {
     let result = Compiler::new()
         .with_source_context(source_file, source_directory)
         .compile(&stmts)
-        .unwrap_or_else(|e| {
-            eprintln!("Fatal error: {}", e);
+        .unwrap_or_else(|failure| {
+            let mut eg = ExecutorGlobals::new();
+            eg.emit_compile_deprecations(&failure.deprecations);
+            if failure.deprecations.is_empty() {
+                eprintln!("Fatal error: {}", failure.message);
+            } else {
+                eprintln!("\nFatal error: {}", failure.message);
+            }
             std::process::exit(255);
         });
     let main_func = make_user_function(result.main);
     let mut eg = ExecutorGlobals::new();
     eg.generic_metadata = result.generic_metadata;
+    let emitted_compile_deprecations = !result.deprecations.is_empty();
     eg.emit_compile_deprecations(&result.deprecations);
     if let Some(executed_file) = executed_file {
         eg.record_included_file(executed_file);
@@ -175,7 +182,11 @@ fn main() {
     for (name, func) in &result.functions {
         eg.register_function(name, &func.common as *const FunctionCommon)
             .unwrap_or_else(|e| {
-                eprintln!("Fatal error: {}", e);
+                if emitted_compile_deprecations {
+                    eprintln!("\nFatal error: {}", e);
+                } else {
+                    eprintln!("Fatal error: {}", e);
+                }
                 std::process::exit(255);
             });
     }
@@ -183,7 +194,11 @@ fn main() {
     // Register class definitions
     for class_def in result.class_defs {
         if let Err(e) = eg.register_compiled_class(class_def) {
-            eprintln!("Fatal error: {}", e);
+            if emitted_compile_deprecations {
+                eprintln!("\nFatal error: {}", e);
+            } else {
+                eprintln!("Fatal error: {}", e);
+            }
             std::process::exit(255);
         }
     }

@@ -179,7 +179,7 @@ fn run_php_expect_error_with_compiler(source: &str, compiler: Compiler) -> execu
     };
     let result = match compiler.compile(&stmts) {
         Ok(r) => r,
-        Err(e) => return execute::VmError::Fatal(e),
+        Err(e) => return execute::VmError::Fatal(e.message),
     };
     let generic_metadata = result.generic_metadata;
     let main_func = make_user_function(result.main);

@@ -502,7 +502,7 @@ fn empty_array_dimensions_reject_reads_and_unsets_but_allow_append_writes() {
         let statements = Parser::new(tokens).parse().expect("source must parse");
         match Compiler::new().compile(&statements) {
             Ok(_) => panic!("empty read or unset dimension must fail during compilation"),
-            Err(error) => error,
+            Err(error) => error.message,
         }
     }
 

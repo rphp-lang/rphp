@@ -700,3 +700,50 @@ $closure(null);
         "\nDeprecated: legacy(): Implicitly marking parameter $value as nullable is deprecated, the explicit nullable type must be used instead in implicit-nullable.php on line 2\n\nDeprecated: LegacyBox::accept(): Implicitly marking parameter $value as nullable is deprecated, the explicit nullable type must be used instead in implicit-nullable.php on line 3\n\nDeprecated: {closure:implicit-nullable.php:4}(): Implicitly marking parameter $value as nullable is deprecated, the explicit nullable type must be used instead in implicit-nullable.php on line 4\nNULL\nNULL\nNULL\n"
     );
 }
+
+#[test]
+fn optional_parameters_before_the_last_required_parameter_are_required() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function contract($first = 1, int $legacy = null, $third = 3, $required) {}
+try { contract(required: 4); } catch (Error $error) { echo $error->getMessage(); }
+"#,
+            "parameter-contract.php",
+            ".",
+        ),
+        "\nDeprecated: contract(): Optional parameter $first declared before required parameter $required is implicitly treated as a required parameter in parameter-contract.php on line 2\n\nDeprecated: contract(): Implicitly marking parameter $legacy as nullable is deprecated, the explicit nullable type must be used instead in parameter-contract.php on line 2\n\nDeprecated: contract(): Optional parameter $third declared before required parameter $required is implicitly treated as a required parameter in parameter-contract.php on line 2\ncontract(): Argument #1 ($first) not passed"
+    );
+}
+
+#[test]
+fn typed_parameter_defaults_are_validated_before_execution() {
+    let tokens = Lexer::new(
+        "<?php\nfunction legacy(iterable $items = null) {}\nfunction invalid(STRING $value = 1) {}\n",
+    )
+    .tokenize()
+    .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let failure = match Compiler::new()
+        .with_source_context("default-contract.php", ".")
+        .compile(&statements)
+    {
+        Ok(_) => panic!("invalid typed default unexpectedly compiled"),
+        Err(failure) => failure,
+    };
+    assert_eq!(failure.deprecations.len(), 1);
+    assert_eq!(
+        failure.deprecations[0].message,
+        "legacy(): Implicitly marking parameter $items as nullable is deprecated, the explicit nullable type must be used instead"
+    );
+    assert_eq!(failure.deprecations[0].line, 2);
+    assert_eq!(
+        failure.message,
+        "Cannot use int as default value for parameter $value of type string in default-contract.php on line 3"
+    );
+
+    assert_eq!(
+        run_php("<?php function widened(float $value = 1) { var_dump($value); } widened();"),
+        "float(1)\n"
+    );
+}

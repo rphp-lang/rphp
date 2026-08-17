@@ -149,11 +149,12 @@ fn execute_source_unit(
         match compiler.compile(&stmts) {
             Ok(result) => break result,
             Err(error) if compile_attempts < 16 => {
-                let Some(owner) = unavailable_class_constant_owner(&error) else {
+                let Some(owner) = unavailable_class_constant_owner(&error.message) else {
+                    eg.emit_compile_deprecations(&error.deprecations);
                     return Ok(include_parse_error(
                         eg,
                         caller.is_some(),
-                        format!("Compile error in {resolved_path}: {error}"),
+                        format!("Compile error in {resolved_path}: {}", error.message),
                     ));
                 };
                 let class_name = imported_class_name(&stmts, owner)
@@ -161,10 +162,11 @@ fn execute_source_unit(
                 let loaded = eg.find_class(&class_name).is_some()
                     || crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?;
                 if !loaded {
+                    eg.emit_compile_deprecations(&error.deprecations);
                     return Ok(include_parse_error(
                         eg,
                         caller.is_some(),
-                        format!("Compile error in {resolved_path}: {error}"),
+                        format!("Compile error in {resolved_path}: {}", error.message),
                     ));
                 }
                 compile_attempts += 1;

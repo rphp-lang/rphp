@@ -82,6 +82,7 @@ struct MethodDeclaration<'a> {
     enforces_visibility: bool,
     is_static: bool,
     is_abstract: bool,
+    source_line: usize,
     function: &'a FunctionCommon,
 }
 
@@ -1016,6 +1017,13 @@ impl ExecutorGlobals {
             enforces_visibility: !class_def.is_trait,
             is_static: method.2,
             is_abstract: class_def.method_is_abstract(&method.0),
+            source_line: method
+                .4
+                .op_array
+                .source_lines
+                .last()
+                .filter(|(opline, _)| *opline == u32::MAX)
+                .map_or(0, |(_, line)| *line as usize),
             function: &method.4.common,
         }
     }
@@ -1437,11 +1445,7 @@ impl ExecutorGlobals {
                 .source_file
                 .as_ref()
                 .map_or_else(String::new, |file| {
-                    // Method line metadata is not yet retained by ClassDef. Keep
-                    // the canonical source unit and a numeric placeholder so the
-                    // diagnostic has PHP's stable location shape without guessing
-                    // a source line.
-                    format!(" in {file} on line 0")
+                    format!(" in {file} on line {}", implementation.source_line)
                 });
             return Err(format!(
                 "Declaration of {} must be compatible with {}{}",

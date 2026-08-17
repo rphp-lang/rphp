@@ -101,6 +101,18 @@ fn inherited_property_errors_use_the_class_line_and_canonical_parent_type() {
 }
 
 #[test]
+fn inherited_method_errors_use_the_child_method_declaration_line() {
+    let (status, stderr) = run_stdin(
+        "<?php\nclass Value {}\nclass ParentBox { public function accept(?Value $value) {} }\nclass ChildBox extends ParentBox { public function accept(Value $value) {} }\n",
+    );
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Fatal error: Declaration of ChildBox::accept(Value $value) must be compatible with ParentBox::accept(?Value $value) in Standard input code on line 4\n"
+    );
+}
+
+#[test]
 fn composite_mixed_void_and_never_types_are_rejected_at_declaration_time() {
     for (declaration, message) in [
         (

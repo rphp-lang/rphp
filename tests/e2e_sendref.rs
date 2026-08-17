@@ -356,7 +356,7 @@ fn test_positional_value_argument_still_rejects_an_empty_dimension_read() {
     let statements = Parser::new(tokens).parse().expect("source must parse");
     let error = match Compiler::new().compile(&statements) {
         Ok(_) => panic!("value argument must not turn [] into an append target"),
-        Err(error) => error,
+        Err(error) => error.message,
     };
     assert_eq!(error, "Cannot use [] for reading on line 3");
 }

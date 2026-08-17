@@ -80,7 +80,7 @@ fn statically_known_scalar_unpack_operands_fail_during_compilation() {
             .compile(&statements)
         {
             Ok(_) => panic!("a statically known scalar spread must not compile"),
-            Err(error) => error,
+            Err(error) => error.message,
         };
 
         assert_eq!(

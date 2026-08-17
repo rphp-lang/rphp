@@ -163,6 +163,27 @@ pub struct CompileDeprecation {
     pub line: usize,
 }
 
+/// A fatal compilation error together with diagnostics emitted before it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompileFailure {
+    pub message: String,
+    pub deprecations: Vec<CompileDeprecation>,
+}
+
+impl std::fmt::Display for CompileFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(formatter)
+    }
+}
+
+impl std::ops::Deref for CompileFailure {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.message
+    }
+}
+
 /// Result of compiling a script — main OpArray + declared functions + class defs.
 pub struct CompileResult {
     pub main: OpArray,
@@ -1576,7 +1597,7 @@ fn property_default_matches_exact(value: &Value, hint: &ParamTypeHint) -> bool {
 
 /// Property defaults are compile-time constants and never use weak scalar
 /// coercion. PHP's one widening exception is an integer default for `float`.
-fn normalize_property_default(value: Value, hint: &ParamTypeHint) -> Option<Value> {
+fn normalize_typed_declaration_default(value: Value, hint: &ParamTypeHint) -> Option<Value> {
     if property_default_matches_exact(&value, hint) {
         return Some(value);
     }
@@ -1585,11 +1606,11 @@ fn normalize_property_default(value: Value, hint: &ParamTypeHint) -> Option<Valu
             Some(Value::double(value.as_long()? as f64))
         }
         ParamTypeHint::Nullable(inner) if value.value_type() != ValueType::Null => {
-            normalize_property_default(value, inner)
+            normalize_typed_declaration_default(value, inner)
         }
         ParamTypeHint::Union(parts) => parts
             .iter()
-            .find_map(|part| normalize_property_default(value.clone(), part)),
+            .find_map(|part| normalize_typed_declaration_default(value.clone(), part)),
         _ => None,
     }
 }
@@ -2828,7 +2849,15 @@ impl Compiler {
         map
     }
 
-    pub fn compile(mut self, stmts: &[Stmt]) -> Result<CompileResult, String> {
+    pub fn compile(self, stmts: &[Stmt]) -> Result<CompileResult, CompileFailure> {
+        let compile_deprecations = Rc::clone(&self.compile_deprecations);
+        self.compile_inner(stmts).map_err(|message| CompileFailure {
+            message,
+            deprecations: compile_deprecations.borrow().clone(),
+        })
+    }
+
+    fn compile_inner(mut self, stmts: &[Stmt]) -> Result<CompileResult, String> {
         // The parser appends the first valid-syntax compile error at top level
         // after the entire source has parsed. Check it before constant-branch
         // elimination or any other lowering can hide it or surface a later
@@ -3726,8 +3755,14 @@ impl Compiler {
         params: &[Param],
         context: &str,
     ) -> Result<CompiledParams, String> {
-        let mut required_num_args = 0u32;
-        let mut seen_default = false;
+        // PHP treats every parameter through the last parameter without a
+        // default as required. Defaults before that boundary remain in the
+        // op array for reflection/source fidelity, but calls may not use them.
+        let required_num_args = params
+            .iter()
+            .rposition(|param| !param.is_variadic && param.default.is_none())
+            .map_or(0, |index| index as u32 + 1);
+        let last_required = required_num_args.checked_sub(1).map(|index| index as usize);
         let mut is_variadic = false;
         let mut variadic_cv_index = 0u32;
         let mut ref_args = 0u64;
@@ -3758,6 +3793,7 @@ impl Compiler {
             // deprecating their spelling. The callable contract itself is
             // nullable, which must be visible to calls and variance checks.
             let implicitly_nullable = matches!(param.default, Some(crate::parser::Expr::Null))
+                && param.promotion.is_none()
                 && param
                     .type_hint
                     .as_ref()
@@ -3777,6 +3813,24 @@ impl Compiler {
                         line: param.line,
                     });
                 hint = ParamTypeHint::Nullable(Box::new(hint));
+            }
+            if param.default.is_some()
+                && !implicitly_nullable
+                && last_required.is_some_and(|required| i < required)
+            {
+                let callable = func_compiler.declaration_diagnostic_name();
+                let required_name = &params[last_required.unwrap()].name;
+                func_compiler
+                    .compile_deprecations
+                    .borrow_mut()
+                    .push(CompileDeprecation {
+                        message: format!(
+                            "{callable}(): Optional parameter ${} declared before required parameter ${required_name} is implicitly treated as a required parameter",
+                            param.name
+                        ),
+                        file: func_compiler.source_file.clone(),
+                        line: param.line,
+                    });
             }
             type_hints.push(hint);
             // Collect param name
@@ -3799,7 +3853,33 @@ impl Compiler {
                 let cv_idx = func_compiler.resolve_cv(&param.name);
                 func_compiler.definitely_defined_cvs.insert(cv_idx);
                 if let Some(default_expr) = &param.default {
-                    seen_default = true;
+                    let mut normalized_default = None;
+                    if Self::parameter_default_is_compile_time_fixed(default_expr)
+                        && !matches!(
+                            type_hints.last(),
+                            Some(ParamTypeHint::None | ParamTypeHint::Mixed)
+                        )
+                        && let Ok(value) = func_compiler
+                            .eval_const_expr_in_source(default_expr, &func_compiler.known_constants)
+                    {
+                        let Some(normalized) = normalize_typed_declaration_default(
+                            value.clone(),
+                            type_hints.last().unwrap(),
+                        ) else {
+                            return Err(func_compiler.goto_error(
+                                &format!(
+                                    "Cannot use {} as default value for parameter ${} of type {}",
+                                    value.type_name(),
+                                    param.name,
+                                    type_hints.last().unwrap().diagnostic_display_name()
+                                ),
+                                param.line,
+                            ));
+                        };
+                        if normalized.value_type() != value.value_type() {
+                            normalized_default = Some(normalized);
+                        }
+                    }
                     let check_generic_default =
                         crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
                             && param
@@ -3811,16 +3891,9 @@ impl Compiler {
                         cv_idx,
                         i as u16,
                         default_expr,
+                        normalized_default,
                         check_generic_default,
                     );
-                } else {
-                    if seen_default {
-                        return Err(format!(
-                            "Required parameter ${} follows optional parameter in {}",
-                            param.name, context
-                        ));
-                    }
-                    required_num_args = (i as u32) + 1;
                 }
             }
         }
@@ -3847,6 +3920,51 @@ impl Compiler {
         match hint {
             TypeHint::Mixed | TypeHint::Null | TypeHint::Nullable(_) => true,
             TypeHint::Union(parts) => parts.iter().any(Self::declared_type_allows_null),
+            _ => false,
+        }
+    }
+
+    fn parameter_default_is_compile_time_fixed(expr: &Expr) -> bool {
+        match expr {
+            Expr::Integer(_)
+            | Expr::Float(_)
+            | Expr::StringLiteral(_)
+            | Expr::Null
+            | Expr::Bool(_)
+            | Expr::MagicConstant { .. } => true,
+            Expr::BinaryOp { left, right, .. }
+            | Expr::NullCoalesce { left, right }
+            | Expr::Elvis { left, right } => {
+                Self::parameter_default_is_compile_time_fixed(left)
+                    && Self::parameter_default_is_compile_time_fixed(right)
+            }
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                Self::parameter_default_is_compile_time_fixed(condition)
+                    && Self::parameter_default_is_compile_time_fixed(then_expr)
+                    && Self::parameter_default_is_compile_time_fixed(else_expr)
+            }
+            Expr::UnaryPlus(inner)
+            | Expr::UnaryMinus(inner)
+            | Expr::Not(inner)
+            | Expr::BitwiseNot(inner)
+            | Expr::Cast { expr: inner, .. } => {
+                Self::parameter_default_is_compile_time_fixed(inner)
+            }
+            Expr::ArrayLiteral(elements) => elements.iter().all(|element| {
+                element
+                    .key
+                    .as_ref()
+                    .is_none_or(Self::parameter_default_is_compile_time_fixed)
+                    && Self::parameter_default_is_compile_time_fixed(&element.value)
+            }),
+            Expr::ArrayAccess { array, index, .. } => {
+                Self::parameter_default_is_compile_time_fixed(array)
+                    && Self::parameter_default_is_compile_time_fixed(index)
+            }
             _ => false,
         }
     }
@@ -4350,11 +4468,21 @@ impl Compiler {
             Some(TypeHint::Callable) => ParamTypeHint::Callable,
             Some(TypeHint::Null) => ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
             Some(TypeHint::ClassName(name)) => {
-                // `self` and `parent` are special PHP pseudo-types — don't resolve through namespaces
-                match name.as_str() {
-                    "self" | "parent" | "static" | "object" | "iterable" | "false" | "true" => {
-                        ParamTypeHint::ClassName(name.clone())
-                    }
+                // Built-in and pseudo-types are ASCII case-insensitive even
+                // when the lexer delivered their spelling as an identifier.
+                match name.to_ascii_lowercase().as_str() {
+                    "int" => ParamTypeHint::Int,
+                    "float" => ParamTypeHint::Float,
+                    "string" => ParamTypeHint::String,
+                    "bool" => ParamTypeHint::Bool,
+                    "array" => ParamTypeHint::Array,
+                    "callable" => ParamTypeHint::Callable,
+                    "mixed" => ParamTypeHint::Mixed,
+                    "never" => ParamTypeHint::Never,
+                    "void" => ParamTypeHint::Void,
+                    "null" => ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
+                    builtin @ ("self" | "parent" | "static" | "object" | "iterable" | "false"
+                    | "true") => ParamTypeHint::ClassName(builtin.to_string()),
                     _ => ParamTypeHint::ClassName(self.resolve_name(name)),
                 }
             }
@@ -4438,6 +4566,7 @@ impl Compiler {
         cv_idx: u16,
         parameter_index: u16,
         default_expr: &Expr,
+        normalized_default: Option<Value>,
         check_generic_default: bool,
     ) {
         // BindDefaultParam: if CV is NOT undef, jump to skip_label (op2 = target, patched later)
@@ -4449,7 +4578,10 @@ impl Compiler {
         compiler.instructions.push(bind);
 
         // Compute default expression (only reached if arg was NOT passed)
-        let (val_op, val_type) = compiler.compile_constant_expression(default_expr);
+        let (val_op, val_type) = match normalized_default {
+            Some(value) => (compiler.add_literal(value), OpType::Const),
+            None => compiler.compile_constant_expression(default_expr),
+        };
 
         // Assign computed default to CV
         let mut assign = Instruction::new(OpCode::AssignCv);

@@ -418,6 +418,7 @@ fn compile_error_with_source(source: &str, file: &str) -> String {
         .compile(&statements)
         .err()
         .expect("program should fail during compilation")
+        .message
 }
 
 #[test]
