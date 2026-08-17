@@ -694,8 +694,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                         };
-                        let destructor = ((&*dest).dereferenced().value_type()
-                            == ValueType::Object)
+                        let destructor = (opline.op1_type == OpType::Cv
+                            && (&*dest).dereferenced().value_type() == ValueType::Object)
                             .then(|| prepare_replaced_value_destructor(eg, &*dest))
                             .flatten();
                         let destructor_ran = destructor.is_some();
