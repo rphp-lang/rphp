@@ -36,7 +36,7 @@ use crate::vm::instruction::{
     FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
     FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
-    OBJ_PROP_REFERENCE_BIND, OpType, REFERENCE_RESULT_INTERNAL,
+    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
     STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
     STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
@@ -1821,6 +1821,16 @@ fn builtin_ref_args(name: &str) -> u64 {
 }
 
 impl Compiler {
+    fn current_hook_matches(&self, property: &str) -> bool {
+        self.current_function_name
+            .rsplit_once("::$")
+            .and_then(|(_, suffix)| suffix.split_once("::"))
+            .is_some_and(|(current, hook)| {
+                current == property
+                    && (hook.eq_ignore_ascii_case("get") || hook.eq_ignore_ascii_case("set"))
+            })
+    }
+
     fn nullsafe_chain_line(expr: &Expr) -> Option<usize> {
         match expr {
             Expr::PropertyAccess {
@@ -6513,6 +6523,11 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
+                if matches!(object.as_ref(), Expr::Variable { name, .. } if name == "this")
+                    && self.current_hook_matches(property)
+                {
+                    fetch._pad |= OBJ_PROP_HOOK_BYPASS;
+                }
                 self.push_instruction_at_line(fetch, *line);
 
                 if let Some(idx) = nullsafe_patch {

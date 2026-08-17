@@ -3039,6 +3039,11 @@ impl Compiler {
                 assign.op2_type = OpType::Const;
                 assign.result = val_op;
                 assign.result_type = val_type;
+                if matches!(object, Expr::Variable { name, .. } if name == "this")
+                    && self.current_hook_matches(property)
+                {
+                    assign._pad |= crate::vm::instruction::OBJ_PROP_HOOK_BYPASS;
+                }
                 self.push_instruction_at_line(assign, *line);
             }
             Stmt::AssignStaticProp {

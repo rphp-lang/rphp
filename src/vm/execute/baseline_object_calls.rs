@@ -1002,6 +1002,7 @@ fn op_fetch_obj_r_slow<'a>(
             ));
         }
         if has_get_hook
+            && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
             && !property_guard_active(obj_val, &name, PROPERTY_GUARD_GET)
             && !property_guard_active(obj_val, &name, PROPERTY_GUARD_SET)
         {
@@ -2031,6 +2032,7 @@ fn op_assign_obj_prop<'a>(
         };
         drop(php_obj);
         if has_set_hook
+            && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
             && !property_guard_active(obj, &name, PROPERTY_GUARD_SET)
             && !property_guard_active(obj, &name, PROPERTY_GUARD_GET)
         {

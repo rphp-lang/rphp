@@ -691,3 +691,29 @@ class ParentReadChild extends ParentReadBase {
         format!("{writable_result:?}").contains("Can't use method return value in write context")
     );
 }
+
+#[test]
+fn explicit_parent_backed_hooks_bypass_child_redispatch() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BackedParentHook {
+    public int $value = 1 {
+        get => $this->value;
+        set { $this->value = $value; }
+    }
+}
+class BackedChildHook extends BackedParentHook {
+    public int $value {
+        get => parent::$value::get() + 1;
+        set { parent::$value::set($value + 1); }
+    }
+}
+$object = new BackedChildHook();
+$object->value = 40;
+var_dump($object->value);
+"#,
+        ),
+        "int(42)\n"
+    );
+}

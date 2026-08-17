@@ -157,6 +157,11 @@ pub const FETCH_OBJ_INCDEC: u16 = 1 << 3;
 /// operation is attempted.
 pub const FETCH_OBJ_COMPOUND: u16 = 1 << 4;
 
+/// A same-property access compiled inside that property's hook. It addresses
+/// backing storage directly even when the hook was entered through an explicit
+/// parent call and therefore has no ordinary dispatch guard.
+pub const OBJ_PROP_HOOK_BYPASS: u16 = 1 << 5;
+
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;
