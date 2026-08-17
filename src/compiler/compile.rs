@@ -3426,6 +3426,19 @@ impl Compiler {
             if param.name == "this" {
                 return Err(self.goto_error("Cannot use $this as parameter", param.line));
             }
+            match param.type_hint.as_ref() {
+                Some(crate::parser::TypeHint::Never) => {
+                    return Err(
+                        self.goto_error("never cannot be used as a parameter type", param.line)
+                    );
+                }
+                Some(crate::parser::TypeHint::Void) => {
+                    return Err(
+                        self.goto_error("void cannot be used as a parameter type", param.line)
+                    );
+                }
+                _ => {}
+            }
             if param.is_ref && i < 64 {
                 ref_args |= 1u64 << i;
             }
@@ -3493,6 +3506,40 @@ impl Compiler {
             param_names,
             return_type_hint: crate::vm::function::ParamTypeHint::None,
         })
+    }
+
+    fn generator_return_type_accepts(hint: &ParamTypeHint) -> bool {
+        match hint {
+            ParamTypeHint::None | ParamTypeHint::Mixed => true,
+            ParamTypeHint::ClassName(name) => matches!(
+                name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
+                "generator" | "iterator" | "traversable" | "iterable" | "object"
+            ),
+            ParamTypeHint::Nullable(inner) => Self::generator_return_type_accepts(inner),
+            ParamTypeHint::Union(parts) => parts.iter().any(Self::generator_return_type_accepts),
+            ParamTypeHint::Intersection(parts) => {
+                !parts.is_empty() && parts.iter().all(Self::generator_return_type_accepts)
+            }
+            _ => false,
+        }
+    }
+
+    fn validate_generator_return_type(
+        &self,
+        contains_yield: bool,
+        hint: &ParamTypeHint,
+        line: usize,
+    ) -> Result<(), String> {
+        if contains_yield && !Self::generator_return_type_accepts(hint) {
+            return Err(self.goto_error(
+                &format!(
+                    "Generator return type must be a supertype of Generator, {} given",
+                    hint.display_name()
+                ),
+                line,
+            ));
+        }
+        Ok(())
     }
 
     /// Convert parser TypeHint to runtime ParamTypeHint.
@@ -5899,6 +5946,13 @@ impl Compiler {
                 };
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 func_compiler.return_type_context = cp.return_type_hint.clone();
+                if let Err(error) = self.validate_generator_return_type(
+                    func_compiler.contains_yield,
+                    &cp.return_type_hint,
+                    *line,
+                ) {
+                    self.deferred_error = Some(error);
+                }
                 let mut closure_reference_cvs = Vec::new();
                 for (v, by_reference, line) in use_vars {
                     let cv = func_compiler.resolve_cv(v);

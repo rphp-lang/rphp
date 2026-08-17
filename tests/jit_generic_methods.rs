@@ -1245,9 +1245,8 @@ genericPropertySet(new GenericPropertyJitBox::<string>('seed'));
 }
 
 #[test]
-fn generic_void_property_mutator_with_value_return_stays_canonical() {
-    let (_, _, result, output) = compile_and_execute(
-        r#"<?php
+fn generic_void_property_mutator_with_value_return_is_rejected_during_compilation() {
+    let source = r#"<?php
 class InvalidGenericVoidMutator<T : int> {
     public T $value;
     public function __construct(T $value) { $this->value = $value; }
@@ -1259,16 +1258,15 @@ class InvalidGenericVoidMutator<T : int> {
 $box = new InvalidGenericVoidMutator::<int>(0);
 $box->update(1);
 echo $box->value;
-"#,
-    );
-    let error = result.unwrap_err();
-    assert_eq!(output, "");
-    let rendered = format!("{error:?}");
+"#;
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let error = match Compiler::new().compile(&statements) {
+        Ok(_) => panic!("invalid void return unexpectedly compiled"),
+        Err(error) => error,
+    };
     assert!(
-        rendered.contains("A void function must not return a value")
-            || rendered.contains(
-                "Return value of InvalidGenericVoidMutator::update() does not match its reified class type",
-            ),
-        "{rendered}"
+        error.contains("A void method must not return a value"),
+        "{error}"
     );
 }

@@ -322,14 +322,10 @@ doStuff();
 
 #[test]
 fn test_void_return_value_error() {
-    assert_eq!(
-        run_php(
-            r#"<?php
-function bad(): void { return 42; }
-try { bad(); } catch (TypeError $e) { echo "caught"; }
-"#
-        ),
-        "caught"
+    let error = run_php_expect_error("<?php function bad(): void { return 42; }");
+    assert!(
+        format!("{error:?}").contains("A void function must not return a value"),
+        "{error:?}"
     );
 }
 
@@ -460,6 +456,57 @@ fn bare_returns_obey_declared_return_contracts_at_compile_time() {
     );
 }
 
+#[test]
+fn never_and_void_reject_value_returns_and_parameter_positions_during_compilation() {
+    for (source, expected) in [
+        (
+            "<?php function stop(): never { return throw new Exception('no'); }",
+            "A never-returning function must not return",
+        ),
+        (
+            "<?php function nothing(): void { return null; }",
+            "A void function must not return a value (did you mean \"return;\" instead of \"return null;\"?)",
+        ),
+        (
+            "<?php class C { function nothing(): void { return 1; } }",
+            "A void method must not return a value",
+        ),
+        (
+            "<?php function consume(never $value) {}",
+            "never cannot be used as a parameter type",
+        ),
+        (
+            "<?php function consume(void $value) {}",
+            "void cannot be used as a parameter type",
+        ),
+        (
+            "<?php function invalidGenerator(): stdClass|array { yield 1; }",
+            "Generator return type must be a supertype of Generator, stdClass|array given",
+        ),
+        (
+            "<?php class C { function invalidGenerator(): int { yield 1; } }",
+            "Generator return type must be a supertype of Generator, int given",
+        ),
+        (
+            "<?php $invalid = function(): string { yield 1; };",
+            "Generator return type must be a supertype of Generator, string given",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        let rphp::vm::execute::VmError::Fatal(message) = error else {
+            panic!("unexpected compile error: {error:?}");
+        };
+        assert!(message.contains(expected), "unexpected compile error: {message}");
+    }
+
+    assert_eq!(
+        run_php(
+            "<?php function validGenerator(): object|callable { yield 1; } echo validGenerator() instanceof Generator ? 'ok' : 'bad';"
+        ),
+        "ok"
+    );
+}
+
 // ── Never return type ──
 
 #[test]
@@ -477,14 +524,10 @@ try { fail(); } catch (Exception $e) { echo $e->getMessage(); }
 
 #[test]
 fn test_never_return_error() {
-    assert_eq!(
-        run_php(
-            r#"<?php
-function bad(): never { return 42; }
-try { bad(); } catch (TypeError $e) { echo "caught"; }
-"#
-        ),
-        "caught"
+    let error = run_php_expect_error("<?php function bad(): never { return 42; }");
+    assert!(
+        format!("{error:?}").contains("A never-returning function must not return"),
+        "{error:?}"
     );
 }
 

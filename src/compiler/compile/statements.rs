@@ -1937,6 +1937,11 @@ impl Compiler {
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 func_compiler.return_type_context = cp.return_type_hint.clone();
+                self.validate_generator_return_type(
+                    func_compiler.contains_yield,
+                    &cp.return_type_hint,
+                    *line,
+                )?;
                 for s in body {
                     func_compiler.compile_stmt(s)?;
                 }
@@ -1999,6 +2004,30 @@ impl Compiler {
                 self.functions.push((resolved_name, user_func));
             }
             Stmt::Return { expr, line } => {
+                if let Some(value) = expr {
+                    let subject = if !self.current_function_name.starts_with("__closure_")
+                        && self.current_function_name.contains("::")
+                    {
+                        "method"
+                    } else {
+                        "function"
+                    };
+                    let message = match &self.return_type_context {
+                        ParamTypeHint::Never => Some(format!(
+                            "A never-returning {subject} must not return"
+                        )),
+                        ParamTypeHint::Void if matches!(value, Expr::Null) => Some(format!(
+                            "A void {subject} must not return a value (did you mean \"return;\" instead of \"return null;\"?)"
+                        )),
+                        ParamTypeHint::Void => Some(format!(
+                            "A void {subject} must not return a value"
+                        )),
+                        _ => None,
+                    };
+                    if let Some(message) = message {
+                        return Err(self.goto_error(&message, *line));
+                    }
+                }
                 if expr.is_none() && !self.contains_yield {
                     let message = match &self.return_type_context {
                         ParamTypeHint::None | ParamTypeHint::Void => None,
@@ -3286,6 +3315,11 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     func_compiler.return_type_context = cp.return_type_hint.clone();
+                    self.validate_generator_return_type(
+                        func_compiler.contains_yield,
+                        &cp.return_type_hint,
+                        method.line,
+                    )?;
 
                     // Constructor property promotion: generate $this->param = $param assignments
                     if method.name == "__construct" {
@@ -3614,6 +3648,11 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     func_compiler.return_type_context = cp.return_type_hint.clone();
+                    self.validate_generator_return_type(
+                        func_compiler.contains_yield,
+                        &cp.return_type_hint,
+                        method.line,
+                    )?;
                     let null_idx = func_compiler.add_literal(Value::null());
                     let mut ret = Instruction::new(OpCode::Return);
                     ret.op1_type = OpType::Const;
@@ -3757,6 +3796,11 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     func_compiler.return_type_context = cp.return_type_hint.clone();
+                    self.validate_generator_return_type(
+                        func_compiler.contains_yield,
+                        &cp.return_type_hint,
+                        method.line,
+                    )?;
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
@@ -4166,6 +4210,11 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     func_compiler.return_type_context = cp.return_type_hint.clone();
+                    self.validate_generator_return_type(
+                        func_compiler.contains_yield,
+                        &cp.return_type_hint,
+                        method.line,
+                    )?;
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
