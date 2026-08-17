@@ -229,6 +229,16 @@ lifecycle state without storing a duplicate property. The exact PHP 8.5.6
 delta is +6/-0 with no stage movement; the full feature matrix and unsafe gate
 pass. No performance gate applies because the work occurs only in `var_dump()`.
 
+The `c1f7ad2` Generator lifecycle checkpoint reaches 1,972 passes with 3,236
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Explicit integer yield keys advance, but never rewind, the next
+implicit key and preserve signed overflow behavior. `Generator::getReturn()`
+auto-primes a new generator and distinguishes a normal return from exceptional
+closure with PHP's catchable incomplete-state exception. The exact PHP 8.5.6
+delta is +4/-0; the full feature matrix and unsafe gate pass. No performance
+gate applies because the ordinary implicit-yield path is unchanged and return
+inspection is cold.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

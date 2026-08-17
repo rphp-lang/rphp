@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `cde7195`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,968 pass, 3,240 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `c1f7ad2`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,972 pass, 3,236 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-37.788%; 82.796% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +153/-0. The first four gains are
+37.865%; 82.796% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +157/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -57,6 +57,13 @@ PHP's synthetic `function` debug property before execution, while suspended
 and after completion. Named functions, methods, anonymous-class methods and
 closures reuse their existing public trace names without adding mutable object
 state. This adds six exact PHP 8.5.6 passes with no lost pass or stage movement.
+
+Generator key allocation now advances its next implicit integer after an
+explicit integer key without rewinding for lower or string keys, including
+PHP's signed wrap after `PHP_INT_MAX`. `Generator::getReturn()` also starts a
+new generator on demand and distinguishes normal completion from exceptional
+closure, reporting the incomplete state as a catchable `Exception`. Together
+these contracts add four exact PHP 8.5.6 passes with no lost pass.
 
 Recursive array identity and loose object comparison now track active compound
 values and enforce a bounded comparison depth. Cycles between distinct values
