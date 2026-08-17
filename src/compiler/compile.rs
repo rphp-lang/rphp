@@ -6427,6 +6427,8 @@ impl Compiler {
                 properties,
                 constants,
                 methods,
+                uses,
+                trait_aliases,
                 line,
                 call_line,
             } => {
@@ -6463,8 +6465,8 @@ impl Compiler {
                     properties: properties.clone(),
                     constants: constants.clone(),
                     methods: methods.clone(),
-                    uses: Vec::new(),
-                    trait_aliases: Vec::new(),
+                    uses: uses.clone(),
+                    trait_aliases: trait_aliases.clone(),
                     generic_params: Vec::new(),
                 };
                 if let Err(error) = self.compile_stmt(&declaration) {

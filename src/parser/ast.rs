@@ -276,6 +276,8 @@ pub enum Expr {
         properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
+        uses: Vec<GenericAncestor>,
+        trait_aliases: Vec<TraitAlias>,
         line: usize,
         call_line: usize,
     },

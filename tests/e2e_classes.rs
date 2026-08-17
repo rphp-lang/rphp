@@ -3,6 +3,40 @@ mod common;
 use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
+fn anonymous_classes_compose_traits_and_hide_internal_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait SharedGreeting {
+    public function greeting() { return "hello"; }
+    public function original() { return "original"; }
+    public function callRenamed() { return $this->renamed(); }
+}
+$object = new class {
+    use SharedGreeting { original as private renamed; }
+    private $value;
+};
+echo $object->greeting(), ":", $object->callRenamed(), "\n";
+var_dump($object);
+"#,
+        ),
+        "hello:original\nobject(class@anonymous)#1 (1) {\n  [\"value\":\"class@anonymous\":private]=>\n  NULL\n}\n"
+    );
+}
+
+#[test]
+fn anonymous_class_rejects_an_explicit_abstract_method_at_its_declaration() {
+    let error =
+        run_php_expect_error("<?php $object = new class { abstract public function missing(); }");
+    assert!(
+        error
+            .to_string()
+            .contains("Anonymous class method missing() must not be abstract"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn readonly_classes_reject_every_dynamic_creation_path_but_allow_magic_set() {
     assert_eq!(
         run_php(

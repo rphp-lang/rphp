@@ -392,16 +392,83 @@ impl Parser {
 
     fn parse_anonymous_class_body(
         &mut self,
-    ) -> Result<(Vec<ClassProperty>, Vec<ClassConstant>, Vec<ClassMethod>), String> {
+    ) -> Result<
+        (
+            Vec<ClassProperty>,
+            Vec<ClassConstant>,
+            Vec<ClassMethod>,
+            Vec<GenericAncestor>,
+            Vec<TraitAlias>,
+        ),
+        String,
+    > {
         let mut properties = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
+        let mut uses = Vec::new();
+        let mut trait_aliases = Vec::new();
         let previous_class_body = self.in_class_body;
         let previous_class_scope = self.class_scope_active;
         self.in_class_body = true;
         self.class_scope_active = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            if self.peek() == Token::Use {
+                self.advance();
+                loop {
+                    uses.push(self.parse_generic_ancestor()?);
+                    if self.peek() == Token::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                if self.peek() == Token::LBrace {
+                    self.advance();
+                    while self.peek() != Token::RBrace && !self.at_eof() {
+                        let first = self.parse_qualified_name()?;
+                        let (trait_name, method) = if self.peek() == Token::DoubleColon {
+                            self.advance();
+                            let token = self.advance();
+                            let method = Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                                format!("Expected trait method name, got {token:?}")
+                            })?;
+                            (Some(first), method)
+                        } else {
+                            (None, first)
+                        };
+                        self.expect(&Token::As)?;
+                        let visibility = match self.peek() {
+                            Token::Public => Some(Visibility::Public),
+                            Token::Protected => Some(Visibility::Protected),
+                            Token::Private => Some(Visibility::Private),
+                            _ => None,
+                        };
+                        if visibility.is_some() {
+                            self.advance();
+                        }
+                        let alias = if self.peek() == Token::Semicolon {
+                            None
+                        } else {
+                            let token = self.advance();
+                            Some(Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                                format!("Expected trait method alias, got {token:?}")
+                            })?)
+                        };
+                        self.expect(&Token::Semicolon)?;
+                        trait_aliases.push(TraitAlias {
+                            trait_name,
+                            method,
+                            alias,
+                            visibility,
+                        });
+                    }
+                    self.expect(&Token::RBrace)?;
+                } else {
+                    self.expect(&Token::Semicolon)?;
+                }
+                continue;
+            }
             let modifiers = self.parse_member_modifiers();
             if matches!(self.peek(), Token::Function(_)) {
                 let line = match self.advance() {
@@ -429,6 +496,12 @@ impl Parser {
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
                 let body = self.parse_method_body(&modifiers, &method_name)?;
+                if modifiers.is_abstract {
+                    self.compile_error(
+                        format!("Anonymous class method {method_name}() must not be abstract"),
+                        line,
+                    );
+                }
                 self.pop_generic_scope();
                 methods.push(ClassMethod {
                     line,
@@ -460,7 +533,7 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         self.in_class_body = previous_class_body;
         self.class_scope_active = previous_class_scope;
-        Ok((properties, constants, methods))
+        Ok((properties, constants, methods, uses, trait_aliases))
     }
 
     /// Parse try { } catch (Type $e) { } finally { }

@@ -9047,10 +9047,14 @@ fn var_dump_value_inner(
                 object.for_each_dynamic_property(|_, value| {
                     property_count += usize::from(value.value_type() != ValueType::Undef);
                 });
+                let display_class = object
+                    .class_name
+                    .strip_prefix("class@anonymous#")
+                    .map_or(object.class_name.as_ref(), |_| "class@anonymous");
                 let mut out = format!(
                     "{}object({})#{} ({}) {{\n",
                     prefix,
-                    object.class_name,
+                    display_class,
                     val.object_handle()
                         .expect("live object must retain its request-local handle"),
                     property_count
@@ -9228,13 +9232,14 @@ fn var_dump_value_inner(
 }
 
 fn var_dump_property_key(definition: &PropertyDefinition) -> String {
+    let declaring_class = definition
+        .declaring_class
+        .strip_prefix("class@anonymous#")
+        .map_or(definition.declaring_class.as_str(), |_| "class@anonymous");
     match definition.visibility {
         Visibility::Public => format!("[\"{}\"]", definition.name),
         Visibility::Protected => format!("[\"{}\":protected]", definition.name),
-        Visibility::Private => format!(
-            "[\"{}\":\"{}\":private]",
-            definition.name, definition.declaring_class
-        ),
+        Visibility::Private => format!("[\"{}\":\"{}\":private]", definition.name, declaring_class),
     }
 }
 

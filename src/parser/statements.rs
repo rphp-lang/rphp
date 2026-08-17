@@ -528,7 +528,11 @@ impl Parser {
                         }
                     };
                     let expression = self.finish_keyword_logical_tail(assignment)?;
-                    self.expect(&Token::Semicolon)?;
+                    // PHP treats the end of the source unit like a closing PHP
+                    // tag, so the final statement may omit its semicolon.
+                    if !self.at_eof() {
+                        self.expect(&Token::Semicolon)?;
+                    }
                     match expression {
                         Expr::Assign { var, expr } => Ok(Stmt::Assign { var, expr: *expr }),
                         expression => Ok(Stmt::ExprStmt(expression)),

@@ -1340,7 +1340,8 @@ impl Parser {
                         Vec::new()
                     };
                     self.expect(&Token::LBrace)?;
-                    let (properties, constants, methods) = self.parse_anonymous_class_body()?;
+                    let (properties, constants, methods, uses, trait_aliases) =
+                        self.parse_anonymous_class_body()?;
                     return Ok(Expr::AnonymousNew {
                         args,
                         is_readonly: anonymous_readonly,
@@ -1350,6 +1351,8 @@ impl Parser {
                         properties,
                         constants,
                         methods,
+                        uses,
+                        trait_aliases,
                         line,
                         call_line: line,
                     });
