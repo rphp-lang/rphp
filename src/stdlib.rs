@@ -8595,7 +8595,7 @@ pub(crate) unsafe fn collect_debug_backtrace(
                 }
             }
             FunctionType::Internal => {
-                let Some(name) = eg
+                let Some(mut name) = eg
                     .function_table
                     .iter()
                     .find(|(_, candidate)| **candidate == (*frame).func)
@@ -8603,6 +8603,11 @@ pub(crate) unsafe fn collect_debug_backtrace(
                 else {
                     break;
                 };
+                if let Some((_, method)) = name.rsplit_once("::")
+                    && let Some(class) = eg.declaring_class_of((*frame).func)
+                {
+                    name = format!("{class}::{method}");
+                }
                 name
             }
             FunctionType::Undef => break,
@@ -9440,13 +9445,14 @@ fn get_generator_ref(ed: *mut ExecuteData) -> Option<crate::vm::generator::Gener
 
 /// Ensure generator is started (first next/send/rewind triggers initial execution)
 fn ensure_generator_started(
+    ed: *mut ExecuteData,
     gen_ref: &crate::vm::generator::GeneratorRef,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     use crate::vm::generator::GeneratorState;
     let state = gen_ref.borrow().state;
     if state == GeneratorState::Created {
-        resume_generator_method(eg, gen_ref, Value::null())?;
+        resume_generator_method(ed, eg, gen_ref, Value::null())?;
     }
     Ok(())
 }
@@ -9455,11 +9461,15 @@ fn ensure_generator_started(
 /// exception in the standard executor sidecar so `execute_full_call` can
 /// inject it into the user caller after the handler returns.
 fn resume_generator_method(
+    ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
     send_value: Value,
 ) -> Result<(), VmError> {
-    match crate::vm::execute::resume_generator(eg, gen_ref, send_value)? {
+    let saved_execute_data = eg.current_execute_data.replace(ed);
+    let outcome = crate::vm::execute::resume_generator(eg, gen_ref, send_value);
+    eg.current_execute_data.set(saved_execute_data);
+    match outcome? {
         crate::vm::execute::GeneratorResumeOutcome::Advanced => Ok(()),
         crate::vm::execute::GeneratorResumeOutcome::Threw(exception) => {
             eg.exception = Some(exception);
@@ -9474,7 +9484,7 @@ fn fn_generator_current(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(&gen_ref, eg)?;
+        ensure_generator_started(ed, &gen_ref, eg)?;
         let val = gen_ref.borrow().value.clone();
         ret!(rv, val);
     }
@@ -9487,7 +9497,7 @@ fn fn_generator_key(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(&gen_ref, eg)?;
+        ensure_generator_started(ed, &gen_ref, eg)?;
         let gen_data = gen_ref.borrow();
         let val = if gen_data.state == crate::vm::generator::GeneratorState::Completed {
             Value::null()
@@ -9505,14 +9515,14 @@ fn fn_generator_next(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(&gen_ref, eg)?;
+        ensure_generator_started(ed, &gen_ref, eg)?;
         // Advance past current yield
         let state = gen_ref.borrow().state;
         if state == crate::vm::generator::GeneratorState::Suspended {
             if gen_ref.borrow().rewindable {
                 gen_ref.borrow_mut().rewindable = false;
             }
-            resume_generator_method(eg, &gen_ref, Value::null())?;
+            resume_generator_method(ed, eg, &gen_ref, Value::null())?;
         }
     }
     ret!(rv, Value::null());
@@ -9524,7 +9534,7 @@ fn fn_generator_valid(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(&gen_ref, eg)?;
+        ensure_generator_started(ed, &gen_ref, eg)?;
         let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
         ret!(rv, Value::bool(is_valid));
     }
@@ -9539,7 +9549,7 @@ fn fn_generator_rewind(
     if let Some(gen_ref) = get_generator_ref(ed) {
         let state = gen_ref.borrow().state;
         if state == crate::vm::generator::GeneratorState::Created {
-            ensure_generator_started(&gen_ref, eg)?;
+            ensure_generator_started(ed, &gen_ref, eg)?;
         } else if !gen_ref.borrow().rewindable {
             eg.exception = Some(crate::value::make_error_value(
                 "Exception",
@@ -9564,18 +9574,18 @@ fn fn_generator_send(
         let state = gen_ref.borrow().state;
         if state == crate::vm::generator::GeneratorState::Created {
             // Start generator — runs to first yield, sets up send_target
-            resume_generator_method(eg, &gen_ref, Value::null())?;
+            resume_generator_method(ed, eg, &gen_ref, Value::null())?;
             // Now resume with the actual send value (if still suspended)
             let state2 = gen_ref.borrow().state;
             if state2 == crate::vm::generator::GeneratorState::Suspended {
                 gen_ref.borrow_mut().rewindable = false;
-                resume_generator_method(eg, &gen_ref, send_val)?;
+                resume_generator_method(ed, eg, &gen_ref, send_val)?;
             }
         } else if state == crate::vm::generator::GeneratorState::Suspended {
             if gen_ref.borrow().rewindable {
                 gen_ref.borrow_mut().rewindable = false;
             }
-            resume_generator_method(eg, &gen_ref, send_val)?;
+            resume_generator_method(ed, eg, &gen_ref, send_val)?;
         }
 
         // Return current yielded value
@@ -9591,7 +9601,7 @@ fn fn_generator_get_return(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(&gen_ref, eg)?;
+        ensure_generator_started(ed, &gen_ref, eg)?;
         if eg.exception.is_some() {
             ret!(rv, Value::null());
         }
@@ -9633,7 +9643,7 @@ fn fn_generator_throw(
 
     if let Some(gen_ref) = get_generator_ref(ed) {
         if gen_ref.borrow().state == crate::vm::generator::GeneratorState::Created {
-            resume_generator_method(eg, &gen_ref, Value::null())?;
+            resume_generator_method(ed, eg, &gen_ref, Value::null())?;
             if eg.exception.is_some() {
                 ret!(rv, Value::null());
             }
@@ -9645,7 +9655,10 @@ fn fn_generator_throw(
                 if gen_ref.borrow().rewindable {
                     gen_ref.borrow_mut().rewindable = false;
                 }
-                match crate::vm::execute::throw_into_generator(eg, &gen_ref, exception)? {
+                let saved_execute_data = eg.current_execute_data.replace(ed);
+                let outcome = crate::vm::execute::throw_into_generator(eg, &gen_ref, exception);
+                eg.current_execute_data.set(saved_execute_data);
+                match outcome? {
                     crate::vm::execute::GeneratorResumeOutcome::Advanced => {}
                     crate::vm::execute::GeneratorResumeOutcome::Threw(exception) => {
                         eg.exception = Some(exception);

@@ -1086,19 +1086,21 @@ fn materialize_generator_frame(
         std::ptr::null_mut(),
         std::ptr::null_mut(),
     );
-    unsafe { (*frame).return_value = std::ptr::null_mut() };
-
     let gen_data = gen_ref.borrow();
     publish_late_static_call_class_id(eg, frame, gen_data.called_scope_class_id);
-    for (i, value) in gen_data.cv_values.iter().enumerate() {
-        let slot = unsafe { (*frame).cv_mut(i as u32) };
-        unsafe { frame_restore_slot(frame, slot as *mut Value, value.clone()) };
-    }
-    for (i, value) in gen_data.tmp_values.iter().enumerate() {
-        let slot = unsafe { (*frame).tmp_mut(i as u32) };
-        unsafe { frame_restore_slot(frame, slot as *mut Value, value.clone()) };
-    }
+    // SAFETY: push_call_frame returned this live compiler-sized generator
+    // frame; every restored CV/TMP index comes from its retained snapshot and
+    // ip_offset belongs to the same immutable generator op-array.
     unsafe {
+        (*frame).return_value = std::ptr::null_mut();
+        for (i, value) in gen_data.cv_values.iter().enumerate() {
+            let slot = (*frame).cv_mut(i as u32);
+            frame_restore_slot(frame, slot as *mut Value, value.clone());
+        }
+        for (i, value) in gen_data.tmp_values.iter().enumerate() {
+            let slot = (*frame).tmp_mut(i as u32);
+            frame_restore_slot(frame, slot as *mut Value, value.clone());
+        }
         (*frame).opline = user
             .op_array
             .instructions
@@ -1160,6 +1162,9 @@ fn execute_resumed_generator_frame(
     activate_generator_generic_context(eg, gen_ref, frame);
     eg.current_execute_data.set(frame);
 
+    let injected_exception_identity = injected_exception
+        .as_ref()
+        .and_then(Value::object_identity);
     let result = if let Some(exception) = injected_exception {
         match throw_in_frame(eg, frame, exception) {
             ThrowResult::Handled(new_frame, _) => execute_ex(eg, new_frame),
@@ -1172,6 +1177,60 @@ fn execute_resumed_generator_frame(
         execute_ex(eg, frame)
     };
     let escaped_exception = eg.exception.take();
+
+    if let Some(exception) = escaped_exception.as_ref()
+        && !saved_execute_data.is_null()
+        && exception.object_identity() != injected_exception_identity
+        && exception.as_object().is_some_and(|object| {
+            object
+                .get_property("trace")
+                .and_then(Value::as_array)
+                .is_none_or(PhpArray::is_empty)
+        })
+    {
+        let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+            .as_deref()
+            .is_some_and(crate::stdlib::ini_boolean);
+        // SAFETY: frame is the live detached generator root and
+        // saved_execute_data is the still-live internal caller retained by
+        // this synchronous resume. Its predecessor is likewise live while we
+        // temporarily advance and restore the call-site pointer.
+        let trace = unsafe {
+            let internal_caller = (*saved_execute_data).prev_execute_data;
+            let (caller_opline, can_advance) = if internal_caller.is_null() {
+                (std::ptr::null(), false)
+            } else {
+                let caller_opline = (*internal_caller).opline;
+                let caller_op_array = (*internal_caller).op_array();
+                let caller_index =
+                    caller_opline.offset_from(caller_op_array.instructions.as_ptr());
+                let can_advance = usize::try_from(caller_index)
+                    .ok()
+                    .filter(|index| *index < caller_op_array.instructions.len())
+                    .is_some();
+                (caller_opline, can_advance)
+            };
+            if can_advance {
+                (*internal_caller).opline = caller_opline.add(1);
+            }
+            (*frame).prev_execute_data = saved_execute_data;
+            let trace = crate::stdlib::collect_debug_backtrace(
+                eg.current_execute_data.get(),
+                if ignore_arguments { 2 } else { 0 },
+                0,
+                eg,
+                true,
+            );
+            (*frame).prev_execute_data = std::ptr::null_mut();
+            if can_advance {
+                (*internal_caller).opline = caller_opline;
+            }
+            trace
+        };
+        if let Some(mut object) = exception.as_object_mut() {
+            object.set_property("trace", Value::array(trace));
+        }
+    }
 
     cleanup_detached_generator_frames(eg, frame);
     eg.current_execute_data.set(saved_execute_data);

@@ -267,6 +267,40 @@ echo get_class($incomplete), "\n";
 }
 
 #[test]
+fn internal_generator_failures_preserve_php_call_frames() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function values() { yield 1; yield 2; }
+$generator = values();
+$generator->next();
+$generator->next();
+try { $generator->rewind(); }
+catch (Exception $rewindError) {
+    foreach ($rewindError->getTrace() as $frame) {
+        echo $frame['class'] ?? '', $frame['type'] ?? '', $frame['function'], "\n";
+    }
+}
+try { serialize(values()); }
+catch (Exception $serializeError) { echo $serializeError->getTrace()[0]['function'], "\n"; }
+
+function reraises() {
+    try { yield; }
+    catch (Exception $error) { throw new LogicException('new'); }
+}
+try { reraises()->throw(new Exception('old')); }
+catch (LogicException $reraisedError) {
+    foreach ($reraisedError->getTrace() as $frame) {
+        echo $frame['class'] ?? '', $frame['type'] ?? '', $frame['function'], "\n";
+    }
+}
+"#
+        ),
+        "Generator->rewind\nserialize\nreraises\nGenerator->throw\n"
+    );
+}
+
+#[test]
 fn test_typed_generator_completion_and_internal_return_value() {
     assert_eq!(
         run_php(

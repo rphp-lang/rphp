@@ -466,6 +466,67 @@ unsafe fn cleanup_call_and_throw<'a>(
     throw_in_frame(eg, frame, err)
 }
 
+/// Snapshot an exception trace while an internal call frame is still live.
+/// Internal handlers execute synchronously and their frame is otherwise
+/// released before the shared throw boundary sees the exception.
+#[cold]
+#[inline(never)]
+fn attach_internal_call_trace_if_missing(
+    throwable: &Value,
+    call: *mut ExecuteData,
+    caller: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+) {
+    let missing_trace = throwable.as_object().is_some_and(|object| {
+        let has_origin = object
+            .get_property("file")
+            .and_then(Value::as_str)
+            .is_some_and(|file| !file.is_empty())
+            && object
+                .get_property("line")
+                .and_then(Value::as_long)
+                .is_some_and(|line| line > 0);
+        !has_origin
+            && object
+                .get_property("trace")
+                .and_then(Value::as_array)
+                .is_none_or(PhpArray::is_empty)
+    });
+    if !missing_trace {
+        return;
+    }
+    let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+        .as_deref()
+        .is_some_and(crate::stdlib::ini_boolean);
+    let trace_options = if ignore_arguments { 2 } else { 0 };
+
+    // SAFETY: call and caller are the linked, live synchronous frames passed
+    // by DoFcall. The caller opline belongs to its immutable op-array and is
+    // restored before either frame can execute or be released.
+    let trace = unsafe {
+        // collect_debug_backtrace expects a caller to point one instruction
+        // past the active call so it can recover the call-site location.
+        let caller_opline = (*caller).opline;
+        let caller_op_array = (*caller).op_array();
+        let caller_index = caller_opline.offset_from(caller_op_array.instructions.as_ptr());
+        let can_advance = usize::try_from(caller_index)
+            .ok()
+            .filter(|index| *index < caller_op_array.instructions.len())
+            .is_some();
+        if can_advance {
+            (*caller).opline = caller_opline.add(1);
+        }
+        let trace = crate::stdlib::collect_debug_backtrace(call, trace_options, 0, eg, true);
+        if can_advance {
+            (*caller).opline = caller_opline;
+        }
+        trace
+    };
+    if let Some(mut object) = throwable.as_object_mut() {
+        object.set_property("trace", Value::array(trace));
+    }
+}
+
 /// Call a magic method on an object.
 /// Looks up `classname::method_name` in the function table and, if found,
 /// pushes a temporary call frame, executes it, and returns the result.

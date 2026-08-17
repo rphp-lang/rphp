@@ -2797,9 +2797,13 @@ fn execute_full_call<'a>(
                     frame_result_finish_external_write(frame, return_value_ptr, opline.result_type)
                 };
             }
+            let internal_exception = eg.exception.take();
+            if let Some(exception) = internal_exception.as_ref() {
+                attach_internal_call_trace_if_missing(exception, call, frame, eg);
+            }
             unsafe { cleanup_frame_slots(call) };
             pop_vm_call_frame(eg, call);
-            if let Some(exc) = eg.exception.take() {
+            if let Some(exc) = internal_exception {
                 return Ok(match throw_in_frame(eg, frame, exc) {
                     ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                     ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),

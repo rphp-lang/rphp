@@ -2952,10 +2952,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 )
                             };
                         }
+                        let internal_exception = eg.exception.take();
+                        if let Some(exception) = internal_exception.as_ref() {
+                            attach_internal_call_trace_if_missing(exception, call, frame, eg);
+                        }
                         unsafe { cleanup_frame_slots(call) };
                         pop_vm_call_frame(eg, call);
 
-                        if let Some(exc) = eg.exception.take() {
+                        if let Some(exc) = internal_exception {
                             match throw_in_frame(eg, frame, exc) {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
