@@ -8,14 +8,26 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `a156cb3`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,439 pass, 2,769 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `78ea4b6`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,440 pass, 2,768 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-46.832%; 87.154% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +624/-0. The first four gains are
+46.851%; 87.154% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +625/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Each anonymous Closure object now owns its function-static cells. Repeated
+creation of the same declaration produces independent cells, ordinary aliases
+of one Closure share them, and `bindTo()` snapshots their current values.
+Closure generators retain the same cells across creation and suspension, and
+detached callback paths preserve the ownership contract. This adds the exact
+`Zend/tests/bug64979.phpt` pass without losing a prior pass or moving another
+failure stage. All five Cargo configurations, all-target/all-features and
+unsafe gates pass. Static-free closures allocate no additional storage; seven
+alternating release runs showed unchanged medians for five million ordinary
+closure calls (0.33 seconds) and two million ordinary closure creations (0.11
+seconds).
 
 Function-static storage in trait methods is now owned by each composed method:
 different consuming classes and aliases no longer share one trait declaration's
