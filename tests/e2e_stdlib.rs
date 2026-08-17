@@ -119,12 +119,18 @@ fn test_e2e_count_assoc() {
 
 #[test]
 fn test_e2e_count_null() {
-    assert_eq!(run_php("<?php echo count(null);"), "0");
+    assert_eq!(
+        run_php("<?php try { count(null); } catch (TypeError $e) { echo $e->getMessage(); }"),
+        "count(): Argument #1 ($value) must be of type Countable|array, null given"
+    );
 }
 
 #[test]
 fn test_e2e_count_scalar() {
-    assert_eq!(run_php("<?php echo count(42);"), "1");
+    assert_eq!(
+        run_php("<?php try { count(42); } catch (TypeError $e) { echo $e->getMessage(); }"),
+        "count(): Argument #1 ($value) must be of type Countable|array, int given"
+    );
 }
 
 #[test]

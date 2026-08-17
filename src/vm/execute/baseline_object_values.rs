@@ -80,11 +80,15 @@ fn op_clone_obj<'a>(
             });
         }
 
-    // Enum cases are singletons — cloning is forbidden
+        // Enum cases and Generator instances are engine-owned singletons.
         {
             let obj = src_val.as_object().unwrap();
-            if let Some(class_def) = eg.class_table.get(obj.class_name.as_ref()) {
-                if class_def.is_enum {
+            let uncloneable = obj.class_name.as_ref() == "Generator"
+                || eg
+                    .class_table
+                    .get(obj.class_name.as_ref())
+                    .is_some_and(|class_def| class_def.is_enum);
+            if uncloneable {
                     let err = make_error_value(
                         "Error",
                         &format!(
@@ -99,7 +103,6 @@ fn op_clone_obj<'a>(
                         }
                         ThrowResult::Unhandled(t) => return Ok(ColdResult::Unhandled(t)),
                     }
-                }
             }
         }
 

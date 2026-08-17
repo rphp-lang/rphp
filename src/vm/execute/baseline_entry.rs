@@ -934,7 +934,7 @@ fn resume_generator_with_input(
             GeneratorState::Running => {
                 return Err(VmError::Fatal("Cannot resume an already running generator".into()));
             }
-            _ => {}
+            GeneratorState::Suspended | GeneratorState::Created => {}
         }
     }
 
@@ -948,6 +948,9 @@ fn resume_generator_with_input(
                 Some(YieldFromDelegate::Generator(inner_gen_ref)) => {
                     // Forward normal values and injected exceptions through
                     // the active delegation chain.
+                    if inner_gen_ref.borrow().rewindable {
+                        inner_gen_ref.borrow_mut().rewindable = false;
+                    }
                     let inner_outcome = if let Some(exception) = injected_exception.clone() {
                         throw_into_generator(eg, &inner_gen_ref, exception)?
                     } else {

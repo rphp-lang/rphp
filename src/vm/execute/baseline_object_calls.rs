@@ -1823,6 +1823,14 @@ fn op_assign_obj_prop<'a>(
             property_accessible && php_obj.contains_property(&key)
         };
         drop(php_obj);
+        if !prop_exists && object_class_name.as_ref() == "Generator" {
+            return Ok(object_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Cannot create dynamic property Generator::${name}"),
+            ));
+        }
         if let Some(definition_ref) = definition {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             if let Some(declaration) = definition_ref.generic_declaration

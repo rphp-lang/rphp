@@ -55,6 +55,9 @@ pub struct Generator {
     /// True only after the generator reaches a normal explicit or implicit
     /// return. Exceptional closure also uses Completed but has no return value.
     pub has_returned: bool,
+    /// Rewind remains legal until execution advances beyond the first
+    /// suspension point. An empty generator also completes while rewindable.
+    pub rewindable: bool,
     /// Auto-incrementing key for yield without explicit key
     pub implicit_key: i64,
     /// Class scope captured when a generator closure/method is invoked.
@@ -113,6 +116,7 @@ impl Generator {
             send_value: Value::null(),
             return_value: Value::null(),
             has_returned: false,
+            rewindable: true,
             implicit_key: 0,
             called_scope_class_id: 0,
             delegate: None,

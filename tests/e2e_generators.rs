@@ -236,6 +236,37 @@ catch (TypeError $error) { echo $error->getMessage(), "\n"; }
 }
 
 #[test]
+fn generator_objects_enforce_engine_owned_state_invariants() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function values() { yield 1; yield 2; }
+$generator = values();
+foreach ([
+    fn() => clone $generator,
+    fn() => $generator->property = 1,
+    fn() => serialize($generator),
+    fn() => count($generator),
+] as $operation) {
+    try { $operation(); }
+    catch (Throwable $error) { echo $error::class, ': ', $error->getMessage(), "\n"; }
+}
+$generator->rewind();
+$generator->rewind();
+$generator->next();
+try { $generator->rewind(); }
+catch (Exception $error) { echo $error->getMessage(), "\n"; }
+try { unserialize('O:9:"Generator":0:{}'); }
+catch (Exception $error) { echo $error->getMessage(), "\n"; }
+$incomplete = unserialize('O:9:"Generator":0:{}', ['allowed_classes' => false]);
+echo get_class($incomplete), "\n";
+"#
+        ),
+        "Error: Trying to clone an uncloneable object of class Generator\nError: Cannot create dynamic property Generator::$property\nException: Serialization of 'Generator' is not allowed\nTypeError: count(): Argument #1 ($value) must be of type Countable|array, Generator given\nCannot rewind a generator that was already run\nUnserialization of 'Generator' is not allowed\n__PHP_Incomplete_Class\n"
+    );
+}
+
+#[test]
 fn test_typed_generator_completion_and_internal_return_value() {
     assert_eq!(
         run_php(

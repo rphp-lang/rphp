@@ -118,6 +118,13 @@ fn serialize_value(
             let object = value.as_object().expect("object value lost its payload");
             let class_name = object.class_name.to_string();
             drop(object);
+            if class_name.eq_ignore_ascii_case("Generator") {
+                eg.exception = Some(crate::value::make_error_value(
+                    "Exception",
+                    "Serialization of 'Generator' is not allowed",
+                ));
+                return Ok(());
+            }
             let properties =
                 match crate::stdlib::call_object_public_method(eg, value, "__serialize", &[])? {
                     Some(serialized) => {
@@ -406,6 +413,13 @@ impl<'a> Parser<'a> {
                 self.expect(b'{')?;
                 let class_name = std::str::from_utf8(class_bytes).map_err(|_| ())?;
                 let allowed = allowed_classes.allows(class_name);
+                if allowed && class_name.eq_ignore_ascii_case("Generator") {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "Exception",
+                        "Unserialization of 'Generator' is not allowed",
+                    ));
+                    return Err(());
+                }
                 let object = if allowed {
                     allocate_object(eg, class_name)?
                 } else {
@@ -443,6 +457,25 @@ impl<'a> Parser<'a> {
                     None => populate_object_properties(eg, &object, class_name, &properties),
                 }
                 Ok(object)
+            }
+            b'C' => {
+                self.expect(b':')?;
+                let class_length = usize::try_from(self.integer(b':')?).map_err(|_| ())?;
+                self.expect(b'"')?;
+                let class_end = self.position.checked_add(class_length).ok_or(())?;
+                let class_bytes = self.input.get(self.position..class_end).ok_or(())?;
+                self.position = class_end;
+                self.expect(b'"')?;
+                let class_name = std::str::from_utf8(class_bytes).map_err(|_| ())?;
+                if allowed_classes.allows(class_name)
+                    && class_name.eq_ignore_ascii_case("Generator")
+                {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "Exception",
+                        "Unserialization of 'Generator' is not allowed",
+                    ));
+                }
+                Err(())
             }
             b'r' | b'R' => {
                 self.expect(b':')?;

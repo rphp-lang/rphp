@@ -134,6 +134,11 @@ fn collect_generator_unpack(
         if state == crate::vm::generator::GeneratorState::Created
             || state == crate::vm::generator::GeneratorState::Suspended
         {
+            if state == crate::vm::generator::GeneratorState::Suspended
+                && generator.borrow().rewindable
+            {
+                generator.borrow_mut().rewindable = false;
+            }
             match resume_generator(eg, &generator, Value::null())? {
                 GeneratorResumeOutcome::Advanced => {}
                 GeneratorResumeOutcome::Threw(exception) => {
@@ -876,6 +881,20 @@ fn op_foreach_init<'a>(
                     ColdResult::Done => {}
                     control => return Ok(control),
                 }
+            } else if !gen_ref.borrow().rewindable {
+                let message = if state == crate::vm::generator::GeneratorState::Completed {
+                    "Cannot traverse an already closed generator"
+                } else {
+                    "Cannot rewind a generator that was already run"
+                };
+                let error = make_error_value("Exception", message);
+                attach_throwable_origin(&error, eg, frame, op_array, init_ip);
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
             }
         }
         let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
@@ -1098,6 +1117,9 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         if pos > 0 {
             let state = gen_ref.borrow().state;
             if state == crate::vm::generator::GeneratorState::Suspended {
+                if pos == 1 {
+                    mark_generator_not_rewindable(&gen_ref);
+                }
                 let outcome = resume_generator(eg, &gen_ref, Value::null())?;
                 let control = generator_resume_result(eg, frame, outcome);
                 if !matches!(control, ColdResult::Done) {
@@ -1342,6 +1364,12 @@ fn generator_resume_result<'a>(
             ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
         },
     }
+}
+
+#[cold]
+#[inline(never)]
+fn mark_generator_not_rewindable(gen_ref: &crate::vm::generator::GeneratorRef) {
+    gen_ref.borrow_mut().rewindable = false;
 }
 
 #[inline(never)]

@@ -3700,20 +3700,29 @@ fn fn_assert_options(
 // Array functions
 // ============================================================================
 
-fn fn_count(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
+fn fn_count(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let n = match v.as_array() {
         Some(arr) => arr.len() as i64,
         None => {
-            if v.value_type() == ValueType::Null {
-                0
-            } else {
-                1
+            if let Some(object) = v.as_object() {
+                let class_name = object.class_name.to_string();
+                drop(object);
+                if eg.class_is_a(&class_name, "Countable") {
+                    let receiver = v.clone();
+                    if let Some(result) = call_object_public_method(eg, &receiver, "count", &[])? {
+                        ret!(rv, Value::long(result.to_long_val()));
+                    }
+                }
             }
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "count(): Argument #1 ($value) must be of type Countable|array, {} given",
+                    v.diagnostic_type_name()
+                ),
+            ));
+            ret!(rv, Value::null());
         }
     };
     ret!(rv, Value::long(n));
@@ -9500,6 +9509,9 @@ fn fn_generator_next(
         // Advance past current yield
         let state = gen_ref.borrow().state;
         if state == crate::vm::generator::GeneratorState::Suspended {
+            if gen_ref.borrow().rewindable {
+                gen_ref.borrow_mut().rewindable = false;
+            }
             resume_generator_method(eg, &gen_ref, Value::null())?;
         }
     }
@@ -9525,7 +9537,15 @@ fn fn_generator_rewind(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(&gen_ref, eg)?;
+        let state = gen_ref.borrow().state;
+        if state == crate::vm::generator::GeneratorState::Created {
+            ensure_generator_started(&gen_ref, eg)?;
+        } else if !gen_ref.borrow().rewindable {
+            eg.exception = Some(crate::value::make_error_value(
+                "Exception",
+                "Cannot rewind a generator that was already run",
+            ));
+        }
     }
     ret!(rv, Value::null());
 }
@@ -9548,9 +9568,13 @@ fn fn_generator_send(
             // Now resume with the actual send value (if still suspended)
             let state2 = gen_ref.borrow().state;
             if state2 == crate::vm::generator::GeneratorState::Suspended {
+                gen_ref.borrow_mut().rewindable = false;
                 resume_generator_method(eg, &gen_ref, send_val)?;
             }
         } else if state == crate::vm::generator::GeneratorState::Suspended {
+            if gen_ref.borrow().rewindable {
+                gen_ref.borrow_mut().rewindable = false;
+            }
             resume_generator_method(eg, &gen_ref, send_val)?;
         }
 
@@ -9618,6 +9642,9 @@ fn fn_generator_throw(
         let state = gen_ref.borrow().state;
         match state {
             crate::vm::generator::GeneratorState::Suspended => {
+                if gen_ref.borrow().rewindable {
+                    gen_ref.borrow_mut().rewindable = false;
+                }
                 match crate::vm::execute::throw_into_generator(eg, &gen_ref, exception)? {
                     crate::vm::execute::GeneratorResumeOutcome::Advanced => {}
                     crate::vm::execute::GeneratorResumeOutcome::Threw(exception) => {
