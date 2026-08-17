@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `16f7c23`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,247 pass, 2,961 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `0c708a5`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,253 pass, 2,955 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-43.145%; 88.249% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +432/-0. The first four gains are
+43.260%; 88.345% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +438/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -40,6 +40,19 @@ configurations, all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel S2
 gates pass. This is a lexer/parser-only cold compile-path change; it does not
 alter runtime dispatch, object layout or generated native code, so no runtime
 performance gate applies.
+
+Readonly classes now reject every attempted dynamic-property creation before
+mutation across direct, compound, increment/decrement and reference write
+paths, while a consuming `__set` remains legal. Anonymous class parsing retains
+the readonly and `AllowDynamicProperties` modifiers, accepts valid anonymous
+readonly classes, and emits PHP 8.5's compile-time errors for the forbidden
+attribute, abstract/final modifiers and duplicate readonly modifier. Anonymous
+property diagnostics expose PHP's stable `class@anonymous` name rather than the
+runtime identity suffix. This adds all five `gh10377` variants plus
+`readonly_class_dynamic_property.phpt`, with no lost pass. All five Cargo
+feature configurations, all-target, unsafe, Composer S0, Symfony S1 and
+warmed-kernel S2 gates pass. The object layout and native code are unchanged;
+the named-class slow path retains its allocation-free shared class name.
 
 Automatically invoked `__clone` now grants each initialized readonly property
 one successful direct reinitialization on the cloned receiver. Failed type
