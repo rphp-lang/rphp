@@ -3875,6 +3875,7 @@ impl Compiler {
                 class_name,
                 property,
                 line,
+                ..
             } => {
                 let (resolved, late_static) = self.resolve_static_member_owner(class_name);
                 Some((
@@ -6995,6 +6996,7 @@ impl Compiler {
                     Expr::StaticProperty {
                         class_name,
                         property,
+                        parenthesized: false,
                         ..
                     },
                     Expr::StringLiteral(hook),

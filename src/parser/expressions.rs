@@ -1000,8 +1000,11 @@ impl Parser {
             }
             Token::LParen(_) => {
                 self.advance();
-                let expr = self.parse_expr()?;
+                let mut expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
+                if let Expr::StaticProperty { parenthesized, .. } = &mut expr {
+                    *parenthesized = true;
+                }
                 Ok(expr)
             }
             Token::Isset => {

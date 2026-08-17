@@ -312,6 +312,9 @@ pub enum Expr {
         // ClassName::$prop
         class_name: String,
         property: String,
+        /// Parentheses make a following `::` operate on the fetched value,
+        /// not on the source-level static-property node.
+        parenthesized: bool,
         line: usize,
     },
     DynamicNamedStaticProperty {

@@ -192,6 +192,7 @@ impl Parser {
             return Ok(Expr::StaticProperty {
                 class_name,
                 property,
+                parenthesized: false,
                 line: property_line,
             });
         }

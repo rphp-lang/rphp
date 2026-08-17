@@ -811,3 +811,22 @@ class NoParentProperty {
         )
     );
 }
+
+#[test]
+fn parenthesized_parent_static_property_calls_the_fetched_class_name() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentClassNameStorage { public static $class = 'FetchedClassName'; }
+class ChildClassNameStorage extends ParentClassNameStorage {
+    public static function read() { return (parent::$class)::answer(); }
+}
+class FetchedClassName {
+    public static function answer() { return 42; }
+}
+var_dump(ChildClassNameStorage::read());
+"#,
+        ),
+        "int(42)\n"
+    );
+}

@@ -1166,6 +1166,7 @@ impl Parser {
                 class_name,
                 property,
                 line,
+                ..
             } => Some((class_name.clone(), property.clone(), *line)),
             _ => None,
         };
@@ -1457,6 +1458,7 @@ impl Parser {
                     class_name,
                     property,
                     line,
+                    ..
                 } => Ok(Stmt::AssignStaticProp {
                     class_name,
                     property,

@@ -284,6 +284,24 @@ fn expression_static_method_calls_retain_class_and_method_operands() {
 }
 
 #[test]
+fn parenthesized_static_property_retains_value_call_boundary() {
+    let tokens = Lexer::new("<?php parent::$prop::get(); (parent::$prop)::get();")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    let parenthesized = |statement: &Stmt| match statement {
+        Stmt::ExprStmt(Expr::DynamicStaticCall { class, .. }) => match class.as_ref() {
+            Expr::StaticProperty { parenthesized, .. } => Some(*parenthesized),
+            _ => None,
+        },
+        _ => None,
+    };
+    assert_eq!(parenthesized(&statements[0]), Some(false));
+    assert_eq!(parenthesized(&statements[1]), Some(true));
+}
+
+#[test]
 fn nullsafe_nested_write_target_is_a_deferred_compile_error() {
     let tokens = Lexer::new("<?php $foo?->bar->baz = sideEffect();")
         .tokenize()
