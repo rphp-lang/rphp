@@ -223,6 +223,59 @@ echo count((new ReflectionClass(ReflectedPropertyParent::class))->getProperties(
 }
 
 #[test]
+fn reflection_property_distinguishes_declared_and_promoted_defaults() {
+    let out = run_php(
+        r#"<?php
+class ReflectedDefaults {
+    public $implicit;
+    public int $uninitialized;
+    public $explicit = 3;
+    public function __construct(public $promoted = 4 { get => $this->promoted; }) {}
+}
+foreach (['implicit', 'uninitialized', 'explicit', 'promoted'] as $name) {
+    $property = new ReflectionProperty(ReflectedDefaults::class, $name);
+    echo $name, ':', (int) $property->hasDefaultValue(), ':';
+    if ($property->hasDefaultValue()) {
+        var_dump($property->getDefaultValue());
+    } else {
+        echo "none\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "implicit:1:NULL\n",
+            "uninitialized:0:none\n",
+            "explicit:1:int(3)\n",
+            "promoted:0:none\n",
+        )
+    );
+}
+
+#[test]
+fn reflection_property_reports_final_abstract_and_virtual_hook_flags() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class ReflectedHookFlags {
+    abstract public $abstract { get; }
+    final public $backed { get => $this->backed; }
+    public $virtual { get => 42; }
+}
+foreach ((new ReflectionClass(ReflectedHookFlags::class))->getProperties() as $property) {
+    echo $property->name, ':', (int) $property->isFinal(),
+        (int) $property->isAbstract(), (int) $property->isVirtual(),
+        ':', $property->getModifiers(), '|';
+}
+"#,
+        ),
+        "abstract:011:577|backed:100:33|virtual:001:513|"
+    );
+}
+
+#[test]
 fn reflection_class_lists_direct_extended_and_inherited_interface_names() {
     let out = run_php(
         r#"<?php

@@ -3812,6 +3812,9 @@ impl Compiler {
                         type_hint_requires_reified_check(&promoted.type_hint),
                     ).with_source_location(&self.source_file, *class_line);
                     definition.set_final(promoted.is_final);
+                    // A constructor parameter default belongs to the parameter,
+                    // not to the promoted property declaration.
+                    definition.set_has_default(false);
                     definition.has_get_hook = promoted.has_get_hook;
                     definition.get_hook_is_backed = promoted.has_get_hook
                         && compiled_methods.iter().any(|(method, _, _, _, function)| {

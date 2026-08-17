@@ -1337,6 +1337,7 @@ impl PropertyDefinition {
         visibility: Visibility,
         declaring_class: String,
     ) -> Self {
+        let has_default = default.is_some();
         let type_scope = declaring_class.clone();
         Self {
             name,
@@ -1356,6 +1357,7 @@ impl PropertyDefinition {
             has_set_hook: false,
             set_hook_is_backed: false,
         }
+        .with_default_presence(has_default)
     }
 
     pub fn declared(
@@ -1367,6 +1369,7 @@ impl PropertyDefinition {
         is_readonly: bool,
         requires_reified_check: bool,
     ) -> Self {
+        let has_default = default.is_some() || matches!(type_hint, ParamTypeHint::None);
         let type_scope = declaring_class.clone();
         Self {
             name,
@@ -1386,6 +1389,7 @@ impl PropertyDefinition {
             has_set_hook: false,
             set_hook_is_backed: false,
         }
+        .with_default_presence(has_default)
     }
 
     pub fn declared_with_set_visibility(
@@ -1415,15 +1419,39 @@ impl PropertyDefinition {
         if !source_file.is_empty() {
             self.source_file = Some(source_file.to_string());
         }
-        self.source_line = source_line;
+        self.source_line =
+            (source_line & !Self::DECLARATION_FLAGS) | (self.source_line & Self::DECLARATION_FLAGS);
         self
     }
 
     const FINAL_FLAG: usize = 1usize << (usize::BITS - 1);
     const ABSTRACT_GET_FLAG: usize = 1usize << (usize::BITS - 2);
     const ABSTRACT_SET_FLAG: usize = 1usize << (usize::BITS - 3);
-    const DECLARATION_FLAGS: usize =
-        Self::FINAL_FLAG | Self::ABSTRACT_GET_FLAG | Self::ABSTRACT_SET_FLAG;
+    const HAS_DEFAULT_FLAG: usize = 1usize << (usize::BITS - 4);
+    const DECLARATION_FLAGS: usize = Self::FINAL_FLAG
+        | Self::ABSTRACT_GET_FLAG
+        | Self::ABSTRACT_SET_FLAG
+        | Self::HAS_DEFAULT_FLAG;
+
+    #[inline]
+    fn with_default_presence(mut self, has_default: bool) -> Self {
+        self.set_has_default(has_default);
+        self
+    }
+
+    #[inline]
+    pub fn has_default(&self) -> bool {
+        self.source_line & Self::HAS_DEFAULT_FLAG != 0
+    }
+
+    #[inline]
+    pub fn set_has_default(&mut self, has_default: bool) {
+        if has_default {
+            self.source_line |= Self::HAS_DEFAULT_FLAG;
+        } else {
+            self.source_line &= !Self::HAS_DEFAULT_FLAG;
+        }
+    }
 
     /// Finality is cold declaration metadata. Store it in the otherwise
     /// unused high bit of the source-line word so ordinary property metadata

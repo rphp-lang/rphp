@@ -1650,7 +1650,20 @@ fn property_modifiers(property: &PropertyDefinition, is_static: bool) -> i64 {
         Visibility::Protected => 2,
         Visibility::Private => 4,
     };
-    visibility | if is_static { 16 } else { 0 } | if property.is_readonly { 128 } else { 0 }
+    visibility
+        | if is_static { 16 } else { 0 }
+        | if property.is_final() { 32 } else { 0 }
+        | if property.abstract_get_hook() || property.abstract_set_hook() {
+            64
+        } else {
+            0
+        }
+        | if property.is_readonly { 128 } else { 0 }
+        | if property.is_virtual_hook_property() {
+            512
+        } else {
+            0
+        }
 }
 
 fn reflected_property_value(property: &PropertyDefinition, is_static: bool) -> Value {
@@ -1676,6 +1689,14 @@ fn reflected_property_value(property: &PropertyDefinition, is_static: bool) -> V
             ("__reflection_type_kind", Value::string(type_kind)),
             ("__reflection_type_name", Value::string(type_name)),
             ("__reflection_allows_null", Value::bool(allows_null)),
+            (
+                "__reflection_has_default",
+                Value::bool(property.has_default()),
+            ),
+            (
+                "__reflection_default",
+                property.default.clone().unwrap_or_else(Value::null),
+            ),
             ("name", Value::string(property.name.clone())),
             ("class", Value::string(declaring_class)),
         ],
@@ -1843,6 +1864,8 @@ fn property_construct(
                     property.declaring_class.clone(),
                     property_modifiers(property, false),
                     property.type_hint.clone(),
+                    property.has_default(),
+                    property.default.clone().unwrap_or_else(Value::null),
                 )
             })
             .or_else(|| {
@@ -1855,6 +1878,8 @@ fn property_construct(
                             property.declaring_class.clone(),
                             property_modifiers(property, true),
                             property.type_hint.clone(),
+                            property.has_default(),
+                            property.default.clone().unwrap_or_else(Value::null),
                         )
                     })
             })
@@ -1864,7 +1889,7 @@ fn property_construct(
             object.set_property("__reflection_target", target);
             object.set_property("__reflection_property", Value::string(name.clone()));
             object.set_property("name", Value::string(name));
-            if let Some((declaring_class, modifiers, type_hint)) = metadata {
+            if let Some((declaring_class, modifiers, type_hint, has_default, default)) = metadata {
                 let has_type = !matches!(type_hint, ParamTypeHint::None);
                 let (type_kind, type_name, allows_null) = hint_metadata(&type_hint);
                 object.set_property("class", Value::string(declaring_class));
@@ -1873,6 +1898,8 @@ fn property_construct(
                 object.set_property("__reflection_type_kind", Value::string(type_kind));
                 object.set_property("__reflection_type_name", Value::string(type_name));
                 object.set_property("__reflection_allows_null", Value::bool(allows_null));
+                object.set_property("__reflection_has_default", Value::bool(has_default));
+                object.set_property("__reflection_default", default);
             }
         }
     });
@@ -1910,6 +1937,71 @@ fn property_is_readonly(
         .and_then(|value| value.as_long())
         .unwrap_or(0);
     return_value(rv, Value::bool(modifiers & 128 != 0))
+}
+
+fn property_modifier_is(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    expected: i64,
+) -> Result<(), VmError> {
+    let modifiers = reflected_property(ed, "__reflection_modifiers")
+        .and_then(|value| value.as_long())
+        .unwrap_or(0);
+    return_value(rv, Value::bool(modifiers & expected != 0))
+}
+
+fn property_is_final(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    property_modifier_is(ed, rv, 32)
+}
+
+fn property_is_abstract(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    property_modifier_is(ed, rv, 64)
+}
+
+fn property_is_virtual(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    property_modifier_is(ed, rv, 512)
+}
+
+fn property_has_default_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let has_default =
+        reflected_property(ed, "__reflection_has_default").is_some_and(|value| value.is_truthy());
+    return_value(rv, Value::bool(has_default))
+}
+
+fn property_get_default_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let has_default =
+        reflected_property(ed, "__reflection_has_default").is_some_and(|value| value.is_truthy());
+    if !has_default {
+        super::report_internal_deprecation(
+            eg,
+            ed,
+            "ReflectionProperty::getDefaultValue() for a property without a default value is deprecated, use ReflectionProperty::hasDefaultValue() to check if the default value exists",
+        )?;
+    }
+    return_value(
+        rv,
+        reflected_property(ed, "__reflection_default").unwrap_or_else(Value::null),
+    )
 }
 
 fn property_is_default(

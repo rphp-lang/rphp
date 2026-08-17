@@ -35,12 +35,14 @@ use super::{
     parameter_allows_null, parameter_get_attributes, parameter_get_declaring_class,
     parameter_get_default_value, parameter_get_name, parameter_get_type, parameter_has_type,
     parameter_is_default_available, parameter_is_optional, parameter_is_passed_by_reference,
-    parameter_is_variadic, property_construct, property_get_modifiers, property_get_value,
-    property_is_default, property_is_initialized, property_is_private, property_is_protected,
-    property_is_public, property_is_readonly, property_is_static, property_set_value,
-    reflection_compound_types, reflection_get_doc_comment, reflection_type_allows_null,
-    reflection_type_generic_arguments, reflection_type_has_generic_arguments,
-    reflection_type_is_builtin, reflection_type_name, reflection_type_to_string,
+    parameter_is_variadic, property_construct, property_get_default_value, property_get_modifiers,
+    property_get_value, property_has_default_value, property_is_abstract, property_is_default,
+    property_is_final, property_is_initialized, property_is_private, property_is_protected,
+    property_is_public, property_is_readonly, property_is_static, property_is_virtual,
+    property_set_value, reflection_compound_types, reflection_get_doc_comment,
+    reflection_type_allows_null, reflection_type_generic_arguments,
+    reflection_type_has_generic_arguments, reflection_type_is_builtin, reflection_type_name,
+    reflection_type_to_string,
 };
 use crate::compiler::compile::{ClassConstantDefinition, ClassDef, PropertyDefinition};
 use crate::compiler::make_internal_method;
@@ -305,7 +307,10 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             ("IS_PROTECTED", 2),
             ("IS_PRIVATE", 4),
             ("IS_STATIC", 16),
+            ("IS_FINAL", 32),
+            ("IS_ABSTRACT", 64),
             ("IS_READONLY", 128),
+            ("IS_VIRTUAL", 512),
         ]
         .into_iter()
         .map(|(name, value)| ClassConstantDefinition {
@@ -859,6 +864,39 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         3,
         2,
         ["class", "property"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "hasdefaultvalue",
+        property_has_default_value,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
+        "getdefaultvalue",
+        property_get_default_value,
+        1,
+        0,
+        []
+    );
+    register_method!("ReflectionProperty", "isfinal", property_is_final, 1, 0, []);
+    register_method!(
+        "ReflectionProperty",
+        "isabstract",
+        property_is_abstract,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
+        "isvirtual",
+        property_is_virtual,
+        1,
+        0,
+        []
     );
     register_method!(
         "ReflectionProperty",
