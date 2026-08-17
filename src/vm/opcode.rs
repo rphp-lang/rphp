@@ -123,6 +123,7 @@ pub enum OpCode {
 
     // Global/static variable binding
     BindGlobal = 121,    // Bind CV op1 to global variable named op2 (CONST string)
+    CheckStatic = 122,   // Create an in-progress static cell or bind the initialized cell and jump
     BindStatic = 123, // Bind CV op1 to static variable named op2 (CONST string), func name in extended_value (CONST)
     AssignObjDim = 124, // $obj->prop[$key] = val; op1=obj, op2=key, result=val, extended_value=prop literal idx
     Include = 125, // Include/require file: op1=path (CONST/TMP/CV), extended_value flags: bit0=require, bit1=once

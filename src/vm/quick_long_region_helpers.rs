@@ -72,6 +72,7 @@ fn instruction_writes_cv(instruction: crate::vm::instruction::Instruction, cv: u
             | OpCode::PostInc
             | OpCode::PostDec
             | OpCode::BindGlobal
+            | OpCode::CheckStatic
             | OpCode::BindStatic
     ) && instruction.op1_type == OpType::Cv
         && instruction.op1 == cv

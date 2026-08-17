@@ -5498,6 +5498,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 op_bind_global(eg, frame, op_array, opline);
             }
 
+            OpCode::CheckStatic => {
+                if op_check_static(eg, frame, op_array, opline) {
+                    continue;
+                }
+            }
+
             OpCode::BindStatic => {
                 op_bind_static(eg, frame, op_array, opline);
             }

@@ -3247,15 +3247,35 @@ impl Compiler {
                     }
                 }
             }
-            Stmt::StaticVar { vars } => {
+            Stmt::StaticVar { vars, line } => {
                 for (var_name, default) in vars {
+                    if self.closure_capture_names.contains(var_name)
+                        || self
+                            .static_vars
+                            .iter()
+                            .any(|(_, existing, _)| existing == var_name)
+                    {
+                        return Err(self.goto_error(
+                            &format!("Duplicate declaration of static variable ${var_name}"),
+                            *line,
+                        ));
+                    }
                     let cv_idx = self.resolve_cv(var_name);
                     let name_idx = self.add_literal(Value::string(var_name.clone()));
                     let func_name_idx =
                         self.add_literal(Value::string(self.current_function_name.clone()));
-                    // If there's a default, compile it and store as extended_value
-                    // We encode: op1=CV, op2=CONST(var_name), extended_value=CONST(func_name)
-                    // result = default value (or Unused)
+                    // Static initializers are lazy. CheckStatic creates an
+                    // in-progress cell on the first/recursive path, or binds
+                    // an already initialized cell and jumps over evaluation.
+                    let check_idx = self.instructions.len();
+                    let mut check = Instruction::new(OpCode::CheckStatic);
+                    check.op1_type = OpType::Cv;
+                    check.op1 = cv_idx;
+                    check.op2_type = OpType::Const;
+                    check.op2 = name_idx;
+                    check.extended_value = func_name_idx as u32;
+                    self.instructions.push(check);
+
                     let mut instr = Instruction::new(OpCode::BindStatic);
                     instr.op1_type = OpType::Cv;
                     instr.op1 = cv_idx;
@@ -3273,6 +3293,7 @@ impl Compiler {
                         instr.result_type = OpType::Unused;
                     }
                     self.instructions.push(instr);
+                    self.instructions[check_idx].result = self.instructions.len() as u16;
                     self.static_vars
                         .push((cv_idx as u32, var_name.clone(), debug_default));
                     self.definitely_defined_cvs.insert(cv_idx);

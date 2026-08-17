@@ -1,5 +1,5 @@
 mod common;
-use common::run_php;
+use common::{run_php, run_php_expect_error};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
@@ -540,37 +540,40 @@ class RecursingStatic {
 }
 
 #[test]
-fn repeated_static_declarations_use_the_last_initial_value_only_once() {
+fn static_initializers_are_lazy_and_recursive_initialization_commits_once() {
     assert_eq!(
         run_php(
             r#"<?php
-function repeatedDefaults() {
-    static $first = 10;
-    static $first;
-    static $second;
-    static $second = 11;
-    static $third = 12;
-    static $third = 13;
-    var_dump($first, $second, $third);
-    $first = $second = $third = 20;
+function seed($value) {
+    echo "seed:$value\n";
+    return $value;
 }
-repeatedDefaults();
-repeatedDefaults();
+function lazy() {
+    static $value = seed(4);
+    echo "$value\n";
+}
+lazy();
+lazy();
 
-function recursiveDefaults($depth = 0) {
-    static $value = 10;
-    static $value = 11;
-    echo "$depth:$value\n";
-    if ($depth === 0) {
-        $value = 20;
-        recursiveDefaults(1);
-    }
-    echo "$depth:$value\n";
+function recursive($depth) {
+    static $value = $depth < 2 ? recursive($depth + 1) : "done";
+    echo "$value\n";
+    return $depth;
 }
-recursiveDefaults();
+recursive(0);
 "#,
         ),
-        "NULL\nint(11)\nint(13)\nint(20)\nint(20)\nint(20)\n0:11\n1:20\n1:20\n0:20\n"
+        "seed:4\n4\n4\ndone\ndone\ndone\n"
+    );
+}
+
+#[test]
+fn duplicate_static_declarations_are_compile_errors() {
+    let error =
+        run_php_expect_error("<?php function invalid() { static $value = 1; static $value = 2; }");
+    assert_eq!(
+        error.to_string(),
+        "Duplicate declaration of static variable $value on line 1"
     );
 }
 

@@ -864,7 +864,11 @@ impl Parser {
                     body,
                 })
             }
-            Token::Function(line) => {
+            Token::Function(line)
+                if matches!(self.peek_at(1), Token::Identifier(_, _) | Token::From)
+                    || (self.peek_at(1) == Token::Ampersand
+                        && matches!(self.peek_at(2), Token::Identifier(_, _) | Token::From)) =>
+            {
                 self.advance(); // consume 'function'
                 // Accept the PHP reference-return declaration marker. Return
                 // aliasing itself remains outside the current execution
@@ -1031,6 +1035,7 @@ impl Parser {
             | Token::Print
             | Token::LParen(_)
             | Token::Fn(_)
+            | Token::Function(_)
             | Token::Integer(_)
             | Token::Float(_)
             | Token::StringLiteral(_)
@@ -1108,6 +1113,10 @@ impl Parser {
             Token::Static if matches!(self.peek_at(1), Token::Variable(_, _)) => {
                 // static $var = expr; (function-level static variable)
                 self.advance(); // consume 'static'
+                let line = match self.peek() {
+                    Token::Variable(_, line) => line,
+                    _ => unreachable!("static-variable lookahead was already validated"),
+                };
                 let mut vars = Vec::new();
                 loop {
                     let var_name = match self.advance() {
@@ -1133,7 +1142,7 @@ impl Parser {
                     }
                 }
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::StaticVar { vars })
+                Ok(Stmt::StaticVar { vars, line })
             }
             other => Err(format!("Unexpected token: {:?}", other)),
         }

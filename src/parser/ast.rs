@@ -923,6 +923,7 @@ pub enum Stmt {
     StaticVar {
         // static $a = 0, $b = "";
         vars: Vec<(String, Option<Expr>)>,
+        line: usize,
     },
     Enum {
         line: usize,
@@ -1051,7 +1052,7 @@ impl Stmt {
             Stmt::ListAssign { targets, expr, .. } => {
                 targets.iter().any(ListTarget::contains_yield) || expr.contains_yield()
             }
-            Stmt::StaticVar { vars } => vars
+            Stmt::StaticVar { vars, .. } => vars
                 .iter()
                 .any(|(_, value)| value.as_ref().is_some_and(Expr::contains_yield)),
             Stmt::Global(targets) => targets.iter().any(|target| match target {

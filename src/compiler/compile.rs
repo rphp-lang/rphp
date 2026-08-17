@@ -788,6 +788,7 @@ fn propagate_declared_scalar_types(
                 | OpCode::ForeachNext
                 | OpCode::ForeachNextPlain
                 | OpCode::BindDefaultParam
+                | OpCode::CheckStatic
         )
     });
 
@@ -806,7 +807,7 @@ fn propagate_declared_scalar_types(
             | OpCode::PostInc
             | OpCode::PostDec
             | OpCode::BindDefaultParam => mark_param(&mut directly_mutated_params, instruction.op1),
-            OpCode::BindGlobal | OpCode::BindStatic => {
+            OpCode::BindGlobal | OpCode::CheckStatic | OpCode::BindStatic => {
                 mark_param(&mut directly_mutated_params, instruction.op1);
                 mark_param(&mut maybe_aliased_params, instruction.op1);
                 if let Some(aliased) = aliased_cvs.get_mut(instruction.op1 as usize) {
@@ -889,7 +890,7 @@ fn propagate_declared_scalar_types(
                     *slot = None;
                 }
             }
-            OpCode::BindGlobal | OpCode::BindStatic => {
+            OpCode::BindGlobal | OpCode::CheckStatic | OpCode::BindStatic => {
                 if let Some(slot) = slots.get_mut(instruction.op1 as usize) {
                     *slot = KnownScalarType::Unknown;
                 }
@@ -1812,6 +1813,8 @@ pub struct Compiler {
     global_vars: Vec<(u32, String)>,
     /// CVs bound to static variables
     static_vars: Vec<(u32, String, Option<Value>)>,
+    /// Explicit closure captures cannot be redeclared as static variables.
+    closure_capture_names: HashSet<String>,
     /// Current function name (for static variable keying)
     current_function_name: String,
     /// Direct variable operands returned from a declaration using `function
@@ -1995,6 +1998,7 @@ impl Compiler {
             contains_yield: false,
             global_vars: Vec::new(),
             static_vars: Vec::new(),
+            closure_capture_names: HashSet::new(),
             current_function_name: String::new(),
             returns_reference_context: false,
             return_type_context: ParamTypeHint::None,
@@ -6885,6 +6889,7 @@ impl Compiler {
                 let mut closure_reference_cvs = Vec::new();
                 for (v, by_reference, line) in use_vars {
                     let cv = func_compiler.resolve_cv(v);
+                    func_compiler.closure_capture_names.insert(v.clone());
                     // Explicit `use ($value)` snapshots at closure creation,
                     // so the captured CV is initialized even when the source
                     // was missing. Arrow functions capture silently and keep

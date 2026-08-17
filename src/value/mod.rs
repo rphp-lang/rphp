@@ -4041,7 +4041,7 @@ impl Value {
     /// Marks only the frame-local alias that created a local-static cell.
     /// A later declaration of the same static in that frame may replace the
     /// first initializer; aliases and recursive frames must not inherit it.
-    const LOCAL_STATIC_INITIALIZER_FLAG: u32 = 1 << 9;
+    const STATIC_INITIALIZER_IN_PROGRESS_FLAG: u32 = 1 << 9;
     /// Marks a compiler-only reference handle that has no PHP-visible storage
     /// location. Its Rc owner keeps the target alive but must not make
     /// `var_dump()` display a reference wrapper after the last source alias is
@@ -4996,7 +4996,8 @@ impl Value {
             // The local-static initializer marker belongs to one frame slot,
             // not to the shared PHP reference cell or any aliases of it.
             type_info: self.type_info
-                & !(Self::LOCAL_STATIC_INITIALIZER_FLAG | Self::INTERNAL_REFERENCE_ALIAS_FLAG),
+                & !(Self::STATIC_INITIALIZER_IN_PROGRESS_FLAG
+                    | Self::INTERNAL_REFERENCE_ALIAS_FLAG),
             _not_send: PhantomData,
         }
     }
@@ -5100,14 +5101,19 @@ impl Value {
     }
 
     #[inline]
-    pub(crate) fn mark_local_static_initializer(&mut self) {
+    pub(crate) fn mark_static_initializer_in_progress(&mut self) {
         debug_assert!(self.is_owned_reference());
-        self.type_info |= Self::LOCAL_STATIC_INITIALIZER_FLAG;
+        self.type_info |= Self::STATIC_INITIALIZER_IN_PROGRESS_FLAG;
     }
 
     #[inline]
-    pub(crate) fn is_local_static_initializer(&self) -> bool {
-        self.is_owned_reference() && self.type_info & Self::LOCAL_STATIC_INITIALIZER_FLAG != 0
+    pub(crate) fn is_static_initializer_in_progress(&self) -> bool {
+        self.is_owned_reference() && self.type_info & Self::STATIC_INITIALIZER_IN_PROGRESS_FLAG != 0
+    }
+
+    #[inline]
+    pub(crate) fn clear_static_initializer_in_progress(&mut self) {
+        self.type_info &= !Self::STATIC_INITIALIZER_IN_PROGRESS_FLAG;
     }
 
     #[inline]

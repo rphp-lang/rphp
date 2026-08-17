@@ -162,7 +162,9 @@ impl OpArray {
                 }
             };
             match instruction.opcode {
-                OpCode::BindGlobal | OpCode::BindStatic => mark(instruction.op1),
+                OpCode::BindGlobal | OpCode::CheckStatic | OpCode::BindStatic => {
+                    mark(instruction.op1)
+                }
                 OpCode::SendRef | OpCode::SendVarEx | OpCode::SendNamed
                     if instruction.op1_type == OpType::Cv =>
                 {
@@ -1284,6 +1286,7 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             | OpCode::PostDec
             | OpCode::BindDefaultParam
             | OpCode::BindGlobal
+            | OpCode::CheckStatic
             | OpCode::BindStatic => clear_cv(&mut mask, instruction.op1),
             // A local `=&` may expose either participating parameter through
             // the other CV for the rest of this frame.

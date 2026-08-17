@@ -726,6 +726,7 @@ mod inner {
             119 => Some("ShiftRight"),
             120 => Some("BitwiseNot"),
             121 => Some("BindGlobal"),
+            122 => Some("CheckStatic"),
             123 => Some("BindStatic"),
             124 => Some("AssignObjDim"),
             125 => Some("Include"),
