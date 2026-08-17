@@ -3531,6 +3531,13 @@ impl Compiler {
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_magic_method_return_type(
+                        &resolved_class,
+                        &method.name,
+                        method.return_type.is_some(),
+                        &cp.return_type_hint,
+                        method.line,
+                    )?;
                     func_compiler.return_type_context = cp.return_type_hint.clone();
                     self.validate_generator_return_type(
                         func_compiler.contains_yield,
@@ -4047,6 +4054,13 @@ impl Compiler {
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_magic_method_return_type(
+                        &resolved_iface,
+                        &method.name,
+                        method.return_type.is_some(),
+                        &cp.return_type_hint,
+                        method.line,
+                    )?;
                     func_compiler.return_type_context = cp.return_type_hint.clone();
                     self.validate_generator_return_type(
                         func_compiler.contains_yield,
@@ -4261,6 +4275,13 @@ impl Compiler {
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_magic_method_return_type(
+                        &resolved_trait,
+                        &method.name,
+                        method.return_type.is_some(),
+                        &cp.return_type_hint,
+                        method.line,
+                    )?;
                     func_compiler.return_type_context = cp.return_type_hint.clone();
                     self.validate_generator_return_type(
                         func_compiler.contains_yield,
@@ -4740,6 +4761,15 @@ impl Compiler {
                 // Compile methods
                 let mut compiled_methods = Vec::new();
                 for method in &enum_methods {
+                    if enum_magic_method_is_forbidden(&method.name) {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Enum {resolved_enum} cannot include magic method {}",
+                                method.name
+                            ),
+                            method.line,
+                        ));
+                    }
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_enum, method.name),
@@ -4762,6 +4792,13 @@ impl Compiler {
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_magic_method_return_type(
+                        &resolved_enum,
+                        &method.name,
+                        method.return_type.is_some(),
+                        &cp.return_type_hint,
+                        method.line,
+                    )?;
                     func_compiler.return_type_context = cp.return_type_hint.clone();
                     self.validate_generator_return_type(
                         func_compiler.contains_yield,

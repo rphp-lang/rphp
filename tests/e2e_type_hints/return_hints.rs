@@ -761,3 +761,89 @@ try { $f(); } catch (TypeError $e) { echo "caught"; }
         "caught"
     );
 }
+
+#[test]
+fn magic_method_return_types_accept_php_covariant_contracts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class AcceptedMagicReturns {
+    public function __clone(): void {}
+    public function __isset($name): true { return true; }
+    public function __toString(): never { throw new Exception(); }
+    public function __debugInfo(): null { return null; }
+    public function __serialize(): array { return []; }
+    public function __unserialize(array $data): void {}
+    public static function __set_state($properties): self { return new self(); }
+}
+echo 'ok';
+"#,
+        ),
+        "ok"
+    );
+}
+
+#[test]
+fn magic_method_return_types_reject_incompatible_declarations() {
+    for (source, expected) in [
+        (
+            "<?php class BadConstructor { function __construct(): void {} }",
+            "Method BadConstructor::__construct() cannot declare a return type",
+        ),
+        (
+            "<?php class BadClone { function __clone(): int {} }",
+            "BadClone::__clone(): Return type must be void when declared",
+        ),
+        (
+            "<?php class BadIsset { function __isset($name): object|bool {} }",
+            "BadIsset::__isset(): Return type must be bool when declared",
+        ),
+        (
+            "<?php class BadDebug { function __debugInfo(): bool {} }",
+            "BadDebug::__debugInfo(): Return type must be ?array when declared",
+        ),
+        (
+            "<?php class BadState { static function __set_state($properties): bool {} }",
+            "BadState::__set_state(): Return type must be object when declared",
+        ),
+        (
+            "<?php interface BadStringable { public function __toString(): bool; }",
+            "BadStringable::__toString(): Return type must be string when declared",
+        ),
+        (
+            "<?php trait BadSerialization { public function __serialize(): object {} }",
+            "BadSerialization::__serialize(): Return type must be array when declared",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(error.to_string().contains(expected), "unexpected error: {error}");
+    }
+}
+
+#[test]
+fn enums_allow_invocation_magic_but_reject_state_and_lifecycle_magic() {
+    assert_eq!(
+        run_php(
+            "<?php enum CallableEnum { case Value; public function __invoke() { return 1; } public function __call($name, $arguments) {} public static function __callStatic($name, $arguments) {} } echo (CallableEnum::Value)();",
+        ),
+        "1"
+    );
+    for method in ["__construct", "__clone", "__get", "__serialize", "__set_state"] {
+        let static_prefix = if method == "__set_state" { "static " } else { "" };
+        let parameters = match method {
+            "__get" => "$name",
+            "__set_state" => "$properties",
+            _ => "",
+        };
+        let source = format!(
+            "<?php enum ForbiddenMagic {{ case Value; public {static_prefix}function {method}({parameters}) {{}} }}"
+        );
+        let error = run_php_expect_error(&source);
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("Enum ForbiddenMagic cannot include magic method {method}")),
+            "unexpected error: {error}"
+        );
+    }
+}

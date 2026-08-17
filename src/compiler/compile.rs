@@ -3013,9 +3013,126 @@ impl Compiler {
     }
 }
 
+fn magic_return_is_void(hint: &ParamTypeHint) -> bool {
+    matches!(hint, ParamTypeHint::Void | ParamTypeHint::Never)
+}
+
+fn magic_return_is_bool(hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::Bool | ParamTypeHint::Never => true,
+        ParamTypeHint::ClassName(name) => {
+            name.eq_ignore_ascii_case("true") || name.eq_ignore_ascii_case("false")
+        }
+        ParamTypeHint::Union(parts) => parts.iter().all(magic_return_is_bool),
+        _ => false,
+    }
+}
+
+fn magic_return_is_string(hint: &ParamTypeHint) -> bool {
+    matches!(hint, ParamTypeHint::String | ParamTypeHint::Never)
+}
+
+fn magic_return_is_array(hint: &ParamTypeHint) -> bool {
+    matches!(hint, ParamTypeHint::Array | ParamTypeHint::Never)
+}
+
+fn magic_return_is_nullable_array(hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::Array | ParamTypeHint::Never => true,
+        ParamTypeHint::Nullable(inner) => {
+            matches!(inner.as_ref(), ParamTypeHint::None | ParamTypeHint::Array)
+        }
+        ParamTypeHint::Union(parts) => parts.iter().all(magic_return_is_nullable_array),
+        _ => false,
+    }
+}
+
+fn magic_return_is_object(hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::Never | ParamTypeHint::Intersection(_) => true,
+        ParamTypeHint::ClassName(name) => !matches!(
+            name.to_ascii_lowercase().as_str(),
+            "false" | "true" | "iterable"
+        ),
+        ParamTypeHint::Union(parts) => parts.iter().all(magic_return_is_object),
+        _ => false,
+    }
+}
+
+fn enum_magic_method_is_forbidden(method: &str) -> bool {
+    [
+        "__construct",
+        "__destruct",
+        "__clone",
+        "__get",
+        "__set",
+        "__unset",
+        "__isset",
+        "__tostring",
+        "__debuginfo",
+        "__serialize",
+        "__unserialize",
+        "__sleep",
+        "__wakeup",
+        "__set_state",
+    ]
+    .iter()
+    .any(|forbidden| method.eq_ignore_ascii_case(forbidden))
+}
+
 include!("compile/statements.rs");
 
 impl Compiler {
+    fn validate_magic_method_return_type(
+        &self,
+        class: &str,
+        method: &str,
+        declared: bool,
+        hint: &ParamTypeHint,
+        line: usize,
+    ) -> Result<(), String> {
+        if !declared {
+            return Ok(());
+        }
+        if method.eq_ignore_ascii_case("__construct") || method.eq_ignore_ascii_case("__destruct") {
+            return Err(self.goto_error(
+                &format!("Method {class}::{method}() cannot declare a return type"),
+                line,
+            ));
+        }
+
+        let (requirement, compatible): (&str, fn(&ParamTypeHint) -> bool) = if method
+            .eq_ignore_ascii_case("__clone")
+            || method.eq_ignore_ascii_case("__set")
+            || method.eq_ignore_ascii_case("__unset")
+            || method.eq_ignore_ascii_case("__unserialize")
+            || method.eq_ignore_ascii_case("__wakeup")
+        {
+            ("void", magic_return_is_void)
+        } else if method.eq_ignore_ascii_case("__isset") {
+            ("bool", magic_return_is_bool)
+        } else if method.eq_ignore_ascii_case("__tostring") {
+            ("string", magic_return_is_string)
+        } else if method.eq_ignore_ascii_case("__debuginfo") {
+            ("?array", magic_return_is_nullable_array)
+        } else if method.eq_ignore_ascii_case("__serialize")
+            || method.eq_ignore_ascii_case("__sleep")
+        {
+            ("array", magic_return_is_array)
+        } else if method.eq_ignore_ascii_case("__set_state") {
+            ("object", magic_return_is_object)
+        } else {
+            return Ok(());
+        };
+        if compatible(hint) {
+            return Ok(());
+        }
+        Err(self.goto_error(
+            &format!("{class}::{method}(): Return type must be {requirement} when declared"),
+            line,
+        ))
+    }
+
     /// Evaluate a constant expression at compile time (for property defaults).
     /// Returns Err for expressions that cannot be resolved at compile time.
     #[allow(dead_code)]
