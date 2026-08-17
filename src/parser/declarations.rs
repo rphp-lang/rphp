@@ -77,10 +77,13 @@ impl Parser {
                 return Err("Hooked properties cannot declare multiple properties".into());
             }
             if modifiers.is_static {
-                return Err("Hooked properties cannot be static".into());
+                self.compile_error("Cannot declare hooks for static property", properties[0].line);
             }
             self.advance();
             let property = properties.last_mut().unwrap();
+            if self.peek() == Token::RBrace {
+                self.compile_error("Property hook list must not be empty", property.line);
+            }
             while self.peek() != Token::RBrace && !self.at_eof() {
                 let hook_is_final = if self.peek() == Token::Final {
                     self.advance();
@@ -88,6 +91,20 @@ impl Parser {
                 } else {
                     false
                 };
+                let invalid_modifier = match self.peek() {
+                    Token::Public => Some("public"),
+                    Token::Protected => Some("protected"),
+                    Token::Private => Some("private"),
+                    Token::Static => Some("static"),
+                    _ => None,
+                };
+                if let Some(modifier) = invalid_modifier {
+                    self.advance();
+                    self.compile_error(
+                        format!("Cannot use the {modifier} modifier on a property hook"),
+                        property.line,
+                    );
+                }
                 let hook_returns_by_ref = if self.peek() == Token::Ampersand {
                     self.advance();
                     true
@@ -98,21 +115,50 @@ impl Parser {
                     Token::Identifier(name, line) => (name, line),
                     other => return Err(format!("Expected property hook, got {other:?}")),
                 };
-                if !hook.eq_ignore_ascii_case("get") && !hook.eq_ignore_ascii_case("set") {
-                    return Err(format!("Unsupported property hook {hook}"));
-                }
                 let is_get = hook.eq_ignore_ascii_case("get");
-                if (is_get && property.has_get_hook) || (!is_get && property.has_set_hook) {
-                    return Err(format!("Cannot redeclare property hook {hook}"));
+                let is_set = hook.eq_ignore_ascii_case("set");
+                if (is_get && property.has_get_hook) || (is_set && property.has_set_hook) {
+                    self.compile_error(
+                        format!("Cannot redeclare property hook \"{}\"", hook.to_ascii_lowercase()),
+                        hook_line,
+                    );
                 }
-                let params = if is_get {
+                let params = if is_get && matches!(self.peek(), Token::LParen(_)) {
+                    self.expect_lparen()?;
+                    let mut params = self.parse_param_list()?;
+                    self.expect(&Token::RParen)?;
+                    if params.is_empty() {
+                        // Preserve the otherwise invisible presence of `()` so the class-aware
+                        // compiler can emit PHP's property-qualified declaration diagnostic.
+                        params.push(Param {
+                            name: "\0property_get_parameter_list".to_string(),
+                            line: hook_line,
+                            default: None,
+                            is_variadic: false,
+                            is_ref: false,
+                            type_hint: None,
+                            promotion: None,
+                        });
+                    }
+                    params
+                } else if is_get {
                     Vec::new()
                 } else if matches!(self.peek(), Token::LParen(_)) {
                     self.expect_lparen()?;
-                    let params = self.parse_param_list()?;
+                    let mut params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
-                    if params.len() != 1 {
-                        return Err("Property set hook must accept exactly one parameter".into());
+                    if params.is_empty() {
+                        // As above, an internal sentinel carries the empty-list syntax only as
+                        // far as the declaration validator; it can never enter executable code.
+                        params.push(Param {
+                            name: "\0property_set_parameter_list".to_string(),
+                            line: hook_line,
+                            default: None,
+                            is_variadic: false,
+                            is_ref: false,
+                            type_hint: None,
+                            promotion: None,
+                        });
                     }
                     params
                 } else {
@@ -160,13 +206,13 @@ impl Parser {
                     (body, false)
                 };
                 property.has_get_hook |= is_get;
-                property.has_set_hook |= !is_get;
+                property.has_set_hook |= is_set;
                 property.has_abstract_get_hook |= is_get && hook_is_abstract;
-                property.has_abstract_set_hook |= !is_get && hook_is_abstract;
+                property.has_abstract_set_hook |= is_set && hook_is_abstract;
                 hook_methods.push(ClassMethod {
                     line: hook_line,
                     visibility: property.visibility,
-                    name: format!("${}::{}", property.name, if is_get { "get" } else { "set" }),
+                    name: format!("${}::{}", property.name, hook.to_ascii_lowercase()),
                     params,
                     body,
                     is_static: false,

@@ -3332,6 +3332,43 @@ impl Compiler {
                 let mut promoted_props: Vec<(String, usize, Visibility, Option<Visibility>, bool, ParamTypeHint, bool)> =
                     Vec::new(); // (name, read visibility, set visibility, readonly, erased type, needs reification)
                 for method in methods {
+                    if method.name.starts_with('$')
+                        && !method.name.ends_with("::get")
+                        && !method.name.ends_with("::set")
+                    {
+                        let (property, hook) = method
+                            .name
+                            .trim_start_matches('$')
+                            .split_once("::")
+                            .expect("property hook method name retains its separator");
+                        return Err(self.goto_error(
+                            &format!(
+                                "Unknown hook \"{hook}\" for property {name}::${property}, expected \"get\" or \"set\""
+                            ),
+                            method.line,
+                        ));
+                    }
+                    if method.name.ends_with("::get") && !method.params.is_empty() {
+                        let property = method.name.trim_start_matches('$').trim_end_matches("::get");
+                        return Err(self.goto_error(
+                            &format!(
+                                "get hook of property {name}::${property} must not have a parameter list"
+                            ),
+                            method.line,
+                        ));
+                    }
+                    if method.name.ends_with("::set")
+                        && (method.params.len() != 1
+                            || method.params[0].name == "\0property_set_parameter_list")
+                    {
+                        let property = method.name.trim_start_matches('$').trim_end_matches("::set");
+                        return Err(self.goto_error(
+                            &format!(
+                                "set hook of property {name}::${property} must accept exactly one parameters"
+                            ),
+                            method.line,
+                        ));
+                    }
                     if method.name.ends_with("::set")
                         && let Some(parameter) = method.params.iter().find(|parameter| parameter.is_ref)
                     {
@@ -3339,6 +3376,32 @@ impl Compiler {
                         return Err(self.goto_error(
                             &format!(
                                 "Parameter ${} of set hook {}::${} must not be pass-by-reference",
+                                parameter.name, name, property
+                            ),
+                            parameter.line,
+                        ));
+                    }
+                    if method.name.ends_with("::set")
+                        && let Some(parameter) =
+                            method.params.iter().find(|parameter| parameter.default.is_some())
+                    {
+                        let property = method.name.trim_start_matches('$').trim_end_matches("::set");
+                        return Err(self.goto_error(
+                            &format!(
+                                "Parameter ${} of set hook {}::${} must not have a default value",
+                                parameter.name, name, property
+                            ),
+                            parameter.line,
+                        ));
+                    }
+                    if method.name.ends_with("::set")
+                        && let Some(parameter) =
+                            method.params.iter().find(|parameter| parameter.is_variadic)
+                    {
+                        let property = method.name.trim_start_matches('$').trim_end_matches("::set");
+                        return Err(self.goto_error(
+                            &format!(
+                                "Parameter ${} of set hook {}::${} must not be variadic",
                                 parameter.name, name, property
                             ),
                             parameter.line,

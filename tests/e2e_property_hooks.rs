@@ -469,3 +469,90 @@ var_dump($object->number);
         "Cannot assign string to reference held by property TypedIteration::$number of type int\nint(4)\n"
     );
 }
+
+#[test]
+fn property_hook_modifiers_are_rejected_at_declaration_time() {
+    for (modifier, expected) in [
+        (
+            "public",
+            "Cannot use the public modifier on a property hook",
+        ),
+        (
+            "protected",
+            "Cannot use the protected modifier on a property hook",
+        ),
+        (
+            "private",
+            "Cannot use the private modifier on a property hook",
+        ),
+        (
+            "static",
+            "Cannot use the static modifier on a property hook",
+        ),
+    ] {
+        let error = run_php_expect_error(&format!(
+            "<?php class InvalidModifier {{ public $value {{ {modifier} get {{}} }} }}"
+        ));
+        assert!(format!("{error:?}").contains(expected));
+    }
+}
+
+#[test]
+fn property_hook_names_must_be_known_and_unique() {
+    let unknown =
+        run_php_expect_error("<?php class UnknownHook { public $value { transform {} } }");
+    let unknown = format!("{unknown:?}");
+    assert!(unknown.contains("Unknown hook"));
+    assert!(unknown.contains("transform"));
+    assert!(unknown.contains("property UnknownHook::$value"));
+    assert!(unknown.contains("expected"));
+
+    let duplicate =
+        run_php_expect_error("<?php class DuplicateHook { public $value { set {} SET {} } }");
+    let duplicate = format!("{duplicate:?}");
+    assert!(duplicate.contains("Cannot redeclare property hook"));
+    assert!(duplicate.contains("set"));
+}
+
+#[test]
+fn property_hook_list_must_not_be_empty() {
+    let error = run_php_expect_error("<?php class EmptyHooks { public $value {} }");
+    assert!(format!("{error:?}").contains("Property hook list must not be empty"));
+}
+
+#[test]
+fn getter_parameter_lists_are_rejected_even_when_empty() {
+    let error = run_php_expect_error("<?php class GetterArgs { public $value { get() {} } }");
+    assert!(
+        format!("{error:?}")
+            .contains("get hook of property GetterArgs::$value must not have a parameter list")
+    );
+}
+
+#[test]
+fn setter_parameter_shape_is_validated_before_execution() {
+    for declaration in ["set() {}", "set($first, $second) {}"] {
+        let error = run_php_expect_error(&format!(
+            "<?php class SetterArity {{ public $value {{ {declaration} }} }}"
+        ));
+        assert!(format!("{error:?}").contains(
+            "set hook of property SetterArity::$value must accept exactly one parameters"
+        ));
+    }
+
+    let defaulted = run_php_expect_error(
+        "<?php class SetterDefault { public $value { set($incoming = 1) {} } }",
+    );
+    assert!(format!("{defaulted:?}").contains(
+        "Parameter $incoming of set hook SetterDefault::$value must not have a default value"
+    ));
+
+    let variadic = run_php_expect_error(
+        "<?php class SetterVariadic { public $value { set(...$incoming) {} } }",
+    );
+    assert!(
+        format!("{variadic:?}").contains(
+            "Parameter $incoming of set hook SetterVariadic::$value must not be variadic"
+        )
+    );
+}
