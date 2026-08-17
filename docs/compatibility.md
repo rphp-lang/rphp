@@ -8,14 +8,26 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `4faca51`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,435 pass, 2,773 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `a156cb3`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,439 pass, 2,769 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-46.755%; 87.154% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +620/-0. The first four gains are
+46.832%; 87.154% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +624/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Function-static storage in trait methods is now owned by each composed method:
+different consuming classes and aliases no longer share one trait declaration's
+cell. Only static-bearing trait methods are cloned during cold class
+registration; ordinary trait methods retain their shared compiled body. A
+function-local `static` declaration can also rebind a CV previously bound by
+`global` without copying the static value back over the global at return. This
+adds four exact PHP 8.5.6 passes without losing a prior pass or moving another
+failure stage. All five Cargo configurations, all-target/all-features and unsafe
+gates pass. The trait work is confined to class registration and the global
+collision adds work only to functions declaring both bindings, so no ordinary
+call-path performance benchmark applies.
 
 Static-variable initializers now execute lazily and at most once after a
 successful commit. An explicit in-progress cell preserves PHP 8.5's recursive
