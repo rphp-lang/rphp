@@ -8,14 +8,29 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `bd413d1`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,430 pass, 2,778 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `4faca51`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,435 pass, 2,773 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-46.659%; 87.174% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +615/-0. The first four gains are
+46.755%; 87.154% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +620/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Static-variable initializers now execute lazily and at most once after a
+successful commit. An explicit in-progress cell preserves PHP 8.5's recursive
+initializer behavior and leaves a throwing initializer retryable, while an
+initialized cell skips the complete expression on later calls. Duplicate
+static declarations and collisions with explicit closure captures fail during
+compilation at the declaration line; standalone anonymous-function expression
+statements reach that validation. This adds five exact passes without losing a
+prior pass: three `Zend/tests/static_variables` cases and both
+`tests/lang/static_basic_*` cases. Runtime reach falls by one case because the
+newly passing closure-capture collision now stops at its required compile
+stage. All five Cargo configurations and the all-target/all-features check
+pass. Static-bearing functions are already excluded from optimized call/JIT
+plans, and the added branch replaces repeated initializer execution rather
+than affecting ordinary calls, so no runtime benchmark applies.
 
 Closure debug metadata now exposes compile-time-known static-variable defaults
 before the first invocation and switches to the request-owned runtime cells
