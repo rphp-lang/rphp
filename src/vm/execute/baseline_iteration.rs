@@ -796,10 +796,10 @@ fn op_foreach_init<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    // SAFETY: ForeachInit's source operand and any promoted live alias use a
+    // SAFETY: ForeachInit's source operand and promoted array/object alias use a
     // compiler-validated frame slot borrowed only until this opcode finishes.
     // A CV array is promoted to an owned cell before either side mutates it.
-    let (init_ip, by_reference, live_array_alias) = unsafe {
+    let (init_ip, by_reference, live_source_alias) = unsafe {
         let init_ip =
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
         let by_reference = op_array
@@ -807,15 +807,32 @@ fn op_foreach_init<'a>(
             .get(init_ip + 1)
             .is_some_and(|next| next.opcode == OpCode::ForeachNextRef);
         let source = (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
-        let live_array_alias = (by_reference
+        let live_source_alias = (by_reference
             && opline.op1_type == OpType::Cv
-            && (&*source).dereferenced().as_array().is_some())
+            && matches!(
+                (&*source).dereferenced().value_type(),
+                ValueType::Array | ValueType::Object
+            ))
         .then(|| materialize_reference_alias(frame, (*frame).cv_mut(opline.op1 as u32)));
-        (init_ip, by_reference, live_array_alias)
+        (init_ip, by_reference, live_source_alias)
     };
-    let source = live_array_alias.as_ref().unwrap_or_else(|| unsafe {
+    let raw_source = live_source_alias.as_ref().unwrap_or_else(|| unsafe {
         &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
     });
+    let source = raw_source.dereferenced();
+    let lazy_source_owner = eg.lazy_object_state(source).map(|_| source.clone());
+    let source = lazy_source_owner.as_ref().unwrap_or(source);
+    let initialized_source = if eg.is_uninitialized_lazy_object(source) {
+        Some(crate::stdlib::reflection::initialize_lazy_object(
+            eg, source,
+        )?)
+    } else {
+        eg.lazy_proxy_instance(source)
+    };
+    if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+        return Ok(control);
+    }
+    let source = initialized_source.as_ref().unwrap_or(source);
     let mut resolved_iterable = None;
     let mut aggregate_identities = Vec::new();
     loop {
@@ -1019,8 +1036,11 @@ fn op_foreach_init<'a>(
             return Ok(ColdResult::Continue);
         }
         // Copy array to result TMP
-        let cloned = if live_array_alias.is_some() {
-            clone_foreach_value::<true>(iterable)
+        let cloned = if let Some(live_source_alias) = live_source_alias.as_ref()
+            && resolved_iterable.is_none()
+            && iterator_values.is_none()
+        {
+            clone_foreach_value::<true>(live_source_alias)
         } else {
             iterable.clone()
         };
@@ -1051,14 +1071,34 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         )?;
     }
 
-    let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    // SAFETY: ForeachNext's cursor is a compiler-allocated live TMP and is read
-    // and updated only during this synchronous iteration step.
-    let cursor_value = unsafe {
-        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+    // SAFETY: both operands are compiler-allocated slots in this live frame;
+    // neither shared borrow escapes this synchronous iteration opcode.
+    let (iteration_state, cursor) = unsafe {
+        let iteration_state =
+            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let cursor = (&*(*frame).get_op_ptr(
+            opline.op2 as u32,
+            opline.op2_type,
+            op_array,
+        ))
+            .as_long()
+            .unwrap_or(0);
+        (iteration_state, cursor)
     };
-    let cursor = cursor_value.as_long().unwrap_or(0);
-
+    let source = iteration_state.dereferenced();
+    let lazy_source_owner = eg.lazy_object_state(source).map(|_| source.clone());
+    let source = lazy_source_owner.as_ref().unwrap_or(source);
+    let initialized_source = if eg.is_uninitialized_lazy_object(source) {
+        Some(crate::stdlib::reflection::initialize_lazy_object(
+            eg, source,
+        )?)
+    } else {
+        eg.lazy_proxy_instance(source)
+    };
+    if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+        return Ok(control);
+    }
+    let arr_val = initialized_source.as_ref().unwrap_or(source);
     // Check for Generator object
     let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
         if obj.class_name.as_ref() == "Generator" {
@@ -1191,18 +1231,18 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 // owned-reference target and current array position remain
                 // request-owned throughout this synchronous opcode.
                 unsafe {
-                    if BY_REFERENCE_LOOP && arr_val.is_reference() {
+                    if BY_REFERENCE_LOOP && iteration_state.is_reference() {
                         // ForeachInit created an owned reference alias for this
                         // CV-backed source. Promoting the live entry before the
                         // body makes both mutations observe the same cell.
-                        let value = (&mut *arr_val.as_ref_ptr())
+                        let value = (&mut *iteration_state.as_ref_ptr())
                             .as_array_mut()
                             .and_then(|array| array.argument_unpack_reference_at(pos))
                             .expect("live foreach position must remain addressable");
                         bind_foreach_value_cv(eg, frame, val_cv, value)?;
                         if key_encoded > 0 {
                             let key_cv = key_encoded - 1;
-                            let key = arr_val
+                            let key = iteration_state
                                 .dereferenced()
                                 .as_array()
                                 .and_then(|array| array.get_at(pos))

@@ -4452,34 +4452,67 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         .dereferenced()
                 };
                 if obj_val.value_type() == ValueType::Object {
-                    let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
-                    let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
-                    let ic = &op_array.cache[ip];
-                    let property_flags = ic.property_flags();
-                    let dynamic_name_matches = if opline.op2_type == OpType::Const {
-                        true
-                    } else {
-                        // SAFETY: AssignObjProp's op2 is a compiler-emitted
-                        // operand in this live frame/op-array. The borrowed
-                        // string is consumed before either can advance.
-                        let requested = unsafe {
+                    // SAFETY: the object tag was checked above; `opline` and
+                    // both operands belong to this live op-array/frame. A
+                    // matching non-empty property cache proves its slot is
+                    // valid before the raw undef read.
+                    let (
+                        obj_class_id,
+                        ip,
+                        property_flags,
+                        dynamic_name_matches,
+                        cached_slot_is_undef,
+                    ) = unsafe {
+                        let obj_class_id = obj_val.object_class_id_unchecked();
+                        let ip = (opline as *const Instruction)
+                            .offset_from(op_array.instructions.as_ptr())
+                            as usize;
+                        let ic = &op_array.cache[ip];
+                        let property_flags = ic.property_flags();
+                        let dynamic_name_matches = if opline.op2_type == OpType::Const {
+                            true
+                        } else {
+                            let requested =
                             (&*(*frame).get_op_ptr(
                                 opline.op2 as u32,
                                 opline.op2_type,
                                 op_array,
                             ))
                                 .dereferenced()
-                                .as_str()
-                        };
-                        requested.is_some_and(|requested| {
-                            obj_val.as_object().is_some_and(|object| {
-                                object.property_name_at_slot(ic.property_slot()) == Some(requested)
+                            .as_str();
+                            requested.is_some_and(|requested| {
+                                obj_val.as_object().is_some_and(|object| {
+                                    object.property_name_at_slot(ic.property_slot())
+                                        == Some(requested)
+                                })
                             })
-                        })
+                        };
+                        let cache_candidate = property_flags != 0
+                            && ic.class_id == obj_class_id
+                            && obj_class_id != 0
+                            && dynamic_name_matches;
+                        let cached_slot_is_undef = cache_candidate
+                            && (&*obj_val
+                                .object_property_slot_unchecked(ic.property_slot()))
+                            .is_undef();
+                        (
+                            obj_class_id,
+                            ip,
+                            property_flags,
+                            dynamic_name_matches,
+                            cached_slot_is_undef,
+                        )
                     };
-                    let cache_matches = ic.class_id == obj_class_id
+                    let ic = &op_array.cache[ip];
+                    let mut cache_matches = ic.class_id == obj_class_id
                         && obj_class_id != 0
                         && dynamic_name_matches;
+                    // Lazy shells share the ordinary class/layout cache. Only
+                    // still-undef slots need the cold sidecar guard; ordinary
+                    // warmed writes retain the allocation-free cache hit.
+                    if cached_slot_is_undef && eg.lazy_object_state(obj_val).is_some() {
+                        cache_matches = false;
+                    }
                     // flags == 3: read-safe + write-safe declared property slot.
                     if property_flags == 3 && cache_matches {
                         // SAFETY: the compiler-emitted source belongs to the

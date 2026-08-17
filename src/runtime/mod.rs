@@ -244,6 +244,26 @@ pub(crate) struct PhpErrorRecord {
     pub(crate) line: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LazyObjectStrategy {
+    Ghost,
+    Proxy,
+}
+
+/// Sparse request-local state for Reflection lazy objects. Ordinary objects
+/// retain their existing compact layout; a weak owner also prevents a stale
+/// allocation identity from being reused while this entry exists.
+pub(crate) struct LazyObjectState {
+    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) strategy: LazyObjectStrategy,
+    pub(crate) initializer_value: crate::value::Value,
+    pub(crate) initializer: crate::stdlib::ResolvedCallback,
+    pub(crate) initializing: bool,
+    pub(crate) lazy_slots: Vec<usize>,
+    pub(crate) proxy_instance: Option<crate::value::Value>,
+    pub(crate) options: u8,
+}
+
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -287,6 +307,10 @@ pub struct ExecutorGlobals {
     pub(crate) clone_readonly_reinitialization: Vec<(usize, std::collections::HashSet<String>)>,
     /// Snapshot of initialized readonly properties eligible for clone-with.
     pub(crate) clone_with_readonly_updates: Vec<(usize, usize, std::collections::HashSet<String>)>,
+    /// Reflection lazy-object metadata exists only after an explicit lazy
+    /// construction/reset. The absent sidecar keeps ordinary object creation
+    /// and request setup allocation-free.
+    pub(crate) lazy_objects: Option<Box<HashMap<usize, LazyObjectState>>>,
     /// Legacy assert_options() settings are request-local and consulted only
     /// by assert(), keeping ordinary call frames and dispatch paths unchanged.
     pub(crate) assertion_state: AssertionState,
@@ -449,6 +473,184 @@ pub(crate) enum ClassAliasRegistrationError {
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
 
 impl ExecutorGlobals {
+    #[cold]
+    pub(crate) fn register_lazy_object(
+        &mut self,
+        object: &crate::value::Value,
+        strategy: LazyObjectStrategy,
+        initializer_value: crate::value::Value,
+        initializer: crate::stdlib::ResolvedCallback,
+        options: u8,
+    ) -> bool {
+        let Some(identity) = object.object_identity() else {
+            return false;
+        };
+        let Some(owner) = object.object_weak() else {
+            return false;
+        };
+        let lazy_slots: Vec<usize> = object
+            .as_object()
+            .map(|object| {
+                (0..object.property_values.len())
+                    .filter(|slot| {
+                        self.instance_property_definition(object.class_id, *slot)
+                            .is_none_or(|definition| !definition.is_virtual_hook_property())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if lazy_slots.is_empty() {
+            return false;
+        }
+        self.lazy_objects
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .insert(
+                identity,
+                LazyObjectState {
+                    owner,
+                    strategy,
+                    initializer_value,
+                    initializer,
+                    initializing: false,
+                    lazy_slots,
+                    proxy_instance: None,
+                    options,
+                },
+            );
+        true
+    }
+
+    #[inline]
+    pub(crate) fn lazy_object_state(
+        &self,
+        object: &crate::value::Value,
+    ) -> Option<&LazyObjectState> {
+        let identity = object.object_identity()?;
+        let state = self.lazy_objects.as_ref()?.get(&identity)?;
+        (state.owner.strong_count() != 0).then_some(state)
+    }
+
+    #[inline]
+    pub(crate) fn lazy_object_state_mut(
+        &mut self,
+        object: &crate::value::Value,
+    ) -> Option<&mut LazyObjectState> {
+        let identity = object.object_identity()?;
+        let state = self.lazy_objects.as_mut()?.get_mut(&identity)?;
+        (state.owner.strong_count() != 0).then_some(state)
+    }
+
+    #[cold]
+    pub(crate) fn take_lazy_object_state(
+        &mut self,
+        object: &crate::value::Value,
+    ) -> Option<LazyObjectState> {
+        let identity = object.object_identity()?;
+        let objects = self.lazy_objects.as_mut()?;
+        let state = objects.remove(&identity);
+        if objects.is_empty() {
+            self.lazy_objects = None;
+        }
+        state
+    }
+
+    #[inline]
+    pub(crate) fn is_uninitialized_lazy_object(&self, object: &crate::value::Value) -> bool {
+        self.lazy_object_state(object)
+            .is_some_and(|state| state.proxy_instance.is_none())
+    }
+
+    #[inline]
+    pub(crate) fn lazy_property_requires_initialization(
+        &self,
+        object: &crate::value::Value,
+        key: &str,
+    ) -> bool {
+        let Some(state) = self.lazy_object_state(object) else {
+            return false;
+        };
+        if state.initializing || state.proxy_instance.is_some() {
+            return false;
+        }
+        let slot = object
+            .as_object()
+            .and_then(|object| object.property_slot(key));
+        slot.map_or(true, |slot| state.lazy_slots.contains(&slot))
+    }
+
+    #[inline]
+    pub(crate) fn lazy_proxy_instance(
+        &self,
+        object: &crate::value::Value,
+    ) -> Option<crate::value::Value> {
+        self.lazy_object_state(object)?.proxy_instance.clone()
+    }
+
+    #[inline]
+    pub(crate) fn mark_initializing_lazy_property_written(
+        &mut self,
+        object: &crate::value::Value,
+        key: &str,
+    ) {
+        let Some(slot) = object
+            .as_object()
+            .and_then(|object| object.property_slot(key))
+        else {
+            return;
+        };
+        if let Some(state) = self.lazy_object_state_mut(object)
+            && state.initializing
+        {
+            state.lazy_slots.retain(|candidate| *candidate != slot);
+        }
+    }
+
+    #[cold]
+    pub(crate) fn clone_initialized_lazy_proxy(
+        &mut self,
+        source: &crate::value::Value,
+        clone: &crate::value::Value,
+    ) {
+        let Some(state) = self.lazy_object_state(source) else {
+            return;
+        };
+        if state.strategy != LazyObjectStrategy::Proxy {
+            return;
+        }
+        let Some(instance) = state.proxy_instance.as_ref() else {
+            return;
+        };
+        let Some(cloned_instance) = instance
+            .as_object()
+            .map(|instance| crate::value::Value::object(instance.clone_for_php()))
+        else {
+            return;
+        };
+        let initializer = state.initializer.clone();
+        let options = state.options;
+        let Some(identity) = clone.object_identity() else {
+            return;
+        };
+        let Some(owner) = clone.object_weak() else {
+            return;
+        };
+        self.lazy_objects
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .insert(
+                identity,
+                LazyObjectState {
+                    owner,
+                    strategy: LazyObjectStrategy::Proxy,
+                    initializer_value: crate::value::Value::null(),
+                    initializer,
+                    initializing: false,
+                    lazy_slots: Vec::new(),
+                    proxy_instance: Some(cloned_instance),
+                    options,
+                },
+            );
+    }
+
     pub fn emit_compile_deprecations(
         &mut self,
         diagnostics: &[crate::compiler::compile::CompileDeprecation],
@@ -566,6 +768,7 @@ impl ExecutorGlobals {
             finally_exceptions: HashMap::new(),
             clone_readonly_reinitialization: Vec::new(),
             clone_with_readonly_updates: Vec::new(),
+            lazy_objects: None,
             assertion_state: AssertionState::default(),
             error_reporting: 32767,
             error_suppression_frames: Vec::new(),
@@ -655,6 +858,7 @@ impl ExecutorGlobals {
             finally_exceptions: HashMap::new(),
             clone_readonly_reinitialization: Vec::new(),
             clone_with_readonly_updates: Vec::new(),
+            lazy_objects: None,
             assertion_state: AssertionState::default(),
             error_reporting: 32767,
             error_suppression_frames: Vec::new(),

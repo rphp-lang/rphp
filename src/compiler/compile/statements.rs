@@ -2623,7 +2623,7 @@ impl Compiler {
                     None => 0,
                 };
                 next.extended_value = key_encoded | (val_cv as u32);
-                self.instructions.push(next);
+                self.push_instruction_at_line(next, *line);
                 self.definitely_defined_cvs.insert(val_cv);
                 if let Some(key_cv) = key_cv {
                     self.definitely_defined_cvs.insert(key_cv);

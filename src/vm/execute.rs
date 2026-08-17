@@ -428,7 +428,9 @@ fn write_fetch_dim_result(frame: *mut ExecuteData, result_ptr: *mut Value, value
 /// their visibility-mangled keys, dynamic properties keep insertion order and
 /// uninitialized typed slots remain absent from the result.
 #[cold]
-fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value {
+pub(crate) fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value {
+    let proxy_instance = eg.lazy_proxy_instance(value);
+    let value = proxy_instance.as_ref().unwrap_or(value);
     let object = value
         .as_object()
         .expect("object-to-array cast requires an object value");

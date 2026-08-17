@@ -38,7 +38,7 @@ use crate::vm::opcode::OpCode;
 pub(crate) mod include_path;
 mod json_decode;
 mod parse_ini;
-mod reflection;
+pub(crate) mod reflection;
 mod regex_callback;
 mod serialization;
 mod tokenizer;
@@ -768,6 +768,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("get_class_vars", fn_get_class_vars, 1, 1, "class");
     reg!("get_object_vars", fn_get_object_vars, 1, 1, "object");
     reg!(
+        "get_mangled_object_vars",
+        fn_get_mangled_object_vars,
+        1,
+        1,
+        "object"
+    );
+    reg!(
         "get_parent_class",
         fn_get_parent_class,
         1,
@@ -951,8 +958,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Output ---
     reg_var!("var_dump", fn_var_dump, 1, "value");
+    reg_var!("debug_zval_dump", fn_debug_zval_dump, 1, "value");
     reg!("print_r", fn_print_r, 2, 1, "value", "return");
     reg!("var_export", fn_var_export, 2, 1, "value", "return");
+    reg!("spl_object_id", fn_spl_object_id, 1, 1, "object");
 
     // --- Constants ---
     reg!("define", fn_define, 2, 2, "constant_name", "value");
@@ -4648,8 +4657,22 @@ fn fn_range(
 fn fn_array_splice(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let replacement = arg_opt!(ed, 3).map(|value| {
+        if let Some(array) = value.as_array() {
+            array.clone()
+        } else if value.value_type() == ValueType::Object {
+            crate::vm::execute::cast_object_to_array(value, eg)
+                .as_array()
+                .expect("object replacement projection must be an array")
+                .clone()
+        } else {
+            let mut replacement = PhpArray::new();
+            replacement.push(value.clone());
+            replacement
+        }
+    });
     let ptr = arg_mut!(ed, 0);
     let offset = arg_long!(ed, 1);
     let arr = unsafe { &mut *ptr };
@@ -4664,24 +4687,25 @@ fn fn_array_splice(
             Some(v) => v.to_long_val().max(0) as usize,
             None => a.len() - start,
         };
-        let replacement = arg_opt!(ed, 3).and_then(|v| v.as_array());
-
         let entries: Vec<(ArrayKey, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
         let mut removed = PhpArray::new();
         let mut new = PhpArray::new();
 
-        for (i, (_, v)) in entries.iter().enumerate() {
-            if i < start || i >= start + del_count {
-                new.push(v.clone());
-            } else {
-                removed.push(v.clone());
-                if i == start {
-                    if let Some(repl) = replacement {
-                        for rv in repl.values() {
-                            new.push(rv.clone());
-                        }
-                    }
+        for i in 0..=entries.len() {
+            if i == start
+                && let Some(replacement) = replacement.as_ref()
+            {
+                for value in replacement.values() {
+                    new.push(value.clone());
                 }
+            }
+            let Some((_, value)) = entries.get(i) else {
+                continue;
+            };
+            if i >= start && i < start + del_count {
+                removed.push(value.clone());
+            } else {
+                new.push(value.clone());
             }
         }
         *arr = Value::array(new);
@@ -7067,7 +7091,17 @@ fn fn_get_object_vars(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let target = arg!(ed, 0);
+    let target_owner = arg!(ed, 0).clone();
+    let target = if eg.is_uninitialized_lazy_object(&target_owner) {
+        reflection::initialize_lazy_object(eg, &target_owner)?
+    } else {
+        eg.lazy_proxy_instance(&target_owner)
+            .unwrap_or(target_owner)
+    };
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    let target = &target;
     if target.value_type() == ValueType::Closure {
         ret!(rv, Value::array(PhpArray::new()));
     }
@@ -7106,6 +7140,31 @@ fn fn_get_object_vars(
         }
     });
     ret!(rv, Value::array(result));
+}
+
+fn fn_get_mangled_object_vars(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let target_owner = arg!(ed, 0).clone();
+    let target = eg
+        .lazy_proxy_instance(&target_owner)
+        .unwrap_or(target_owner);
+    if target.value_type() == ValueType::Closure {
+        ret!(rv, Value::array(PhpArray::new()));
+    }
+    if target.value_type() != ValueType::Object {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "get_mangled_object_vars(): Argument #1 ($object) must be of type object, {} given",
+                target.type_name()
+            ),
+        ));
+        return Ok(());
+    }
+    ret!(rv, crate::vm::execute::cast_object_to_array(&target, eg));
 }
 
 fn invalid_class_methods_argument(eg: &mut ExecutorGlobals, value: &Value) {
@@ -7667,6 +7726,14 @@ fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 // Output functions
 // ============================================================================
 
+fn initialize_lazy_output_value(eg: &mut ExecutorGlobals, value: Value) -> Result<Value, VmError> {
+    if eg.is_uninitialized_lazy_object(&value) {
+        reflection::initialize_lazy_object(eg, &value)
+    } else {
+        Ok(eg.lazy_proxy_instance(&value).unwrap_or(value))
+    }
+}
+
 fn fn_var_dump(
     ed: *mut ExecuteData,
     _rv: *mut Value,
@@ -7677,6 +7744,40 @@ fn fn_var_dump(
     if let Some(arguments) = arg!(ed, 1).as_array() {
         for value in arguments.values() {
             let output = var_dump_value(value, 0, eg);
+            eg.write_output(output.as_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn debug_zval_dump_value(value: &Value, eg: &ExecutorGlobals) -> String {
+    let dump = var_dump_value(value, 0, eg);
+    let mut output = String::with_capacity(dump.len() + 32);
+    for line in dump.split_inclusive('\n') {
+        let value_line = line.trim_start();
+        let object_line = value_line.starts_with("object(")
+            || value_line.starts_with("lazy ghost object(")
+            || value_line.starts_with("lazy proxy object(");
+        if object_line && line.ends_with(" {\n") {
+            output.push_str(&line[..line.len() - 3]);
+            output.push_str(" refcount(2){\n");
+        } else {
+            output.push_str(line);
+        }
+    }
+    output
+}
+
+fn fn_debug_zval_dump(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let first = debug_zval_dump_value(arg!(ed, 0), eg);
+    eg.write_output(first.as_bytes());
+    if let Some(arguments) = arg!(ed, 1).as_array() {
+        for value in arguments.values() {
+            let output = debug_zval_dump_value(value, eg);
             eg.write_output(output.as_bytes());
         }
     }
@@ -7702,18 +7803,40 @@ fn fn_var_export(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
+    let v = initialize_lazy_output_value(eg, arg!(ed, 0).clone())?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     let return_str = match arg_opt!(ed, 1) {
         Some(v) => v.is_truthy(),
         None => false,
     };
-    let output = var_export_value(v, eg);
+    let output = var_export_value(&v, eg);
     if return_str {
         ret!(rv, Value::string(output));
     } else {
         eg.write_output(output.as_bytes());
         ret!(rv, Value::null());
     }
+}
+
+fn fn_spl_object_id(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 0).dereferenced();
+    let Some(handle) = value.object_handle() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "spl_object_id(): Argument #1 ($object) must be of type object, {} given",
+                value.type_name()
+            ),
+        ));
+        return Ok(());
+    };
+    ret!(rv, Value::long(i64::from(handle)));
 }
 
 // ============================================================================
@@ -7797,10 +7920,13 @@ fn fn_constant(
 fn fn_json_encode(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    ret!(rv, Value::string(json_encode_value(v)));
+    let value = initialize_lazy_output_value(eg, arg!(ed, 0).clone())?;
+    if eg.exception.is_some() {
+        ret!(rv, Value::bool(false));
+    }
+    ret!(rv, Value::string(json_encode_value(&value)));
 }
 
 fn fn_json_decode(
@@ -9067,7 +9193,29 @@ fn var_dump_value_inner(
                 return format!("{}*RECURSION*\n", prefix);
             }
             let object = val.as_object().unwrap();
-            let output = if let Some(generator) = object.generator.as_ref() {
+            let lazy_state = eg.lazy_object_state(val);
+            let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
+            let output = if let Some(instance) = initialized_proxy {
+                let mut out = format!(
+                    "{}lazy proxy object({})#{} (1) {{\n{}  [\"instance\"]=>\n",
+                    prefix,
+                    object.class_name,
+                    val.object_handle()
+                        .expect("live lazy proxy must retain its request-local handle"),
+                    prefix,
+                );
+                drop(object);
+                out.push_str(&var_dump_value_inner(
+                    &instance,
+                    indent + 1,
+                    eg,
+                    true,
+                    visited_arrays,
+                    visited_objects,
+                ));
+                out.push_str(&format!("{}}}\n", prefix));
+                out
+            } else if let Some(generator) = object.generator.as_ref() {
                 let generator = generator.borrow();
                 // SAFETY: every live Generator is created from a retained user
                 // function allocation, and its pointer remains stable for the request.
@@ -9137,9 +9285,14 @@ fn var_dump_value_inner(
                     .class_name
                     .strip_prefix("class@anonymous#")
                     .map_or(object.class_name.as_ref(), |_| "class@anonymous");
+                let lazy_prefix = lazy_state.map_or("", |state| match state.strategy {
+                    crate::runtime::LazyObjectStrategy::Ghost => "lazy ghost ",
+                    crate::runtime::LazyObjectStrategy::Proxy => "lazy proxy ",
+                });
                 let mut out = format!(
-                    "{}object({})#{} ({}) {{\n",
+                    "{}{}object({})#{} ({}) {{\n",
                     prefix,
+                    lazy_prefix,
                     display_class,
                     val.object_handle()
                         .expect("live object must retain its request-local handle"),
@@ -9502,7 +9655,29 @@ fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
             out.push(')');
             out
         }
-        ValueType::Object => enum_case_export(val, eg).unwrap_or_else(|| "NULL".to_string()),
+        ValueType::Object => enum_case_export(val, eg).unwrap_or_else(|| {
+            let object = val
+                .as_object()
+                .expect("object export requires a live object value");
+            let class_name = object.class_name.to_string();
+            drop(object);
+            let properties = crate::vm::execute::cast_object_to_array(val, eg);
+            let properties = properties
+                .as_array()
+                .expect("object-to-array projection must return an array");
+            let mut out = format!("\\{class_name}::__set_state(array(\n");
+            for (key, value) in properties.iter() {
+                let key = match key {
+                    ArrayKey::Int(key) => key.to_string(),
+                    ArrayKey::String(key) => {
+                        format!("'{}'", key.replace('\\', "\\\\").replace('\'', "\\'"))
+                    }
+                };
+                out.push_str(&format!("   {key} => {},\n", var_export_value(value, eg)));
+            }
+            out.push_str("))");
+            out
+        }),
         _ => "NULL".to_string(),
     }
 }
@@ -13418,7 +13593,152 @@ fn fn_array_walk(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 1).clone();
+    let source_owner = arg!(ed, 0).dereferenced().clone();
     let arr_ptr: *mut Value = arg_mut!(ed, 0);
+    let initialized_object = if eg.is_uninitialized_lazy_object(&source_owner) {
+        Some(reflection::initialize_lazy_object(eg, &source_owner)?)
+    } else {
+        eg.lazy_proxy_instance(&source_owner)
+    };
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    let object_target = initialized_object.as_ref().unwrap_or(&source_owner);
+    if let Some(object) = object_target.as_object() {
+        let class_id = object.class_id;
+        let class_name = object.class_name.to_string();
+        let declared = eg
+            .visible_instance_property_slots(class_id, None)
+            .into_iter()
+            .filter_map(|slot| {
+                eg.instance_property_definition(class_id, slot)
+                    .filter(|definition| !definition.is_virtual_hook_property())
+                    .map(|definition| (slot, definition.name.clone()))
+            })
+            .collect::<Vec<_>>();
+        let dynamic_names = {
+            let mut names = Vec::new();
+            object.for_each_dynamic_property(|name, value| {
+                if !value.is_undef()
+                    && !declared
+                        .iter()
+                        .any(|(_, declared_name)| declared_name == name)
+                {
+                    names.push(name.to_string());
+                }
+            });
+            names
+        };
+        drop(object);
+
+        let resolved = match resolve_callback_at_callsite(&callback, eg, ed) {
+            Some(resolved) => resolved,
+            None => {
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    "array_walk(): Argument #2 ($callback) must be a valid callback",
+                ));
+                return Ok(());
+            }
+        };
+        let callback_arg0_by_ref = resolved.signature().is_param_by_ref(0);
+        for (slot, name) in declared {
+            let Some(definition) = eg.instance_property_definition(class_id, slot) else {
+                continue;
+            };
+            let definition = definition.clone();
+            let argument = if callback_arg0_by_ref {
+                let mut object = object_target
+                    .as_object_mut()
+                    .expect("array_walk object target must remain live");
+                let property = object
+                    .get_property_slot_mut(slot)
+                    .expect("visible array_walk property must remain addressable");
+                if property.is_undef() {
+                    continue;
+                }
+                let binding = if property.is_owned_reference() {
+                    property.clone_owned_reference_alias()
+                } else {
+                    let current = std::mem::replace(property, Value::undef());
+                    let binding = Value::owned_reference(current.dereferenced().clone());
+                    *property = binding.clone_owned_reference_alias();
+                    binding
+                };
+                let owner = object.instance_property_reference_owner(slot);
+                drop(object);
+                if definition.is_typed() {
+                    binding.add_reference_property_constraint(
+                        crate::value::ReferencePropertyConstraint {
+                            owner,
+                            declaring_class: definition.declaring_class.clone(),
+                            property: definition.name.clone(),
+                            type_scope: definition.type_scope.clone(),
+                            called_class: class_name.clone(),
+                            type_hint: definition.type_hint.clone(),
+                        },
+                    );
+                }
+                binding
+            } else {
+                let Some(value) = object_target
+                    .as_object()
+                    .and_then(|object| object.get_property_slot(slot).cloned())
+                else {
+                    continue;
+                };
+                if value.is_undef() {
+                    continue;
+                }
+                value
+            };
+            let key = Value::string(name);
+            let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
+            call_resolved_owned_iter(
+                eg,
+                &resolved,
+                num_args,
+                resolved
+                    .prepend_args
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(argument))
+                    .chain(std::iter::once(key))
+                    .chain(resolved.use_vars.iter().cloned()),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        for name in dynamic_names {
+            let argument = object_target
+                .as_object()
+                .and_then(|object| {
+                    object
+                        .get_dynamic_property_with_position(&name)
+                        .map(|(value, _)| value.clone())
+                })
+                .unwrap_or_else(Value::null);
+            let key = Value::string(name);
+            let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
+            call_resolved_owned_iter(
+                eg,
+                &resolved,
+                num_args,
+                resolved
+                    .prepend_args
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(argument))
+                    .chain(std::iter::once(key))
+                    .chain(resolved.use_vars.iter().cloned()),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        ret!(rv, Value::bool(true));
+    }
 
     let arr = match unsafe { &*arr_ptr }.as_array() {
         Some(arr) => arr,

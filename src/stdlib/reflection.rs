@@ -18,7 +18,7 @@ use functions::reflection_function_target;
 use crate::compiler::compile::PropertyDefinition;
 use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities};
 use crate::parser::Visibility;
-use crate::runtime::ExecutorGlobals;
+use crate::runtime::{ExecutorGlobals, LazyObjectStrategy};
 use crate::value::{PhpArray, PhpClosure, PhpObject, Value, ValueType, make_error_value};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
@@ -1749,10 +1749,98 @@ fn class_get_properties(
     return_value(rv, Value::array(properties))
 }
 
+fn class_get_property(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        reflection_exception(eg, "ReflectionClass has no resolved class");
+        return Ok(());
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        reflection_exception(eg, format!("Class \"{owner}\" does not exist"));
+        return Ok(());
+    }
+    let property_name = argument_string(ed, 1);
+    let property = eg.find_class(&owner).and_then(|class| {
+        class
+            .properties
+            .iter()
+            .find(|property| property.name == property_name)
+            .map(|property| (property, false))
+            .or_else(|| {
+                class
+                    .static_properties
+                    .iter()
+                    .find(|property| property.name == property_name)
+                    .map(|property| (property, true))
+            })
+    });
+    let Some((property, is_static)) = property else {
+        reflection_exception(
+            eg,
+            format!("Property {owner}::${property_name} does not exist"),
+        );
+        return Ok(());
+    };
+    return_value(rv, reflected_property_value(property, is_static))
+}
+
 fn class_new_lazy_ghost(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_new_lazy_object(ed, rv, eg, LazyObjectStrategy::Ghost)
+}
+
+const LAZY_SKIP_INITIALIZATION_ON_SERIALIZE: i64 = 8;
+const LAZY_SKIP_DESTRUCTOR: i64 = 16;
+
+fn lazy_object_options(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    method: &str,
+    index: u32,
+    allow_skip_destructor: bool,
+) -> Option<u8> {
+    let options = with_argument(ed, index, |value| {
+        if value.is_undef() {
+            0
+        } else {
+            value.as_long().unwrap_or(0)
+        }
+    });
+    let allowed = LAZY_SKIP_INITIALIZATION_ON_SERIALIZE | LAZY_SKIP_DESTRUCTOR;
+    if options < 0 || options & !allowed != 0 {
+        reflection_exception(
+            eg,
+            format!(
+                "ReflectionClass::{method}(): Argument #{index} ($options) contains invalid flags"
+            ),
+        );
+        return None;
+    }
+    if !allow_skip_destructor && options & LAZY_SKIP_DESTRUCTOR != 0 {
+        reflection_exception(
+            eg,
+            format!(
+                "ReflectionClass::{method}(): Argument #{index} ($options) does not accept ReflectionClass::SKIP_DESTRUCTOR"
+            ),
+        );
+        return None;
+    }
+    Some(options as u8)
+}
+
+fn class_new_lazy_object(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    strategy: LazyObjectStrategy,
 ) -> Result<(), VmError> {
     let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
         return Err(VmError::Fatal(
@@ -1767,26 +1855,354 @@ fn class_new_lazy_ghost(
     let class = eg
         .find_class(&owner)
         .ok_or_else(|| VmError::Fatal(format!("Class {owner} does not exist")))?;
-    if class.is_interface || class.is_abstract || class.is_enum {
+    if class.is_interface || class.is_trait || class.is_abstract || class.is_enum {
         return Err(VmError::Fatal(format!(
-            "Class {owner} cannot be instantiated as a lazy ghost"
+            "Class {owner} cannot be instantiated as a lazy object"
         )));
     }
-    let object = if class.class_id == 0 {
-        PhpObject::dynamic(owner, 0, HashMap::new())
-    } else {
-        PhpObject::with_layout(
-            class.class_id,
-            class.property_layout.clone(),
-            class.property_defaults.as_ref().to_vec(),
-        )
+    if eg.class_is_internal(&owner) {
+        reflection_exception(
+            eg,
+            format!("Class {owner} is an internal class and cannot be lazy"),
+        );
+        return Ok(());
+    }
+    let class_id = class.class_id;
+    let property_layout = class.property_layout.clone();
+    let property_count = class.property_defaults.len();
+    let method = match strategy {
+        LazyObjectStrategy::Ghost => "newLazyGhost",
+        LazyObjectStrategy::Proxy => "newLazyProxy",
     };
-    let ghost = Value::object(object);
+    let Some(options) = lazy_object_options(ed, eg, method, 2, false) else {
+        return Ok(());
+    };
+    let object = PhpObject::with_layout(
+        class_id,
+        property_layout,
+        (0..property_count).map(|_| Value::undef()).collect(),
+    );
+    let lazy_object = Value::object(object);
     let initializer = with_argument(ed, 1, Clone::clone);
     let resolved = crate::stdlib::resolve_callback_at_callsite(&initializer, eg, ed)
-        .ok_or_else(|| VmError::Fatal("Lazy ghost initializer must be callable".into()))?;
-    crate::stdlib::call_resolved_with_values(eg, &resolved, std::slice::from_ref(&ghost))?;
-    return_value(rv, ghost)
+        .ok_or_else(|| VmError::Fatal("Lazy object initializer must be callable".into()))?;
+    eg.register_lazy_object(&lazy_object, strategy, initializer, resolved, options);
+    return_value(rv, lazy_object)
+}
+
+fn class_new_lazy_proxy(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_new_lazy_object(ed, rv, eg, LazyObjectStrategy::Proxy)
+}
+
+fn restore_lazy_property_defaults(eg: &ExecutorGlobals, object: &Value, lazy_slots: &[usize]) {
+    let Some((class_name, property_count)) = object
+        .as_object()
+        .map(|object| (object.class_name.clone(), object.property_values.len()))
+    else {
+        return;
+    };
+    let Some(defaults) = eg
+        .find_class(class_name.as_ref())
+        .map(|class| class.property_defaults.clone())
+    else {
+        return;
+    };
+    debug_assert_eq!(defaults.len(), property_count);
+    let Some(mut object) = object.as_object_mut() else {
+        return;
+    };
+    for &slot in lazy_slots {
+        if object
+            .property_values
+            .get(slot)
+            .is_some_and(Value::is_undef)
+        {
+            object.property_values[slot] = defaults[slot].clone();
+        }
+    }
+}
+
+/// Initialize one Reflection lazy object at the property-access boundary.
+/// Ghosts return their original identity; proxies return their real instance.
+pub(crate) fn initialize_lazy_object(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+) -> Result<Value, VmError> {
+    if let Some(state) = eg.lazy_object_state(object) {
+        if let Some(instance) = state.proxy_instance.as_ref() {
+            return Ok(instance.clone());
+        }
+        if state.initializing {
+            return Ok(object.clone());
+        }
+    } else {
+        return Ok(object.clone());
+    }
+    let property_snapshot = object.as_object().map(|object| {
+        (
+            object.property_values.clone(),
+            object.dynamic_properties.clone(),
+        )
+    });
+    let Some((strategy, initializer, lazy_slots_before)) =
+        eg.lazy_object_state_mut(object).map(|state| {
+            state.initializing = true;
+            (
+                state.strategy,
+                state.initializer.clone(),
+                state.lazy_slots.clone(),
+            )
+        })
+    else {
+        return Ok(object.clone());
+    };
+
+    let result = match strategy {
+        LazyObjectStrategy::Ghost => crate::stdlib::call_resolved_with_values(
+            eg,
+            &initializer,
+            std::slice::from_ref(object),
+        )?,
+        LazyObjectStrategy::Proxy => crate::stdlib::call_resolved_with_values(
+            eg,
+            &initializer,
+            std::slice::from_ref(object),
+        )?,
+    };
+    if eg.exception.is_some() {
+        if strategy == LazyObjectStrategy::Ghost
+            && let Some((properties, dynamic)) = property_snapshot
+        {
+            if let Some(mut object) = object.as_object_mut() {
+                object.property_values = properties;
+                object.dynamic_properties = dynamic;
+            }
+        }
+        if let Some(state) = eg.lazy_object_state_mut(object) {
+            state.initializing = false;
+            state.lazy_slots = lazy_slots_before.clone();
+        }
+        return Ok(object.clone());
+    }
+
+    match strategy {
+        LazyObjectStrategy::Ghost => {
+            if result.value_type() != ValueType::Null {
+                if strategy == LazyObjectStrategy::Ghost
+                    && let Some((properties, dynamic)) = property_snapshot
+                {
+                    if let Some(mut object) = object.as_object_mut() {
+                        object.property_values = properties;
+                        object.dynamic_properties = dynamic;
+                    }
+                }
+                if let Some(state) = eg.lazy_object_state_mut(object) {
+                    state.initializing = false;
+                    state.lazy_slots = lazy_slots_before.clone();
+                }
+                eg.exception = Some(make_error_value(
+                    "TypeError",
+                    "Lazy object initializer must return NULL or no value",
+                ));
+                return Ok(object.clone());
+            }
+            if let Some(state) = eg.take_lazy_object_state(object) {
+                restore_lazy_property_defaults(eg, object, &state.lazy_slots);
+            }
+            Ok(object.clone())
+        }
+        LazyObjectStrategy::Proxy => {
+            let valid_instance = result.as_object().is_some_and(|instance| {
+                object
+                    .as_object()
+                    .is_some_and(|lazy| eg.class_is_a(&lazy.class_name, &instance.class_name))
+            });
+            if !valid_instance {
+                if strategy == LazyObjectStrategy::Ghost
+                    && let Some((properties, dynamic)) = property_snapshot
+                {
+                    if let Some(mut object) = object.as_object_mut() {
+                        object.property_values = properties;
+                        object.dynamic_properties = dynamic;
+                    }
+                }
+                if let Some(state) = eg.lazy_object_state_mut(object) {
+                    state.initializing = false;
+                    state.lazy_slots = lazy_slots_before.clone();
+                }
+                eg.exception = Some(make_error_value(
+                    "TypeError",
+                    "Lazy proxy factory must return an instance of the reflected class",
+                ));
+                return Ok(object.clone());
+            }
+            if let Some(state) = eg.lazy_object_state_mut(object) {
+                state.initializing = false;
+                state.initializer_value = Value::null();
+                state.lazy_slots.clear();
+                state.proxy_instance = Some(result.clone());
+            }
+            Ok(result)
+        }
+    }
+}
+
+fn reflected_class_object_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    method: &str,
+) -> Option<Value> {
+    let (_, owner) = generic_target(ed)?;
+    let object = with_argument(ed, 1, Clone::clone);
+    let given = object
+        .as_object()
+        .map(|object| object.class_name.to_string())?;
+    if !eg.class_is_a(&given, &owner) {
+        eg.exception = Some(make_error_value(
+            "TypeError",
+            &format!(
+                "ReflectionClass::{method}(): Argument #1 ($object) must be of type {owner}, {given} given"
+            ),
+        ));
+        return None;
+    }
+    Some(object)
+}
+
+fn class_initialize_lazy_object(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(object) = reflected_class_object_argument(ed, eg, "initializeLazyObject") else {
+        return Ok(());
+    };
+    let initialized = initialize_lazy_object(eg, &object)?;
+    return_value(rv, initialized)
+}
+
+fn class_is_uninitialized_lazy_object(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(object) = reflected_class_object_argument(ed, eg, "isUninitializedLazyObject") else {
+        return Ok(());
+    };
+    return_value(rv, Value::bool(eg.is_uninitialized_lazy_object(&object)))
+}
+
+fn class_mark_lazy_object_as_initialized(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(object) = reflected_class_object_argument(ed, eg, "markLazyObjectAsInitialized")
+    else {
+        return Ok(());
+    };
+    if let Some(state) = eg.take_lazy_object_state(&object) {
+        restore_lazy_property_defaults(eg, &object, &state.lazy_slots);
+    }
+    return_value(rv, object)
+}
+
+fn class_get_lazy_initializer(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(object) = reflected_class_object_argument(ed, eg, "getLazyInitializer") else {
+        return Ok(());
+    };
+    let initializer = eg
+        .lazy_object_state(&object)
+        .filter(|state| state.proxy_instance.is_none())
+        .map(|state| state.initializer_value.clone())
+        .unwrap_or_else(Value::null);
+    return_value(rv, initializer)
+}
+
+fn class_reset_as_lazy_object(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    strategy: LazyObjectStrategy,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        reflection_exception(eg, "ReflectionClass has no resolved class");
+        return Ok(());
+    };
+    let method = match strategy {
+        LazyObjectStrategy::Ghost => "resetAsLazyGhost",
+        LazyObjectStrategy::Proxy => "resetAsLazyProxy",
+    };
+    let object = with_argument(ed, 1, Clone::clone);
+    let Some(object_class) = object
+        .as_object()
+        .map(|object| object.class_name.to_string())
+    else {
+        eg.exception = Some(make_error_value(
+            "TypeError",
+            "Lazy object reset expects an object",
+        ));
+        return Ok(());
+    };
+    if !eg.class_is_a(&object_class, &owner) {
+        eg.exception = Some(make_error_value(
+            "TypeError",
+            &format!(
+                "ReflectionClass::{method}(): Argument #1 ($object) must be of type {owner}, {object_class} given"
+            ),
+        ));
+        return Ok(());
+    }
+    if eg.is_uninitialized_lazy_object(&object) {
+        reflection_exception(eg, "Object is already lazy");
+        return Ok(());
+    }
+    let Some(options) = lazy_object_options(ed, eg, method, 3, true) else {
+        return Ok(());
+    };
+    let initializer = with_argument(ed, 2, Clone::clone);
+    let resolved = crate::stdlib::resolve_callback_at_callsite(&initializer, eg, ed)
+        .ok_or_else(|| VmError::Fatal("Lazy object initializer must be callable".into()))?;
+
+    if options as i64 & LAZY_SKIP_DESTRUCTOR == 0 {
+        let _ = crate::stdlib::call_object_public_method(eg, &object, "__destruct", &[])?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+
+    eg.take_lazy_object_state(&object);
+    if let Some(mut object_data) = object.as_object_mut() {
+        for value in &mut object_data.property_values {
+            *value = Value::undef();
+        }
+        object_data.dynamic_properties = None;
+    }
+    eg.register_lazy_object(&object, strategy, initializer, resolved, options);
+    Ok(())
+}
+
+fn class_reset_as_lazy_ghost(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_reset_as_lazy_object(ed, eg, LazyObjectStrategy::Ghost)
+}
+
+fn class_reset_as_lazy_proxy(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_reset_as_lazy_object(ed, eg, LazyObjectStrategy::Proxy)
 }
 
 fn class_new_instance_without_constructor(
@@ -2089,6 +2505,26 @@ fn reflected_property_scope(ed: *mut ExecuteData) -> Option<String> {
     reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned))
 }
 
+fn reflected_property_access_object(
+    eg: &mut ExecutorGlobals,
+    mut object: Value,
+    key: &str,
+) -> Result<Value, VmError> {
+    for _ in 0..16 {
+        if eg.lazy_property_requires_initialization(&object, key) {
+            object = initialize_lazy_object(eg, &object)?;
+            if eg.exception.is_some() {
+                break;
+            }
+        } else if let Some(instance) = eg.lazy_proxy_instance(&object) {
+            object = instance;
+        } else {
+            break;
+        }
+    }
+    Ok(object)
+}
+
 fn property_is_initialized(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -2098,15 +2534,22 @@ fn property_is_initialized(
         return return_value(rv, Value::bool(false));
     };
     let reflected_scope = reflected_property_scope(ed);
-    let initialized = reflected_property_object(ed, 1).is_some_and(|target| {
-        let Some(object) = target.as_object() else {
-            return false;
-        };
-        let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
-        object
-            .get_property(&key)
-            .is_some_and(|value| !value.is_undef())
-    });
+    let initialized = if let Some(target) = reflected_property_object(ed, 1) {
+        let key = target
+            .as_object()
+            .map(|object| {
+                reflection_property_key(eg, &object, reflected_scope.as_deref(), &property)
+            })
+            .unwrap_or_else(|| property.clone());
+        let target = reflected_property_access_object(eg, target, &key)?;
+        target.as_object().is_some_and(|object| {
+            object
+                .get_property(&key)
+                .is_some_and(|value| !value.is_undef())
+        })
+    } else {
+        false
+    };
     return_value(rv, Value::bool(initialized))
 }
 
@@ -2119,13 +2562,21 @@ fn property_get_value(
         return return_value(rv, Value::null());
     };
     let reflected_scope = reflected_property_scope(ed);
-    let value = reflected_property_object(ed, 1)
-        .and_then(|target| {
-            let object = target.as_object()?;
-            let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
-            object.get_property(&key).cloned()
-        })
-        .unwrap_or_else(Value::null);
+    let value = if let Some(target) = reflected_property_object(ed, 1) {
+        let key = target
+            .as_object()
+            .map(|object| {
+                reflection_property_key(eg, &object, reflected_scope.as_deref(), &property)
+            })
+            .unwrap_or_else(|| property.clone());
+        let target = reflected_property_access_object(eg, target, &key)?;
+        target
+            .as_object()
+            .and_then(|object| object.get_property(&key).cloned())
+            .unwrap_or_else(Value::null)
+    } else {
+        Value::null()
+    };
     return_value(rv, value)
 }
 
@@ -2139,11 +2590,138 @@ fn property_set_value(
     };
     let reflected_scope = reflected_property_scope(ed);
     let value = with_argument(ed, 2, Clone::clone);
-    if let Some(target) = reflected_property_object(ed, 1)
-        && let Some(mut object) = target.as_object_mut()
-    {
+    if let Some(target) = reflected_property_object(ed, 1) {
+        let key = target
+            .as_object()
+            .map(|object| {
+                reflection_property_key(eg, &object, reflected_scope.as_deref(), &property)
+            })
+            .unwrap_or_else(|| property.clone());
+        let target = reflected_property_access_object(eg, target, &key)?;
+        if let Some(mut object) = target.as_object_mut() {
+            object.set_property(&key, value);
+        }
+    }
+    Ok(())
+}
+
+fn property_get_raw_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    property_get_value(ed, rv, eg)
+}
+
+fn property_set_raw_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    property_set_value(ed, rv, eg)
+}
+
+fn property_is_lazy(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((_, property)) = reflected_property_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    let Some(mut target) = reflected_property_object(ed, 1) else {
+        return return_value(rv, Value::bool(false));
+    };
+    for _ in 0..16 {
+        let Some(instance) = eg.lazy_proxy_instance(&target) else {
+            break;
+        };
+        target = instance;
+    }
+    let reflected_scope = reflected_property_scope(ed);
+    let lazy = target.as_object().is_some_and(|object| {
         let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
+        let Some(slot) = object.property_slot(&key) else {
+            return false;
+        };
+        eg.lazy_object_state(&target)
+            .is_some_and(|state| state.proxy_instance.is_none() && state.lazy_slots.contains(&slot))
+    });
+    return_value(rv, Value::bool(lazy))
+}
+
+fn property_skip_lazy_initialization(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((_, property)) = reflected_property_target(ed) else {
+        return Ok(());
+    };
+    let Some(target) = reflected_property_object(ed, 1) else {
+        return Ok(());
+    };
+    let reflected_scope = reflected_property_scope(ed);
+    let Some((key, slot)) = target.as_object().and_then(|object| {
+        let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
+        object.property_slot(&key).map(|slot| (key, slot))
+    }) else {
+        return Ok(());
+    };
+    let became_initialized = eg.lazy_object_state_mut(&target).and_then(|state| {
+        if state.proxy_instance.is_some() {
+            None
+        } else {
+            state.lazy_slots.retain(|candidate| *candidate != slot);
+            Some(state.lazy_slots.is_empty())
+        }
+    });
+    let Some(became_initialized) = became_initialized else {
+        return Ok(());
+    };
+    restore_lazy_property_defaults(eg, &target, std::slice::from_ref(&slot));
+    if became_initialized {
+        eg.take_lazy_object_state(&target);
+    }
+    let _ = key;
+    Ok(())
+}
+
+fn property_set_raw_value_without_lazy_initialization(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((_, property)) = reflected_property_target(ed) else {
+        return Ok(());
+    };
+    let Some(target) = reflected_property_object(ed, 1) else {
+        return Ok(());
+    };
+    let reflected_scope = reflected_property_scope(ed);
+    let Some((key, slot)) = target.as_object().and_then(|object| {
+        let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
+        object.property_slot(&key).map(|slot| (key, slot))
+    }) else {
+        return Ok(());
+    };
+    let became_initialized = if let Some(state) = eg.lazy_object_state_mut(&target) {
+        if state.proxy_instance.is_some() {
+            false
+        } else {
+            state.lazy_slots.retain(|candidate| *candidate != slot);
+            state.lazy_slots.is_empty()
+        }
+    } else {
+        false
+    };
+    let value = with_argument(ed, 2, Clone::clone);
+    let write_target = eg.lazy_proxy_instance(&target).unwrap_or(target.clone());
+    if let Some(mut object) = write_target.as_object_mut() {
         object.set_property(&key, value);
+    }
+    if became_initialized {
+        eg.take_lazy_object_state(&target);
     }
     Ok(())
 }

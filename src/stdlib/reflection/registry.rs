@@ -17,13 +17,16 @@ use super::generic_parameters::{
 use super::{
     class_construct, class_file_name, class_get_attributes, class_get_constants,
     class_get_constructor, class_get_default_properties, class_get_interface_names,
-    class_get_interfaces, class_get_method, class_get_methods, class_get_name, class_get_parent,
-    class_get_properties, class_get_reflection_constants, class_get_trait_names, class_get_traits,
-    class_has_method, class_implements_interface, class_is_abstract, class_is_final,
+    class_get_interfaces, class_get_lazy_initializer, class_get_method, class_get_methods,
+    class_get_name, class_get_parent, class_get_properties, class_get_property,
+    class_get_reflection_constants, class_get_trait_names, class_get_traits, class_has_method,
+    class_implements_interface, class_initialize_lazy_object, class_is_abstract, class_is_final,
     class_is_instantiable, class_is_interface, class_is_internal, class_is_readonly,
-    class_is_subclass_of, class_is_trait, class_is_user_defined,
-    class_new_instance_without_constructor, class_new_lazy_ghost, function_construct,
-    function_get_closure, function_get_closure_called_class, function_get_closure_this,
+    class_is_subclass_of, class_is_trait, class_is_uninitialized_lazy_object,
+    class_is_user_defined, class_mark_lazy_object_as_initialized,
+    class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
+    class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, function_construct, function_get_closure,
+    function_get_closure_called_class, function_get_closure_this,
     function_get_number_of_parameters, function_get_number_of_required_parameters,
     function_get_parameters, function_get_return_type, function_get_tentative_return_type,
     function_has_return_type, function_has_tentative_return_type, function_is_anonymous,
@@ -36,10 +39,12 @@ use super::{
     parameter_get_default_value, parameter_get_name, parameter_get_type, parameter_has_type,
     parameter_is_default_available, parameter_is_optional, parameter_is_passed_by_reference,
     parameter_is_variadic, property_construct, property_get_default_value, property_get_modifiers,
-    property_get_value, property_has_default_value, property_is_abstract, property_is_default,
-    property_is_final, property_is_initialized, property_is_private, property_is_protected,
-    property_is_public, property_is_readonly, property_is_static, property_is_virtual,
-    property_set_value, reflection_compound_types, reflection_get_doc_comment,
+    property_get_raw_value, property_get_value, property_has_default_value, property_is_abstract,
+    property_is_default, property_is_final, property_is_initialized, property_is_lazy,
+    property_is_private, property_is_protected, property_is_public, property_is_readonly,
+    property_is_static, property_is_virtual, property_set_raw_value,
+    property_set_raw_value_without_lazy_initialization, property_set_value,
+    property_skip_lazy_initialization, reflection_compound_types, reflection_get_doc_comment,
     reflection_type_allows_null, reflection_type_generic_arguments,
     reflection_type_has_generic_arguments, reflection_type_is_builtin, reflection_type_name,
     reflection_type_to_string,
@@ -107,6 +112,22 @@ fn register_reflection_class_kind(
                 ("IS_STATIC", 16),
                 ("IS_FINAL", 32),
                 ("IS_ABSTRACT", 64),
+            ]
+            .into_iter()
+            .map(|(constant, value)| ClassConstantDefinition {
+                name: constant.to_string(),
+                value: Value::long(value),
+                evaluation_error: None,
+                visibility: Visibility::Public,
+                declaring_class: name.to_string(),
+                type_hint: ParamTypeHint::Int,
+                is_final: false,
+            })
+            .collect()
+        } else if name == "ReflectionClass" {
+            [
+                ("SKIP_INITIALIZATION_ON_SERIALIZE", 8),
+                ("SKIP_DESTRUCTOR", 16),
             ]
             .into_iter()
             .map(|(constant, value)| ClassConstantDefinition {
@@ -693,6 +714,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_method!(
         "ReflectionClass",
+        "getproperty",
+        class_get_property,
+        2,
+        1,
+        ["name"]
+    );
+    register_method!(
+        "ReflectionClass",
         "getmethods",
         class_get_methods,
         2,
@@ -742,6 +771,62 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         3,
         1,
         ["initializer", "options"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "newlazyproxy",
+        class_new_lazy_proxy,
+        3,
+        1,
+        ["factory", "options"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "initializelazyobject",
+        class_initialize_lazy_object,
+        2,
+        1,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "isuninitializedlazyobject",
+        class_is_uninitialized_lazy_object,
+        2,
+        1,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "marklazyobjectasinitialized",
+        class_mark_lazy_object_as_initialized,
+        2,
+        1,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "getlazyinitializer",
+        class_get_lazy_initializer,
+        2,
+        1,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "resetaslazyghost",
+        class_reset_as_lazy_ghost,
+        4,
+        2,
+        ["object", "initializer", "options"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "resetaslazyproxy",
+        class_reset_as_lazy_proxy,
+        4,
+        2,
+        ["object", "factory", "options"]
     );
     register_method!(
         "ReflectionClass",
@@ -874,6 +959,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         3,
         2,
         ["class", "property"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "getname",
+        parameter_get_name,
+        1,
+        0,
+        []
     );
     register_method!(
         "ReflectionProperty",
@@ -1014,11 +1107,51 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_method!(
         "ReflectionProperty",
+        "getrawvalue",
+        property_get_raw_value,
+        2,
+        1,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionProperty",
         "setvalue",
         property_set_value,
         3,
         2,
         ["object", "value"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "setrawvalue",
+        property_set_raw_value,
+        3,
+        2,
+        ["object", "value"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "setrawvaluewithoutlazyinitialization",
+        property_set_raw_value_without_lazy_initialization,
+        3,
+        2,
+        ["object", "value"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "skiplazyinitialization",
+        property_skip_lazy_initialization,
+        2,
+        1,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionProperty",
+        "islazy",
+        property_is_lazy,
+        2,
+        1,
+        ["object"]
     );
     for class in [
         "ReflectionFunction",

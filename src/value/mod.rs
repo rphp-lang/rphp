@@ -4355,6 +4355,15 @@ impl Value {
         })
     }
 
+    /// Weak ownership for cold object sidecars. Keeping a weak handle prevents
+    /// an allocation address from being recycled while sidecar metadata still
+    /// names it, without extending the PHP-visible lifetime of the object.
+    #[inline]
+    pub(crate) fn object_weak(&self) -> Option<std::rc::Weak<std::cell::RefCell<PhpObject>>> {
+        let object = self.as_object_rc()?;
+        Some(Rc::downgrade(&object))
+    }
+
     /// Request-local object-store handle used by PHP-visible diagnostics.
     #[inline]
     pub fn object_handle(&self) -> Option<u32> {

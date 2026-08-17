@@ -64,15 +64,14 @@ fn op_clone_obj<'a>(
     // SAFETY: CloneObj's source and result are compiler-owned slots in the live
     // frame; result publication initializes and marks the destination owner.
     unsafe {
-        let src_val = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
-        let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+        let source = (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).clone();
 
-        if src_val.value_type() != ValueType::Object {
+        if source.value_type() != ValueType::Object {
             let error = make_error_value(
                 "TypeError",
                 &format!(
                     "clone(): Argument #1 ($object) must be of type object, {} given",
-                    src_val.dereferenced().type_name()
+                    source.dereferenced().type_name()
                 ),
             );
             let instruction_index = (opline as *const Instruction)
@@ -85,6 +84,25 @@ fn op_clone_obj<'a>(
                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
             });
         }
+        let source_is_proxy = eg.lazy_object_state(&source).is_some_and(|state| {
+            state.strategy == crate::runtime::LazyObjectStrategy::Proxy
+        });
+        let initialized = if eg.is_uninitialized_lazy_object(&source) {
+            crate::stdlib::reflection::initialize_lazy_object(eg, &source)?
+        } else {
+            eg.lazy_proxy_instance(&source)
+                .unwrap_or_else(|| source.clone())
+        };
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        let src_val = if source_is_proxy { source } else { initialized };
+        let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
 
         // Enum cases and Generator instances are engine-owned singletons.
         {
@@ -117,6 +135,7 @@ fn op_clone_obj<'a>(
             obj.clone_for_php()
         };
         let cloned_val = Value::object(cloned_obj);
+        eg.clone_initialized_lazy_proxy(&src_val, &cloned_val);
         {
             let cloned = cloned_val.as_object().unwrap();
             for (slot, property) in cloned.property_values.iter().enumerate() {
@@ -139,7 +158,7 @@ fn op_clone_obj<'a>(
         }
 
     #[cfg(feature = "php-generics-reified")]
-        if let Some(binding) = eg.reified_object_binding(src_val) {
+        if let Some(binding) = eg.reified_object_binding(&src_val) {
             eg.bind_reified_object(&cloned_val, binding);
         }
 

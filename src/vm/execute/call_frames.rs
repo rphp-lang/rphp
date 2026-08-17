@@ -154,6 +154,9 @@ fn run_frame_destructors(
                 let Some(representative) = representative else {
                     continue;
                 };
+                if eg.is_uninitialized_lazy_object(representative) {
+                    continue;
+                }
                 let class_name = representative.object_class_name_unchecked().to_string();
                 if eg.find_method_info(&class_name, "__destruct").is_none() {
                     continue;
@@ -187,6 +190,9 @@ fn prepare_replaced_value_destructor(
     value: &Value,
 ) -> Option<Value> {
     let value = value.dereferenced();
+    if eg.is_uninitialized_lazy_object(value) {
+        return None;
+    }
     let Some(class_name) = value
         .as_object()
         .map(|object| object.class_name.to_string())
@@ -270,6 +276,9 @@ fn release_statement_temps(
                 let Some(representative) = representative else {
                     continue;
                 };
+                if eg.is_uninitialized_lazy_object(representative) {
+                    continue;
+                }
                 let class_name = representative.object_class_name_unchecked().to_string();
                 if eg.find_method_info(&class_name, "__destruct").is_none() {
                     continue;

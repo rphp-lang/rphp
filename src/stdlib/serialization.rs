@@ -104,6 +104,20 @@ fn serialize_value(
             output.push('}');
         }
         ValueType::Object => {
+            let initialize = eg
+                .lazy_object_state(value)
+                .is_some_and(|state| state.proxy_instance.is_none() && state.options & 8 == 0);
+            let lazy_target = if initialize {
+                Some(crate::stdlib::reflection::initialize_lazy_object(
+                    eg, value,
+                )?)
+            } else {
+                eg.lazy_proxy_instance(value)
+            };
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            let value = lazy_target.as_ref().unwrap_or(value);
             let identity = value
                 .object_identity()
                 .expect("object value lost its identity");

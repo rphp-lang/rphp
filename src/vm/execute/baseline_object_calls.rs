@@ -931,6 +931,51 @@ fn op_fetch_obj_r_slow<'a>(
             }
         }
 
+        // Lazy objects keep every triggering property at the undef sentinel,
+        // so their fast cache naturally lands here. Initialize only after
+        // visibility/key resolution, then continue the same access against
+        // the ghost or the real proxy instance without repeating name side
+        // effects.
+        let declared_property = obj.property_slot(&key).is_some();
+        let dynamic_property = obj.get_dynamic_property_with_position(&key).is_some();
+        let class_name = obj.class_name.clone();
+        drop(obj);
+        let has_magic_get = eg
+            .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
+            .is_some();
+        let has_magic_isset = eg
+            .find_function(&format!(
+                "{}::__isset",
+                class_name.to_ascii_lowercase()
+            ))
+            .is_some();
+        let magic_get_can_handle = !declared_property
+            && !dynamic_property
+            && ((has_magic_get
+                && !property_guard_active(obj_val, &name, PROPERTY_GUARD_GET))
+                || (opline._pad & FETCH_OBJ_SILENT != 0
+                    && has_magic_isset
+                    && !property_guard_active(obj_val, &name, PROPERTY_GUARD_ISSET)));
+        let must_initialize = (property_accessible || force_dynamic)
+            && !dynamic_property
+            && !magic_get_can_handle
+            && eg.lazy_property_requires_initialization(obj_val, &key);
+        let initialized_target = if must_initialize {
+            Some(crate::stdlib::reflection::initialize_lazy_object(
+                eg, obj_val,
+            )?)
+        } else {
+            eg.lazy_proxy_instance(obj_val)
+        };
+        if let Some(result) = take_magic_exception(eg, frame) {
+            return Ok(result);
+        }
+        let magic_receiver = obj_val;
+        let obj_val = initialized_target.as_ref().unwrap_or(obj_val);
+        let obj = obj_val
+            .as_object()
+            .expect("lazy initialization must preserve an object receiver");
+
         // Cache only declared public properties. Dynamic properties have no
         // stable slot and remain on the cold lookup path.
         let cache_dynamic_std_class =
@@ -996,7 +1041,7 @@ fn op_fetch_obj_r_slow<'a>(
             ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
-        if write_only_property && !property_guard_active(obj_val, &name, PROPERTY_GUARD_SET) {
+        if write_only_property && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_SET) {
             let class_name = obj_val
                 .as_object()
                 .map(|object| object.class_name.to_string())
@@ -1010,13 +1055,13 @@ fn op_fetch_obj_r_slow<'a>(
         }
         if has_get_hook
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
-            && !property_guard_active(obj_val, &name, PROPERTY_GUARD_GET)
-            && !property_guard_active(obj_val, &name, PROPERTY_GUARD_SET)
+            && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_SET)
         {
             let hook_name = format!("${name}::get");
             let hook_value = call_guarded_property_magic_method(
                 eg,
-                obj_val,
+                magic_receiver,
                 &name,
                 PROPERTY_GUARD_GET,
                 &hook_name,
@@ -1071,25 +1116,36 @@ fn op_fetch_obj_r_slow<'a>(
             // An intermediate property in `isset($object->a->b)` first asks
             // `__isset(a)` and invokes `__get(a)` only when it returns true.
             if opline._pad & FETCH_OBJ_SILENT != 0 {
-                let magic_set = call_guarded_property_magic_method(
-                    eg,
-                    obj_val,
-                    &name,
-                    PROPERTY_GUARD_ISSET,
-                    "__isset",
-                    &[Value::string(name.clone())],
-                )?;
+                let isset_guarded =
+                    property_guard_active(magic_receiver, &name, PROPERTY_GUARD_ISSET);
+                let magic_set = if isset_guarded {
+                    None
+                } else {
+                    call_guarded_property_magic_method(
+                        eg,
+                        magic_receiver,
+                        &name,
+                        PROPERTY_GUARD_ISSET,
+                        "__isset",
+                        &[Value::string(name.clone())],
+                    )?
+                };
                 if let Some(result) = take_magic_exception(eg, frame) {
                     return Ok(result);
                 }
-                if !magic_set.is_some_and(|value| value.is_truthy()) {
+                let guarded_lazy_get = isset_guarded
+                    && has_magic_get
+                    && eg.lazy_object_state(magic_receiver).is_some();
+                if (!isset_guarded && !magic_set.is_some_and(|value| value.is_truthy()))
+                    || (isset_guarded && !guarded_lazy_get)
+                {
                     set_result(Value::null());
                     return Ok(ColdResult::Done);
                 }
             }
             // Property not found (or accepted by __isset) — try __get.
             if name.starts_with('\0')
-                && property_guard_active(obj_val, &name, PROPERTY_GUARD_GET)
+                && property_guard_active(magic_receiver, &name, PROPERTY_GUARD_GET)
             {
                 return Ok(object_property_throw(
                     eg,
@@ -1100,7 +1156,7 @@ fn op_fetch_obj_r_slow<'a>(
             }
             let magic_value = call_guarded_property_magic_method(
                 eg,
-                obj_val,
+                magic_receiver,
                 &name,
                 PROPERTY_GUARD_GET,
                 "__get",
@@ -1210,6 +1266,8 @@ fn op_isset_obj<'a>(
         set_result(false);
         return Ok(ColdResult::Done);
     }
+    let lazy_receiver_owner = eg.lazy_object_state(object).map(|_| object.clone());
+    let object = lazy_receiver_owner.as_ref().unwrap_or(object);
     let name = property.as_str().unwrap_or("");
     let caller_class = get_caller_class(frame, eg);
     let object_ref = object.as_object().expect("object tag must expose object storage");
@@ -1251,17 +1309,69 @@ fn op_isset_obj<'a>(
         false
     };
     let object_class_name = object_ref.class_name.clone();
+    let key = if hidden_parent_private {
+        name.to_string()
+    } else {
+        crate::runtime::resolve_property_key(
+            eg,
+            &object_ref.class_name,
+            name,
+            effective_caller,
+        )
+    };
+    let has_get_hook = accessible
+        && !hidden_parent_private
+        && object_ref
+            .property_slot(&key)
+            .and_then(|slot| eg.instance_property_definition(object_ref.class_id, slot))
+            .is_some_and(|definition| definition.has_get_hook);
+    let declared_property = object_ref.property_slot(&key).is_some();
+    drop(object_ref);
+    let initialized_target = if accessible
+        && !hidden_parent_private
+        && declared_property
+        && eg.lazy_property_requires_initialization(object, &key)
+    {
+        Some(crate::stdlib::reflection::initialize_lazy_object(
+            eg, object,
+        )?)
+    } else {
+        eg.lazy_proxy_instance(object)
+    };
+    if let Some(result) = take_magic_exception(eg, frame) {
+        return Ok(result);
+    }
+    let magic_receiver = object;
+    let object = initialized_target.as_ref().unwrap_or(object);
+    if has_get_hook
+        && !property_guard_active(magic_receiver, name, PROPERTY_GUARD_GET)
+        && !property_guard_active(magic_receiver, name, PROPERTY_GUARD_SET)
+    {
+        let hook_name = format!("${name}::get");
+        let value = call_guarded_property_magic_method(
+            eg,
+            magic_receiver,
+            name,
+            PROPERTY_GUARD_GET,
+            &hook_name,
+            &[],
+        )?;
+        if let Some(result) = take_magic_exception(eg, frame) {
+            return Ok(result);
+        }
+        set_result(value.is_some_and(|value| {
+            !value.is_undef() && value.value_type() != ValueType::Null
+        }));
+        return Ok(ColdResult::Done);
+    }
+    let object_ref = object
+        .as_object()
+        .expect("lazy initialization must preserve an object receiver");
     let property_state = if hidden_parent_private {
         object_ref
             .get_dynamic_property_with_position(name)
             .map(|(value, _)| !value.is_undef() && value.value_type() != ValueType::Null)
     } else if accessible {
-        let key = crate::runtime::resolve_property_key(
-            eg,
-            &object_ref.class_name,
-            name,
-            effective_caller,
-        );
         object_ref
             .get_property(&key)
             .map(|value| !value.is_undef() && value.value_type() != ValueType::Null)
@@ -1270,7 +1380,7 @@ fn op_isset_obj<'a>(
     };
     drop(object_ref);
 
-    if write_only_property && !property_guard_active(object, name, PROPERTY_GUARD_SET) {
+    if write_only_property && !property_guard_active(magic_receiver, name, PROPERTY_GUARD_SET) {
         return Ok(object_property_throw(
             eg,
             frame,
@@ -1283,7 +1393,7 @@ fn op_isset_obj<'a>(
         Some(set) => set,
         None => call_guarded_property_magic_method(
             eg,
-            object,
+            magic_receiver,
             name,
             PROPERTY_GUARD_ISSET,
             "__isset",
@@ -1316,9 +1426,12 @@ fn op_unset_obj<'a>(
     if object.value_type() != ValueType::Object {
         return Ok(ColdResult::Done);
     }
+    let lazy_receiver_owner = eg.lazy_object_state(object).map(|_| object.clone());
+    let object = lazy_receiver_owner.as_ref().unwrap_or(object);
     let name = property
         .as_str()
-        .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?;
+        .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?
+        .to_string();
     let caller_class = get_caller_class(frame, eg);
     let object_ref = object.as_object().unwrap();
     let receiver_in_scope = caller_class
@@ -1328,36 +1441,36 @@ fn op_unset_obj<'a>(
         .then_some(caller_class.as_deref())
         .flatten();
     let accessible = eg
-        .find_property_set_visibility(&object_ref.class_name, name)
+        .find_property_set_visibility(&object_ref.class_name, &name)
         .is_none_or(|(visibility, defining_class)| {
             visibility == Visibility::Public
                 || eg.check_visibility(effective_caller, &defining_class, visibility)
         });
     let hidden_parent_private = eg
-        .find_property_visibility(&object_ref.class_name, name)
+        .find_property_visibility(&object_ref.class_name, &name)
         .is_some_and(|(visibility, defining_class)| {
             visibility == Visibility::Private
                 && !defining_class.eq_ignore_ascii_case(&object_ref.class_name)
                 && !eg.check_visibility(effective_caller, &defining_class, visibility)
         });
     let key = if hidden_parent_private {
-        name.to_string()
+        name.clone()
     } else {
         crate::runtime::resolve_property_key(
             eg,
             &object_ref.class_name,
-            name,
+            &name,
             effective_caller,
         )
     };
     if !accessible
-        && eg.property_has_asymmetric_set_visibility(&object_ref.class_name, name)
+        && eg.property_has_asymmetric_set_visibility(&object_ref.class_name, &name)
         && object_ref
             .get_property(&key)
             .is_some_and(|value| !value.is_undef())
     {
         let (visibility, defining_class) = eg
-            .find_property_set_visibility(&object_ref.class_name, name)
+            .find_property_set_visibility(&object_ref.class_name, &name)
             .expect("asymmetric property has write visibility");
         let visibility = match visibility {
             Visibility::Private => "private",
@@ -1389,6 +1502,50 @@ fn op_unset_obj<'a>(
             format!("Cannot unset hooked property {class_name}::${name}"),
         ));
     }
+    let lazy_declared_property = accessible
+        && !hidden_parent_private
+        && object_ref.property_slot(&key).is_some();
+    let lazy_dynamic_property = object_ref
+        .get_dynamic_property_with_position(&key)
+        .is_some();
+    let lazy_declared_undefined = lazy_declared_property
+        && object_ref
+            .get_property(&key)
+            .is_some_and(Value::is_undef);
+    let lazy_class_name = object_ref.class_name.clone();
+    drop(object_ref);
+    let magic_unset_can_handle = !lazy_declared_property
+        && !lazy_dynamic_property
+        && !property_guard_active(object, &name, PROPERTY_GUARD_UNSET)
+        && eg
+            .find_function(&format!(
+                "{}::__unset",
+                lazy_class_name.to_ascii_lowercase()
+            ))
+            .is_some();
+    let lazy_undefined = (lazy_declared_undefined
+        && eg.lazy_property_requires_initialization(object, &key))
+        || (accessible
+            && !hidden_parent_private
+            && !lazy_declared_property
+            && !lazy_dynamic_property
+            && !magic_unset_can_handle
+            && eg.is_uninitialized_lazy_object(object));
+    let initialized_target = if lazy_undefined {
+        Some(crate::stdlib::reflection::initialize_lazy_object(
+            eg, object,
+        )?)
+    } else {
+        eg.lazy_proxy_instance(object)
+    };
+    if let Some(result) = take_magic_exception(eg, frame) {
+        return Ok(result);
+    }
+    let magic_receiver = object;
+    let object = initialized_target.as_ref().unwrap_or(object);
+    let object_ref = object
+        .as_object()
+        .expect("lazy initialization must preserve an object receiver");
     let removed = if hidden_parent_private {
         object_ref.get_dynamic_property_with_position(&key).is_some()
     } else {
@@ -1401,16 +1558,17 @@ fn op_unset_obj<'a>(
             object.as_object_mut().unwrap().remove_dynamic_property(&key);
         } else {
             object.as_object_mut().unwrap().unset_property(&key);
+            eg.mark_initializing_lazy_property_written(object, &key);
         }
         return Ok(ColdResult::Done);
     }
     let _ = call_guarded_property_magic_method(
         eg,
-        object,
-        name,
+        magic_receiver,
+        &name,
         PROPERTY_GUARD_UNSET,
         "__unset",
-        &[Value::string(name)],
+        &[Value::string(&name)],
     )?;
     if let Some(result) = take_magic_exception(eg, frame) {
         return Ok(result);
@@ -1526,6 +1684,31 @@ fn op_bind_obj_prop_ref<'a>(
                 effective_caller,
             )
         };
+        let (lazy_declared_property, lazy_dynamic_property) = receiver
+            .as_object()
+            .map(|object| {
+                (
+                    object.property_slot(&key).is_some(),
+                    object.get_dynamic_property_with_position(&key).is_some(),
+                )
+            })
+            .unwrap_or((false, false));
+        let lazy_magic_get_can_handle = !lazy_declared_property
+            && !lazy_dynamic_property
+            && !property_guard_active(&receiver, &name, PROPERTY_GUARD_GET)
+            && eg
+                .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
+                .is_some();
+        let receiver = if !lazy_magic_get_can_handle
+            && eg.lazy_property_requires_initialization(&receiver, &key)
+        {
+            crate::stdlib::reflection::initialize_lazy_object(eg, &receiver)?
+        } else {
+            eg.lazy_proxy_instance(&receiver).unwrap_or(receiver)
+        };
+        if let Some(result) = take_magic_exception(eg, frame) {
+            return Ok(result);
+        }
         let (declared_slot, definition, owner) = {
             let object = receiver.as_object().unwrap();
             let slot = (!force_dynamic).then(|| object.property_slot(&key)).flatten();
@@ -1583,6 +1766,43 @@ fn op_bind_obj_prop_ref<'a>(
                         "Error",
                         message,
                     ));
+                };
+                if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                    binding.mark_internal_reference_alias();
+                }
+                let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+                frame_slot_set(frame, destination, binding);
+                return Ok(ColdResult::Done);
+            }
+        }
+
+        let missing_property = declared_slot.is_none()
+            && receiver
+                .as_object()
+                .is_some_and(|object| {
+                    object.get_dynamic_property_with_position(&key).is_none()
+                });
+        if missing_property
+            && !property_guard_active(&receiver, &name, PROPERTY_GUARD_GET)
+        {
+            let returned = call_guarded_property_magic_method(
+                eg,
+                &receiver,
+                &name,
+                PROPERTY_GUARD_GET,
+                "__get",
+                &[Value::string(name.clone())],
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
+            if let Some(returned) = returned {
+                let mut binding = if returned.is_owned_reference() {
+                    returned.clone_owned_reference_alias()
+                } else if returned.is_reference() {
+                    Value::reference(returned.as_ref_ptr())
+                } else {
+                    Value::owned_reference(returned)
                 };
                 if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
                     binding.mark_internal_reference_alias();
@@ -2013,6 +2233,8 @@ fn op_assign_obj_prop<'a>(
         val.clone()
     };
     let name = prop_name.echo_to_string();
+    let lazy_receiver_owner = eg.lazy_object_state(obj).map(|_| obj.clone());
+    let obj = lazy_receiver_owner.as_ref().unwrap_or(obj);
 
     if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
@@ -2098,6 +2320,46 @@ fn op_assign_obj_prop<'a>(
                 }
             }
         }
+        let lazy_key = crate::runtime::resolve_property_key(
+            eg,
+            &php_obj.class_name,
+            &name,
+            effective_caller,
+        );
+        let lazy_declared_property = php_obj.property_slot(&lazy_key).is_some();
+        let lazy_dynamic_property = php_obj
+            .get_dynamic_property_with_position(&lazy_key)
+            .is_some();
+        let lazy_class_name = php_obj.class_name.clone();
+        drop(php_obj);
+        let magic_set_can_handle = !lazy_declared_property
+            && !lazy_dynamic_property
+            && !property_guard_active(obj, &name, PROPERTY_GUARD_SET)
+            && eg
+                .find_function(&format!(
+                    "{}::__set",
+                    lazy_class_name.to_ascii_lowercase()
+                ))
+                .is_some();
+        let must_initialize = (property_accessible || force_dynamic)
+            && !lazy_dynamic_property
+            && !magic_set_can_handle
+            && eg.lazy_property_requires_initialization(obj, &lazy_key);
+        let initialized_target = if must_initialize {
+            Some(crate::stdlib::reflection::initialize_lazy_object(
+                eg, obj,
+            )?)
+        } else {
+            eg.lazy_proxy_instance(obj)
+        };
+        if let Some(result) = take_magic_exception(eg, frame) {
+            return Ok(result);
+        }
+        let magic_receiver = obj;
+        let obj = initialized_target.as_ref().unwrap_or(obj);
+        let php_obj = obj
+            .as_object_mut()
+            .expect("lazy initialization must preserve an object receiver");
         // Enum guard: enum cases are sealed — no property writes allowed
         // Track writability for cache population — enum/readonly are not cacheable for writes.
         let mut prop_is_writable = true;
@@ -2226,13 +2488,13 @@ fn op_assign_obj_prop<'a>(
         drop(php_obj);
         if has_set_hook
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
-            && !property_guard_active(obj, &name, PROPERTY_GUARD_SET)
-            && !property_guard_active(obj, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_SET)
+            && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_GET)
         {
             let hook_name = format!("${name}::set");
             let hook_value = call_guarded_property_magic_method(
                 eg,
-                obj,
+                magic_receiver,
                 &name,
                 PROPERTY_GUARD_SET,
                 &hook_name,
@@ -2363,7 +2625,7 @@ fn op_assign_obj_prop<'a>(
             }
         } else {
             // Property not found — try __set magic method
-            let guarded = property_guard_active(obj, &name, PROPERTY_GUARD_SET);
+            let guarded = property_guard_active(magic_receiver, &name, PROPERTY_GUARD_SET);
             if name.starts_with('\0') && guarded {
                 return Ok(object_property_throw(
                     eg,
@@ -2374,7 +2636,7 @@ fn op_assign_obj_prop<'a>(
             }
             let magic = call_guarded_property_magic_method(
                 eg,
-                obj,
+                magic_receiver,
                 &name,
                 PROPERTY_GUARD_SET,
                 "__set",
@@ -2426,6 +2688,7 @@ fn op_assign_obj_prop<'a>(
                 }
             }
         }
+        eg.mark_initializing_lazy_property_written(obj, &key);
     } else {
         let action = if opline._pad & ASSIGN_OBJ_MODIFY != 0 {
             "modify"

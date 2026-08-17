@@ -1052,12 +1052,32 @@ fn reflection_function_parameters_expose_controller_metadata_surface() {
 }
 
 #[test]
-fn reflection_class_lazy_ghost_eagerly_runs_initializer_on_real_instance() {
+fn reflection_class_lazy_ghost_defers_initializer_until_property_access() {
     assert_eq!(
         run_php(
-            "<?php class LazyService { public string $value; public function __construct(string $value) { $this->value = $value; } } $service = (new ReflectionClass(LazyService::class))->newLazyGhost(static function ($ghost) { $ghost->__construct('OK'); }); echo $service->value;"
+            "<?php class LazyService { public string $value; public function __construct(string $value) { $this->value = $value; } } $service = (new ReflectionClass(LazyService::class))->newLazyGhost(static function ($ghost) { echo 'initializer:'; $ghost->__construct('OK'); }); echo 'before:', $service->value;"
         ),
-        "OK"
+        "before:initializer:OK"
+    );
+}
+
+#[test]
+fn reflection_class_lazy_proxy_preserves_shell_identity_and_forwards_properties() {
+    assert_eq!(
+        run_php(
+            "<?php class LazyProxyService { public int $value = 1; } $reflection = new ReflectionClass(LazyProxyService::class); $proxy = $reflection->newLazyProxy(static function ($shell) { echo $shell::class, ':factory:'; $real = new LazyProxyService(); $real->value = 4; return $real; }); $id = spl_object_id($proxy); echo (int) $reflection->isUninitializedLazyObject($proxy), ':'; echo $proxy->value, ':'; echo (int) ($id === spl_object_id($proxy)), ':', (int) $reflection->isUninitializedLazyObject($proxy);"
+        ),
+        "1:LazyProxyService:factory:4:1:0"
+    );
+}
+
+#[test]
+fn lazy_magic_property_access_stays_deferred_until_magic_observes_state() {
+    assert_eq!(
+        run_php(
+            "<?php class LazyMagicService { public int $value = 1; public function __get($name) { return $name; } } $reflection = new ReflectionClass(LazyMagicService::class); $service = $reflection->newLazyGhost(static function ($shell) { echo 'initializer:'; $shell->value = 5; }); echo $service->missing, ':', $service->value;"
+        ),
+        "missing:initializer:5"
     );
 }
 
