@@ -481,6 +481,18 @@ read/write/method/constructor lanes are -0.183%, -0.206%, +1.869% and +1.934%,
 within their ceilings. Hook method reflection, raw-value access, assertion AST
 rendering, full hooked iteration ordering and parent-hook calls remain next.
 
+The `ba8a678` explicit-parent-property-hook checkpoint reaches 2,203 passes
+with 3,005 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts
+and zero crashes. Matching `parent::$property::get()` and `set()` forms now use
+the exact parent hook method while preserving `$this`; mismatched hook,
+property and outside-hook forms receive PHP 8.5 compile diagnostics. The exact
+PHP 8.5.6 delta is +6/-0, bringing the cumulative gain from the initial
+baseline to +388/-0. All five feature configurations, all-target and unsafe
+gates pass. No runtime performance gate applies because existing bytecode and
+dispatch are unchanged. Implicit parent accessors for plain storage, hook
+method/raw-value Reflection, assertion AST rendering and full hooked iteration
+ordering remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

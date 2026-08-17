@@ -8,14 +8,24 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `29f9a44`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,197 pass, 3,011 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `ba8a678`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,203 pass, 3,005 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-42.185%; 87.999% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +382/-0. The first four gains are
+42.300%; 87.999% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +388/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Explicit `parent::$property::get()` and `set()` calls inside matching property
+hooks now lower to the existing exact parent-method call protocol, preserving
+the current object receiver and case-insensitive hook names. Calls outside a
+hook or from a different property/hook fail during compilation with PHP 8.5's
+diagnostics. This adds six exact passes without losing a prior pass. All
+feature, target and unsafe gates pass. No runtime performance gate applies:
+ordinary property bytecode and VM dispatch are unchanged, and only the new
+source form enters the established static parent-call path. Implicit parent
+accessors for plain storage remain a separate VM follow-up.
 
 `ReflectionProperty` now exposes PHP 8.5 default-value presence and value,
 including the distinction between implicit-null untyped declarations,
