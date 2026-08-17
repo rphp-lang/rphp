@@ -8,14 +8,28 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `c95e7db`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,270 pass, 2,938 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `46464fb`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,298 pass, 2,910 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-43.587%; 88.402% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +455/-0. The first four gains are
+44.124%; 88.402% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +483/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Magic-method declarations now enforce PHP 8.5's covariant return contracts in
+classes, interfaces and traits, including `never`, literal booleans, nullable
+debug arrays and object subtypes. Constructors and destructors reject every
+declared return type. Direct enum declarations permit only the invocation magic
+methods and reject lifecycle and state magic methods with source-qualified
+diagnostics. This adds 28 exact passes without losing a prior pass: fourteen
+enum restrictions, thirteen return-type cases and the invalid Stringable trait
+case. All five Cargo configurations, all-target, all-features check, unsafe,
+Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass. The change is
+confined to cold declaration validation and does not alter runtime layouts,
+generated code or dispatch, so no runtime performance benchmark applies. Magic
+methods imported into enums through traits remain a separate composition and
+source-location cluster.
 
 Union-typed calls now test exact members before PHP's scalar coercion
 precedence, preserve integer values for `int|float`, select floating-point for
