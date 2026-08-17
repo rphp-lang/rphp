@@ -9022,9 +9022,10 @@ fn var_dump_value_inner(
                         .iter()
                         .enumerate()
                         .filter(|(slot, _)| {
-                            object
-                                .get_property_slot(*slot)
-                                .is_some_and(|value| value.value_type() != ValueType::Undef)
+                            !class.properties[*slot].is_virtual_hook_property()
+                                && object
+                                    .get_property_slot(*slot)
+                                    .is_some_and(|value| value.value_type() != ValueType::Undef)
                         })
                         .count()
                 } else {
@@ -9047,6 +9048,11 @@ fn var_dump_value_inner(
                         let Some(value) = object.get_property_slot(slot) else {
                             continue;
                         };
+                        if definition.is_virtual_hook_property()
+                            && value.value_type() != ValueType::Undef
+                        {
+                            continue;
+                        }
                         if value.value_type() == ValueType::Undef {
                             if !matches!(definition.type_hint, ParamTypeHint::None) {
                                 let key = var_dump_property_key(definition);

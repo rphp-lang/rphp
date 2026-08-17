@@ -270,6 +270,21 @@ fn validate_inherited_property_definition(
             message
         }
     };
+    let getter_returns_reference = linking_class.methods.iter().any(
+        |(method, _, _, _, function)| {
+            method.eq_ignore_ascii_case(&format!("${}::get", child.name))
+                && function.common.sig.returns_reference
+        },
+    );
+    if getter_returns_reference
+        && child.has_set_hook
+        && (child.get_hook_is_backed || (!parent.has_get_hook && !parent.has_set_hook))
+    {
+        return Err(error(format!(
+            "Get hook of backed property {}::{} with set hook may not return by reference",
+            child_class, child.name
+        )));
+    }
     debug_assert_ne!(parent.visibility, Visibility::Private);
     let visibility_is_compatible = match parent.visibility {
         Visibility::Public => child.visibility == Visibility::Public,

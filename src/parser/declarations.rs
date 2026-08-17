@@ -88,6 +88,12 @@ impl Parser {
                 } else {
                     false
                 };
+                let hook_returns_by_ref = if self.peek() == Token::Ampersand {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 let (hook, hook_line) = match self.advance() {
                     Token::Identifier(name, line) => (name, line),
                     other => return Err(format!("Expected property hook, got {other:?}")),
@@ -166,7 +172,7 @@ impl Parser {
                     is_static: false,
                     is_final: hook_is_final,
                     is_abstract: hook_is_abstract,
-                    returns_by_ref: false,
+                    returns_by_ref: hook_returns_by_ref,
                     return_type: is_get.then(|| property.type_hint.clone()).flatten(),
                     generic_params: Vec::new(),
                 });

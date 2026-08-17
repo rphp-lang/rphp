@@ -1469,6 +1469,13 @@ impl PropertyDefinition {
     }
 
     #[inline]
+    pub fn is_virtual_hook_property(&self) -> bool {
+        (self.has_get_hook || self.has_set_hook)
+            && !self.get_hook_is_backed
+            && !self.set_hook_is_backed
+    }
+
+    #[inline]
     pub fn is_typed(&self) -> bool {
         !matches!(self.type_hint, ParamTypeHint::None)
     }

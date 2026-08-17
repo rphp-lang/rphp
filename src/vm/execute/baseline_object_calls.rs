@@ -1455,6 +1455,62 @@ fn op_bind_obj_prop_ref<'a>(
         };
         let definition = definition.map(|definition| &*definition);
 
+        if let Some(definition) = definition
+            && definition.has_get_hook
+            && !property_guard_active(&receiver, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(&receiver, &name, PROPERTY_GUARD_SET)
+        {
+            if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
+                return Ok(object_property_throw_at(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    "Error",
+                    "Cannot assign by reference to overloaded object".to_string(),
+                ));
+            }
+            let hook_name = format!("${name}::get");
+            let returned = call_guarded_property_magic_method(
+                eg,
+                &receiver,
+                &name,
+                PROPERTY_GUARD_GET,
+                &hook_name,
+                &[],
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
+            if let Some(returned) = returned {
+                let mut binding = if returned.is_owned_reference() {
+                    returned.clone_owned_reference_alias()
+                } else if returned.is_reference() {
+                    Value::reference(returned.as_ref_ptr())
+                } else {
+                    let message = if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                        format!("Indirect modification of {class_name}::${name} is not allowed")
+                    } else {
+                        format!("Cannot create reference to property {class_name}::${name}")
+                    };
+                    return Ok(object_property_throw_at(
+                        eg,
+                        frame,
+                        op_array,
+                        instruction_index,
+                        "Error",
+                        message,
+                    ));
+                };
+                if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                    binding.mark_internal_reference_alias();
+                }
+                let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+                frame_slot_set(frame, destination, binding);
+                return Ok(ColdResult::Done);
+            }
+        }
+
         if opline._pad & OBJ_PROP_REFERENCE_BIND == 0
             && let Some(definition) = definition
             && definition.is_typed()

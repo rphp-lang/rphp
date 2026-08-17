@@ -3328,6 +3328,18 @@ impl Compiler {
                 let mut promoted_props: Vec<(String, usize, Visibility, Option<Visibility>, bool, ParamTypeHint, bool)> =
                     Vec::new(); // (name, read visibility, set visibility, readonly, erased type, needs reification)
                 for method in methods {
+                    if method.name.ends_with("::set")
+                        && let Some(parameter) = method.params.iter().find(|parameter| parameter.is_ref)
+                    {
+                        let property = method.name.trim_start_matches('$').trim_end_matches("::set");
+                        return Err(self.goto_error(
+                            &format!(
+                                "Parameter ${} of set hook {}::${} must not be pass-by-reference",
+                                parameter.name, name, property
+                            ),
+                            parameter.line,
+                        ));
+                    }
                     if method.name.starts_with('$')
                         && method.is_final
                         && method.visibility == Visibility::Private

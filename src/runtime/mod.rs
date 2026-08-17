@@ -1029,6 +1029,10 @@ impl ExecutorGlobals {
                 "implementation cannot be static".to_string()
             });
         }
+        if required.function.sig.returns_reference && !implementation.function.sig.returns_reference
+        {
+            errors.push("implementation must return by reference".to_string());
+        }
 
         let required_signature = &required.function.sig;
         let implementation_signature = &implementation.function.sig;
@@ -1308,6 +1312,9 @@ impl ExecutorGlobals {
             declaration.name,
             parameters.join(", ")
         );
+        if signature.returns_reference {
+            rendered.insert_str(0, "& ");
+        }
         if !matches!(signature.return_type_hint, ParamTypeHint::None) {
             rendered.push_str(": ");
             rendered.push_str(
@@ -2071,6 +2078,30 @@ impl ExecutorGlobals {
                     return Err(format!(
                         "Set access level of {}::${} must be omitted (as in class {}){}",
                         class_name, property.name, interface.name, location
+                    ));
+                }
+                if required.has_get_hook
+                    && let Some(required_getter) = interface.methods.iter().find(|method| {
+                        method
+                            .0
+                            .eq_ignore_ascii_case(&format!("${}::get", required.name))
+                    })
+                    && required_getter.4.common.sig.returns_reference
+                    && property.has_get_hook
+                    && let Some(implementation) =
+                        self.find_effective_method(class_def, &format!("${}::get", property.name))
+                    && !implementation.function.sig.returns_reference
+                {
+                    let required = Self::method_declaration(interface, required_getter);
+                    let location = class_def
+                        .source_file
+                        .as_ref()
+                        .map_or_else(String::new, |file| format!(" in {file} on line 0"));
+                    return Err(format!(
+                        "Declaration of {} must be compatible with {}{}",
+                        self.format_method_signature(implementation, Some(class_def)),
+                        self.format_method_signature(required, Some(class_def)),
+                        location
                     ));
                 }
             }

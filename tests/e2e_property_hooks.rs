@@ -310,3 +310,90 @@ class FixedValue implements MutableValue {
         "Set access level of FixedValue::$value must be omitted (as in class MutableValue)"
     ));
 }
+
+#[test]
+fn reference_getter_exposes_the_returned_backing_alias() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferencedValue {
+    private int $storage = 41;
+    public int $value {
+        &get => $this->storage;
+        set => $this->storage = $value;
+    }
+}
+function increment(int &$value): void { $value++; }
+$object = new ReferencedValue();
+$alias = &$object->value;
+$alias++;
+increment($object->value);
+var_dump($object->value);
+"#,
+        ),
+        "int(43)\n"
+    );
+}
+
+#[test]
+fn plain_property_implements_reference_getter_interface() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface ReferencedProperty { public int $value { &get; } }
+class PlainValue implements ReferencedProperty { public int $value = 41; }
+$object = new PlainValue();
+$alias = &$object->value;
+$alias++;
+var_dump($object->value);
+"#,
+        ),
+        "int(42)\n"
+    );
+}
+
+#[test]
+fn value_getter_cannot_implement_reference_getter_interface() {
+    let error = run_php_expect_error(
+        r#"<?php
+interface ReferencedProperty { public int $value { &get; } }
+class ValueGetter implements ReferencedProperty {
+    public int $value { get => $this->value; }
+}
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("Declaration of ValueGetter::$value::get(): int"));
+    assert!(rendered.contains("compatible with & ReferencedProperty::$value::get(): int"));
+}
+
+#[test]
+fn set_hook_parameter_cannot_be_passed_by_reference() {
+    let error = run_php_expect_error(
+        r#"<?php
+class InvalidSetter { public $value { set(&$incoming) {} } }
+"#,
+    );
+    assert!(format!("{error:?}").contains(
+        "Parameter $incoming of set hook InvalidSetter::$value must not be pass-by-reference"
+    ));
+}
+
+#[test]
+fn inherited_backing_property_rejects_reference_getter_with_setter() {
+    let error = run_php_expect_error(
+        r#"<?php
+class BackingValue { public $value; }
+class InvalidReferenceValue extends BackingValue {
+    private $storage;
+    public $value {
+        &get => $this->storage;
+        set => $this->storage = $value;
+    }
+}
+"#,
+    );
+    assert!(format!("{error:?}").contains(
+        "Get hook of backed property InvalidReferenceValue::value with set hook may not return by reference"
+    ));
+}
