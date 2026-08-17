@@ -275,6 +275,7 @@ unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
     eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
+    eg.finally_exceptions.remove(&(call as usize));
     if (*call).deferred_scalar_call {
         eg.pending_call_stack.pop_call_frame(call);
     } else {
@@ -288,6 +289,7 @@ fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
     eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
+    eg.finally_exceptions.remove(&(call as usize));
     eg.function_arguments.remove(&(call as usize));
     eg.vm_stack.pop_call_frame(call);
 }
@@ -550,6 +552,107 @@ enum ThrowResult<'a> {
     Unhandled(Value),
 }
 
+/// Append an exception displaced by an escaping finally failure to the tail
+/// of the new Throwable's explicit previous chain. PHP preserves an explicitly
+/// supplied previous value first and adds the displaced exception after it.
+#[cold]
+fn append_replaced_exception(
+    thrown: &Value,
+    displaced: &Value,
+    eg: &ExecutorGlobals,
+) {
+    let Some(displaced_identity) = displaced.object_identity() else {
+        return;
+    };
+    if !displaced.as_object().is_some_and(|object| {
+        eg.class_is_a(&object.class_name, "Throwable")
+    }) {
+        return;
+    }
+    let Some(thrown_identity) = thrown.object_identity() else {
+        return;
+    };
+    // Do not create a cycle when the displaced exception already names the
+    // newly escaping Throwable somewhere in its explicit previous chain.
+    let mut probe = displaced.clone();
+    let mut probed = std::collections::HashSet::new();
+    loop {
+        let Some(identity) = probe.object_identity() else {
+            break;
+        };
+        if identity == thrown_identity {
+            return;
+        }
+        if !probed.insert(identity) {
+            break;
+        }
+        let Some(object) = probe.as_object() else {
+            break;
+        };
+        let class_name = object.class_name.to_string();
+        let previous_key = eg
+            .find_property_visibility(&class_name, "previous")
+            .map_or_else(
+                || "previous".to_string(),
+                |(_, declaring_class)| {
+                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
+                },
+            );
+        let previous = object
+            .get_property(&previous_key)
+            .filter(|value| {
+                value.as_object().is_some_and(|previous| {
+                    eg.class_is_a(&previous.class_name, "Throwable")
+                })
+            })
+            .cloned();
+        drop(object);
+        let Some(previous) = previous else {
+            break;
+        };
+        probe = previous;
+    }
+    let mut current = thrown.clone();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let Some(identity) = current.object_identity() else {
+            return;
+        };
+        if identity == displaced_identity || !seen.insert(identity) {
+            return;
+        }
+        let Some(object) = current.as_object() else {
+            return;
+        };
+        let class_name = object.class_name.to_string();
+        let previous_key = eg
+            .find_property_visibility(&class_name, "previous")
+            .map_or_else(
+                || "previous".to_string(),
+                |(_, declaring_class)| {
+                    crate::runtime::mangle_private_prop(&declaring_class, "previous")
+                },
+            );
+        let previous = object
+            .get_property(&previous_key)
+            .filter(|value| {
+                value.as_object().is_some_and(|previous| {
+                    eg.class_is_a(&previous.class_name, "Throwable")
+                })
+            })
+            .cloned();
+        drop(object);
+        if let Some(previous) = previous {
+            current = previous;
+            continue;
+        }
+        if let Some(mut object) = current.as_object_mut() {
+            object.set_property(&previous_key, displaced.clone());
+        }
+        return;
+    }
+}
+
 /// Attach the immutable creation/raise origin that PHP exposes through
 /// Throwable::getFile()/getLine(). Existing metadata wins so rethrowing an
 /// object never moves its origin. The trace is captured at the same creation
@@ -694,13 +797,31 @@ fn throw_in_frame<'a>(
     // propagating out of a callee.
     // SAFETY: `frame` is the live frame entering the shared throw boundary;
     // its opline points into the immutable instruction slice of its op-array.
-    let (origin_op_array, origin_ip) = unsafe {
+    // SAFETY: every traversed pointer belongs to the live caller chain rooted
+    // at `frame`; the chain remains allocated for the whole unwind search.
+    let (origin_op_array, origin_ip, displaced_exception) = unsafe {
         let origin_op_array = (*frame).op_array();
         let origin_ip =
         (*frame)
             .opline
             .offset_from(origin_op_array.instructions.as_ptr()) as usize;
-        (origin_op_array, origin_ip)
+        let mut pending_owner = frame;
+        let displaced_exception = loop {
+            if let Some(pending) = eg
+                .finally_exceptions
+                .get(&(pending_owner as usize))
+                .and_then(|pending| pending.last())
+                .filter(|pending| pending.object_identity() != thrown.object_identity())
+            {
+                break Some((pending_owner, pending.clone()));
+            }
+            let previous = (*pending_owner).prev_execute_data;
+            if previous.is_null() {
+                break None;
+            }
+            pending_owner = previous;
+        };
+        (origin_op_array, origin_ip, displaced_exception)
     };
     attach_throwable_origin(&thrown, eg, frame, origin_op_array, origin_ip);
 
@@ -731,6 +852,23 @@ fn throw_in_frame<'a>(
                 .find(|c| exception_matches_catch(&thrown, &c.types, eg));
 
             if let Some(catch) = matched_catch {
+                if let Some((owner, displaced)) = displaced_exception.as_ref() {
+                    let catch_stays_in_finally = search_frame == *owner
+                        && sf_op_array.try_entries.iter().any(|active| {
+                            active.finally_start != u32::MAX
+                                && catch.catch_start >= active.finally_start
+                                && catch.catch_start < active.finally_end
+                        });
+                    if !catch_stays_in_finally {
+                        append_replaced_exception(&thrown, displaced, eg);
+                        if let Some(pending) = eg.finally_exceptions.get_mut(&(*owner as usize)) {
+                            pending.pop();
+                            if pending.is_empty() {
+                                eg.finally_exceptions.remove(&(*owner as usize));
+                            }
+                        }
+                    }
+                }
                 while frame != search_frame {
                     let prev = unsafe { (*frame).prev_execute_data };
                     eg.current_execute_data.set(prev);
@@ -776,7 +914,19 @@ fn throw_in_frame<'a>(
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };
                 let base_ptr = sf_op_array.instructions.as_ptr();
-                eg.exception = Some(thrown.clone());
+                if let Some((owner, displaced)) = displaced_exception.as_ref() {
+                    append_replaced_exception(&thrown, displaced, eg);
+                    if let Some(pending) = eg.finally_exceptions.get_mut(&(*owner as usize)) {
+                        pending.pop();
+                        if pending.is_empty() {
+                            eg.finally_exceptions.remove(&(*owner as usize));
+                        }
+                    }
+                }
+                eg.finally_exceptions
+                    .entry(frame as usize)
+                    .or_default()
+                    .push(thrown.clone());
                 unsafe { (*frame).opline = base_ptr.add(entry.finally_start as usize) };
                 let new_op_array = unsafe { (*frame).op_array() };
                 return ThrowResult::Handled(frame, new_op_array);
@@ -790,5 +940,14 @@ fn throw_in_frame<'a>(
         search_frame = prev;
     }
 
+    if let Some((owner, displaced)) = displaced_exception.as_ref() {
+        append_replaced_exception(&thrown, displaced, eg);
+        if let Some(pending) = eg.finally_exceptions.get_mut(&(*owner as usize)) {
+            pending.pop();
+            if pending.is_empty() {
+                eg.finally_exceptions.remove(&(*owner as usize));
+            }
+        }
+    }
     ThrowResult::Unhandled(thrown)
 }

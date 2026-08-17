@@ -264,6 +264,9 @@ pub struct ExecutorGlobals {
     pub regex_cache: crate::regex::RegexCache,
     /// Exception being thrown — None = no exception
     pub exception: Option<crate::value::Value>,
+    /// Exceptions suspended while their frame executes a finally block. This
+    /// cold sidecar keeps them separate from newly raised VM exceptions.
+    pub(crate) finally_exceptions: HashMap<usize, Vec<crate::value::Value>>,
     /// Legacy assert_options() settings are request-local and consulted only
     /// by assert(), keeping ordinary call frames and dispatch paths unchanged.
     pub(crate) assertion_state: AssertionState,
@@ -497,6 +500,7 @@ impl ExecutorGlobals {
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
+            finally_exceptions: HashMap::new(),
             assertion_state: AssertionState::default(),
             error_reporting: 32767,
             error_suppression_frames: Vec::new(),
@@ -579,6 +583,7 @@ impl ExecutorGlobals {
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
+            finally_exceptions: HashMap::new(),
             assertion_state: AssertionState::default(),
             error_reporting: 32767,
             error_suppression_frames: Vec::new(),

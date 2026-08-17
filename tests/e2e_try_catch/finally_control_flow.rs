@@ -206,6 +206,7 @@ function f() {
         return 1;
     }
 }
+
 function g() {
     try {
         return "Z";
@@ -216,5 +217,30 @@ echo "F" . f() . "G" . g();
 "#
         ),
         "F1GZ"
+    );
+}
+
+#[test]
+fn escaping_finally_exception_appends_displaced_previous_chain() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$explicit = new Exception('explicit');
+try {
+    try { throw new Exception('old'); }
+    finally { throw new Exception('new', 0, $explicit); }
+} catch (Throwable $error) {
+    for (; $error; $error = $error->getPrevious()) echo $error->getMessage(), "\n";
+}
+try {
+    try { throw new Exception('kept'); }
+    finally {
+        try { throw new Exception('caught'); }
+        catch (Throwable $error) { var_dump($error->getPrevious()); }
+    }
+} catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+"#
+        ),
+        "new\nexplicit\nold\nNULL\nkept\n"
     );
 }

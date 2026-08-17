@@ -509,7 +509,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
         // Check for pending return or exception after finally block ends
         let frame_pending = unsafe { (*frame).pending_return_after_finally };
-        let check_finally = frame_pending || eg.exception.is_some();
+        let check_finally = frame_pending
+            || eg.exception.is_some()
+            || eg.finally_exceptions.contains_key(&(frame as usize));
         if check_finally {
             let current_ip = unsafe {
                 (*frame).opline.offset_from(op_array.instructions.as_ptr()) as u32
@@ -538,7 +540,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     continue;
                 } else {
                     // Real exception — re-enter throw/unwind to find outer handler
-                    let pending = eg.exception.take().unwrap();
+                    let pending = eg.exception.take().or_else(|| {
+                        let exceptions = eg.finally_exceptions.get_mut(&(frame as usize))?;
+                        let pending = exceptions.pop();
+                        if exceptions.is_empty() {
+                            eg.finally_exceptions.remove(&(frame as usize));
+                        }
+                        pending
+                    }).unwrap();
                     // Start from current frame (outer try/catch may be in same frame)
                     let mut search_frame = frame;
                     let mut found = false;
@@ -574,7 +583,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     }
                                     unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
                                 } else if entry.finally_start != 0xFFFFFFFF {
-                                    eg.exception = Some(pending.clone());
+                                    eg.finally_exceptions
+                                        .entry(frame as usize)
+                                        .or_default()
+                                        .push(pending.clone());
                                     unsafe { (*frame).opline = base_ptr.add(entry.finally_start as usize) };
                                 }
                                 found = true;
@@ -5858,6 +5870,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if eg.exception.is_some() {
                     eg.exception = None;
                 }
+                eg.finally_exceptions.remove(&(frame as usize));
 
                 if func_common_ret.plan.needs_late_static_scope() {
                     eg.discard_late_static_scope(frame as usize);
