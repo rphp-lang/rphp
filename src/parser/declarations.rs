@@ -71,7 +71,10 @@ impl Parser {
         while self.peek() != Token::RBrace && !self.at_eof() {
             let modifiers = self.parse_member_modifiers();
             if matches!(self.peek(), Token::Function(_)) {
-                self.advance();
+                let line = match self.advance() {
+                    Token::Function(line) => line,
+                    _ => unreachable!("method parser starts at function"),
+                };
                 // PHP permits functions and methods to declare a reference
                 // return with an ampersand before the name. The runtime's
                 // return-reference contract is a separate compatibility
@@ -91,6 +94,7 @@ impl Parser {
                 let body = self.parse_method_body(&modifiers, &method_name)?;
                 self.pop_generic_scope();
                 methods.push(ClassMethod {
+                    line,
                     visibility: modifiers.visibility,
                     name: method_name,
                     params,
@@ -317,7 +321,10 @@ impl Parser {
 
             if matches!(self.peek(), Token::Function(_)) {
                 // Method
-                self.advance(); // consume 'function'
+                let line = match self.advance() {
+                    Token::Function(line) => line,
+                    _ => unreachable!("method parser starts at function"),
+                };
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -335,6 +342,7 @@ impl Parser {
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
+                    line,
                     visibility: modifiers.visibility,
                     name: method_name,
                     params,
@@ -461,7 +469,10 @@ impl Parser {
             let modifiers = self.parse_member_modifiers();
 
             if matches!(self.peek(), Token::Function(_)) {
-                self.advance();
+                let line = match self.advance() {
+                    Token::Function(line) => line,
+                    _ => unreachable!("method parser starts at function"),
+                };
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -479,6 +490,7 @@ impl Parser {
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
+                    line,
                     visibility: modifiers.visibility,
                     name: method_name,
                     params,
@@ -547,7 +559,10 @@ impl Parser {
             if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, true)?);
             } else if matches!(self.peek(), Token::Function(_)) {
-                self.advance(); // consume 'function'
+                let line = match self.advance() {
+                    Token::Function(line) => line,
+                    _ => unreachable!("method parser starts at function"),
+                };
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -577,6 +592,7 @@ impl Parser {
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
+                    line,
                     visibility: modifiers.visibility,
                     name: method_name,
                     params,
@@ -720,7 +736,10 @@ impl Parser {
                 if self.peek() == Token::Const {
                     constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
                 } else if matches!(self.peek(), Token::Function(_)) {
-                    self.advance();
+                    let line = match self.advance() {
+                        Token::Function(line) => line,
+                        _ => unreachable!("method parser starts at function"),
+                    };
                     let returns_by_ref = self.peek() == Token::Ampersand;
                     self.consume_reference_return_marker();
                     let token = self.advance();
@@ -743,6 +762,7 @@ impl Parser {
                     self.pop_generic_scope();
                     self.class_scope_active = previous_class_scope;
                     methods.push(ClassMethod {
+                        line,
                         visibility: modifiers.visibility,
                         name: method_name,
                         params,

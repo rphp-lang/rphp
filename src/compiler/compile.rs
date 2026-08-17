@@ -1897,6 +1897,14 @@ impl Compiler {
         self.instruction_source_lines.clone()
     }
 
+    fn materialize_source_lines_with_declaration(&self, line: usize) -> Vec<(u32, u32)> {
+        let mut lines = self.materialize_source_lines();
+        if line != 0 {
+            lines.push((u32::MAX, u32::try_from(line).unwrap_or(u32::MAX)));
+        }
+        lines
+    }
+
     fn child_compiler(&self) -> Self {
         let mut child = Self::new();
         child.generic_use_sites = Rc::clone(&self.generic_use_sites);
@@ -5931,7 +5939,7 @@ impl Compiler {
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
-                    source_lines: func_compiler.materialize_source_lines(),
+                    source_lines: func_compiler.materialize_source_lines_with_declaration(*line),
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,

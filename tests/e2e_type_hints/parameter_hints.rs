@@ -32,6 +32,25 @@ try {
 }
 
 #[test]
+fn argument_type_errors_keep_declaration_origin_and_pending_call_trace() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function acceptInt(int $value): void {}
+class Gate { public static function acceptInt(int $value): void {} }
+$closure = function(int $value): void {};
+try { acceptInt([]); } catch (TypeError $error) { $trace = $error->getTrace(); echo $error->getFile(), ':', $error->getLine(), '|', $trace[0]['function'], ':', $trace[0]['line'], ':', gettype($trace[0]['args'][0]), "\n"; }
+try { Gate::acceptInt([]); } catch (TypeError $error) { echo $error->getFile(), ':', $error->getLine(), "\n"; }
+try { $closure([]); } catch (TypeError $error) { echo $error->getFile(), ':', $error->getLine(), "\n"; }
+"#,
+            "argument_origin.php",
+            ".",
+        ),
+        "argument_origin.php:2|acceptInt:5:array\nargument_origin.php:3\nargument_origin.php:4\n"
+    );
+}
+
+#[test]
 fn test_string_type_hint_pass() {
     assert_eq!(
         run_php(

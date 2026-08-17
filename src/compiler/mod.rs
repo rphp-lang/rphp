@@ -110,6 +110,15 @@ impl OpArray {
             .map(|position| self.source_lines[position].1 as usize)
     }
 
+    /// Cold declaration origin retained outside the instruction stream. The
+    /// sentinel does not enlarge opcodes or the hot OpArray header.
+    pub fn declaration_line(&self) -> Option<usize> {
+        self.source_lines
+            .last()
+            .filter(|(index, _)| *index == u32::MAX)
+            .map(|(_, line)| *line as usize)
+    }
+
     /// Split by-value foreach writes after the complete function body is
     /// available. CVs that can become PHP references keep the canonical
     /// assignment-aware opcode; proven frame-local CVs use a branch-free

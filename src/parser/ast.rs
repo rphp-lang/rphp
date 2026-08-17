@@ -746,6 +746,7 @@ pub enum Stmt {
         body: Vec<Stmt>,
     },
     Function {
+        line: usize,
         name: String,
         returns_by_ref: bool,
         params: Vec<Param>,
@@ -1085,6 +1086,7 @@ pub struct ClassConstant {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassMethod {
+    pub line: usize,
     pub visibility: Visibility,
     pub name: String,
     pub params: Vec<Param>,

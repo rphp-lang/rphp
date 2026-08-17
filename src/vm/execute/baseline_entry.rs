@@ -157,7 +157,14 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             rendered.push_str(&segment.message);
         }
         if let Some((file, line, trace)) = segment.location {
-            rendered.push_str(" in ");
+            if segment.class_name == "TypeError"
+                && segment.message.contains(", called in ")
+                && segment.message.contains(" on line ")
+            {
+                rendered.push_str(" and defined in ");
+            } else {
+                rendered.push_str(" in ");
+            }
             rendered.push_str(&file);
             rendered.push(':');
             rendered.push_str(&line.to_string());

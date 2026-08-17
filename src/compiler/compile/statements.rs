@@ -1907,6 +1907,7 @@ impl Compiler {
                 }
             }
             Stmt::Function {
+                line,
                 name,
                 returns_by_ref,
                 params,
@@ -1958,7 +1959,7 @@ impl Compiler {
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
-                    source_lines: func_compiler.materialize_source_lines(),
+                    source_lines: func_compiler.materialize_source_lines_with_declaration(*line),
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
@@ -3343,7 +3344,8 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
-                        source_lines: func_compiler.materialize_source_lines(),
+                        source_lines: func_compiler
+                            .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
@@ -3632,7 +3634,8 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
-                        source_lines: func_compiler.materialize_source_lines(),
+                        source_lines: func_compiler
+                            .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
@@ -3778,7 +3781,8 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
-                        source_lines: func_compiler.materialize_source_lines(),
+                        source_lines: func_compiler
+                            .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
@@ -3994,6 +3998,7 @@ impl Compiler {
                 }
                 let mut enum_methods = methods.clone();
                 enum_methods.push(crate::parser::ClassMethod {
+                    line: 0,
                     visibility: Visibility::Public,
                     name: "cases".to_string(),
                     params: vec![],
@@ -4069,6 +4074,7 @@ impl Compiler {
                         promotion: None,
                     };
                     enum_methods.push(crate::parser::ClassMethod {
+                        line: 0,
                         visibility: Visibility::Public,
                         name: "tryFrom".to_string(),
                         params: vec![value_param.clone()],
@@ -4111,6 +4117,7 @@ impl Compiler {
                         ))),
                     };
                     enum_methods.push(crate::parser::ClassMethod {
+                        line: 0,
                         visibility: Visibility::Public,
                         name: "from".to_string(),
                         params: vec![value_param],
@@ -4183,7 +4190,8 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
-                        source_lines: func_compiler.materialize_source_lines(),
+                        source_lines: func_compiler
+                            .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,

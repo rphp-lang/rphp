@@ -7,11 +7,11 @@ use super::frame::{CALL_FRAME_SLOTS, ExecuteData, HeapSlotIter};
 use super::function::{
     BinaryLongRecursionPlan, CallStrategy, ComposedScalarDoubleFunctionPlan,
     ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
-    ComposedTypedLongFunctionPlan, ComposedTypedLongOp, FUNC_HOT_THRESHOLD, FunctionCommon,
-    FunctionType, HotStatus, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp,
-    LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ObjectArrayFunctionPlan,
-    ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan,
-    ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ParamTypeHint,
+    ComposedTypedLongFunctionPlan, ComposedTypedLongOp, FUNC_HOT_THRESHOLD, Function,
+    FunctionCommon, FunctionType, HotStatus, LongPlanSource, LongPropertyMethodPlan,
+    LongPropertyOp, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition,
+    ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource,
+    ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ParamTypeHint,
     PropertyGetterMethodPlan, PropertyInitMethodPlan, ReturnStrategy, ScalarDoubleFunctionPlan,
     ScalarDoubleOpKind, ScalarDoubleProgram, ScalarDoubleSource, ScalarLongCall,
     ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand,
@@ -2483,14 +2483,42 @@ fn execute_full_call<'a>(
                 ));
                 break;
             }
-        }
-        if let Some(err) = type_error {
-            unsafe { cleanup_frame_slots(call) };
-            pop_vm_call_frame(eg, call);
-            return Ok(match throw_in_frame(eg, frame, err) {
-                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-            });
+            if let Some(err) = type_error {
+                let function = Function::from_common_ptr((*call).func);
+                if function.fn_type() == FunctionType::User {
+                    let callee_op_array = &function.as_user().op_array;
+                    if let Some(declaration_line) = callee_op_array.declaration_line()
+                        && !callee_op_array.source_file.is_empty()
+                    {
+                        let ignore_arguments =
+                            crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+                                .as_deref()
+                                .is_some_and(crate::stdlib::ini_boolean);
+                        let trace_options = if ignore_arguments { 2 } else { 0 };
+                        let trace = crate::stdlib::collect_debug_backtrace(
+                            call,
+                            trace_options,
+                            0,
+                            eg,
+                            true,
+                        );
+                        attach_argument_type_error_origin(
+                            &err,
+                            callee_op_array.source_file.clone(),
+                            declaration_line,
+                            trace,
+                            op_array,
+                            opline,
+                        );
+                    }
+                }
+                cleanup_frame_slots(call);
+                pop_vm_call_frame(eg, call);
+                return Ok(match throw_in_frame(eg, frame, err) {
+                    ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                    ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+                });
+            }
         }
     }
 

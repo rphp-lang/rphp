@@ -887,6 +887,7 @@ impl Parser {
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 Ok(Stmt::Function {
+                    line,
                     name,
                     returns_by_ref,
                     params,

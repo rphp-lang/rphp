@@ -643,6 +643,41 @@ fn attach_throwable_origin(
     }
 }
 
+/// Argument verification happens while the callee frame is pending. PHP
+/// exposes the declaration as the Throwable origin but retains that pending
+/// call as frame zero of the trace, so snapshot both before releasing it.
+fn attach_argument_type_error_origin(
+    throwable: &Value,
+    source_file: std::rc::Rc<String>,
+    declaration_line: usize,
+    mut trace: PhpArray,
+    caller_op_array: &crate::compiler::OpArray,
+    call_instruction: &Instruction,
+) {
+    let call_index = caller_op_array
+        .instructions
+        .iter()
+        .position(|instruction| std::ptr::eq(instruction, call_instruction));
+    if let Some(call_line) = call_index.and_then(|index| caller_op_array.source_line(index))
+        && !caller_op_array.source_file.is_empty()
+        && let Some(mut first) = trace.get_value_at(0).cloned()
+        && let Some(entry) = first.as_array_mut()
+    {
+        entry.set_str(
+            "file",
+            Value::shared_string(caller_op_array.source_file.clone()),
+        );
+        entry.set_str("line", Value::long(call_line as i64));
+        trace.set_int(0, first);
+    }
+    let Some(mut object) = throwable.as_object_mut() else {
+        return;
+    };
+    object.set_property("file", Value::shared_string(source_file));
+    object.set_property("line", Value::long(declaration_line as i64));
+    object.set_property("trace", Value::array(trace));
+}
+
 /// Walk frames starting from `frame` looking for a try/catch handler for `thrown`.
 /// On success: unwinds frames and returns the handler frame + op_array.
 /// On failure: returns Unhandled with the original exception value.
