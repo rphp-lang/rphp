@@ -357,6 +357,28 @@ $generator->send($generator);
 }
 
 #[test]
+fn yield_obeys_assignment_keyword_and_nested_expression_precedence() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function values() {
+    $assigned = yield $value = 1;
+    var_dump($value, $assigned);
+    var_dump(yield * -1);
+    yield yield;
+}
+$generator = values();
+var_dump($generator->current());
+var_dump($generator->send(2));
+var_dump($generator->send(3));
+var_dump($generator->send(4));
+"#
+        ),
+        "int(1)\nint(1)\nint(2)\nNULL\nint(-3)\nNULL\nint(4)\n"
+    );
+}
+
+#[test]
 fn test_typed_generator_completion_and_internal_return_value() {
     assert_eq!(
         run_php(

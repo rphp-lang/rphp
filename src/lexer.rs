@@ -107,6 +107,8 @@ pub enum Token {
     GreaterEqual,           // >=
     AmpAmp,                 // &&
     PipePipe,               // ||
+    LogicalAnd,             // and
+    LogicalOr,              // or
     PipeGreater(usize),     // |> (PHP 8.5 pipe operator)
     LogicalXor,             // xor
     Bang,                   // !
@@ -656,6 +658,8 @@ impl<'a> Lexer<'a> {
                         "include_once" => tokens.push(Token::IncludeOnce),
                         "require" => tokens.push(Token::Require),
                         "require_once" => tokens.push(Token::RequireOnce),
+                        "and" => tokens.push(Token::LogicalAnd),
+                        "or" => tokens.push(Token::LogicalOr),
                         "xor" => tokens.push(Token::LogicalXor),
                         _ => tokens.push(Token::Identifier(ident, line)),
                     }

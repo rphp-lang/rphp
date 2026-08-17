@@ -514,15 +514,21 @@ impl Parser {
                             target,
                         });
                     }
-                    let expr = self.parse_expr()?;
+                    let expr = self.parse_assignment_or_yield()?;
+                    let assignment = if var_name == "GLOBALS" {
+                        self.globals_modification_error(line)
+                    } else {
+                        Expr::Assign {
+                            var: var_name.clone(),
+                            expr: Box::new(expr),
+                        }
+                    };
+                    let expression = self.finish_keyword_logical_tail(assignment)?;
                     self.expect(&Token::Semicolon)?;
-                    if var_name == "GLOBALS" {
-                        return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
+                    match expression {
+                        Expr::Assign { var, expr } => Ok(Stmt::Assign { var, expr: *expr }),
+                        expression => Ok(Stmt::ExprStmt(expression)),
                     }
-                    Ok(Stmt::Assign {
-                        var: var_name,
-                        expr,
-                    })
                 } else if let Some(bin_op) = Self::compound_assign_op(&next) {
                     let (var_name, line) = match self.advance() {
                         Token::Variable(name, line) => (name, line),

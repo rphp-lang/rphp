@@ -1,11 +1,83 @@
 impl Parser {
-    /// Parse expression: ternary ? : (lowest precedence, non-associative in PHP 8+)
+    /// Parse PHP's keyword logical operators below assignment and yield.
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        // yield has the lowest precedence
-        if self.peek() == Token::Yield {
-            return self.parse_yield_expr();
-        }
+        self.parse_keyword_or()
+    }
 
+    fn parse_keyword_or(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_keyword_xor()?;
+        while self.peek() == Token::LogicalOr {
+            self.advance();
+            let right = self.parse_keyword_xor()?;
+            left = Expr::BinaryOp {
+                op: BinOp::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn finish_keyword_logical_tail(&mut self, mut left: Expr) -> Result<Expr, String> {
+        while self.peek() == Token::LogicalAnd {
+            self.advance();
+            let right = self.parse_assignment_or_yield()?;
+            left = Expr::BinaryOp {
+                op: BinOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        while self.peek() == Token::LogicalXor {
+            self.advance();
+            let right = self.parse_keyword_and()?;
+            left = Expr::BinaryOp {
+                op: BinOp::LogicalXor,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        while self.peek() == Token::LogicalOr {
+            self.advance();
+            let right = self.parse_keyword_xor()?;
+            left = Expr::BinaryOp {
+                op: BinOp::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_keyword_xor(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_keyword_and()?;
+        while self.peek() == Token::LogicalXor {
+            self.advance();
+            let right = self.parse_keyword_and()?;
+            left = Expr::BinaryOp {
+                op: BinOp::LogicalXor,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_keyword_and(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_assignment_or_yield()?;
+        while self.peek() == Token::LogicalAnd {
+            self.advance();
+            let right = self.parse_assignment_or_yield()?;
+            left = Expr::BinaryOp {
+                op: BinOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_assignment_or_yield(&mut self) -> Result<Expr, String> {
         let expr = self.parse_ternary()?;
         self.finish_assignment_tail(expr)
     }
@@ -63,7 +135,7 @@ impl Parser {
         } else {
             false
         };
-        let expr = self.parse_expr()?;
+        let expr = self.parse_assignment_or_yield()?;
         if let Expr::Globals { line } = target {
             return Ok(self.compile_error("Cannot append to $GLOBALS", line));
         }
@@ -99,7 +171,7 @@ impl Parser {
         }
         let op = Self::compound_assign_op(&self.advance())
             .ok_or_else(|| "Expected compound assignment operator".to_string())?;
-        let expr = self.parse_expr()?;
+        let expr = self.parse_assignment_or_yield()?;
         if let Some(line) = nullsafe_line {
             return Ok(self.nullsafe_write_error(line));
         }
@@ -121,7 +193,7 @@ impl Parser {
         } else {
             false
         };
-        let expr = Box::new(self.parse_expr()?);
+        let expr = Box::new(self.parse_assignment_or_yield()?);
         if let Some(line) = Self::nullsafe_chain_line(&target) {
             return Ok(self.nullsafe_write_error(line));
         }
@@ -205,7 +277,7 @@ impl Parser {
             return Err("Invalid null-coalescing assignment target".into());
         }
         self.expect(&Token::QuestionQuestionAssign)?;
-        let expr = self.parse_expr()?;
+        let expr = self.parse_assignment_or_yield()?;
         if let Some(line) = nullsafe_line {
             return Ok(self.nullsafe_write_error(line));
         }
@@ -236,6 +308,7 @@ impl Parser {
                 | Token::RBracket
                 | Token::RBrace
                 | Token::Comma
+                | Token::Star
                 | Token::Eof
         ) {
             return Ok(Expr::Yield {
@@ -245,10 +318,10 @@ impl Parser {
         }
 
         // yield <expr> or yield <key> => <value>
-        let first = self.parse_ternary()?;
+        let first = self.parse_assignment_or_yield()?;
         if self.peek() == Token::DoubleArrow {
             self.advance(); // consume '=>'
-            let value = self.parse_ternary()?;
+            let value = self.parse_assignment_or_yield()?;
             Ok(Expr::Yield {
                 key: Some(Box::new(first)),
                 value: Some(Box::new(value)),
@@ -313,7 +386,7 @@ impl Parser {
 
     /// Null coalesce: ?? (right-associative)
     fn parse_null_coalesce(&mut self) -> Result<Expr, String> {
-        let left = self.parse_logical_xor()?;
+        let left = self.parse_logical_or()?;
 
         if self.peek() == Token::QuestionQuestion {
             self.advance();
@@ -328,21 +401,6 @@ impl Parser {
         } else {
             Ok(left)
         }
-    }
-
-    /// Keyword `xor`: both operands are evaluated and converted to bool.
-    fn parse_logical_xor(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_logical_or()?;
-        while self.peek() == Token::LogicalXor {
-            self.advance();
-            let right = self.parse_logical_or()?;
-            left = Expr::BinaryOp {
-                op: BinOp::LogicalXor,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
-        Ok(left)
     }
 
     /// Logical OR: || (left-associative)
@@ -815,6 +873,7 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Bool(false))
             }
+            Token::Yield => self.parse_yield_expr(),
             Token::Variable(_, _) => {
                 let (name, line) = match self.advance() {
                     Token::Variable(n, line) => (n, line),

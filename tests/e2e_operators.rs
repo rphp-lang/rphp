@@ -67,12 +67,19 @@ fn test_e2e_or_right_true() {
 }
 
 #[test]
-fn test_e2e_keyword_xor_uses_boolean_truthiness_and_evaluates_both_sides() {
+fn keyword_logical_operators_use_php_precedence_and_short_circuit_rules() {
     assert_eq!(
         run_php(
-            "<?php function side($value) { echo $value; return $value; } echo ':'; echo side('L') xor side('') ? 'yes' : 'no';"
+            "<?php
+function side($value) { echo $value; return $value; }
+echo ':';
+echo side('L') xor side('') ? 'yes' : 'no';
+$or = false or true;
+$and = true and false;
+var_dump($or, $and, false xor true);
+"
         ),
-        ":Lyes"
+        ":Lbool(false)\nbool(true)\nbool(true)\n"
     );
 }
 
