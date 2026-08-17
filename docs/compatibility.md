@@ -8,14 +8,29 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `bd3c5bc`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,234 pass, 2,974 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `e4ede85`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,241 pass, 2,967 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-42.896%; 88.249% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +419/-0. The first four gains are
+43.030%; 88.249% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +426/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Automatically invoked `__clone` now grants each initialized readonly property
+one successful direct reinitialization on the cloned receiver. Failed type
+checks do not consume the grant, a second or indirect array update is rejected,
+and manually calling `__clone` receives no grant. Clone-with snapshots the
+readonly properties initialized after `__clone` and permits each named update
+once, so a hook that initializes another readonly property cannot make a later
+array entry overwrite it. Frame-local cold sidecars preserve the 72-byte object
+layout and are cleared on normal completion and exception paths. This adds
+seven exact PHP 8.5 passes without losing a prior pass. The remaining
+`readonly_clone_success2.phpt` executes the expected unset/reassign values but
+still differs in pre-existing object-handle numbering. All five feature
+configurations, all-target and unsafe gates pass. Ten-pair typed/untyped
+property read, write, method and constructor controls measure +0.451%, -1.880%,
++0.684% and +1.950%, all within the five-percent ceiling.
 
 PHP 8.5's `clone($object, $withProperties)` form now validates both operands
 before cloning, rejects live reference aliases, runs `__clone`, and then applies
