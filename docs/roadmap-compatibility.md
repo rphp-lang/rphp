@@ -524,6 +524,17 @@ gain from the initial baseline to +404/-0. All five feature configurations,
 all-target and unsafe gates pass. No runtime performance gate applies because
 the change does not alter runtime structures, bytecode or VM dispatch.
 
+The `f07d8be` hooked-property-unset checkpoint reaches 2,220 passes with 2,988
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Accessible backed, virtual, uninitialized and inherited hooked
+properties now reject `unset()` with PHP 8.5's catchable property-specific
+error before storage mutation or `__unset`; ordinary properties and visibility
+precedence are preserved. The exact PHP 8.5.6 delta is +1/-0, bringing the
+cumulative gain from the initial baseline to +405/-0. All five feature
+configurations, all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel
+S2 gates pass. No ordinary property performance gate applies because the new
+metadata check is confined to the cold `UnsetObj` handler.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

@@ -8,14 +8,24 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `dffa9c0`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,219 pass, 2,989 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `f07d8be`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,220 pass, 2,988 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-42.608%; 87.999% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +404/-0. The first four gains are
+42.627%; 87.999% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +405/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Unsetting an accessible hooked property now raises PHP 8.5's catchable
+`Cannot unset hooked property` error before changing backed storage or invoking
+`__unset`. The rule covers backed, virtual, uninitialized and inherited hooks,
+while ordinary properties retain their existing unset behavior and visibility
+checks remain authoritative. This adds the exact property-hook `unset.phpt`
+pass without losing a prior pass. All five feature configurations, all-target,
+unsafe, Composer S0, Symfony S1 and warmed-kernel S2 gates pass. No ordinary
+property performance gate applies because the additional metadata lookup is
+confined to the cold `UnsetObj` handler.
 
 Parenthesized static-property expressions now retain their value-call boundary
 in the parser AST. Consequently `(parent::$property)::method()` fetches the
