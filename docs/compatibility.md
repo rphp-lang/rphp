@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `63f65ee`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,446 pass, 2,762 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `df00319`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,456 pass, 2,752 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-46.966%; 87.154% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +631/-0. The first four gains are
+47.158%; 87.154% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +641/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -28,9 +28,20 @@ its external cell as frame storage. This adds six exact PHP 8.5.6 passes with
 no lost pass or moved failure stage. All five Cargo configurations,
 all-target/all-features and unsafe gates pass. Alternating AMD64 release runs
 showed unchanged medians for ten million scalar assignments (0.05 seconds) and
-five million object assignments (0.93 seconds). Property/static-property
-replacement, generator finalization and request-shutdown destruction remain
-separate lifecycle work.
+five million object assignments (0.93 seconds).
+
+Instance and static property replacement now commit the new value or reference
+cell before invoking the final old value's destructor, so re-entrant writes see
+PHP 8.5's assignment state. A standalone property assignment transfers an
+unobserved TMP/VAR owner into storage instead of retaining a compiler-only
+object alias; reference-returning RHS values remain dereferenced ordinary
+assignments. This closes all ten previously failing `Zend/tests/gh10168`
+property cases with no lost pass, timeout, crash or moved failure stage. The
+property E2E suite passes in all five Cargo feature configurations, as do the
+all-target/all-features compile and unsafe-policy gates. Nine alternating AMD64
+release runs retain identical medians for ten million scalar property writes
+(0.19 seconds) and 500,000 object replacements (0.08 seconds). Generator
+finalization and request-shutdown destruction remain separate lifecycle work.
 
 Each anonymous Closure object now owns its function-static cells. Repeated
 creation of the same declaration produces independent cells, ordinary aliases
