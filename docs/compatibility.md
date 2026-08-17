@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `805933b`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,243 pass, 2,965 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `16f7c23`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,247 pass, 2,961 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-43.068%; 88.249% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +428/-0. The first four gains are
+43.145%; 88.249% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +432/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -30,6 +30,16 @@ configurations, all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel S2
 gates pass. Fifteen interleaved declared-property-write measurements preserve
 the exact result and move the median from 0.181461 s to 0.182137 s (+0.373%);
 the candidate p10/p90 interval is 0.178616/0.191200 s, within measurement noise.
+
+The retained `AllowDynamicProperties` declaration marker now also reaches
+interface, trait, enum and readonly-class declarations and emits PHP 8.5's
+compile-time target diagnostic for each forbidden kind. Ordinary classes and
+delayed validation on non-declaration members remain unchanged. The four exact
+target-validation PHPTs move to pass with no lost pass. All five Cargo feature
+configurations, all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel S2
+gates pass. This is a lexer/parser-only cold compile-path change; it does not
+alter runtime dispatch, object layout or generated native code, so no runtime
+performance gate applies.
 
 Automatically invoked `__clone` now grants each initialized readonly property
 one successful direct reinitialization on the cloned receiver. Failed type
