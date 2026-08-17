@@ -258,6 +258,16 @@ contract with receiver lifetime preservation. The exact PHP 8.5.6 delta is
 generator resume gate measured -2.155%, within the one-percent regression
 ceiling without treating the negative sample as an optimization claim.
 
+The `f444173` internal exception-trace checkpoint reaches 1,989 passes with
+3,219 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. Internal call frames are captured before cleanup, detached
+generator rethrows reconnect their generator/method/caller chain, and supplied
+Throwable objects keep their creation trace. The exact PHP 8.5.6 delta is
++6/-0. The feature matrix and unsafe gate pass, reducing the unsafe-block
+inventory from 1,623 to 1,620. The 100-pair hot `strlen()` internal-call gate
+measured -3.762%, within the one-percent regression ceiling without claiming
+the negative sample as an optimization.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

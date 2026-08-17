@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `5bf280a`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,983 pass, 3,225 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `f444173`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,989 pass, 3,219 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-38.076%; 82.796% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +168/-0. The first four gains are
+38.191%; 82.796% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +174/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -82,6 +82,16 @@ retaining a receiver that releases itself during `Countable::count()`. This
 adds five exact PHP 8.5.6 passes with no lost pass. The 200-pair generator
 resume gate measured -2.155% versus the prior binary, so no speedup is claimed
 but the one-percent regression ceiling is satisfied.
+
+Exceptions created by internal functions and methods now snapshot their live
+internal call frame before cleanup, while exceptions supplied by the caller
+retain their original immutable trace. Detached generator failures reconnect
+the generator, internal method and user caller only for that cold snapshot,
+including rethrows from `Generator::throw()`. Public trace names recover the
+canonical declaring-class spelling. This adds six exact PHP 8.5.6 passes with
+no lost pass. A 100-pair hot `strlen()` internal-call gate measured -3.762%
+against the prior binary; no speedup is claimed, but the one-percent regression
+ceiling is satisfied.
 
 Recursive array identity and loose object comparison now track active compound
 values and enforce a bounded comparison depth. Cycles between distinct values
