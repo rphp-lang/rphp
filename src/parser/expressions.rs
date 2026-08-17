@@ -461,6 +461,7 @@ impl Parser {
         while self.peek() == Token::Pipe {
             self.advance();
             let right = self.parse_bitwise_xor()?;
+            let right = self.finish_assignment_tail(right)?;
             left = Expr::BinaryOp {
                 op: BinOp::BitwiseOr,
                 left: Box::new(left),
@@ -478,6 +479,7 @@ impl Parser {
         while self.peek() == Token::Caret {
             self.advance();
             let right = self.parse_bitwise_and()?;
+            let right = self.finish_assignment_tail(right)?;
             left = Expr::BinaryOp {
                 op: BinOp::BitwiseXor,
                 left: Box::new(left),
@@ -495,6 +497,7 @@ impl Parser {
         while self.peek() == Token::Ampersand {
             self.advance();
             let right = self.parse_comparison()?;
+            let right = self.finish_assignment_tail(right)?;
             left = Expr::BinaryOp {
                 op: BinOp::BitwiseAnd,
                 left: Box::new(left),
@@ -638,6 +641,7 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_additive()?;
+            let right = self.finish_assignment_tail(right)?;
             left = Expr::BinaryOp {
                 op,
                 left: Box::new(left),
@@ -660,6 +664,7 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_multiplicative()?;
+            let right = self.finish_assignment_tail(right)?;
             left = Expr::BinaryOp {
                 op,
                 left: Box::new(left),
@@ -683,6 +688,7 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_unary()?;
+            let right = self.finish_assignment_tail(right)?;
             left = Expr::BinaryOp {
                 op,
                 left: Box::new(left),
@@ -825,6 +831,7 @@ impl Parser {
         if self.peek() == Token::StarStar {
             self.advance();
             let exp = self.parse_unary()?; // right-associative: recurse through unary
+            let exp = self.finish_assignment_tail(exp)?;
             Ok(Expr::BinaryOp {
                 op: BinOp::Pow,
                 left: Box::new(base),

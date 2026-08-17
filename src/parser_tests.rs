@@ -603,6 +603,23 @@ fn test_parse_add() {
 }
 
 #[test]
+fn binary_operators_bind_an_assignment_inside_their_right_operand() {
+    let tokens = Lexer::new("<?php echo 1 + $value = 3;").tokenize().unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert_eq!(
+        stmts,
+        vec![echo(vec![Expr::BinaryOp {
+            op: BinOp::Add,
+            left: Box::new(Expr::Integer(1)),
+            right: Box::new(Expr::Assign {
+                var: "value".into(),
+                expr: Box::new(Expr::Integer(3)),
+            }),
+        }])]
+    );
+}
+
+#[test]
 fn test_parse_assignment_on_comparison_rhs() {
     let tokens = Lexer::new("<?php echo false !== $position = find_position();")
         .tokenize()

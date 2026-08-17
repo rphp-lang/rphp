@@ -84,6 +84,23 @@ var_dump($or, $and, false xor true);
 }
 
 #[test]
+fn binary_right_operands_accept_value_producing_assignments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$add = 2; var_dump(1 + $add = 3, $add);
+$concat = 'x'; var_dump('p' . $concat = 'q', $concat);
+$multiply = 4; var_dump(8 * $multiply = 5, $multiply);
+$shift = 0; var_dump(8 >> $shift = 2, $shift);
+$bitwise = 0; var_dump(1 | $bitwise = 2, $bitwise);
+$power = 0; var_dump(2 ** $power = 3, $power);
+"#
+        ),
+        "int(4)\nint(3)\nstring(2) \"pq\"\nstring(1) \"q\"\nint(40)\nint(5)\nint(2)\nint(2)\nint(3)\nint(2)\nint(8)\nint(3)\n"
+    );
+}
+
+#[test]
 fn test_e2e_not_true() {
     assert_eq!(
         run_php("<?php if (!0) { echo \"yes\"; } else { echo \"no\"; }"),
