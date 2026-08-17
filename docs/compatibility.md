@@ -8,14 +8,27 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `0c708a5`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,253 pass, 2,955 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `89d63aa`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,262 pass, 2,946 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-43.260%; 88.345% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +438/-0. The first four gains are
+43.433%; 88.402% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +447/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Anonymous classes now accept trait composition, including aliases and
+visibility adaptations, through the same class-linking contract as named
+classes. Their `var_dump()` class and private-property owner labels hide the
+runtime-only identity suffix, explicit abstract methods fail at declaration,
+and a final assignment may omit its semicolon at end of source as PHP permits.
+This adds nine exact passes without losing a prior pass: two trait-use cases,
+six anonymous object dumps, and the explicit-abstract diagnostic. All five
+Cargo feature configurations,
+all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel S2 gates pass.
+The executable object layout, ordinary object access and generated native code
+are unchanged; added formatting is confined to the explicitly requested cold
+`var_dump()` path and the remaining work is parser/compiler class metadata.
 
 Dynamic-property creation now follows the PHP 8.5 diagnostic contract across
 direct assignment, compound assignment, increment/decrement, array append and
