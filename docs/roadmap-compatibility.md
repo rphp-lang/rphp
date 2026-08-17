@@ -248,6 +248,16 @@ the caller. The exact PHP 8.5.6 delta is +6/-0; the full feature matrix and
 unsafe gate pass. No performance gate applies because injection is an explicit
 cold method and ordinary generator advancement remains unchanged.
 
+The `5bf280a` Generator object-invariant checkpoint reaches 1,983 passes with
+3,225 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. Generator cloning and dynamic properties are rejected, engine
+serialization is forbidden, rewind eligibility survives only through the
+first suspension, and `count()` implements the PHP 8.5 array/`Countable`
+contract with receiver lifetime preservation. The exact PHP 8.5.6 delta is
++5/-0. The feature matrix and unsafe gate pass; the established 200-pair
+generator resume gate measured -2.155%, within the one-percent regression
+ceiling without treating the negative sample as an optimization claim.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

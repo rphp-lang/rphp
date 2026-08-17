@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `d0cd311`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,978 pass, 3,230 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `5bf280a`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,983 pass, 3,225 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-37.980%; 82.796% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +163/-0. The first four gains are
+38.076%; 82.796% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +168/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -72,6 +72,16 @@ an escaped exception closes the generator and reaches the caller, and active
 delegates. Closed generators rethrow the supplied value, while non-Throwable
 arguments raise the canonical `TypeError`. This adds six exact PHP 8.5.6
 passes with no lost pass.
+
+Generator objects now enforce their engine-owned invariants: they cannot be
+cloned, cannot receive dynamic properties, and cannot be serialized or
+materialized by `unserialize()`. Rewind remains legal through the first
+suspension point but is rejected after advancement, including delegated array
+yields, and `count()` accepts only arrays or `Countable` objects while safely
+retaining a receiver that releases itself during `Countable::count()`. This
+adds five exact PHP 8.5.6 passes with no lost pass. The 200-pair generator
+resume gate measured -2.155% versus the prior binary, so no speedup is claimed
+but the one-percent regression ceiling is satisfied.
 
 Recursive array identity and loose object comparison now track active compound
 values and enforce a bounded comparison depth. Cycles between distinct values
