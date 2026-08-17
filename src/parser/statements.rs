@@ -131,13 +131,17 @@ impl Parser {
     }
 
     fn memory_exhausted(&self, line: usize) -> String {
+        self.source_error("memory exhausted", line)
+    }
+
+    fn source_error(&self, message: &str, line: usize) -> String {
         let location = self
             .source_name
             .as_deref()
             .filter(|source_name| !source_name.is_empty())
             .map(|source_name| format!(" in {source_name}"))
             .unwrap_or_default();
-        format!("memory exhausted{location} on line {line}")
+        format!("{message}{location} on line {line}")
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {

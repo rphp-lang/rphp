@@ -967,4 +967,21 @@ fn asymmetric_property_visibility_is_retained_separately_for_reads_and_writes() 
     assert_eq!(properties[0].set_visibility, Some(Visibility::Private));
     assert_eq!(properties[1].visibility, Visibility::Public);
     assert_eq!(properties[1].set_visibility, Some(Visibility::Protected));
+    assert_eq!(properties[0].line, 1);
+}
+
+#[test]
+fn duplicate_asymmetric_visibility_retains_the_second_modifier_location() {
+    let tokens =
+        Lexer::new("<?php\nclass Box {\n    public private(set) protected(set) int $value;\n}")
+            .tokenize()
+            .unwrap();
+    let error = Parser::new(tokens)
+        .with_source_name("/fixture/asymmetric.php")
+        .parse()
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "Multiple access type modifiers are not allowed in /fixture/asymmetric.php on line 3"
+    );
 }

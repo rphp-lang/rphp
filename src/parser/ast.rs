@@ -1065,6 +1065,8 @@ pub enum Visibility {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassProperty {
+    /// Declaration line used by compile/link diagnostics.
+    pub line: usize,
     pub visibility: Visibility,
     pub set_visibility: Option<Visibility>,
     pub name: String,

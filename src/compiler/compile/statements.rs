@@ -3324,7 +3324,7 @@ impl Compiler {
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
                 // Collect promoted properties from constructor
-                let mut promoted_props: Vec<(String, Visibility, Option<Visibility>, bool, ParamTypeHint, bool)> =
+                let mut promoted_props: Vec<(String, usize, Visibility, Option<Visibility>, bool, ParamTypeHint, bool)> =
                     Vec::new(); // (name, read visibility, set visibility, readonly, erased type, needs reification)
                 for method in methods {
                     self.record_generic_declaration(
@@ -3368,15 +3368,21 @@ impl Compiler {
                                         Visibility::Public => 2,
                                     };
                                     if rank(*vis) < rank(*set_visibility) {
-                                        return Err(format!(
-                                            "Visibility of property {}::${} must not be weaker than set visibility",
-                                            name, param.name
+                                        return Err(self.goto_error(
+                                            &format!(
+                                                "Visibility of property {}::${} must not be weaker than set visibility",
+                                                name, param.name
+                                            ),
+                                            param.line,
                                         ));
                                     }
                                     if param.type_hint.is_none() {
-                                        return Err(format!(
-                                            "Property with asymmetric visibility {}::${} must have type",
-                                            name, param.name
+                                        return Err(self.goto_error(
+                                            &format!(
+                                                "Property with asymmetric visibility {}::${} must have type",
+                                                name, param.name
+                                            ),
+                                            param.line,
                                         ));
                                     }
                                 }
@@ -3387,6 +3393,7 @@ impl Compiler {
                                 );
                                 promoted_props.push((
                                     param.name.clone(),
+                                    param.line,
                                     *vis,
                                     *set_vis,
                                     *is_ro,
@@ -3529,35 +3536,50 @@ impl Compiler {
                             Visibility::Public => 2,
                         };
                         if rank(prop.visibility) < rank(set_visibility) {
-                            return Err(format!(
-                                "Visibility of property {}::${} must not be weaker than set visibility",
-                                name, prop.name
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Visibility of property {}::${} must not be weaker than set visibility",
+                                    name, prop.name
+                                ),
+                                prop.line,
                             ));
                         }
                         if prop.type_hint.is_none() {
-                            return Err(format!(
-                                "Property with asymmetric visibility {}::${} must have type",
-                                name, prop.name
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Property with asymmetric visibility {}::${} must have type",
+                                    name, prop.name
+                                ),
+                                prop.line,
                             ));
                         }
                     }
                     let property_is_readonly = *is_readonly || prop.is_readonly;
                     if prop.is_static && property_is_readonly {
-                        return Err(format!(
-                            "Static property {}::${} cannot be readonly",
-                            name, prop.name
+                        return Err(self.goto_error(
+                            &format!(
+                                "Static property {}::${} cannot be readonly",
+                                name, prop.name
+                            ),
+                            prop.line,
                         ));
                     }
                     if property_is_readonly && prop.type_hint.is_none() {
-                        return Err(format!(
-                            "Readonly property {}::${} must have type",
-                            name, prop.name
+                        return Err(self.goto_error(
+                            &format!(
+                                "Readonly property {}::${} must have type",
+                                name, prop.name
+                            ),
+                            prop.line,
                         ));
                     }
                     if property_is_readonly && prop.default.is_some() {
-                        return Err(format!(
-                            "Readonly property {}::${} cannot have default value",
-                            name, prop.name
+                        return Err(self.goto_error(
+                            &format!(
+                                "Readonly property {}::${} cannot have default value",
+                                name, prop.name
+                            ),
+                            prop.line,
                         ));
                     }
                     let type_hint = self.resolve_declared_property_type_hint(
@@ -3595,7 +3617,8 @@ impl Compiler {
                         type_hint,
                         property_is_readonly,
                         type_hint_requires_reified_check(&prop.type_hint),
-                    );
+                    )
+                    .with_source_location(&self.source_file, prop.line);
                     if prop.is_static {
                         compiled_static_props.push(definition);
                     } else {
@@ -3604,7 +3627,7 @@ impl Compiler {
                 }
 
                 // Add promoted properties
-                for (pname, pvis, pset_vis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
+                for (pname, line, pvis, pset_vis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
                     let property_is_readonly = *is_readonly || *p_readonly;
                     compiled_props.push(PropertyDefinition::declared_with_set_visibility(
                         pname.clone(),
@@ -3615,7 +3638,7 @@ impl Compiler {
                         type_hint.clone(),
                         property_is_readonly,
                         *requires_reified_check,
-                    ));
+                    ).with_source_location(&self.source_file, *line));
                     if property_is_readonly {
                         readonly_props.push(pname.clone());
                     }

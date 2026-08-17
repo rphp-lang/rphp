@@ -3,6 +3,7 @@ struct MemberModifiers {
     visibility: Visibility,
     set_visibility: Option<Visibility>,
     has_duplicate_set_visibility: bool,
+    duplicate_set_visibility_line: Option<usize>,
     is_static: bool,
     is_final: bool,
     is_readonly: bool,
@@ -15,6 +16,7 @@ impl Default for MemberModifiers {
             visibility: Visibility::Public,
             set_visibility: None,
             has_duplicate_set_visibility: false,
+            duplicate_set_visibility_line: None,
             is_static: false,
             is_final: false,
             is_readonly: false,
@@ -32,13 +34,17 @@ impl Parser {
             return Err("Properties cannot be declared abstract".into());
         }
         if modifiers.has_duplicate_set_visibility {
-            return Err("Multiple access type modifiers are not allowed".into());
+            let line = modifiers.duplicate_set_visibility_line.unwrap_or(1);
+            return Err(self.source_error(
+                "Multiple access type modifiers are not allowed",
+                line,
+            ));
         }
         let type_hint = self.try_parse_type_hint()?;
         let mut properties = Vec::new();
         loop {
-            let name = match self.advance() {
-                Token::Variable(name, _) => name,
+            let (name, line) = match self.advance() {
+                Token::Variable(name, line) => (name, line),
                 other => return Err(format!("Expected property variable, got {other:?}")),
             };
             let default = if self.peek() == Token::Assign {
@@ -48,6 +54,7 @@ impl Parser {
                 None
             };
             properties.push(ClassProperty {
+                line,
                 visibility: modifiers.visibility,
                 set_visibility: modifiers.set_visibility,
                 name,
@@ -814,9 +821,15 @@ impl Parser {
                         && self.peek_at(2) == Token::RParen
                     {
                         self.advance();
-                        self.advance();
+                        let line = match self.advance() {
+                            Token::Identifier(_, line) => line,
+                            _ => unreachable!(),
+                        };
                         self.advance();
                         modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
+                        if modifiers.has_duplicate_set_visibility {
+                            modifiers.duplicate_set_visibility_line = Some(line);
+                        }
                         modifiers.set_visibility = Some(Visibility::Public);
                     } else {
                         modifiers.visibility = Visibility::Public;
@@ -829,9 +842,15 @@ impl Parser {
                         && self.peek_at(2) == Token::RParen
                     {
                         self.advance();
-                        self.advance();
+                        let line = match self.advance() {
+                            Token::Identifier(_, line) => line,
+                            _ => unreachable!(),
+                        };
                         self.advance();
                         modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
+                        if modifiers.has_duplicate_set_visibility {
+                            modifiers.duplicate_set_visibility_line = Some(line);
+                        }
                         modifiers.set_visibility = Some(Visibility::Protected);
                     } else {
                         modifiers.visibility = Visibility::Protected;
@@ -844,9 +863,15 @@ impl Parser {
                         && self.peek_at(2) == Token::RParen
                     {
                         self.advance();
-                        self.advance();
+                        let line = match self.advance() {
+                            Token::Identifier(_, line) => line,
+                            _ => unreachable!(),
+                        };
                         self.advance();
                         modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
+                        if modifiers.has_duplicate_set_visibility {
+                            modifiers.duplicate_set_visibility_line = Some(line);
+                        }
                         modifiers.set_visibility = Some(Visibility::Private);
                     } else {
                         modifiers.visibility = Visibility::Private;

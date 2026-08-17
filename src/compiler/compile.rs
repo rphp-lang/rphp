@@ -1316,6 +1316,11 @@ pub struct PropertyDefinition {
     /// receiver declaration, so one cached definition pointer carries both
     /// the erased PHP contract and the bound/reified generic lookup key.
     pub(crate) generic_declaration: Option<u32>,
+    /// Source declaration location used only by cold link-time diagnostics.
+    /// Keep it after execution metadata so established hot-field offsets stay
+    /// stable.
+    pub source_file: Option<String>,
+    pub source_line: usize,
 }
 
 impl PropertyDefinition {
@@ -1338,6 +1343,8 @@ impl PropertyDefinition {
             is_readonly: false,
             requires_reified_check: false,
             generic_declaration: None,
+            source_file: None,
+            source_line: 0,
         }
     }
 
@@ -1362,6 +1369,8 @@ impl PropertyDefinition {
             is_readonly,
             requires_reified_check,
             generic_declaration: None,
+            source_file: None,
+            source_line: 0,
         }
     }
 
@@ -1386,6 +1395,14 @@ impl PropertyDefinition {
         );
         property.set_visibility = set_visibility;
         property
+    }
+
+    pub fn with_source_location(mut self, source_file: &str, source_line: usize) -> Self {
+        if !source_file.is_empty() {
+            self.source_file = Some(source_file.to_string());
+        }
+        self.source_line = source_line;
+        self
     }
 
     #[inline]

@@ -132,6 +132,13 @@ fn validate_inherited_property_definition(
     parent: &PropertyDefinition,
     child_class: &str,
 ) -> Result<(), String> {
+    let error = |message: String| {
+        if let Some(file) = &child.source_file {
+            format!("{message} in {file} on line {}", child.source_line)
+        } else {
+            message
+        }
+    };
     debug_assert_ne!(parent.visibility, Visibility::Private);
     let visibility_is_compatible = match parent.visibility {
         Visibility::Public => child.visibility == Visibility::Public,
@@ -144,16 +151,16 @@ fn validate_inherited_property_definition(
             Visibility::Protected => "protected",
             Visibility::Private => unreachable!(),
         };
-        return Err(format!(
+        return Err(error(format!(
             "Access level to {}::${} must be {} (as in class {}) or weaker",
             child_class, child.name, required, parent.declaring_class
-        ));
+        )));
     }
     if parent.set_visibility == Some(Visibility::Private) {
-        return Err(format!(
+        return Err(error(format!(
             "Cannot override final property {}::${}",
             parent.declaring_class, parent.name
-        ));
+        )));
     }
     let visibility_rank = |visibility| match visibility {
         Visibility::Private => 0,
@@ -162,10 +169,10 @@ fn validate_inherited_property_definition(
     };
     match (parent.set_visibility, child.set_visibility) {
         (None, Some(_)) => {
-            return Err(format!(
+            return Err(error(format!(
                 "Set access level of {}::${} must be omitted (as in class {})",
                 child_class, child.name, parent.declaring_class
-            ));
+            )));
         }
         (Some(parent_set), Some(child_set))
             if visibility_rank(child_set) < visibility_rank(parent_set) =>
@@ -175,15 +182,15 @@ fn validate_inherited_property_definition(
                 Visibility::Protected => "protected(set)",
                 Visibility::Private => unreachable!(),
             };
-            return Err(format!(
+            return Err(error(format!(
                 "Set access level of {}::${} must be {} (as in class {}) or weaker",
                 child_class, child.name, required, parent.declaring_class
-            ));
+            )));
         }
         _ => {}
     }
     if child.is_readonly != parent.is_readonly {
-        return Err(format!(
+        return Err(error(format!(
             "Cannot redeclare {} property {}::${} as {} {}::${}",
             if parent.is_readonly {
                 "readonly"
@@ -199,16 +206,16 @@ fn validate_inherited_property_definition(
             },
             child_class,
             child.name
-        ));
+        )));
     }
     if !property_type_hints_are_equivalent(&child.type_hint, &parent.type_hint) {
-        return Err(format!(
+        return Err(error(format!(
             "Type of {}::${} must be {} (as in class {})",
             child_class,
             child.name,
             parent.type_hint.display_name(),
             parent.declaring_class
-        ));
+        )));
     }
     Ok(())
 }
