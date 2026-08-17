@@ -3333,9 +3333,81 @@ impl Compiler {
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
+                let mut effective_methods = methods.clone();
+                for property in properties.iter().filter(|property| {
+                    !property.is_static && !property.has_get_hook && !property.has_set_hook
+                }) {
+                    effective_methods.push(crate::parser::ClassMethod {
+                        line: property.line,
+                        visibility: property.visibility,
+                        name: format!("${}::get", property.name),
+                        params: Vec::new(),
+                        body: vec![Stmt::Return {
+                            expr: Some(Expr::PropertyAccess {
+                                object: Box::new(Expr::Variable {
+                                    name: "this".to_string(),
+                                    line: property.line,
+                                }),
+                                property: property.name.clone(),
+                                nullsafe: false,
+                                line: property.line,
+                            }),
+                            line: property.line,
+                        }],
+                        is_static: false,
+                        is_final: false,
+                        is_abstract: false,
+                        returns_by_ref: false,
+                        return_type: property.type_hint.clone(),
+                        generic_params: Vec::new(),
+                    });
+                    effective_methods.push(crate::parser::ClassMethod {
+                        line: property.line,
+                        visibility: property.visibility,
+                        name: format!("${}::set", property.name),
+                        params: vec![crate::parser::Param {
+                            name: "value".to_string(),
+                            line: property.line,
+                            default: None,
+                            is_variadic: false,
+                            is_ref: false,
+                            type_hint: property.type_hint.clone(),
+                            promotion: None,
+                            promoted_property: None,
+                            promotion_hooks: Vec::new(),
+                        }],
+                        body: vec![
+                            Stmt::AssignProp {
+                                object: Expr::Variable {
+                                    name: "this".to_string(),
+                                    line: property.line,
+                                },
+                                property: property.name.clone(),
+                                expr: Expr::Variable {
+                                    name: "value".to_string(),
+                                    line: property.line,
+                                },
+                                line: property.line,
+                            },
+                            Stmt::Return {
+                                expr: Some(Expr::Variable {
+                                    name: "value".to_string(),
+                                    line: property.line,
+                                }),
+                                line: property.line,
+                            },
+                        ],
+                        is_static: false,
+                        is_final: false,
+                        is_abstract: false,
+                        returns_by_ref: false,
+                        return_type: None,
+                        generic_params: Vec::new(),
+                    });
+                }
                 // Collect promoted properties from constructor
                 let mut promoted_props = Vec::<crate::parser::ClassProperty>::new();
-                for method in methods {
+                for method in &effective_methods {
                     if method.name.starts_with('$')
                         && !method.name.ends_with("::get")
                         && !method.name.ends_with("::set")
