@@ -906,6 +906,25 @@ pub(crate) fn resume_generator(
     gen_ref: &crate::vm::generator::GeneratorRef,
     send_value: Value,
 ) -> Result<GeneratorResumeOutcome, VmError> {
+    resume_generator_with_input(eg, gen_ref, send_value, None)
+}
+
+/// Resume a generator by throwing an exception at its current suspension
+/// point. The caller is responsible for priming a newly-created generator.
+pub(crate) fn throw_into_generator(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    exception: Value,
+) -> Result<GeneratorResumeOutcome, VmError> {
+    resume_generator_with_input(eg, gen_ref, Value::null(), Some(exception))
+}
+
+fn resume_generator_with_input(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    send_value: Value,
+    injected_exception: Option<Value>,
+) -> Result<GeneratorResumeOutcome, VmError> {
     use crate::vm::generator::GeneratorState;
 
     {
@@ -927,8 +946,14 @@ pub(crate) fn resume_generator(
             let delegate = gen_ref.borrow_mut().delegate.take();
             match delegate {
                 Some(YieldFromDelegate::Generator(inner_gen_ref)) => {
-                    // Forward send value to inner generator
-                    match resume_generator(eg, &inner_gen_ref, send_value)? {
+                    // Forward normal values and injected exceptions through
+                    // the active delegation chain.
+                    let inner_outcome = if let Some(exception) = injected_exception.clone() {
+                        throw_into_generator(eg, &inner_gen_ref, exception)?
+                    } else {
+                        resume_generator(eg, &inner_gen_ref, send_value)?
+                    };
+                    match inner_outcome {
                         GeneratorResumeOutcome::Advanced => {}
                         GeneratorResumeOutcome::Threw(exception) => {
                             gen_ref.borrow_mut().delegate = None;
@@ -978,6 +1003,19 @@ pub(crate) fn resume_generator(
                     }
                 }
                 Some(YieldFromDelegate::Array(entries, pos)) => {
+                    if let Some(exception) = injected_exception {
+                        drop(entries);
+                        gen_ref.borrow_mut().delegate = None;
+                        let (frame, saved_execute_data) =
+                            materialize_generator_frame(eg, gen_ref);
+                        return execute_resumed_generator_frame(
+                            eg,
+                            gen_ref,
+                            frame,
+                            saved_execute_data,
+                            Some(exception),
+                        );
+                    }
                     if pos >= entries.len() {
                         // Array exhausted — remove delegate, resume outer
                         gen_ref.borrow_mut().delegate = None;
@@ -1018,7 +1056,13 @@ pub(crate) fn resume_generator(
 
     let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
     restore_yield_send_value(frame, gen_ref, send_value);
-    execute_resumed_generator_frame(eg, gen_ref, frame, saved_execute_data, None)
+    execute_resumed_generator_frame(
+        eg,
+        gen_ref,
+        frame,
+        saved_execute_data,
+        injected_exception,
+    )
 }
 
 /// Materialize one detached frame from the generator snapshot. All resume

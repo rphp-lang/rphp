@@ -191,6 +191,51 @@ catch (Exception $error) { echo $error->getMessage(), "\n"; }
 }
 
 #[test]
+fn generator_throw_injects_through_direct_and_delegated_suspension_points() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function catches() {
+    try { yield 'first'; }
+    catch (Exception $error) { echo 'direct:', $error->getMessage(), "\n"; }
+    yield 'after';
+}
+$direct = catches();
+var_dump($direct->throw(new Exception('caught')));
+
+function inner() {
+    try { yield 'inner'; }
+    catch (Exception $error) { echo 'nested:', $error->getMessage(), "\n"; }
+    yield 'nested-after';
+}
+function nested() { yield from inner(); }
+$nested = nested();
+var_dump($nested->throw(new Exception('forwarded')));
+
+function arrayDelegate() {
+    try { yield from [1, 2]; }
+    catch (Exception $error) { echo 'array:', $error->getMessage(), "\n"; }
+    yield 'array-after';
+}
+$array = arrayDelegate();
+var_dump($array->current());
+var_dump($array->throw(new Exception('stopped')));
+
+function closes() { yield; }
+$closed = closes();
+$closed->next();
+$closed->next();
+try { $closed->throw(new Exception('closed')); }
+catch (Exception $error) { echo $error->getMessage(), "\n"; }
+try { catches()->throw(new stdClass); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#
+        ),
+        "direct:caught\nstring(5) \"after\"\nnested:forwarded\nstring(12) \"nested-after\"\nint(1)\narray:stopped\nstring(11) \"array-after\"\nclosed\nGenerator::throw(): Argument #1 ($exception) must be of type Throwable, stdClass given\n"
+    );
+}
+
+#[test]
 fn test_typed_generator_completion_and_internal_return_value() {
     assert_eq!(
         run_php(

@@ -3516,6 +3516,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     reg_method!("Generator", "valid", fn_generator_valid, 1, 0);
     reg_method!("Generator", "rewind", fn_generator_rewind, 1, 0);
     reg_method!("Generator", "send", fn_generator_send, 2, 1, "value");
+    reg_method!("Generator", "throw", fn_generator_throw, 2, 1, "exception");
     reg_method!("Generator", "getreturn", fn_generator_get_return, 1, 0);
 
     funcs
@@ -9582,6 +9583,63 @@ fn fn_generator_get_return(
             ret!(rv, Value::null());
         }
         ret!(rv, gen_data.return_value.clone());
+    }
+    ret!(rv, Value::null());
+}
+
+fn fn_generator_throw(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let exception = arg!(ed, 1).dereferenced().clone();
+    let is_throwable = exception
+        .as_object()
+        .is_some_and(|object| eg.class_is_a(object.class_name.as_ref(), "Throwable"));
+    if !is_throwable {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "Generator::throw(): Argument #1 ($exception) must be of type Throwable, {} given",
+                exception.diagnostic_type_name()
+            ),
+        ));
+        ret!(rv, Value::null());
+    }
+
+    if let Some(gen_ref) = get_generator_ref(ed) {
+        if gen_ref.borrow().state == crate::vm::generator::GeneratorState::Created {
+            resume_generator_method(eg, &gen_ref, Value::null())?;
+            if eg.exception.is_some() {
+                ret!(rv, Value::null());
+            }
+        }
+
+        let state = gen_ref.borrow().state;
+        match state {
+            crate::vm::generator::GeneratorState::Suspended => {
+                match crate::vm::execute::throw_into_generator(eg, &gen_ref, exception)? {
+                    crate::vm::execute::GeneratorResumeOutcome::Advanced => {}
+                    crate::vm::execute::GeneratorResumeOutcome::Threw(exception) => {
+                        eg.exception = Some(exception);
+                    }
+                }
+            }
+            crate::vm::generator::GeneratorState::Completed => {
+                eg.exception = Some(exception);
+            }
+            crate::vm::generator::GeneratorState::Running => {
+                return Err(VmError::Fatal(
+                    "Cannot resume an already running generator".into(),
+                ));
+            }
+            crate::vm::generator::GeneratorState::Created => unreachable!(),
+        }
+
+        if eg.exception.is_some() {
+            ret!(rv, Value::null());
+        }
+        ret!(rv, gen_ref.borrow().value.clone());
     }
     ret!(rv, Value::null());
 }
