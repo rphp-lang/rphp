@@ -26,6 +26,160 @@ impl Default for MemberModifiers {
 }
 
 impl Parser {
+    pub(super) fn parse_promoted_property_hook_list(
+        &mut self,
+        property: &mut ClassProperty,
+    ) -> Result<Vec<ClassMethod>, String> {
+        self.expect(&Token::LBrace)?;
+        let mut hook_methods = Vec::new();
+        if self.peek() == Token::RBrace {
+            self.compile_error("Property hook list must not be empty", property.line);
+        }
+        while self.peek() != Token::RBrace && !self.at_eof() {
+            let hook_is_final = if self.peek() == Token::Final {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            let invalid_modifier = match self.peek() {
+                Token::Public => Some("public"),
+                Token::Protected => Some("protected"),
+                Token::Private => Some("private"),
+                Token::Static => Some("static"),
+                _ => None,
+            };
+            if let Some(modifier) = invalid_modifier {
+                self.advance();
+                self.compile_error(
+                    format!("Cannot use the {modifier} modifier on a property hook"),
+                    property.line,
+                );
+            }
+            let hook_returns_by_ref = if self.peek() == Token::Ampersand {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            let (hook, hook_line) = match self.advance() {
+                Token::Identifier(name, line) => (name, line),
+                other => return Err(format!("Expected property hook, got {other:?}")),
+            };
+            let is_get = hook.eq_ignore_ascii_case("get");
+            let is_set = hook.eq_ignore_ascii_case("set");
+            if (is_get && property.has_get_hook) || (is_set && property.has_set_hook) {
+                self.compile_error(
+                    format!("Cannot redeclare property hook \"{}\"", hook.to_ascii_lowercase()),
+                    hook_line,
+                );
+            }
+            let params = if is_get && matches!(self.peek(), Token::LParen(_)) {
+                self.expect_lparen()?;
+                let mut params = self.parse_param_list()?;
+                self.expect(&Token::RParen)?;
+                if params.is_empty() {
+                    params.push(Param {
+                        name: "\0property_get_parameter_list".to_string(),
+                        line: hook_line,
+                        default: None,
+                        is_variadic: false,
+                        is_ref: false,
+                        type_hint: None,
+                        promotion: None,
+                        promoted_property: None,
+                        promotion_hooks: Vec::new(),
+                    });
+                }
+                params
+            } else if is_get {
+                Vec::new()
+            } else if matches!(self.peek(), Token::LParen(_)) {
+                self.expect_lparen()?;
+                let mut params = self.parse_param_list()?;
+                self.expect(&Token::RParen)?;
+                if params.is_empty() {
+                    params.push(Param {
+                        name: "\0property_set_parameter_list".to_string(),
+                        line: hook_line,
+                        default: None,
+                        is_variadic: false,
+                        is_ref: false,
+                        type_hint: None,
+                        promotion: None,
+                        promoted_property: None,
+                        promotion_hooks: Vec::new(),
+                    });
+                }
+                params
+            } else {
+                vec![Param {
+                    name: "value".to_string(),
+                    line: hook_line,
+                    default: None,
+                    is_variadic: false,
+                    is_ref: false,
+                    type_hint: property.type_hint.clone(),
+                    promotion: None,
+                    promoted_property: None,
+                    promotion_hooks: Vec::new(),
+                }]
+            };
+            let (body, hook_is_abstract) = if self.peek() == Token::Semicolon {
+                self.advance();
+                (Vec::new(), true)
+            } else if self.peek() == Token::DoubleArrow {
+                self.advance();
+                let expression = self.parse_expr()?;
+                self.expect(&Token::Semicolon)?;
+                let body = if is_get {
+                    vec![Stmt::Return {
+                        expr: Some(expression),
+                        line: hook_line,
+                    }]
+                } else {
+                    vec![Stmt::AssignProp {
+                        object: Expr::Variable {
+                            name: "this".to_string(),
+                            line: hook_line,
+                        },
+                        property: property.name.clone(),
+                        expr: expression,
+                        line: hook_line,
+                    }]
+                };
+                (body, false)
+            } else {
+                self.expect(&Token::LBrace)?;
+                let mut body = Vec::new();
+                while self.peek() != Token::RBrace && !self.at_eof() {
+                    body.push(self.parse_stmt()?);
+                }
+                self.expect(&Token::RBrace)?;
+                (body, false)
+            };
+            property.has_get_hook |= is_get;
+            property.has_set_hook |= is_set;
+            property.has_abstract_get_hook |= is_get && hook_is_abstract;
+            property.has_abstract_set_hook |= is_set && hook_is_abstract;
+            hook_methods.push(ClassMethod {
+                line: hook_line,
+                visibility: property.visibility,
+                name: format!("${}::{}", property.name, hook.to_ascii_lowercase()),
+                params,
+                body,
+                is_static: false,
+                is_final: hook_is_final,
+                is_abstract: hook_is_abstract,
+                returns_by_ref: hook_returns_by_ref,
+                return_type: is_get.then(|| property.type_hint.clone()).flatten(),
+                generic_params: Vec::new(),
+            });
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(hook_methods)
+    }
+
     fn parse_property_declaration(
         &mut self,
         modifiers: &MemberModifiers,
@@ -138,6 +292,8 @@ impl Parser {
                             is_ref: false,
                             type_hint: None,
                             promotion: None,
+                            promoted_property: None,
+                            promotion_hooks: Vec::new(),
                         });
                     }
                     params
@@ -158,6 +314,8 @@ impl Parser {
                             is_ref: false,
                             type_hint: None,
                             promotion: None,
+                            promoted_property: None,
+                            promotion_hooks: Vec::new(),
                         });
                     }
                     params
@@ -170,6 +328,8 @@ impl Parser {
                         is_ref: false,
                         type_hint: property.type_hint.clone(),
                         promotion: None,
+                        promoted_property: None,
+                        promotion_hooks: Vec::new(),
                     }]
                 };
                 let (body, hook_is_abstract) = if self.peek() == Token::Semicolon {
@@ -263,6 +423,10 @@ impl Parser {
                 self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
+                let promoted_hooks = params
+                    .iter()
+                    .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
+                    .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
                 let body = self.parse_method_body(&modifiers, &method_name)?;
                 self.pop_generic_scope();
@@ -279,6 +443,7 @@ impl Parser {
                     return_type,
                     generic_params,
                 });
+                methods.extend(promoted_hooks);
             } else if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
@@ -512,6 +677,10 @@ impl Parser {
                 self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
+                let promoted_hooks = params
+                    .iter()
+                    .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
+                    .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
                 let body = self.parse_method_body(&modifiers, &method_name)?;
                 self.pop_generic_scope();
@@ -529,6 +698,7 @@ impl Parser {
                     return_type,
                     generic_params,
                 });
+                methods.extend(promoted_hooks);
             } else if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
@@ -665,6 +835,10 @@ impl Parser {
                 self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
+                let promoted_hooks = params
+                    .iter()
+                    .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
+                    .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
                 let body = self.parse_method_body(&modifiers, &method_name)?;
                 self.pop_generic_scope();
@@ -682,6 +856,7 @@ impl Parser {
                     return_type,
                     generic_params: method_generic_params,
                 });
+                methods.extend(promoted_hooks);
             } else if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
@@ -770,6 +945,10 @@ impl Parser {
                 self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
+                let promoted_hooks = params
+                    .iter()
+                    .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
+                    .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
                 self.expect(&Token::Semicolon)?; // interface methods end with ;
                 self.pop_generic_scope();
@@ -787,6 +966,7 @@ impl Parser {
                     return_type,
                     generic_params: method_generic_params,
                 });
+                methods.extend(promoted_hooks);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
                 properties.extend(declared);

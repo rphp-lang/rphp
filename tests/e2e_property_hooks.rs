@@ -556,3 +556,67 @@ fn setter_parameter_shape_is_validated_before_execution() {
         )
     );
 }
+
+#[test]
+fn promoted_property_assignment_runs_the_setter_before_constructor_body() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PromotedTemperature {
+    public function __construct(
+        public int $celsius {
+            get => $this->celsius;
+            set => max(-273, $value);
+        }
+    ) {
+        echo "body={$this->celsius}\n";
+    }
+}
+$temperature = new PromotedTemperature(-500);
+var_dump($temperature->celsius);
+"#,
+        ),
+        "body=-273\nint(-273)\n"
+    );
+}
+
+#[test]
+fn promoted_hook_without_visibility_is_public_and_uses_its_setter() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PromotedScale {
+    public function __construct($amount = 4 { set => $value * 3; }) {}
+}
+$scale = new PromotedScale();
+var_dump($scale);
+"#,
+        ),
+        "object(PromotedScale)#1 (1) {\n  [\"amount\"]=>\n  int(12)\n}\n"
+    );
+}
+
+#[test]
+fn final_promoted_property_cannot_be_overridden() {
+    let error = run_php_expect_error(
+        r#"<?php
+class FinalPromotion {
+    public function __construct(final $value) {}
+}
+class InvalidChild extends FinalPromotion { public $value; }
+"#,
+    );
+    assert!(format!("{error:?}").contains("Cannot override final property FinalPromotion::$value"));
+}
+
+#[test]
+fn readonly_class_rejects_promoted_hooked_property() {
+    let error = run_php_expect_error(
+        r#"<?php
+readonly class InvalidReadonlyPromotion {
+    public function __construct(public int $value { set => $value; }) {}
+}
+"#,
+    );
+    assert!(format!("{error:?}").contains("Hooked properties cannot be readonly"));
+}

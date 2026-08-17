@@ -3329,8 +3329,7 @@ impl Compiler {
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
                 // Collect promoted properties from constructor
-                let mut promoted_props: Vec<(String, usize, Visibility, Option<Visibility>, bool, ParamTypeHint, bool)> =
-                    Vec::new(); // (name, read visibility, set visibility, readonly, erased type, needs reification)
+                let mut promoted_props = Vec::<crate::parser::ClassProperty>::new();
                 for method in methods {
                     if method.name.starts_with('$')
                         && !method.name.ends_with("::get")
@@ -3464,14 +3463,14 @@ impl Compiler {
                     // Constructor property promotion: generate $this->param = $param assignments
                     if method.name == "__construct" {
                         for param in &method.params {
-                            if let Some((vis, set_vis, is_ro)) = &param.promotion {
-                                if let Some(set_visibility) = set_vis {
+                            if let Some(promoted) = &param.promoted_property {
+                                if let Some(set_visibility) = promoted.set_visibility {
                                     let rank = |visibility| match visibility {
                                         Visibility::Private => 0,
                                         Visibility::Protected => 1,
                                         Visibility::Public => 2,
                                     };
-                                    if rank(*vis) < rank(*set_visibility) {
+                                    if rank(promoted.visibility) < rank(set_visibility) {
                                         return Err(self.goto_error(
                                             &format!(
                                                 "Visibility of property {}::${} must not be weaker than set visibility",
@@ -3490,20 +3489,7 @@ impl Compiler {
                                         ));
                                     }
                                 }
-                                let promoted_type_hint = self.resolve_declared_property_type_hint(
-                                    self.convert_type_hint(&param.type_hint),
-                                    &resolved_class,
-                                    resolved_parent.as_deref(),
-                                );
-                                promoted_props.push((
-                                    param.name.clone(),
-                                    param.line,
-                                    *vis,
-                                    *set_vis,
-                                    *is_ro,
-                                    promoted_type_hint,
-                                    type_hint_requires_reified_check(&param.type_hint),
-                                ));
+                                promoted_props.push(promoted.clone());
                                 // Generate: $this->paramName = $paramName;
                                 let this_cv = 0u16; // $this is always CV 0
                                 let param_cv = func_compiler.resolve_cv(&param.name);
@@ -3800,20 +3786,63 @@ impl Compiler {
                 }
 
                 // Add promoted properties
-                for (pname, _line, pvis, pset_vis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
-                    let property_is_readonly = *is_readonly || *p_readonly;
-                    compiled_props.push(PropertyDefinition::declared_with_set_visibility(
-                        pname.clone(),
+                for promoted in &promoted_props {
+                    let property_is_readonly = *is_readonly || promoted.is_readonly;
+                    if property_is_readonly
+                        && (promoted.has_get_hook || promoted.has_set_hook)
+                    {
+                        return Err(self.goto_error(
+                            "Hooked properties cannot be readonly",
+                            promoted.line,
+                        ));
+                    }
+                    let type_hint = self.resolve_declared_property_type_hint(
+                        self.convert_type_hint(&promoted.type_hint),
+                        &resolved_class,
+                        resolved_parent.as_deref(),
+                    );
+                    let mut definition = PropertyDefinition::declared_with_set_visibility(
+                        promoted.name.clone(),
                         None,
-                        *pvis,
-                        *pset_vis,
+                        promoted.visibility,
+                        promoted.set_visibility,
                         resolved_class.clone(),
-                        type_hint.clone(),
+                        type_hint,
                         property_is_readonly,
-                        *requires_reified_check,
-                    ).with_source_location(&self.source_file, *class_line));
+                        type_hint_requires_reified_check(&promoted.type_hint),
+                    ).with_source_location(&self.source_file, *class_line);
+                    definition.set_final(promoted.is_final);
+                    definition.has_get_hook = promoted.has_get_hook;
+                    definition.get_hook_is_backed = promoted.has_get_hook
+                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
+                            method.eq_ignore_ascii_case(&format!("${}::get", promoted.name))
+                                && function.op_array.instructions.iter().any(|instruction| {
+                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
+                                        && instruction.op1_type == OpType::Cv
+                                        && instruction.op1 == 0
+                                        && instruction.op2_type == OpType::Const
+                                        && function.op_array.literals.get(instruction.op2 as usize)
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|name| name == promoted.name)
+                                })
+                        });
+                    definition.has_set_hook = promoted.has_set_hook;
+                    definition.set_hook_is_backed = promoted.has_set_hook
+                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
+                            method.eq_ignore_ascii_case(&format!("${}::set", promoted.name))
+                                && function.op_array.instructions.iter().any(|instruction| {
+                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
+                                        && instruction.op1_type == OpType::Cv
+                                        && instruction.op1 == 0
+                                        && instruction.op2_type == OpType::Const
+                                        && function.op_array.literals.get(instruction.op2 as usize)
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|name| name == promoted.name)
+                                })
+                        });
+                    compiled_props.push(definition);
                     if property_is_readonly {
-                        readonly_props.push(pname.clone());
+                        readonly_props.push(promoted.name.clone());
                     }
                 }
 
@@ -4554,6 +4583,8 @@ impl Compiler {
                         is_ref: false,
                         type_hint: backing_type.clone(),
                         promotion: None,
+                        promoted_property: None,
+                        promotion_hooks: Vec::new(),
                     };
                     enum_methods.push(crate::parser::ClassMethod {
                         line: 0,

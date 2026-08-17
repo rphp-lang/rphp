@@ -689,6 +689,10 @@ pub struct Param {
     /// Constructor property promotion: read visibility, optional narrower
     /// write visibility, and readonly state.
     pub promotion: Option<(Visibility, Option<Visibility>, bool)>,
+    /// Full promoted-property declaration, including PHP 8.5 final/hook flags.
+    pub promoted_property: Option<ClassProperty>,
+    /// Hidden methods lowered from a promoted property's hook list.
+    pub promotion_hooks: Vec<ClassMethod>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -265,6 +265,7 @@ impl Parser {
                 | Token::Public
                 | Token::Protected
                 | Token::Private
+                | Token::Final
         )
     }
 
@@ -764,6 +765,7 @@ impl Parser {
         // Check for constructor property promotion: visibility keyword before type hint
         let mut promotion: Option<(Visibility, Option<Visibility>, bool)> = None;
         let mut promo_readonly = false;
+        let mut promo_final = false;
         let mut promo_visibility = None;
         let mut promo_set_visibility = None;
         loop {
@@ -801,10 +803,15 @@ impl Parser {
                     promo_readonly = true;
                     continue;
                 }
+                Token::Final => {
+                    self.advance();
+                    promo_final = true;
+                    continue;
+                }
                 _ => break,
             }
         }
-        if promo_visibility.is_some() || promo_set_visibility.is_some() {
+        if promo_visibility.is_some() || promo_set_visibility.is_some() || promo_final {
             promotion = Some((
                 promo_visibility.unwrap_or(Visibility::Public),
                 promo_set_visibility,
@@ -843,6 +850,37 @@ impl Parser {
         } else {
             None
         };
+        let has_hooks = self.peek() == Token::LBrace;
+        if has_hooks && promotion.is_none() {
+            promotion = Some((Visibility::Public, None, false));
+        }
+        let mut promoted_property = promotion.map(|(visibility, set_visibility, is_readonly)| {
+            ClassProperty {
+                line,
+                visibility,
+                set_visibility,
+                name: name.clone(),
+                type_hint: type_hint.clone(),
+                default: None,
+                is_static: false,
+                is_readonly,
+                is_final: promo_final,
+                is_abstract: false,
+                has_get_hook: false,
+                has_abstract_get_hook: false,
+                has_set_hook: false,
+                has_abstract_set_hook: false,
+            }
+        });
+        let promotion_hooks = if has_hooks {
+            self.parse_promoted_property_hook_list(
+                promoted_property
+                    .as_mut()
+                    .expect("hook syntax creates a promoted property"),
+            )?
+        } else {
+            Vec::new()
+        };
         Ok(Param {
             name,
             line,
@@ -851,6 +889,8 @@ impl Parser {
             is_ref,
             type_hint,
             promotion,
+            promoted_property,
+            promotion_hooks,
         })
     }
 
