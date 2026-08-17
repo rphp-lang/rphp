@@ -5612,7 +5612,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array.strict_types,
                         ) == Some(true);
                         if !type_ok {
-                            let outcome = format!("{} returned", retval.diagnostic_type_name());
+                            let outcome =
+                                format!("{} returned", declared_type_error_value_name(retval));
                             let err = return_type_error_value(
                                 eg,
                                 func_common_ret as *const FunctionCommon,
@@ -5821,8 +5822,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     frame,
                                     ret_callee_class,
                                 ) {
-                                    let outcome =
-                                        format!("{} returned", retval.diagnostic_type_name());
+                                    let outcome = format!(
+                                        "{} returned",
+                                        declared_type_error_value_name(retval)
+                                    );
                                     let err = return_type_error_value(
                                         eg,
                                         func_common as *const FunctionCommon,

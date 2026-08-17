@@ -7,6 +7,41 @@ use rphp::parser::Parser;
 use rphp::vm::opcode::OpCode;
 
 #[test]
+fn strict_union_calls_reject_non_members_and_widen_int_to_float() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+function nullableUnion(int|string|null $value) { return $value; }
+function floatOrArray(float|array $value) { return $value; }
+try { nullableUnion(1.5); } catch (TypeError $error) { echo strstr($error->getMessage(), ', called in', true), "\n"; }
+var_dump(floatOrArray(42));
+$closure = eval('return function(int|string|null $value) { return $value; };');
+try { $closure(1.5); } catch (TypeError $error) { echo strstr($error->getMessage(), ', called in', true), "\n"; }
+"#,
+        ),
+        "nullableUnion(): Argument #1 ($value) must be of type string|int|null, float given\nfloat(42)\n{closure:<main>(7) : eval()'d code:1}(): Argument #1 ($value) must be of type string|int|null, float given\n"
+    );
+}
+
+#[test]
+fn weak_union_calls_select_scalar_coercions_by_php_precedence() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function number(int|float $value) { var_dump($value); }
+function integerOrBool(int|bool $value) { var_dump($value); }
+function integerOrString(int|string|null $value) { var_dump($value); }
+number('42'); number('42.0');
+integerOrBool(42.0); integerOrBool(INF);
+integerOrString(INF);
+"#,
+        ),
+        "int(42)\nfloat(42)\nint(42)\nbool(true)\nstring(3) \"INF\"\n"
+    );
+}
+
+#[test]
 fn undefined_local_rvalues_warn_at_each_read_but_silent_and_reference_contexts_do_not() {
     let file = "/virtual/undefined-rvalue-contract.php";
     let source = r#"<?php

@@ -100,16 +100,16 @@ try { returnOnly("bad"); } catch (TypeError $e) { echo "caught"; }
 // ── declare(strict_types=1) ──
 
 #[test]
-fn test_strict_types_float_rejects_int() {
+fn test_strict_types_float_widens_int() {
     assert_eq!(
         run_php(
             r#"<?php
 declare(strict_types=1);
-function f(float $x): void { echo $x; }
-try { f(10); } catch (TypeError $e) { echo "caught"; }
+function f(float $x): void { var_dump($x); }
+f(10);
 "#
         ),
-        "caught"
+        "float(10)\n"
     );
 }
 

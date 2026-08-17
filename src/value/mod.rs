@@ -4757,7 +4757,13 @@ impl Value {
             ValueType::Long => unsafe { self.data.long }.to_string(),
             ValueType::Double => {
                 let d = unsafe { self.data.double };
-                if d == d.floor() && d.abs() < 1e15 {
+                if d.is_nan() {
+                    "NAN".to_string()
+                } else if d == f64::INFINITY {
+                    "INF".to_string()
+                } else if d == f64::NEG_INFINITY {
+                    "-INF".to_string()
+                } else if d == d.floor() && d.abs() < 1e15 {
                     format!("{}", d as i64)
                 } else {
                     format!("{}", d)
@@ -4788,7 +4794,13 @@ impl Value {
             }
             ValueType::Double => {
                 let d = unsafe { self.data.double };
-                if d == d.floor() && d.abs() < 1e15 {
+                if d.is_nan() {
+                    output.push_str("NAN");
+                } else if d == f64::INFINITY {
+                    output.push_str("INF");
+                } else if d == f64::NEG_INFINITY {
+                    output.push_str("-INF");
+                } else if d == d.floor() && d.abs() < 1e15 {
                     let _ = write!(output, "{}", d as i64);
                 } else {
                     let _ = write!(output, "{}", d);

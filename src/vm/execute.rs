@@ -599,6 +599,8 @@ fn check_type_hint_in_scopes(
         ParamTypeHint::Nullable(inner) => {
             if val.value_type() == ValueType::Null {
                 true
+            } else if matches!(inner.as_ref(), ParamTypeHint::None) {
+                false
             } else {
                 check_type_hint_in_scopes(val, inner, eg, strict, callee_class, called_class)
             }
@@ -631,11 +633,17 @@ fn prepare_call_argument(
     strict: bool,
     callee_class: Option<&str>,
 ) -> Result<CallArgumentPreparation, VmError> {
-    if check_type_hint(value, hint, eg, strict, callee_class) {
+    // Test exact members first even for weak callers. In particular, an int
+    // remains an int for `int|float`; widening is considered only when no
+    // member already matches the runtime value.
+    if check_type_hint(value, hint, eg, true, callee_class) {
         return Ok(CallArgumentPreparation::Exact);
     }
     if strict {
-        return Ok(CallArgumentPreparation::Invalid);
+        return Ok(coerce_property_value(value, hint, false).map_or(
+            CallArgumentPreparation::Invalid,
+            CallArgumentPreparation::Coerced,
+        ));
     }
 
     // Calls and typed-property writes share PHP's weak scalar conversion
@@ -652,7 +660,10 @@ fn prepare_call_argument(
                     .then(|| Value::string(rendered.as_str().unwrap()))
             })
         }
-        ParamTypeHint::Nullable(inner) if value.value_type() != ValueType::Null => {
+        ParamTypeHint::Nullable(inner)
+            if value.value_type() != ValueType::Null
+                && !matches!(inner.as_ref(), ParamTypeHint::None) =>
+        {
             return prepare_call_argument(value, inner, eg, false, callee_class);
         }
         ParamTypeHint::Union(parts) => {
@@ -2153,9 +2164,14 @@ fn displayed_function_name(eg: &ExecutorGlobals, function: *const FunctionCommon
             .map_or(registered_name, |(_, method)| method)
             .starts_with("__closure_")
     {
-        eg.declaring_class_of(function)
-            .map(|class| format!("{class}::{{closure}}"))
-            .unwrap_or_else(|| "{closure}".to_string())
+        registered_name
+            .split_once('@')
+            .map(|(_, public_name)| public_name.to_string())
+            .unwrap_or_else(|| {
+                eg.declaring_class_of(function)
+                    .map(|class| format!("{class}::{{closure}}"))
+                    .unwrap_or_else(|| "{closure}".to_string())
+            })
     } else if let Some((_, method)) = registered_name.rsplit_once("::") {
         eg.declaring_class_of(function)
             .map(|class| format!("{class}::{method}"))
@@ -2233,7 +2249,7 @@ fn argument_type_error(
         "{name}(): Argument #{} (${parameter}) must be of type {}, {} given",
         parameter_index + 1,
         hint.diagnostic_display_name(),
-        value.diagnostic_type_name()
+        declared_type_error_value_name(value)
     );
     if common.fn_type == FunctionType::User {
         let instruction_index = caller_op_array
@@ -2250,6 +2266,14 @@ fn argument_type_error(
         message.push_str(&format!(", called in {file} on line {line}"));
     }
     make_error_value("TypeError", &message)
+}
+
+fn declared_type_error_value_name(value: &Value) -> String {
+    match value.value_type() {
+        ValueType::True => "true".to_string(),
+        ValueType::False => "false".to_string(),
+        _ => value.diagnostic_type_name().into_owned(),
+    }
 }
 
 fn too_many_internal_arguments_error(

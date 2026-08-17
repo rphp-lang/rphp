@@ -1059,11 +1059,38 @@ impl ParamTypeHint {
                 }
                 inner => format!("?{}", inner.diagnostic_display_name()),
             },
-            ParamTypeHint::Union(parts) => parts
-                .iter()
-                .map(ParamTypeHint::diagnostic_display_name)
-                .collect::<Vec<_>>()
-                .join("|"),
+            ParamTypeHint::Union(parts) => {
+                // PHP canonicalizes built-in members in runtime diagnostics;
+                // user class/intersection members retain declaration order
+                // ahead of this fixed scalar sequence.
+                let rank = |part: &ParamTypeHint| match part {
+                    ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("object") => 10,
+                    ParamTypeHint::Array => 20,
+                    ParamTypeHint::String => 30,
+                    ParamTypeHint::Int => 40,
+                    ParamTypeHint::Float => 50,
+                    ParamTypeHint::Bool => 60,
+                    ParamTypeHint::ClassName(name)
+                        if name.eq_ignore_ascii_case("false")
+                            || name.eq_ignore_ascii_case("true") =>
+                    {
+                        65
+                    }
+                    ParamTypeHint::Nullable(inner)
+                        if matches!(inner.as_ref(), ParamTypeHint::None) =>
+                    {
+                        70
+                    }
+                    _ => 0,
+                };
+                let mut ordered = parts.iter().enumerate().collect::<Vec<_>>();
+                ordered.sort_by_key(|(index, part)| (rank(part), *index));
+                ordered
+                    .into_iter()
+                    .map(|(_, part)| part.diagnostic_display_name())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            }
             ParamTypeHint::Intersection(parts) => parts
                 .iter()
                 .map(ParamTypeHint::diagnostic_display_name)

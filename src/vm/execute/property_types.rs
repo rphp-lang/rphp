@@ -103,9 +103,78 @@ fn coerce_property_value(value: &Value, hint: &ParamTypeHint, weak: bool) -> Opt
                 coerce_property_value(value, inner, weak)
             }
         }
-        ParamTypeHint::Union(parts) => parts
-            .iter()
-            .find_map(|part| coerce_property_value(value, part, weak)),
+        ParamTypeHint::Union(parts) => coerce_union_value(value, parts, weak),
+        _ => None,
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn coerce_union_value(value: &Value, parts: &[ParamTypeHint], weak: bool) -> Option<Value> {
+    let member = |candidate: &ParamTypeHint| parts.iter().any(|part| part == candidate);
+    if !weak {
+        return member(&ParamTypeHint::Float)
+            .then(|| value.as_long().map(|number| Value::double(number as f64)))
+            .flatten();
+    }
+    match value.value_type() {
+        ValueType::String => {
+            let numeric = value.as_str()?.trim();
+            if member(&ParamTypeHint::Int)
+                && let Ok(number) = numeric.parse::<i64>()
+            {
+                return Some(Value::long(number));
+            }
+            if member(&ParamTypeHint::Float)
+                && let Ok(number) = numeric.parse::<f64>()
+            {
+                return Some(Value::double(number));
+            }
+            if member(&ParamTypeHint::Int)
+                && let Ok(number) = numeric.parse::<f64>()
+                && number.is_finite()
+                && number >= i64::MIN as f64
+                && number <= i64::MAX as f64
+            {
+                return Some(Value::long(number as i64));
+            }
+            member(&ParamTypeHint::Bool).then(|| Value::bool(value.is_truthy()))
+        }
+        ValueType::Double => {
+            let number = value.as_double()?;
+            if member(&ParamTypeHint::Int)
+                && number.is_finite()
+                && number >= i64::MIN as f64
+                && number <= i64::MAX as f64
+            {
+                return Some(Value::long(number as i64));
+            }
+            if member(&ParamTypeHint::String) {
+                return Some(Value::string(value.echo_to_string()));
+            }
+            member(&ParamTypeHint::Bool).then(|| Value::bool(value.is_truthy()))
+        }
+        ValueType::Long => {
+            if member(&ParamTypeHint::Float) {
+                return Some(Value::double(value.as_long()? as f64));
+            }
+            if member(&ParamTypeHint::String) {
+                return Some(Value::string(value.echo_to_string()));
+            }
+            member(&ParamTypeHint::Bool).then(|| Value::bool(value.is_truthy()))
+        }
+        ValueType::True | ValueType::False => {
+            if member(&ParamTypeHint::Int) {
+                return Some(Value::long(i64::from(value.is_truthy())));
+            }
+            if member(&ParamTypeHint::Float) {
+                return Some(Value::double(f64::from(value.is_truthy())));
+            }
+            if member(&ParamTypeHint::String) {
+                return Some(Value::string(value.echo_to_string()));
+            }
+            None
+        }
         _ => None,
     }
 }
