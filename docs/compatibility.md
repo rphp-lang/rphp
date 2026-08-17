@@ -8,14 +8,30 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `4ffc25a`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,221 pass, 2,987 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `bd3c5bc`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,234 pass, 2,974 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-42.646%; 87.999% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +406/-0. The first four gains are
+42.896%; 88.249% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +419/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+PHP 8.5's `clone($object, $withProperties)` form now validates both operands
+before cloning, rejects live reference aliases, runs `__clone`, and then applies
+the update array in insertion order through the ordinary scoped property-write
+path. Consequently visibility, asymmetric setters, typed properties, hooks,
+magic methods and exceptions keep their existing baseline semantics. The same
+checkpoint replaces the legacy non-object clone error with PHP 8.5's catchable
+`TypeError`, while preserving the older `clone (new C)->property` grammar. The
+exact corpus delta is +13/-0: nine clone-with cases and four adjacent clone
+diagnostic cases. Four clone-with cases remain visible behind independently
+missing dynamic-property deprecation, readonly reinitialization during
+`__clone`, lazy-object Reflection and Random extension support. All five feature
+configurations, all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel S2
+gates pass. No performance gate applies because the new validation and loop are
+emitted only for the new cold clone-with construct; ordinary clone and property
+hot paths are unchanged.
 
 Property hook implementation names such as `$property::get` and
 `$property::set` are now hidden from direct object callbacks. A direct call
