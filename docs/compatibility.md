@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `e63a903`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,411 pass, 2,797 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `186c0ec`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,429 pass, 2,779 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-46.294%; 87.174% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +596/-0. The first four gains are
+46.640%; 87.174% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +614/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Anonymous Closure dumps now expose PHP 8.5's source-qualified `name`, `file`
+and declaration `line` fields before captures, receiver and parameter metadata.
+Named functions, methods and internal first-class callables retain their
+distinct `function` field, and closure identity, capture/reference state and
+recursion tracking are unchanged. This adds eighteen exact passes without
+losing a prior pass or moving a remaining failure stage. All five Cargo
+configurations, all-target, all-features check, unsafe, Composer S0, all four
+Symfony S1 gates and warmed-kernel S2 pass. The added work runs only during an
+explicit closure `var_dump()` and reads existing immutable source metadata, so
+no runtime performance benchmark applies.
 
 Parameters before the final parameter without a default now follow PHP 8.5's
 required-arity contract, including named calls, while declaration deprecations
