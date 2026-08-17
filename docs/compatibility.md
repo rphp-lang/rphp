@@ -8,14 +8,28 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `89d63aa`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,262 pass, 2,946 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `376f559`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,264 pass, 2,944 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-43.433%; 88.402% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +447/-0. The first four gains are
+43.472%; 88.402% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +449/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Anonymous class names exposed through `get_class()` now use PHP 8.5's parent-
+or first-interface-derived public prefix and retain a request-unique opaque
+suffix after NUL. The projected name remains valid for `class_alias()`, and an
+anonymous subclass with inherited abstract requirements reports its public
+name, method list and source location. Binary-safe `strstr()`, including its
+empty-needle and before-needle behavior, and the
+`JSON_PRESERVE_ZERO_FRACTION` constant complete the adjacent PHP contract.
+This adds `Zend/tests/anon/anon_class_name.phpt` and `gh15994.phpt` with no lost
+pass. All five Cargo feature configurations, all-target, unsafe, Composer S0,
+all four Symfony S1 gates and warmed-kernel S2 pass. Named `get_class()` calls,
+ordinary object lookup, object layout and generated native code are unchanged;
+the anonymous-name fallback runs only after a cold class-table miss, so no
+runtime performance benchmark applies.
 
 Anonymous classes now accept trait composition, including aliases and
 visibility adaptations, through the same class-linking contract as named
