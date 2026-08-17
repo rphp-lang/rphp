@@ -171,3 +171,55 @@ var_dump($label->value);
         "string(5) \"mixed\"\nstring(5) \"MIXED\"\n"
     );
 }
+
+#[test]
+fn final_property_rejects_child_redeclaration() {
+    let error = run_php_expect_error(
+        r#"<?php
+class FixedStorage { public final int $value = 1; }
+class ReplacementStorage extends FixedStorage { public int $value = 2; }
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Cannot override final property FixedStorage::$value\")"
+    );
+}
+
+#[test]
+fn final_getter_rejects_child_hook_override() {
+    let error = run_php_expect_error(
+        r#"<?php
+class FixedReading { public int $value { final get => 1; } }
+class ReplacementReading extends FixedReading { public int $value { get => 2; } }
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Cannot override final property hook FixedReading::$value::get()\")"
+    );
+}
+
+#[test]
+fn final_private_property_and_hook_are_rejected() {
+    for (source, expected) in [
+        (
+            "<?php class HiddenStorage { final private int $value; }",
+            "Property cannot be both final and private",
+        ),
+        (
+            "<?php class HiddenReading { private int $value { final get; } }",
+            "Property hook cannot be both final and private",
+        ),
+        (
+            "<?php class ImpossibleReading { public int $value { final get; } }",
+            "Property hook cannot be both abstract and final",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(
+            format!("{error:?}").contains(expected),
+            "unexpected error: {error:?}"
+        );
+    }
+}

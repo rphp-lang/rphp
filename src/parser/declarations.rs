@@ -63,6 +63,7 @@ impl Parser {
                 default,
                 is_static: modifiers.is_static,
                 is_readonly: modifiers.is_readonly,
+                is_final: modifiers.is_final,
                 has_get_hook: false,
                 has_set_hook: false,
             });
@@ -81,6 +82,12 @@ impl Parser {
             self.advance();
             let property = properties.last_mut().unwrap();
             while self.peek() != Token::RBrace && !self.at_eof() {
+                let hook_is_final = if self.peek() == Token::Final {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 let (hook, hook_line) = match self.advance() {
                     Token::Identifier(name, line) => (name, line),
                     other => return Err(format!("Expected property hook, got {other:?}")),
@@ -113,11 +120,14 @@ impl Parser {
                         promotion: None,
                     }]
                 };
-                let body = if self.peek() == Token::DoubleArrow {
+                let (body, hook_is_abstract) = if self.peek() == Token::Semicolon {
+                    self.advance();
+                    (Vec::new(), true)
+                } else if self.peek() == Token::DoubleArrow {
                     self.advance();
                     let expression = self.parse_expr()?;
                     self.expect(&Token::Semicolon)?;
-                    if is_get {
+                    let body = if is_get {
                         vec![Stmt::Return {
                             expr: Some(expression),
                             line: hook_line,
@@ -132,7 +142,8 @@ impl Parser {
                             expr: expression,
                             line: hook_line,
                         }]
-                    }
+                    };
+                    (body, false)
                 } else {
                     self.expect(&Token::LBrace)?;
                     let mut body = Vec::new();
@@ -140,7 +151,7 @@ impl Parser {
                         body.push(self.parse_stmt()?);
                     }
                     self.expect(&Token::RBrace)?;
-                    body
+                    (body, false)
                 };
                 property.has_get_hook |= is_get;
                 property.has_set_hook |= !is_get;
@@ -151,8 +162,8 @@ impl Parser {
                     params,
                     body,
                     is_static: false,
-                    is_final: false,
-                    is_abstract: false,
+                    is_final: hook_is_final,
+                    is_abstract: hook_is_abstract,
                     returns_by_ref: false,
                     return_type: is_get.then(|| property.type_hint.clone()).flatten(),
                     generic_params: Vec::new(),
@@ -480,7 +491,9 @@ impl Parser {
         self.pop_generic_scope();
 
         if !is_abstract
-            && let Some(method) = methods.iter().find(|method| method.is_abstract)
+            && let Some(method) = methods.iter().find(|method| {
+                method.is_abstract && !(method.is_final && method.name.starts_with('$'))
+            })
         {
             return Err(format!(
                 "Class {} declares abstract method {}() and must therefore be declared abstract",

@@ -3328,6 +3328,21 @@ impl Compiler {
                 let mut promoted_props: Vec<(String, usize, Visibility, Option<Visibility>, bool, ParamTypeHint, bool)> =
                     Vec::new(); // (name, read visibility, set visibility, readonly, erased type, needs reification)
                 for method in methods {
+                    if method.name.starts_with('$')
+                        && method.is_final
+                        && method.visibility == Visibility::Private
+                    {
+                        return Err(self.goto_error(
+                            "Property hook cannot be both final and private",
+                            method.line,
+                        ));
+                    }
+                    if method.name.starts_with('$') && method.is_final && method.is_abstract {
+                        return Err(self.goto_error(
+                            "Property hook cannot be both abstract and final",
+                            method.line,
+                        ));
+                    }
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_class, method.name),
@@ -3530,6 +3545,12 @@ impl Compiler {
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
+                    if prop.is_final && prop.visibility == Visibility::Private {
+                        return Err(self.goto_error(
+                            "Property cannot be both final and private",
+                            prop.line,
+                        ));
+                    }
                     if let Some(set_visibility) = prop.set_visibility {
                         let rank = |visibility| match visibility {
                             Visibility::Private => 0,
@@ -3620,6 +3641,7 @@ impl Compiler {
                         type_hint_requires_reified_check(&prop.type_hint),
                     )
                     .with_source_location(&self.source_file, *class_line);
+                    definition.set_final(prop.is_final);
                     definition.has_get_hook = prop.has_get_hook;
                     definition.get_hook_is_backed = prop.has_get_hook
                         && compiled_methods.iter().any(|(method, _, _, _, function)| {

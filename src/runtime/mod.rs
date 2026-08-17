@@ -1811,10 +1811,44 @@ impl ExecutorGlobals {
                     if let Some(anc_def) = self.class_table.get(anc_name.as_str()) {
                         for (m_name, _vis, _is_static, is_final, _func) in &anc_def.methods {
                             if m_name.to_lowercase() == *child_method && *is_final {
-                                return Err(format!(
-                                    "Cannot override final method {}::{}()",
-                                    anc_name, m_name
-                                ));
+                                let (message, function) = if m_name.starts_with('$') {
+                                    (
+                                        format!(
+                                            "Cannot override final property hook {}::{}()",
+                                            anc_name, m_name
+                                        ),
+                                        class_def
+                                            .methods
+                                            .iter()
+                                            .find(|(name, _, _, _, _)| {
+                                                name.eq_ignore_ascii_case(m_name)
+                                            })
+                                            .map(|(_, _, _, _, function)| function),
+                                    )
+                                } else {
+                                    (
+                                        format!(
+                                            "Cannot override final method {}::{}()",
+                                            anc_name, m_name
+                                        ),
+                                        None,
+                                    )
+                                };
+                                if let Some(function) = function
+                                    && !function.op_array.source_file.is_empty()
+                                {
+                                    let line = function
+                                        .op_array
+                                        .source_lines
+                                        .first()
+                                        .map(|(_, line)| *line)
+                                        .unwrap_or(1);
+                                    return Err(format!(
+                                        "{message} in {} on line {line}",
+                                        function.op_array.source_file
+                                    ));
+                                }
+                                return Err(message);
                             }
                         }
                         ancestor = anc_def.parent.clone();

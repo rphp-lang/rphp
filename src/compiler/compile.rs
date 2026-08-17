@@ -1419,6 +1419,30 @@ impl PropertyDefinition {
         self
     }
 
+    const FINAL_FLAG: usize = 1usize << (usize::BITS - 1);
+
+    /// Finality is cold declaration metadata. Store it in the otherwise
+    /// unused high bit of the source-line word so ordinary property metadata
+    /// keeps its established size and hot-field layout.
+    #[inline]
+    pub fn is_final(&self) -> bool {
+        self.source_line & Self::FINAL_FLAG != 0
+    }
+
+    #[inline]
+    pub fn set_final(&mut self, is_final: bool) {
+        if is_final {
+            self.source_line |= Self::FINAL_FLAG;
+        } else {
+            self.source_line &= !Self::FINAL_FLAG;
+        }
+    }
+
+    #[inline]
+    pub fn declaration_line(&self) -> usize {
+        self.source_line & !Self::FINAL_FLAG
+    }
+
     #[inline]
     pub fn is_typed(&self) -> bool {
         !matches!(self.type_hint, ParamTypeHint::None)

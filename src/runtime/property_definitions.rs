@@ -212,6 +212,7 @@ fn property_definitions_are_compatible(
         && left.set_visibility == right.set_visibility
         && property_type_hints_are_equivalent(&left.type_hint, &right.type_hint)
         && left.is_readonly == right.is_readonly
+        && left.is_final() == right.is_final()
         && left.has_get_hook == right.has_get_hook
         && left.get_hook_is_backed == right.get_hook_is_backed
         && left.has_set_hook == right.has_set_hook
@@ -232,7 +233,7 @@ fn validate_inherited_property_definition(
 ) -> Result<(), String> {
     let error = |message: String| {
         if let Some(file) = &child.source_file {
-            format!("{message} in {file} on line {}", child.source_line)
+            format!("{message} in {file} on line {}", child.declaration_line())
         } else {
             message
         }
@@ -254,7 +255,7 @@ fn validate_inherited_property_definition(
             child_class, child.name, required, parent.declaring_class
         )));
     }
-    if parent.set_visibility == Some(Visibility::Private) {
+    if parent.is_final() || parent.set_visibility == Some(Visibility::Private) {
         return Err(error(format!(
             "Cannot override final property {}::${}",
             parent.declaring_class, parent.name

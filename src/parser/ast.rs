@@ -1078,6 +1078,8 @@ pub struct ClassProperty {
     pub default: Option<Expr>,
     pub is_static: bool,
     pub is_readonly: bool,
+    /// A final property cannot be redeclared by a child class.
+    pub is_final: bool,
     /// An explicit PHP 8.4+ `get` hook is compiled as an engine-owned method.
     pub has_get_hook: bool,
     /// An explicit PHP 8.4+ `set` hook is compiled as an engine-owned method.
