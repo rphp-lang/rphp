@@ -6976,6 +6976,59 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
+                if let (
+                    Expr::StaticProperty {
+                        class_name,
+                        property,
+                        ..
+                    },
+                    Expr::StringLiteral(hook),
+                ) = (class.as_ref(), method.as_ref())
+                    && class_name.eq_ignore_ascii_case("parent")
+                    && (hook.eq_ignore_ascii_case("get") || hook.eq_ignore_ascii_case("set"))
+                {
+                    let current_hook = self
+                        .current_function_name
+                        .rsplit_once("::$")
+                        .and_then(|(_, suffix)| suffix.split_once("::"));
+                    let Some((current_property, current_kind)) = current_hook else {
+                        self.deferred_error = Some(self.goto_error(
+                            &format!(
+                                "Must not use parent::${property}::{hook}() outside a property hook"
+                            ),
+                            *line,
+                        ));
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    };
+                    if current_property != property {
+                        self.deferred_error = Some(self.goto_error(
+                            &format!(
+                                "Must not use parent::${property}::{hook}() in a different property (${current_property})"
+                            ),
+                            *line,
+                        ));
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    }
+                    if !current_kind.eq_ignore_ascii_case(hook) {
+                        self.deferred_error = Some(self.goto_error(
+                            &format!(
+                                "Must not use parent::${property}::{hook}() in a different property hook ({current_kind})"
+                            ),
+                            *line,
+                        ));
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    }
+                    return self.compile_expr(&Expr::StaticCall {
+                        class_name: "parent".to_string(),
+                        method: format!("${property}::{}", hook.to_ascii_lowercase()),
+                        args: args.clone(),
+                        generic_args: generic_args.clone(),
+                        line: *line,
+                    });
+                }
                 let (class_op, class_type) = self.compile_expr(class);
                 let receiver_patches = self.take_nullsafe_receiver_patches(class_op, class_type);
                 let callable = self.alloc_tmp();

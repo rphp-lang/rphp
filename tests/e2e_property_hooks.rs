@@ -620,3 +620,56 @@ readonly class InvalidReadonlyPromotion {
     );
     assert!(format!("{error:?}").contains("Hooked properties cannot be readonly"));
 }
+
+#[test]
+fn explicit_parent_property_hooks_dispatch_to_the_parent_declaration() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentHookBase {
+    public int $value {
+        get => 40;
+        set { echo "parent-set:$value\n"; }
+    }
+}
+class ParentHookChild extends ParentHookBase {
+    public int $value {
+        get => parent::$value::GET() + 2;
+        set { parent::$value::set($value + 1); }
+    }
+}
+$child = new ParentHookChild();
+$child->value = 9;
+var_dump($child->value);
+"#,
+        ),
+        "parent-set:10\nint(42)\n"
+    );
+}
+
+#[test]
+fn parent_property_hook_calls_are_restricted_to_the_matching_hook() {
+    let wrong_property = run_php_expect_error(
+        r#"<?php
+class WrongParentProperty {
+    public $first { get => parent::$second::get(); }
+}
+"#,
+    );
+    assert!(
+        format!("{wrong_property:?}")
+            .contains("Must not use parent::$second::get() in a different property ($first)")
+    );
+
+    let outside_hook = run_php_expect_error(
+        r#"<?php
+class ParentHookOutside {
+    public function read() { return parent::$value::get(); }
+}
+"#,
+    );
+    assert!(
+        format!("{outside_hook:?}")
+            .contains("Must not use parent::$value::get() outside a property hook")
+    );
+}
