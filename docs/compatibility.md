@@ -8,14 +8,26 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `7c0c535`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,161 pass, 3,047 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `2ad9fa5`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,174 pass, 3,034 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-41.494%; 87.366% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +346/-0. The first four gains are
+41.743%; 87.634% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +359/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Indirect mutation through a by-value property getter now raises PHP 8.5's
+property-specific error before modifying a detached array, while objects
+returned by value remain legally mutable. By-reference object iteration invokes
+hook getters, preserves their alias identity, rejects by-value hook results and
+attaches typed-property constraints to ordinary property aliases. This adds four
+exact passes without losing a prior pass. The 40-pair ordinary property A/B
+workload is -1.074%; a separate 20-pair hookless object-foreach control is
++0.102%. Typed/untyped read, write, method and constructor lanes are +0.039%,
++0.118%, +2.381% and +0.435%, within their five-percent ceiling. Full hooked
+object-iteration ordering, parent-hook calls and Reflection remain follow-up
+work.
 
 Abstract properties and body-less hooks now form real class, trait and
 interface contracts. A plain property supplies both ordinary accessors, a
@@ -27,8 +39,9 @@ Cold capability flags reuse existing source metadata and validation helpers are
 kept off hot paths. This adds 43 exact passes without losing a prior pass. The
 40-pair ordinary property A/B workload is +0.571%; typed/untyped read, write,
 method and constructor lanes are -0.278%, -0.774%, +1.218% and +1.018%, within
-their ceilings. General by-reference hooks, parent-hook calls and Reflection
-remain follow-up work.
+their ceilings. Reference-returning hooks and their direct alias contracts are
+covered by the following checkpoints; full hooked iteration ordering,
+parent-hook calls and Reflection remain follow-up work.
 
 Final properties and final property hooks now retain their declaration contract
 through parsing, compilation and inheritance linking. Child redeclarations fail

@@ -432,6 +432,19 @@ lanes are +2.529% and +1.051%, within their five-percent ceiling. Indirect
 array modification through reference getters, by-reference object iteration,
 parent-hook calls and Reflection remain next.
 
+The `2ad9fa5` indirect-reference-hook checkpoint reaches 2,174 passes with
+3,034 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. Array mutation through a by-value getter now fails before
+detached storage can change, while object results remain mutable. By-reference
+object iteration invokes getter hooks, binds reference results, rejects value
+results and retains typed-property constraints on ordinary aliases. The exact
+PHP 8.5.6 delta is +4/-0, bringing the cumulative gain from the initial
+baseline to +359/-0. All five feature configurations, all-target and unsafe
+gates pass. The ordinary property A/B workload is -1.074%; a 20-pair hookless
+object-foreach control is +0.102%, and specialized read/write/method/constructor
+lanes are +0.039%, +0.118%, +2.381% and +0.435%. Full hooked object-iteration
+ordering, parent-hook calls and Reflection remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
