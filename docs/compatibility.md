@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `2b1df95`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,088 pass, 3,120 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `8d43a0b`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,111 pass, 3,097 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-40.092%; 85.253% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +273/-0. The first four gains are
+40.534%; 86.406% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +296/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Property `get` and `set` hooks now accept PHP 8.5's arrow form. Getter
+expressions return through the existing hook method contract; setter
+expressions transform the value written to backing storage while the assignment
+expression itself retains its input value. The syntax reuses the existing hook
+reentrance guard and method lowering rather than adding a runtime fast path.
+This adds 23 exact passes without losing a prior pass. The ordinary property A/B
+workload is -1.565%; typed/untyped read, write, method and constructor lanes are
+-1.066%, -0.572%, +2.190% and -0.143%, within their five-percent ceiling.
+Abstract/final, by-reference, parent-hook and Reflection forms remain follow-up
+work.
 
 Block-form property `set` hooks now accept PHP's implicit `$value` or one
 explicit, independently typed parameter and execute before ordinary backing
@@ -26,8 +37,8 @@ for reads and `isset()`. Assignment expressions retain their original input
 value even when the hook transforms backing storage. This adds 20 exact passes
 without losing a prior pass. The ordinary property A/B workload is -1.824%;
 typed/untyped read, write, method and constructor lanes are -0.020%, +0.548%,
-+2.074% and +0.366%, all within their five-percent ceiling. Arrow, abstract,
-final, by-reference, parent-hook and Reflection forms remain follow-up work.
++2.074% and +0.366%, all within their five-percent ceiling. Abstract, final,
+by-reference, parent-hook and Reflection forms remain follow-up work.
 
 Explicit block-form property `get` hooks now compile through the ordinary user
 method engine and execute on the cold declared-property path. Reentrant
@@ -37,7 +48,7 @@ capture and inheritance variance reuse their general method semantics. Hook
 methods remain hidden from `get_class_methods()`. This adds seven exact passes
 without losing a prior pass. The final 20-pair ordinary property A/B gate is
 -0.718%; the 40-pair typed/untyped method lane is +2.176%, below its five-percent
-ceiling. `set`, arrow, abstract, final, by-reference and Reflection hook forms
+ceiling. Abstract, final, by-reference and Reflection hook forms
 remain explicit follow-up work.
 
 Named child classes whose invariant property types depend on an alias published

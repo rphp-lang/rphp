@@ -384,6 +384,16 @@ gates pass. The ordinary property A/B workload is -1.824%; specialized lanes
 range from -0.020% to +2.074%, within their five-percent ceiling. Arrow,
 abstract/final, by-reference, parent-hook and Reflection forms remain next.
 
+The `8d43a0b` property-hook-arrow checkpoint reaches 2,111 passes with 3,097
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Arrow getters return their expression and arrow setters write the
+transformed expression result through the existing backing guard while the
+assignment retains its input value. The exact PHP 8.5.6 delta is +23/-0. All
+five feature configurations, all-target and unsafe gates pass. The ordinary
+property A/B workload is -1.565%; specialized lanes range from -1.066% to
++2.190%, within their five-percent ceiling. Abstract/final, by-reference,
+parent-hook and Reflection forms remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
