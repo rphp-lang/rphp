@@ -8,22 +8,32 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `91b8804`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,017 pass, 3,191 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `925bc63`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,018 pass, 3,190 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-38.729%; 83.698% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +202/-0. The first four gains are
+38.748%; 83.717% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +203/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Static properties now enforce the same asymmetric set visibility across direct
+assignment, increment, compound and dimension mutation, reference access and
+warmed inline-cache execution. Mutating an object stored in a readable static
+property remains legal, and unsetting a member through an uninitialized typed
+static property remains a no-op. This adds one exact pass without losing a
+pass. Static read controls measured +0.068% for `self::` and +0.188% for
+`static::`; the specialized property read and write lanes remained within their
+five-percent ceiling. Property hooks and several source-located declaration
+diagnostics remain incomplete.
 
 Typed instance properties and promoted constructor properties now retain a
 separate PHP 8.5 `private(set)`, `protected(set)` or `public(set)` visibility.
 Reads keep their declared visibility while assignments, indirect array writes,
 references and unsets enforce the narrower write scope; inheritance also
 retains final `private(set)` and set-scope variance. This adds 16 exact passes
-without losing a pass. Static asymmetric properties, property-hook interaction
-and several source-located declaration diagnostics remain incomplete. The
+without losing a pass. Property-hook interaction and several source-located
+declaration diagnostics remain incomplete. The
 instance-property A/B control measured +0.448%, and all four specialized
 typed/untyped property lanes remained within their five-percent ceiling.
 

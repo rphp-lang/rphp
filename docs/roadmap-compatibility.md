@@ -317,6 +317,17 @@ work. All five CI feature configurations, the all-target and unsafe gates pass.
 The instance-property A/B control is +0.448%; all specialized property lanes
 remain below their five-percent regression ceiling.
 
+The `925bc63` static-asymmetric-set checkpoint reaches 2,018 passes with 3,190
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Static properties now enforce their separate set scope across direct
+and indirect writes, references and warmed caches while preserving nested
+object mutation and silent unset behavior. The exact PHP 8.5.6 delta is +1/-0
+and runtime reach rises to 83.717%. All five CI feature configurations, the
+all-target and unsafe gates pass. Static `self::` and `static::` read controls
+measure +0.068% and +0.188%; specialized read/write lanes remain under their
+five-percent ceiling. Hooks and source-located declaration diagnostics remain
+the asymmetric-property follow-up.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
