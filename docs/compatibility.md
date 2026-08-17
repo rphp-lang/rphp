@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `c404c71`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,925 pass, 3,283 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `777552e`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,941 pass, 3,267 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-36.962%; 82.796% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +110/-0. The first four gains are
+37.270%; 82.796% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +126/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -28,6 +28,13 @@ until the cold throw path constructs `UnhandledMatchError`. Scalar values use
 PHP's value-specific spelling and compound values name their concrete type;
 successful arms keep their existing comparison and result path. This adds
 three exact PHP 8.5.6 passes without losing a pass or moving a failure stage.
+
+Argument type failures now retain each user function, method or closure's
+declaration line in the existing cold source map. Verification snapshots the
+pending callee before cleanup, so Throwable origin points to the declaration
+while trace frame zero still contains the call site and rejected arguments.
+This adds 16 exact PHP 8.5.6 passes without a lost pass or stage movement and
+also removes one redundant unsafe cleanup block.
 
 Recursive array identity and loose object comparison now track active compound
 values and enforce a bounded comparison depth. Cycles between distinct values

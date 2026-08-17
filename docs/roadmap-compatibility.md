@@ -195,6 +195,16 @@ with no remaining-failure stage movement; the full feature matrix and unsafe
 gate pass. No runtime performance gate applies because successful match arms
 retain their existing execution path.
 
+The `777552e` argument-TypeError checkpoint reaches 1,941 passes with 3,267
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Functions, methods and closures retain declaration-line metadata in
+their existing cold source map; rejected pending calls are snapshotted before
+cleanup so Throwable origin and frame-zero call details match PHP. The exact
+PHP 8.5.6 delta is +16/-0 with no stage movement. The feature matrix and unsafe
+gate pass, with the production unsafe-block inventory reduced from 1,623 to
+1,622. No runtime performance gate applies because successful calls retain one
+existing post-validation error branch and the new work is confined to failure.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
