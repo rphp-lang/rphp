@@ -85,6 +85,7 @@ fn register_reflection_class_kind(
     eg.register_class(ClassDef {
         name: name.to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: parent.map(str::to_owned),
         implements: implements.iter().map(|name| (*name).to_string()).collect(),
         is_interface: false,
@@ -135,6 +136,7 @@ fn register_reflection_interface(eg: &mut ExecutorGlobals, name: &str) {
     eg.register_class(ClassDef {
         name: name.to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: None,
         implements: vec![],
         is_interface: true,
@@ -176,6 +178,7 @@ fn register_generic_variance(eg: &mut ExecutorGlobals) {
     eg.register_class(ClassDef {
         name: "ReflectionGenericVariance".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -234,6 +237,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     eg.register_class(ClassDef {
         name: "ReflectionAttribute".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -294,6 +298,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     eg.register_class(ClassDef {
         name: "ReflectionProperty".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: None,
         implements: vec!["Reflector".to_string()],
         is_interface: false,

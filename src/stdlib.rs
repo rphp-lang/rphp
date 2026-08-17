@@ -2642,6 +2642,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
     eg.register_class(ClassDef {
         name: "ValueError".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -2722,6 +2723,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "Throwable".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: None,
         implements: vec![],
         is_interface: true,
@@ -2749,6 +2751,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "Exception".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: None,
         implements: vec!["Throwable".to_string()],
         is_interface: false,
@@ -2810,6 +2813,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(ClassDef {
             name: name.to_string(),
             source_file: None,
+            declaration_line: 0,
             parent: Some(parent.to_string()),
             implements: vec![],
             is_interface: false,
@@ -2837,6 +2841,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "ErrorException".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: Some("Exception".to_string()),
         implements: vec![],
         is_interface: false,
@@ -2869,6 +2874,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "Error".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: None,
         implements: vec!["Throwable".to_string()],
         is_interface: false,
@@ -2927,6 +2933,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(ClassDef {
             name: name.to_string(),
             source_file: None,
+            declaration_line: 0,
             parent: Some(parent.to_string()),
             implements: vec![],
             is_interface: false,
@@ -2955,6 +2962,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "TypeError".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -2982,6 +2990,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "CompileError".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -3009,6 +3018,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "ParseError".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: Some("CompileError".to_string()),
         implements: vec![],
         is_interface: false,
@@ -3036,6 +3046,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "ArgumentCountError".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -3063,6 +3074,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(ClassDef {
         name: "UnhandledMatchError".to_string(),
         source_file: None,
+        declaration_line: 0,
         parent: Some("Error".to_string()),
         implements: vec![],
         is_interface: false,
@@ -3158,6 +3170,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         |name: &str, implements: Vec<String>, is_interface: bool, is_final: bool| ClassDef {
             name: name.to_string(),
             source_file: None,
+            declaration_line: 0,
             parent: None,
             implements,
             is_interface,

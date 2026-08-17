@@ -1,5 +1,5 @@
 mod common;
-use common::{run_php, run_php_expect_error};
+use common::{run_php, run_php_expect_error, run_php_expect_error_with_source_context};
 
 // -- final class --
 
@@ -383,17 +383,35 @@ echo Item::One->reveal();
 fn enum_rejects_trait_properties_and_forbidden_magic_methods() {
     for (source, expected) in [
         (
-            "<?php trait T { public $value; } enum E { use T; }",
-            "cannot include properties",
+            "<?php\ntrait T { public $value; }\nenum E { use T; }",
+            "Enum E cannot include properties in enum-trait.php on line 3",
         ),
         (
-            "<?php trait T { function __construct() {} } enum E { use T; }",
-            "cannot include magic method",
+            "<?php\ntrait T { function __construct() {} }\nenum E { use T; }",
+            "Enum E cannot include magic method __construct in enum-trait.php on line 3",
+        ),
+        (
+            "<?php\ntrait Inner { public $value; } trait Outer { use Inner; }\nenum E { use Outer; }",
+            "Enum E cannot include properties in enum-trait.php on line 3",
+        ),
+        (
+            "<?php\ntrait T { function stringify() {} }\nenum E { use T { stringify as __toString; } }",
+            "Enum E cannot include magic method __toString in enum-trait.php on line 3",
         ),
     ] {
-        let error = run_php_expect_error(source);
-        assert!(format!("{error:?}").contains(expected));
+        let error = run_php_expect_error_with_source_context(source, "enum-trait.php", ".");
+        assert!(
+            format!("{error:?}").contains(expected),
+            "unexpected error: {error:?}"
+        );
     }
+
+    assert_eq!(
+        run_php(
+            "<?php trait Invokable { function __invoke() { return 7; } } enum E { use Invokable; case One; } echo (E::One)();"
+        ),
+        "7"
+    );
 }
 
 #[test]

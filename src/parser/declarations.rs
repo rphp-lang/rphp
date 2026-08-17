@@ -1068,8 +1068,8 @@ impl Parser {
     /// Parse enum declaration
     fn parse_enum(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'enum'
-        let name = match self.advance() {
-            Token::Identifier(n, _) => n,
+        let (name, line) = match self.advance() {
+            Token::Identifier(n, line) => (n, line),
             other => return Err(format!("Expected enum name, got {:?}", other)),
         };
         // Optional backing type: enum Foo: string { ... }
@@ -1225,6 +1225,7 @@ impl Parser {
         self.expect(&Token::RBrace)?;
 
         Ok(Stmt::Enum {
+            line,
             name,
             backing_type,
             implements,

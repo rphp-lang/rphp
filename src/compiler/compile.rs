@@ -1612,6 +1612,9 @@ pub struct ClassDef {
     /// Canonical source unit that declared this class-like symbol. Built-ins
     /// have no source file and expose `false` through Reflection.
     pub source_file: Option<String>,
+    /// Source line of the class-like declaration for cold link diagnostics.
+    /// Built-ins use zero.
+    pub declaration_line: usize,
     pub parent: Option<String>,
     pub implements: Vec<String>,
     pub is_interface: bool,
@@ -3059,7 +3062,7 @@ fn magic_return_is_object(hint: &ParamTypeHint) -> bool {
     }
 }
 
-fn enum_magic_method_is_forbidden(method: &str) -> bool {
+pub(crate) fn enum_magic_method_is_forbidden(method: &str) -> bool {
     [
         "__construct",
         "__destruct",

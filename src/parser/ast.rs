@@ -925,6 +925,7 @@ pub enum Stmt {
         vars: Vec<(String, Option<Expr>)>,
     },
     Enum {
+        line: usize,
         name: String,
         backing_type: Option<TypeHint>,
         implements: Vec<GenericAncestor>,

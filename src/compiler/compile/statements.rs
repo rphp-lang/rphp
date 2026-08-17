@@ -3955,6 +3955,7 @@ impl Compiler {
                     name: resolved_class,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
+                    declaration_line: *class_line,
                     parent: resolved_parent,
                     implements: resolved_implements,
                     is_interface: false,
@@ -4189,6 +4190,7 @@ impl Compiler {
                     name: resolved_iface,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
+                    declaration_line: 0,
                     parent: None,
                     implements: resolved_extends,
                     is_interface: true,
@@ -4509,6 +4511,7 @@ impl Compiler {
                     name: resolved_trait,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
+                    declaration_line: 0,
                     parent: None,
                     implements: vec![],
                     is_interface: false,
@@ -4536,6 +4539,7 @@ impl Compiler {
                 });
             }
             Stmt::Enum {
+                line: enum_line,
                 name,
                 backing_type,
                 implements,
@@ -4957,6 +4961,7 @@ impl Compiler {
                     name: resolved_enum,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
+                    declaration_line: *enum_line,
                     parent: None,
                     implements: resolved_implements,
                     is_interface: false,

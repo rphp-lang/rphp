@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::compiler::compile::{ClassConstantDefinition, ClassDef, PropertyDefinition};
+use crate::compiler::compile::{
+    ClassConstantDefinition, ClassDef, PropertyDefinition, enum_magic_method_is_forbidden,
+};
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 use crate::generics::GenericType;
 use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
@@ -1778,29 +1780,24 @@ impl ExecutorGlobals {
         for trait_name in &trait_names {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
                 if class_def.is_enum {
+                    let declaration_location = class_def
+                        .source_file
+                        .as_ref()
+                        .map_or_else(String::new, |file| {
+                            format!(" in {file} on line {}", class_def.declaration_line)
+                        });
                     if !trait_def.properties.is_empty() || !trait_def.static_properties.is_empty() {
-                        return Err(format!("Enum {class_name} cannot include properties"));
-                    }
-                    const FORBIDDEN_ENUM_MAGIC_METHODS: &[&str] = &[
-                        "__construct",
-                        "__destruct",
-                        "__clone",
-                        "__get",
-                        "__set",
-                        "__unset",
-                        "__isset",
-                        "__sleep",
-                        "__wakeup",
-                        "__serialize",
-                        "__unserialize",
-                    ];
-                    if let Some((method, ..)) = trait_def.methods.iter().find(|(method, ..)| {
-                        FORBIDDEN_ENUM_MAGIC_METHODS
-                            .iter()
-                            .any(|forbidden| method.eq_ignore_ascii_case(forbidden))
-                    }) {
                         return Err(format!(
-                            "Enum {class_name} cannot include magic method {method}"
+                            "Enum {class_name} cannot include properties{declaration_location}"
+                        ));
+                    }
+                    if let Some((method, ..)) = trait_def
+                        .methods
+                        .iter()
+                        .find(|(method, ..)| enum_magic_method_is_forbidden(method))
+                    {
+                        return Err(format!(
+                            "Enum {class_name} cannot include magic method {method}{declaration_location}"
                         ));
                     }
                 }
@@ -1888,6 +1885,17 @@ impl ExecutorGlobals {
                 .get(&source)
                 .ok_or_else(|| format!("Trait method {source} not found"))?;
             let alias = adaptation.alias.as_deref().unwrap_or(&adaptation.method);
+            if class_def.is_enum && enum_magic_method_is_forbidden(alias) {
+                let location = class_def
+                    .source_file
+                    .as_ref()
+                    .map_or_else(String::new, |file| {
+                        format!(" in {file} on line {}", class_def.declaration_line)
+                    });
+                return Err(format!(
+                    "Enum {class_name} cannot include magic method {alias}{location}"
+                ));
+            }
             self.function_table
                 .insert(format!("{}::{}", class_name, alias).to_lowercase(), pointer);
             self.method_declaring_class
