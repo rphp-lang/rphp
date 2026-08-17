@@ -1245,7 +1245,14 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 let object = arr_val.as_object().unwrap();
                 eg.visible_instance_property_slots(class_id, caller_class.as_deref())
                     .into_iter()
-                    .filter(|slot| !object.property_values[*slot].is_undef())
+                    .filter(|slot| {
+                        let definition = eg.instance_property_definition(class_id, *slot);
+                        (!object.property_values[*slot].is_undef()
+                            || definition.is_some_and(|definition| definition.has_get_hook))
+                            && definition.is_none_or(|definition| {
+                                !definition.is_virtual_hook_property() || definition.has_get_hook
+                            })
+                    })
                     .collect::<Vec<_>>()
             };
             let dynamic_names = {
@@ -1266,15 +1273,34 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             if pos < slots.len() + dynamic_names.len() {
                 let (name, value) = if pos < slots.len() {
                     let slot = slots[pos];
-                    let definition = eg
-                        .instance_property_definition(class_id, slot)
-                        .expect("visible property slot must retain its definition");
-                    if definition.is_readonly {
+                    let (
+                        name,
+                        declaring_class,
+                        type_scope,
+                        type_hint,
+                        is_typed,
+                        is_readonly,
+                        has_get_hook,
+                    ) = {
+                        let definition = eg
+                            .instance_property_definition(class_id, slot)
+                            .expect("visible property slot must retain its definition");
+                        (
+                            definition.name.clone(),
+                            definition.declaring_class.clone(),
+                            definition.type_scope.clone(),
+                            definition.type_hint.clone(),
+                            definition.is_typed(),
+                            definition.is_readonly,
+                            definition.has_get_hook,
+                        )
+                    };
+                    if is_readonly {
                         let error = make_error_value(
                             "Error",
                             &format!(
                                 "Cannot acquire reference to readonly property {}::${}",
-                                definition.declaring_class, definition.name
+                                declaring_class, name
                             ),
                         );
                         return Ok(match throw_in_frame(eg, frame, error) {
@@ -1284,13 +1310,73 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                         });
                     }
-                    let name = definition.name.clone();
-                    let mut object = arr_val.as_object_mut().unwrap();
-                    let value = promote_foreach_property_reference(
-                        object
-                            .get_property_slot_mut(slot)
-                            .expect("visible property slot must remain addressable"),
-                    );
+                    let value = if has_get_hook {
+                        let hook_name = format!("${name}::get");
+                        let returned = call_guarded_property_magic_method(
+                            eg,
+                            arr_val,
+                            &name,
+                            PROPERTY_GUARD_GET,
+                            &hook_name,
+                            &[],
+                        )?
+                        .unwrap_or_else(Value::null);
+                        if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+                            return Ok(control);
+                        }
+                        if returned.is_owned_reference() {
+                            returned.clone_owned_reference_alias()
+                        } else if returned.is_reference() {
+                            // SAFETY: the getter result retains the referenced target while
+                            // the loop CV alias is installed synchronously for this iteration.
+                            Value::reference(unsafe { returned.as_ref_ptr() })
+                        } else {
+                            let class_name = arr_val
+                                .as_object()
+                                .map(|object| object.class_name.to_string())
+                                .unwrap_or_else(|| "object".to_string());
+                            let error = make_error_value(
+                                "Error",
+                                &format!(
+                                    "Cannot create reference to property {class_name}::${name}"
+                                ),
+                            );
+                            return Ok(match throw_in_frame(eg, frame, error) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    ColdResult::NewFrame(new_frame, new_op_array)
+                                }
+                                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                            });
+                        }
+                    } else {
+                        let (owner, called_class) = {
+                            let object = arr_val.as_object().unwrap();
+                            (
+                                object.instance_property_reference_owner(slot),
+                                object.class_name.to_string(),
+                            )
+                        };
+                        let mut object = arr_val.as_object_mut().unwrap();
+                        let binding = promote_foreach_property_reference(
+                            object
+                                .get_property_slot_mut(slot)
+                                .expect("visible property slot must remain addressable"),
+                        );
+                        drop(object);
+                        if is_typed {
+                            binding.add_reference_property_constraint(
+                                crate::value::ReferencePropertyConstraint {
+                                    owner,
+                                    declaring_class,
+                                    property: name.clone(),
+                                    type_scope,
+                                    called_class,
+                                    type_hint,
+                                },
+                            );
+                        }
+                        binding
+                    };
                     (name, value)
                 } else {
                     let name = dynamic_names[pos - slots.len()].clone();

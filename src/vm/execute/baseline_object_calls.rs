@@ -1018,6 +1018,21 @@ fn op_fetch_obj_r_slow<'a>(
                 return Ok(result);
             }
             if let Some(value) = hook_value {
+                if opline._pad & FETCH_OBJ_MODIFY != 0
+                    && !value.is_reference()
+                    && value.dereferenced().value_type() != ValueType::Object
+                {
+                    let class_name = obj_val
+                        .as_object()
+                        .map(|object| object.class_name.to_string())
+                        .unwrap_or_else(|| "object".to_string());
+                    return Ok(object_property_throw(
+                        eg,
+                        frame,
+                        "Error",
+                        format!("Indirect modification of {class_name}::${name} is not allowed"),
+                    ));
+                }
                 set_result(value);
                 return Ok(ColdResult::Done);
             }

@@ -397,3 +397,75 @@ class InvalidReferenceValue extends BackingValue {
         "Get hook of backed property InvalidReferenceValue::value with set hook may not return by reference"
     ));
 }
+
+#[test]
+fn value_getter_rejects_indirect_array_modification() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BufferedList {
+    public array $items {
+        get { return $this->items; }
+        set { $this->items = $value; }
+    }
+}
+$list = new BufferedList();
+$list->items = [];
+try {
+    $list->items[] = 7;
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump($list->items);
+"#,
+        ),
+        "Indirect modification of BufferedList::$items is not allowed\narray(0) {\n}\n"
+    );
+}
+
+#[test]
+fn foreach_by_reference_uses_reference_getters_and_rejects_value_getters() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class IteratedState {
+    private int $storage = 9;
+    public int $alias { &get => $this->storage; }
+    public int $copy = 11 { get => $this->copy; }
+}
+$object = new IteratedState();
+try {
+    foreach ($object as $name => &$value) {
+        echo "$name=$value\n";
+    }
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        "alias=9\nCannot create reference to property IteratedState::$copy\n"
+    );
+}
+
+#[test]
+fn foreach_reference_preserves_typed_property_constraints() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class TypedIteration {
+    public int $number = 4;
+}
+$object = new TypedIteration();
+foreach ($object as &$value) {
+    try {
+        $value = 'invalid';
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+var_dump($object->number);
+"#,
+        ),
+        "Cannot assign string to reference held by property TypedIteration::$number of type int\nint(4)\n"
+    );
+}

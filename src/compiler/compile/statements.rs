@@ -423,6 +423,7 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_MODIFY;
                 if silent_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
@@ -455,6 +456,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_MODIFY;
                 if silent_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
@@ -1456,6 +1458,7 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_MODIFY;
                 if silent_root_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
@@ -1487,6 +1490,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_OBJ_MODIFY;
                 if silent_root_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
