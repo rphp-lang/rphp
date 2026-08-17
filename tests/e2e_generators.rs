@@ -338,6 +338,25 @@ catch (Throwable $error) { echo $error->getMessage(), "\n"; }
 }
 
 #[test]
+fn generator_cannot_delegate_to_itself_while_running() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function delegatesToSentValue() {
+    try { yield from yield; }
+    catch (Error $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+$generator = delegatesToSentValue();
+$generator->send($generator);
+"#
+        ),
+        "Impossible to yield from the Generator being currently run\n"
+    );
+}
+
+#[test]
 fn test_typed_generator_completion_and_internal_return_value() {
     assert_eq!(
         run_php(

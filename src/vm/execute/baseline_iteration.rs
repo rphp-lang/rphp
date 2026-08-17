@@ -1463,6 +1463,21 @@ fn op_yield_from<'a>(
             if obj_data.class_name.as_ref() == "Generator" {
                 if let Some(inner_gen_ref) = obj_data.generator.clone() {
                     drop(obj_data);
+                    if std::rc::Rc::ptr_eq(&gen_ref, &inner_gen_ref) {
+                        eg.active_generator = Some(gen_ref);
+                        let error = crate::value::make_error_value(
+                            "Error",
+                            "Impossible to yield from the Generator being currently run",
+                        );
+                        return Ok(match throw_in_frame(eg, frame, error) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                ColdResult::NewFrame(new_frame, new_op_array)
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                ColdResult::Unhandled(exception)
+                            }
+                        });
+                    }
                     // Start inner generator if needed
                     {
                         let inner_state: GeneratorState = inner_gen_ref.borrow().state;
