@@ -133,7 +133,7 @@ echo (new ExplicitInvokeReceiver())->callback()->__invoke('!');
 #[test]
 fn closure_var_dump_reports_function_receiver_captures_and_parameters() {
     assert_eq!(
-        run_php(
+        run_php_with_source_context(
             r#"<?php
 function reflectedDebug(string $required, int $optional = 1) {}
 var_dump(Closure::fromCallable('reflectedDebug'));
@@ -149,6 +149,8 @@ $receiver = new DebugReceiver();
 var_dump(Closure::fromCallable([$receiver, 'method']));
 var_dump($receiver->closure());
 "#,
+            "closure-debug.php",
+            ".",
         ),
         r#"object(Closure)#1 (2) {
   ["function"]=>
@@ -168,7 +170,13 @@ object(Closure)#2 (2) {
   object(DebugReceiver)#1 (0) {
   }
 }
-object(Closure)#2 (3) {
+object(Closure)#2 (6) {
+  ["name"]=>
+  string(36) "{closure:DebugReceiver::closure():9}"
+  ["file"]=>
+  string(17) "closure-debug.php"
+  ["line"]=>
+  int(9)
   ["static"]=>
   array(1) {
     ["captured"]=>

@@ -9211,6 +9211,27 @@ fn var_dump_value_inner(
                 .common()
                 .expect("live Closure must retain a registered function");
             let user_function = closure.user_function();
+            let anonymous_metadata = user_function.and_then(|function| {
+                let public_name =
+                    function
+                        .op_array
+                        .name
+                        .split_once('@')
+                        .and_then(|(internal, public)| {
+                            internal.starts_with("__closure_").then_some(public)
+                        })?;
+                let declaration_line = function
+                    .op_array
+                    .source_lines
+                    .last()
+                    .filter(|(opline, _)| *opline == u32::MAX)
+                    .map_or(0, |(_, line)| i64::from(*line));
+                Some((
+                    public_name.to_string(),
+                    function.op_array.source_file.as_ref().clone(),
+                    declaration_line,
+                ))
+            });
             let function_name = user_function
                 .map(|function| function.op_array.name.as_str())
                 .filter(|name| {
@@ -9267,7 +9288,8 @@ fn var_dump_value_inner(
                 };
                 parameters.set_str(&format!("${name}"), Value::string(state));
             }
-            let property_count = usize::from(function_name.is_some())
+            let property_count = anonymous_metadata.as_ref().map_or(0, |_| 3)
+                + usize::from(function_name.is_some())
                 + usize::from(!static_values.is_empty())
                 + usize::from(closure.bound_this.is_some())
                 + usize::from(!parameters.is_empty());
@@ -9286,7 +9308,11 @@ fn var_dump_value_inner(
                     visited_objects,
                 ));
             };
-            if let Some(function_name) = function_name {
+            if let Some((name, file, line)) = anonymous_metadata {
+                append_property("name", &Value::string(name));
+                append_property("file", &Value::string(file));
+                append_property("line", &Value::long(line));
+            } else if let Some(function_name) = function_name {
                 append_property("function", &Value::string(function_name));
             }
             if !static_values.is_empty() {
