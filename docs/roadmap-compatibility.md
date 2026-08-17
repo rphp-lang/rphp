@@ -502,6 +502,19 @@ delta is +2/-0, bringing the cumulative gain from the initial baseline to
 runtime performance gate applies because valid bytecode is unchanged.
 Implicit parent accessors for plain storage remain the next parent-hook slice.
 
+The `d85aaa9` implicit-parent-property-accessor checkpoint reaches 2,218 passes
+with 2,990 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts
+and zero crashes. Plain backed parent properties now expose implicit exact-arity
+get/set accessors to overriding hooks, use the parent's backing slot without
+child redispatch, and produce catchable property visibility, undefined-property
+and missing-parent diagnostics. Explicit hooks retain user-function argument
+behavior. The exact PHP 8.5.6 delta is +13/-0, bringing the cumulative gain
+from the initial baseline to +403/-0. All five feature configurations,
+all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel S2 gates pass.
+Typed/untyped read/write/method/constructor lanes are -0.642%, -0.742%,
++0.982% and +2.863%, within their five-percent ceiling. Parenthesized parent
+property-call syntax remains a separate parser/AST slice.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

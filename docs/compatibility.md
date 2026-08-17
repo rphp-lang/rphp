@@ -8,14 +8,27 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `ba41208`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,205 pass, 3,003 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `d85aaa9`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,218 pass, 2,990 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-42.339%; 88.038% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +390/-0. The first four gains are
+42.588%; 87.999% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +403/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Plain backed properties now provide PHP 8.5's implicit
+`parent::$property::get()` and `set()` accessors to overriding hooks. They use
+the parent's backing slot without redispatching into the child, enforce the
+internal-accessor exact arity, and report catchable property diagnostics for
+missing or inaccessible storage and a missing parent scope. Explicit user
+hooks retain their normal surplus-argument behavior. This adds 13 exact passes
+without losing a prior pass, including default-value inheritance and generator
+hook interactions. All five feature configurations, all-target, unsafe,
+Composer S0, Symfony S1 and warmed-kernel S2 gates pass. Typed/untyped
+read/write/method/constructor performance lanes measure -0.642%, -0.742%,
++0.982% and +2.863%, within their five-percent ceiling. The parenthesized
+`(parent::$property)::get()` syntax remains a separate parser/AST boundary.
 
 Parent property-hook syntax without an active class scope now reports PHP
 8.5's class-scope compile fatal before hook-context validation. Incrementing or
@@ -32,8 +45,7 @@ hook or from a different property/hook fail during compilation with PHP 8.5's
 diagnostics. This adds six exact passes without losing a prior pass. All
 feature, target and unsafe gates pass. No runtime performance gate applies:
 ordinary property bytecode and VM dispatch are unchanged, and only the new
-source form enters the established static parent-call path. Implicit parent
-accessors for plain storage remain a separate VM follow-up.
+source form enters the established static parent-call path.
 
 `ReflectionProperty` now exposes PHP 8.5 default-value presence and value,
 including the distinction between implicit-null untyped declarations,
