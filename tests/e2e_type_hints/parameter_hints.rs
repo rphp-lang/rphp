@@ -407,6 +407,87 @@ fn intersection_types_reject_non_class_members_at_declaration_time() {
     ));
 }
 
+#[test]
+fn redundant_declared_types_use_php_normalization_and_diagnostics() {
+    for (source, expected) in [
+        (
+            "<?php\nfunction invalid(): int|INT {}",
+            "Duplicate type int is redundant",
+        ),
+        (
+            "<?php\nfunction invalid(): Example|EXAMPLE {}",
+            "Duplicate type EXAMPLE is redundant",
+        ),
+        (
+            "<?php\nclass Example { function invalid(): self|SELF {} }",
+            "Duplicate type Example is redundant",
+        ),
+        (
+            "<?php\nclass Base {} class Example extends Base { function invalid(): parent|PARENT {} }",
+            "Duplicate type Base is redundant",
+        ),
+        (
+            "<?php\nuse Original as Alias; function invalid(): Original&Alias {}",
+            "Duplicate type Original is redundant",
+        ),
+        (
+            "<?php\nfunction invalid(): bool|false {}",
+            "Duplicate type false is redundant",
+        ),
+        (
+            "<?php\nfunction invalid(): false|true {}",
+            "Type contains both true and false, bool must be used instead",
+        ),
+        (
+            "<?php\nfunction invalid(): iterable|Traversable {}",
+            "Duplicate type Traversable is redundant",
+        ),
+        (
+            "<?php\nfunction invalid(): iterable|iterable|null {}",
+            "Duplicate type array is redundant",
+        ),
+        (
+            "<?php\nfunction invalid(): ?null {}",
+            "null cannot be marked as nullable",
+        ),
+        (
+            "<?php\nfunction invalid(): object|Example {}",
+            "Type Example|object contains both object and a class type, which is redundant",
+        ),
+        (
+            "<?php\nfunction invalid(): object|iterable|Example|null {}",
+            "Type Traversable|Example|object|array|null contains both object and a class type, which is redundant",
+        ),
+        (
+            "<?php\ninterface A {} interface B {} function invalid(): (A&B)|A {}",
+            "Type A&B is redundant as it is more restrictive than type A",
+        ),
+        (
+            "<?php\ninterface X {} use Original as Alias; function invalid(): (X&Original)|(X&Alias) {}",
+            "Type X&Original is redundant with type X&Original",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "redundant-type.php",
+            ".",
+        );
+        assert!(
+            error.to_string().contains(&format!(
+                "{expected} in redundant-type.php on line 2"
+            )),
+            "unexpected error for {source}: {error}"
+        );
+    }
+
+    assert_eq!(
+        run_php(
+            "<?php interface A {} interface B {} interface C {} class Both implements A, B {} function valid((A&B)|C $value): (A&B)|C { return $value; } echo valid(new Both()) instanceof B ? 'ok' : 'bad';"
+        ),
+        "ok"
+    );
+}
+
 // ── Type hints with defaults ──
 
 #[test]

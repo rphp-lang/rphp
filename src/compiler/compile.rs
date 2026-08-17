@@ -3723,7 +3723,7 @@ impl Compiler {
             if param.name == "this" {
                 return Err(self.goto_error("Cannot use $this as parameter", param.line));
             }
-            self.validate_declared_type_hint(&param.type_hint, param.line)?;
+            func_compiler.validate_declared_type_hint(&param.type_hint, param.line)?;
             match param.type_hint.as_ref() {
                 Some(crate::parser::TypeHint::Never) => {
                     return Err(
@@ -3845,11 +3845,67 @@ impl Compiler {
         hint: &Option<crate::parser::TypeHint>,
         line: usize,
     ) -> Result<(), String> {
+        self.validate_declared_type_hint_in_scope(
+            hint,
+            line,
+            self.lexical_static_class.as_deref(),
+            self.lexical_static_parent.as_deref(),
+        )
+    }
+
+    fn validate_declared_type_hint_in_scope(
+        &self,
+        hint: &Option<crate::parser::TypeHint>,
+        line: usize,
+        current_class: Option<&str>,
+        parent_class: Option<&str>,
+    ) -> Result<(), String> {
         use crate::parser::TypeHint;
+
+        #[derive(Clone)]
+        struct TypeAtom {
+            identity: String,
+            display: String,
+            semantic: Vec<&'static str>,
+            is_class: bool,
+            explicit_true: bool,
+            explicit_false: bool,
+        }
+
+        #[derive(Clone)]
+        struct TypeBranch {
+            atoms: Vec<TypeAtom>,
+        }
+
+        impl TypeBranch {
+            fn display(&self) -> String {
+                self.atoms
+                    .iter()
+                    .map(|atom| atom.display.as_str())
+                    .collect::<Vec<_>>()
+                    .join("&")
+            }
+
+            fn identities(&self) -> std::collections::HashSet<&str> {
+                self.atoms
+                    .iter()
+                    .map(|atom| atom.identity.as_str())
+                    .collect()
+            }
+        }
 
         fn intersection_member_name(hint: &TypeHint) -> Option<String> {
             match hint {
                 TypeHint::ClassName(name) => match name.to_ascii_lowercase().as_str() {
+                    "int" => Some("int".to_string()),
+                    "float" => Some("float".to_string()),
+                    "string" => Some("string".to_string()),
+                    "bool" => Some("bool".to_string()),
+                    "callable" => Some("callable".to_string()),
+                    "null" => Some("null".to_string()),
+                    "void" => Some("void".to_string()),
+                    "mixed" => Some("mixed".to_string()),
+                    "never" => Some("never".to_string()),
                     "false" => Some("false".to_string()),
                     "true" => Some("true".to_string()),
                     "object" => Some("object".to_string()),
@@ -3884,11 +3940,262 @@ impl Compiler {
             }
         }
 
+        let atom = |hint: &TypeHint| -> Option<TypeAtom> {
+            let builtin = |identity: &str,
+                           semantic: Vec<&'static str>,
+                           is_class: bool,
+                           explicit_true: bool,
+                           explicit_false: bool| TypeAtom {
+                identity: identity.to_string(),
+                display: identity.to_string(),
+                semantic,
+                is_class,
+                explicit_true,
+                explicit_false,
+            };
+            Some(match hint {
+                TypeHint::Int => builtin("int", vec![], false, false, false),
+                TypeHint::Float => builtin("float", vec![], false, false, false),
+                TypeHint::String => builtin("string", vec![], false, false, false),
+                TypeHint::Bool => builtin("bool", vec!["true", "false"], false, false, false),
+                TypeHint::Array => builtin("array", vec![], false, false, false),
+                TypeHint::Callable => builtin("callable", vec![], false, false, false),
+                TypeHint::Null => builtin("null", vec![], false, false, false),
+                TypeHint::Void => builtin("void", vec![], false, false, false),
+                TypeHint::Mixed => builtin("mixed", vec![], false, false, false),
+                TypeHint::Never => builtin("never", vec![], false, false, false),
+                TypeHint::ClassName(name) => {
+                    let lower = name.to_ascii_lowercase();
+                    match lower.as_str() {
+                        "int" => builtin("int", vec![], false, false, false),
+                        "float" => builtin("float", vec![], false, false, false),
+                        "string" => builtin("string", vec![], false, false, false),
+                        "bool" => builtin("bool", vec!["true", "false"], false, false, false),
+                        "callable" => builtin("callable", vec![], false, false, false),
+                        "null" => builtin("null", vec![], false, false, false),
+                        "void" => builtin("void", vec![], false, false, false),
+                        "mixed" => builtin("mixed", vec![], false, false, false),
+                        "never" => builtin("never", vec![], false, false, false),
+                        "false" => builtin("false", vec![], false, false, true),
+                        "true" => builtin("true", vec![], false, true, false),
+                        "object" => builtin("object", vec![], false, false, false),
+                        "iterable" => TypeAtom {
+                            identity: "iterable".to_string(),
+                            display: "iterable".to_string(),
+                            semantic: vec!["traversable", "array"],
+                            is_class: false,
+                            explicit_true: false,
+                            explicit_false: false,
+                        },
+                        "static" => builtin("static", vec![], true, false, false),
+                        "self" => {
+                            let display = current_class.unwrap_or("self").to_string();
+                            TypeAtom {
+                                identity: display.to_ascii_lowercase(),
+                                display,
+                                semantic: vec![],
+                                is_class: true,
+                                explicit_true: false,
+                                explicit_false: false,
+                            }
+                        }
+                        "parent" => {
+                            let display = parent_class.unwrap_or("parent").to_string();
+                            TypeAtom {
+                                identity: display.to_ascii_lowercase(),
+                                display,
+                                semantic: vec![],
+                                is_class: true,
+                                explicit_true: false,
+                                explicit_false: false,
+                            }
+                        }
+                        _ => {
+                            let display = self.resolve_name(name);
+                            TypeAtom {
+                                identity: display.to_ascii_lowercase(),
+                                display,
+                                semantic: vec![],
+                                is_class: true,
+                                explicit_true: false,
+                                explicit_false: false,
+                            }
+                        }
+                    }
+                }
+                TypeHint::GenericParameter { name, .. } => TypeAtom {
+                    identity: format!("generic:{name}"),
+                    display: name.clone(),
+                    semantic: vec![],
+                    is_class: true,
+                    explicit_true: false,
+                    explicit_false: false,
+                },
+                TypeHint::GenericApplication { base, .. } => {
+                    let display = self.resolve_name(base);
+                    TypeAtom {
+                        identity: display.to_ascii_lowercase(),
+                        display,
+                        semantic: vec![],
+                        is_class: true,
+                        explicit_true: false,
+                        explicit_false: false,
+                    }
+                }
+                TypeHint::Nullable(_) | TypeHint::Union(_) | TypeHint::Intersection(_) => {
+                    return None;
+                }
+            })
+        };
+
+        let branch = |hint: &TypeHint| -> Option<TypeBranch> {
+            match hint {
+                TypeHint::Intersection(parts) => Some(TypeBranch {
+                    atoms: parts.iter().filter_map(&atom).collect(),
+                }),
+                _ => atom(hint).map(|atom| TypeBranch { atoms: vec![atom] }),
+            }
+        };
+
+        fn duplicate_in_branch(branch: &TypeBranch) -> Option<String> {
+            let mut seen = std::collections::HashSet::new();
+            for atom in &branch.atoms {
+                if !seen.insert(atom.identity.as_str()) {
+                    return Some(atom.display.clone());
+                }
+            }
+            None
+        }
+
+        fn union_redundancy(branches: &[TypeBranch]) -> Option<String> {
+            let has_explicit_true = branches
+                .iter()
+                .flat_map(|branch| &branch.atoms)
+                .any(|atom| atom.explicit_true);
+            let has_explicit_false = branches
+                .iter()
+                .flat_map(|branch| &branch.atoms)
+                .any(|atom| atom.explicit_false);
+            let has_bool = branches
+                .iter()
+                .flat_map(|branch| &branch.atoms)
+                .any(|atom| atom.identity == "bool");
+            if has_explicit_true && has_explicit_false && !has_bool {
+                return Some("Type contains both true and false, bool must be used instead".into());
+            }
+
+            let mut seen_identities = std::collections::HashSet::new();
+            let mut seen_semantic = std::collections::HashSet::new();
+            for branch in branches.iter().filter(|branch| branch.atoms.len() == 1) {
+                let atom = &branch.atoms[0];
+                if !seen_identities.insert(atom.identity.as_str())
+                    || seen_semantic.contains(atom.identity.as_str())
+                {
+                    if atom.identity == "iterable" {
+                        return Some("Duplicate type array is redundant".to_string());
+                    }
+                    return Some(format!("Duplicate type {} is redundant", atom.display));
+                }
+                for semantic in &atom.semantic {
+                    if seen_identities.contains(semantic) || !seen_semantic.insert(*semantic) {
+                        return Some(format!("Duplicate type {semantic} is redundant"));
+                    }
+                }
+            }
+
+            let has_object = branches
+                .iter()
+                .any(|branch| branch.atoms.len() == 1 && branch.atoms[0].identity == "object");
+            if has_object
+                && branches
+                    .iter()
+                    .any(|branch| branch.atoms.iter().any(|a| a.is_class))
+            {
+                let mut class_displays = Vec::new();
+                let mut tail_displays = Vec::new();
+                for branch in branches {
+                    if branch.atoms.len() > 1 {
+                        class_displays.push(format!("({})", branch.display()));
+                        continue;
+                    }
+                    let atom = &branch.atoms[0];
+                    match atom.identity.as_str() {
+                        "object" => {}
+                        "iterable" => {
+                            class_displays.push("Traversable".to_string());
+                            tail_displays.push("array".to_string());
+                        }
+                        _ if atom.is_class => class_displays.push(atom.display.clone()),
+                        _ => tail_displays.push(atom.display.clone()),
+                    }
+                }
+                class_displays.push("object".to_string());
+                class_displays.extend(tail_displays);
+                return Some(format!(
+                    "Type {} contains both object and a class type, which is redundant",
+                    class_displays.join("|")
+                ));
+            }
+
+            for left in 0..branches.len() {
+                for right in (left + 1)..branches.len() {
+                    let left_ids = branches[left].identities();
+                    let right_ids = branches[right].identities();
+                    if left_ids == right_ids && branches[left].atoms.len() > 1 {
+                        let display = branches[left].display();
+                        return Some(format!("Type {display} is redundant with type {display}"));
+                    }
+                    let (restrictive, permissive) = if left_ids.is_superset(&right_ids) {
+                        (&branches[left], &branches[right])
+                    } else if right_ids.is_superset(&left_ids) {
+                        (&branches[right], &branches[left])
+                    } else {
+                        continue;
+                    };
+                    if restrictive.atoms.len() > permissive.atoms.len() {
+                        return Some(format!(
+                            "Type {} is redundant as it is more restrictive than type {}",
+                            restrictive.display(),
+                            permissive.display()
+                        ));
+                    }
+                }
+            }
+            None
+        }
+
         if let Some(invalid) = hint.as_ref().and_then(first_invalid_intersection_member) {
             return Err(self.goto_error(
                 &format!("Type {invalid} cannot be part of an intersection type"),
                 line,
             ));
+        }
+        if matches!(hint, Some(TypeHint::Nullable(inner)) if matches!(inner.as_ref(), TypeHint::Null))
+        {
+            return Err(self.goto_error("null cannot be marked as nullable", line));
+        }
+        if let Some(TypeHint::Intersection(parts)) = hint {
+            let normalized = TypeBranch {
+                atoms: parts.iter().filter_map(&atom).collect(),
+            };
+            if let Some(duplicate) = duplicate_in_branch(&normalized) {
+                return Err(
+                    self.goto_error(&format!("Duplicate type {duplicate} is redundant"), line)
+                );
+            }
+        }
+        if let Some(TypeHint::Union(parts)) = hint {
+            let branches = parts.iter().filter_map(branch).collect::<Vec<_>>();
+            for normalized in &branches {
+                if let Some(duplicate) = duplicate_in_branch(normalized) {
+                    return Err(
+                        self.goto_error(&format!("Duplicate type {duplicate} is redundant"), line)
+                    );
+                }
+            }
+            if let Some(message) = union_redundancy(&branches) {
+                return Err(self.goto_error(&message, line));
+            }
         }
         Ok(())
     }
@@ -6298,7 +6605,7 @@ impl Compiler {
                         }
                     }
                 };
-                if let Err(error) = self.validate_declared_type_hint(return_type, *line) {
+                if let Err(error) = func_compiler.validate_declared_type_hint(return_type, *line) {
                     self.deferred_error = Some(error);
                 }
                 cp.return_type_hint = self.convert_type_hint(return_type);
