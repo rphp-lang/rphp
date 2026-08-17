@@ -694,9 +694,43 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                         };
-                        let destructor = (opline.op1_type == OpType::Cv
-                            && (&*dest).dereferenced().value_type() == ValueType::Object)
-                            .then(|| prepare_replaced_value_destructor(eg, &*dest))
+                        let replaced_object = opline.op1_type == OpType::Cv
+                            && (&*dest).dereferenced().value_type() == ValueType::Object;
+                        let mirrored_global_name = (replaced_object && !(&*dest).is_reference())
+                            .then(|| {
+                                let root_frame = (*frame).prev_execute_data.is_null();
+                                let mirrored_variables = if root_frame {
+                                    &op_array.main_scope_vars
+                                } else {
+                                    &op_array.global_vars
+                                };
+                                (root_frame || !mirrored_variables.is_empty()).then(|| {
+                                    mirrored_variables
+                                    .iter()
+                                    .find(|(cv, _)| *cv == u32::from(opline.op1))
+                                    .and_then(|(_, name)| {
+                                        eg.globals
+                                            .get(name)
+                                            .filter(|global| {
+                                                !global.is_reference()
+                                                    && global.object_identity()
+                                                        == (&*dest).object_identity()
+                                            })
+                                            .map(|_| name.as_str())
+                                    })
+                                })
+                                .flatten()
+                            })
+                            .flatten();
+                        let replaced_references = 1 + usize::from(mirrored_global_name.is_some());
+                        let destructor = replaced_object
+                            .then(|| {
+                                prepare_replaced_value_destructor_with_references(
+                                    eg,
+                                    &*dest,
+                                    replaced_references,
+                                )
+                            })
                             .flatten();
                         let destructor_ran = destructor.is_some();
                         if destination_is_reference {
@@ -733,12 +767,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                         if destructor.is_some()
-                            && (*frame).prev_execute_data.is_null()
-                            && opline.op1_type == OpType::Cv
-                            && let Some((_, global_name)) = op_array
-                                .global_vars
-                                .iter()
-                                .find(|(cv, _)| *cv == u32::from(opline.op1))
+                            && let Some(global_name) = mirrored_global_name
                         {
                             globals_set(&mut eg.globals, global_name, (&*dest).clone());
                         }

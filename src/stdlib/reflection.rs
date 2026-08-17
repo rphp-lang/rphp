@@ -1886,7 +1886,7 @@ fn class_new_lazy_object(
     let initializer = with_argument(ed, 1, Clone::clone);
     let resolved = crate::stdlib::resolve_callback_at_callsite(&initializer, eg, ed)
         .ok_or_else(|| VmError::Fatal("Lazy object initializer must be callable".into()))?;
-    eg.register_lazy_object(&lazy_object, strategy, initializer, resolved, options);
+    eg.register_lazy_object(&lazy_object, strategy, initializer, resolved, options, None);
     return_value(rv, lazy_object)
 }
 
@@ -2132,6 +2132,53 @@ fn class_get_lazy_initializer(
     return_value(rv, initializer)
 }
 
+fn reflected_reset_lazy_slots(
+    eg: &ExecutorGlobals,
+    reflected_class: &str,
+    object: &Value,
+) -> Vec<usize> {
+    let Some(class) = eg.find_class(reflected_class) else {
+        return Vec::new();
+    };
+    let reflected_class_id = class.class_id;
+    let reflected_layout = class.property_layout.clone();
+    let Some(object) = object.as_object() else {
+        return Vec::new();
+    };
+    let mut slots = Vec::with_capacity(reflected_layout.len());
+    for reflected_slot in 0..reflected_layout.len() {
+        let Some(key) = reflected_layout.key(reflected_slot) else {
+            continue;
+        };
+        let Some(slot) = object.property_slot(key) else {
+            continue;
+        };
+        let definition = eg.instance_property_definition(object.class_id, slot);
+        if definition.is_some_and(PropertyDefinition::is_virtual_hook_property) {
+            continue;
+        }
+        // An initialized readonly property inherited from another class keeps
+        // its value. Resetting the declaring class itself starts a new
+        // lifecycle for that storage; an uninitialized inherited readonly
+        // slot can also participate normally.
+        if definition.is_some_and(|definition| {
+            definition.is_readonly
+                && eg
+                    .find_class(&definition.declaring_class)
+                    .is_some_and(|declaring| declaring.class_id != reflected_class_id)
+                && object
+                    .get_property_slot(slot)
+                    .is_some_and(|value| !value.is_undef())
+        }) {
+            continue;
+        }
+        if !slots.contains(&slot) {
+            slots.push(slot);
+        }
+    }
+    slots
+}
+
 fn class_reset_as_lazy_object(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
@@ -2165,9 +2212,18 @@ fn class_reset_as_lazy_object(
         ));
         return Ok(());
     }
-    if eg.is_uninitialized_lazy_object(&object) {
-        reflection_exception(eg, "Object is already lazy");
-        return Ok(());
+    if let Some(state) = eg.lazy_object_state(&object) {
+        if state.initializing {
+            eg.exception = Some(make_error_value(
+                "Error",
+                "Can not reset an object while it is being initialized",
+            ));
+            return Ok(());
+        }
+        if state.proxy_instance.is_none() {
+            reflection_exception(eg, "Object is already lazy");
+            return Ok(());
+        }
     }
     let Some(options) = lazy_object_options(ed, eg, method, 3, true) else {
         return Ok(());
@@ -2176,21 +2232,76 @@ fn class_reset_as_lazy_object(
     let resolved = crate::stdlib::resolve_callback_at_callsite(&initializer, eg, ed)
         .ok_or_else(|| VmError::Fatal("Lazy object initializer must be callable".into()))?;
 
+    let lazy_slots = reflected_reset_lazy_slots(eg, &owner, &object);
+    let destructor_target = eg
+        .lazy_proxy_instance(&object)
+        .unwrap_or_else(|| object.clone());
+    let previous_lazy_state = eg.take_lazy_object_state(&object);
     if options as i64 & LAZY_SKIP_DESTRUCTOR == 0 {
-        let _ = crate::stdlib::call_object_public_method(eg, &object, "__destruct", &[])?;
+        let has_destructor = destructor_target.as_object().is_some_and(|object| {
+            eg.find_method_info(&object.class_name, "__destruct")
+                .is_some()
+        });
+        let destructor_result = if has_destructor && destructor_target.mark_object_destructed() {
+            crate::stdlib::call_object_public_method(eg, &destructor_target, "__destruct", &[])
+        } else {
+            Ok(None)
+        };
+        if let Err(error) = destructor_result {
+            if let Some(state) = previous_lazy_state {
+                eg.restore_lazy_object_state(&object, state);
+            }
+            return Err(error);
+        }
         if eg.exception.is_some() {
+            if let Some(state) = previous_lazy_state {
+                eg.restore_lazy_object_state(&object, state);
+            }
             return Ok(());
         }
     }
 
-    eg.take_lazy_object_state(&object);
-    if let Some(mut object_data) = object.as_object_mut() {
-        for value in &mut object_data.property_values {
-            *value = Value::undef();
+    let (declared_keys, dynamic_keys) = object.as_object().map_or_else(
+        || (Vec::new(), Vec::new()),
+        |object| {
+            let declared = lazy_slots
+                .iter()
+                .filter_map(|slot| object.property_name_at_slot(*slot).map(str::to_owned))
+                .collect();
+            let mut dynamic = Vec::new();
+            object.for_each_dynamic_property(|key, _| dynamic.push(key.to_owned()));
+            (declared, dynamic)
+        },
+    );
+    let mut property_destructors = Vec::new();
+    for key in declared_keys.into_iter().chain(dynamic_keys) {
+        let destructor = object.as_object().and_then(|object| {
+            object
+                .get_property(&key)
+                .and_then(|value| crate::vm::execute::prepare_replaced_value_destructor(eg, value))
+        });
+        if let Some(mut object_data) = object.as_object_mut() {
+            object_data.unset_property(&key);
         }
-        object_data.dynamic_properties = None;
+        if let Some(destructor) = destructor {
+            property_destructors.push(destructor);
+        }
     }
-    eg.register_lazy_object(&object, strategy, initializer, resolved, options);
+    object.clear_object_destructed();
+    eg.register_lazy_object(
+        &object,
+        strategy,
+        initializer,
+        resolved,
+        options,
+        Some(lazy_slots),
+    );
+    for destructor in property_destructors {
+        crate::vm::execute::run_prepared_value_destructor(eg, Some(destructor))?;
+        if eg.exception.is_some() {
+            break;
+        }
+    }
     Ok(())
 }
 

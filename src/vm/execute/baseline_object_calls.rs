@@ -2302,7 +2302,9 @@ fn op_assign_obj_prop<'a>(
         let mut prop_is_public = true;
         let mut property_accessible = true;
         let mut force_dynamic = false;
+        let mut property_defining_class = None;
         if let Some((vis, defining_class)) = eg.find_property_set_visibility(&php_obj.class_name, &name) {
+            property_defining_class = Some(defining_class.clone());
             if vis != Visibility::Public {
                 prop_is_public = false;
                 let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
@@ -2425,6 +2427,14 @@ fn op_assign_obj_prop<'a>(
         }
         // Readonly property check
         let mut consume_clone_reinitialization = false;
+        let readonly_display_class = property_defining_class.as_deref().map_or(
+            object_display_class_name.as_ref(),
+            |class| {
+                class
+                    .strip_prefix("class@anonymous#")
+                    .map_or(class, |_| "class@anonymous")
+            },
+        );
         if let Some(class_def) = eg.class_table.get(php_obj.class_name.as_ref()) {
             if class_def.readonly_props.contains(&name) {
                 prop_is_writable = false;
@@ -2437,7 +2447,7 @@ fn op_assign_obj_prop<'a>(
                     {
                         let err = make_error_value("Error", &format!(
                             "Cannot indirectly modify readonly property {}::${}",
-                            object_display_class_name, name
+                            readonly_display_class, name
                         ));
                         drop(php_obj);
                         match throw_in_frame(eg, frame, err) {
@@ -2453,7 +2463,7 @@ fn op_assign_obj_prop<'a>(
                     } else {
                         let err = make_error_value("Error", &format!(
                             "Cannot modify readonly property {}::${}",
-                            object_display_class_name, name
+                            readonly_display_class, name
                         ));
                         drop(php_obj);
                         match throw_in_frame(eg, frame, err) {
@@ -2469,7 +2479,7 @@ fn op_assign_obj_prop<'a>(
                     if !in_declaring_scope {
                         let err = make_error_value("Error", &format!(
                             "Cannot initialize readonly property {}::${} from {}",
-                            object_display_class_name, name,
+                            readonly_display_class, name,
                             caller_class.as_deref().map_or("global scope".to_string(), |c| format!("scope {}", c))
                         ));
                         drop(php_obj);

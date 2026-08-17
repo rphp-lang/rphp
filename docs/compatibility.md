@@ -781,6 +781,28 @@ ceiling and 289 functions at its ceiling. Twenty alternating release pairs of
 1.260106/1.275084/1.301365 seconds (median -1.37 percent), with the identical
 `12499997500000` result.
 
+Lazy resets now retire only the declared storage visible through the reflected
+class, while preserving additional subclass properties and initialized
+readonly storage inherited from another declaring class. An initialized proxy
+is detached before its old real instance is destructed; a throwing destructor
+restores the proxy relation and leaves the retired lifecycle marked so it is
+not invoked again. Successful resets remove typed-reference constraints,
+release nested declared and dynamic values after the reset commit, and reject
+re-entry while an initializer is active. Main-scope CV and request-global
+mirrors are also counted as one logical ownership boundary for replacement and
+shutdown destructors. The exact 223-case lazy-object pass set moves from 177 to
+187, a further +10/-0 delta; 12 of the 14 `reset_as_lazy*` cases now pass. The
+remaining two expose independent closure-reference-capture and dynamic-value
+destructor-order gaps.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting, Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass on
+AMD64, with the unsafe inventory unchanged. A final 20-pair candidate-first
+confirmation of `bench_property.php` measured baseline p10/median/p90 of
+1.273414/1.284652/1.333661 seconds and candidate
+1.268104/1.279233/1.295493 seconds (median -0.42 percent), with identical
+output.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

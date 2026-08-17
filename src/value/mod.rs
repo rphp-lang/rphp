@@ -4386,6 +4386,18 @@ impl Value {
         true
     }
 
+    /// Begin a fresh lifecycle after Reflection successfully resets an object
+    /// as lazy. The destructor that retired the previous state remains marked
+    /// if it threw, while the new lazy state may be destructed after it is
+    /// initialized.
+    #[cold]
+    pub(crate) fn clear_object_destructed(&self) {
+        let Some(mut object) = self.as_object_mut() else {
+            return;
+        };
+        object.lifecycle &= OBJECT_HANDLE_MASK;
+    }
+
     /// Number of live PHP Value handles sharing this object identity.
     #[inline]
     pub(crate) fn object_strong_count(&self) -> Option<usize> {

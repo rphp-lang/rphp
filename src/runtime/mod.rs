@@ -481,6 +481,7 @@ impl ExecutorGlobals {
         initializer_value: crate::value::Value,
         initializer: crate::stdlib::ResolvedCallback,
         options: u8,
+        explicit_lazy_slots: Option<Vec<usize>>,
     ) -> bool {
         let Some(identity) = object.object_identity() else {
             return false;
@@ -488,17 +489,19 @@ impl ExecutorGlobals {
         let Some(owner) = object.object_weak() else {
             return false;
         };
-        let lazy_slots: Vec<usize> = object
-            .as_object()
-            .map(|object| {
-                (0..object.property_values.len())
-                    .filter(|slot| {
-                        self.instance_property_definition(object.class_id, *slot)
-                            .is_none_or(|definition| !definition.is_virtual_hook_property())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let lazy_slots: Vec<usize> = explicit_lazy_slots.unwrap_or_else(|| {
+            object
+                .as_object()
+                .map(|object| {
+                    (0..object.property_values.len())
+                        .filter(|slot| {
+                            self.instance_property_definition(object.class_id, *slot)
+                                .is_none_or(|definition| !definition.is_virtual_hook_property())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
         if lazy_slots.is_empty() {
             return false;
         }
@@ -552,6 +555,20 @@ impl ExecutorGlobals {
             self.lazy_objects = None;
         }
         state
+    }
+
+    #[cold]
+    pub(crate) fn restore_lazy_object_state(
+        &mut self,
+        object: &crate::value::Value,
+        state: LazyObjectState,
+    ) {
+        let Some(identity) = object.object_identity() else {
+            return;
+        };
+        self.lazy_objects
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .insert(identity, state);
     }
 
     #[inline]

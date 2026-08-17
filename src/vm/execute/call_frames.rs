@@ -109,11 +109,24 @@ fn run_frame_destructors(
         } else {
             (0..total).collect()
         };
+        let root_frame = (*frame).prev_execute_data.is_null();
         let mut counts = HashMap::<usize, usize>::new();
         for &index in &candidate_indices {
             let value = &*base.add(index);
             if let Some(identity) = value.object_identity() {
                 *counts.entry(identity).or_default() += 1;
+            }
+        }
+        if root_frame {
+            // Main-scope CVs are mirrored in the request-global table. Both
+            // handles are retired together at shutdown, so include the mirror
+            // when deciding whether this is the object's final PHP owner.
+            for value in eg.globals.values().filter(|value| !value.is_reference()) {
+                if let Some(identity) = value.object_identity()
+                    && let Some(count) = counts.get_mut(&identity)
+                {
+                    *count += 1;
+                }
             }
         }
 
@@ -128,7 +141,7 @@ fn run_frame_destructors(
                 identities.push(identity);
             }
         };
-        if (*frame).prev_execute_data.is_null() {
+        if root_frame {
             for &index in candidate_indices.iter().rev() {
                 record_identity(index);
             }
@@ -189,6 +202,18 @@ pub(crate) fn prepare_replaced_value_destructor(
     eg: &ExecutorGlobals,
     value: &Value,
 ) -> Option<Value> {
+    prepare_replaced_value_destructor_with_references(eg, value, 1)
+}
+
+/// Prepare a destructor when one logical PHP slot has multiple direct runtime
+/// mirrors that the caller commits together, such as a main-scope CV and its
+/// request-global table entry.
+#[cold]
+pub(crate) fn prepare_replaced_value_destructor_with_references(
+    eg: &ExecutorGlobals,
+    value: &Value,
+    replaced_references: usize,
+) -> Option<Value> {
     let value = value.dereferenced();
     if eg.is_uninitialized_lazy_object(value) {
         return None;
@@ -199,7 +224,7 @@ pub(crate) fn prepare_replaced_value_destructor(
     else {
         return None;
     };
-    if value.object_strong_count() != Some(1)
+    if value.object_strong_count() != Some(replaced_references)
         || eg.find_method_info(&class_name, "__destruct").is_none()
         || !value.mark_object_destructed()
     {

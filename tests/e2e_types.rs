@@ -1138,6 +1138,66 @@ echo $outer->payload, ':', $first->payload, ':', $last->payload;
 }
 
 #[test]
+fn reflection_lazy_reset_retires_selected_storage_before_reinitialization() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ResetPayload {
+    public function __destruct() { echo "release\n"; }
+}
+class ResetBase {
+    public $base;
+    public function __destruct() { echo 'owner:', gettype($this->base), ':', $this->child, "\n"; }
+}
+#[AllowDynamicProperties]
+class ResetChild extends ResetBase {
+    public string $child = 'keep';
+}
+$object = new ResetChild();
+$object->base = new ResetPayload();
+$object->dynamic = new ResetPayload();
+$reflection = new ReflectionClass(ResetBase::class);
+$reflection->resetAsLazyGhost($object, function ($object) {
+    echo "initialize\n";
+    $object->base = 'ready';
+});
+echo $object->child, ':', (int) $reflection->isUninitializedLazyObject($object), "\n";
+echo $object->base, "\n";
+$object = null;
+"#,
+        ),
+        "owner:object:keep\nrelease\nrelease\nkeep:1\ninitialize\nready\nowner:string:keep\n"
+    );
+}
+
+#[test]
+fn reflection_lazy_reset_destructor_failure_keeps_the_original_lifecycle_retired() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RejectedLazyReset {
+    public string $value = 'original';
+    public function __destruct() {
+        echo "destructor\n";
+        throw new Exception('stop');
+    }
+}
+$object = new RejectedLazyReset();
+$reflection = new ReflectionClass(RejectedLazyReset::class);
+try {
+    $reflection->resetAsLazyProxy($object, fn () => new RejectedLazyReset());
+} catch (Exception $error) {
+    echo $error->getMessage(), "\n";
+}
+echo (int) $reflection->isUninitializedLazyObject($object), ':', $object->value, "\n";
+$object = null;
+"#,
+        ),
+        "destructor\nstop\n0:original\n"
+    );
+}
+
+#[test]
 fn lazy_proxy_magic_guards_follow_shell_and_real_instance_recursion() {
     assert_eq!(
         run_php(
