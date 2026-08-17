@@ -239,6 +239,15 @@ delta is +4/-0; the full feature matrix and unsafe gate pass. No performance
 gate applies because the ordinary implicit-yield path is unchanged and return
 inspection is cold.
 
+The `d0cd311` Generator exception-injection checkpoint reaches 1,978 passes
+with 3,230 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts
+and zero crashes. `Generator::throw()` auto-primes new generators, injects a
+`Throwable` into direct and delegated suspension points, returns the next
+yield after a catch, and propagates escaped or closed-generator exceptions to
+the caller. The exact PHP 8.5.6 delta is +6/-0; the full feature matrix and
+unsafe gate pass. No performance gate applies because injection is an explicit
+cold method and ordinary generator advancement remains unchanged.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
