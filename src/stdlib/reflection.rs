@@ -1961,6 +1961,13 @@ pub(crate) fn initialize_lazy_object(
         return Ok(object.clone());
     };
 
+    // Ghost storage becomes an ordinary object before user code runs, so
+    // declared defaults are observable inside the initializer itself. Proxy
+    // shells keep their lazy storage; their factory produces the real object.
+    if strategy == LazyObjectStrategy::Ghost {
+        restore_lazy_property_defaults(eg, object, &lazy_slots_before);
+    }
+
     let result = match strategy {
         LazyObjectStrategy::Ghost => crate::stdlib::call_resolved_with_values(
             eg,
@@ -2010,9 +2017,7 @@ pub(crate) fn initialize_lazy_object(
                 ));
                 return Ok(object.clone());
             }
-            if let Some(state) = eg.take_lazy_object_state(object) {
-                restore_lazy_property_defaults(eg, object, &state.lazy_slots);
-            }
+            eg.take_lazy_object_state(object);
             Ok(object.clone())
         }
         LazyObjectStrategy::Proxy => {
@@ -2525,6 +2530,121 @@ fn reflected_property_access_object(
     Ok(object)
 }
 
+fn reflected_lazy_property_operation_target(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    method: &str,
+) -> Option<(Value, String, usize, Option<PropertyDefinition>)> {
+    let (_, property) = reflected_property_target(ed)?;
+    let mut target = reflected_property_object(ed, 1)?;
+    let reflected_scope = reflected_property_scope(ed);
+    let modifiers = reflected_property(ed, "__reflection_modifiers")
+        .and_then(|value| value.as_long())
+        .unwrap_or(0);
+    let initial_class = target
+        .as_object()
+        .map(|object| object.class_name.to_string())?;
+    let declaring_class = reflected_scope.as_deref().unwrap_or(initial_class.as_str());
+
+    if modifiers & 16 != 0 {
+        reflection_exception(
+            eg,
+            format!("Can not use {method} on static property {declaring_class}::${property}"),
+        );
+        return None;
+    }
+    if modifiers & 512 != 0 {
+        reflection_exception(
+            eg,
+            format!("Can not use {method} on virtual property {declaring_class}::${property}"),
+        );
+        return None;
+    }
+
+    // An initialized proxy may itself point at another initialized proxy.
+    // Reflection operates on the endpoint visible at method entry, while an
+    // uninitialized endpoint must remain untouched by ordinary initialization.
+    if let Some(instance) = eg.lazy_proxy_instance(&target) {
+        target = instance;
+    }
+    let (key, slot, class_id) = {
+        let object = target.as_object()?;
+        let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
+        let Some(slot) = object.property_slot(&key) else {
+            reflection_exception(
+                eg,
+                format!("Can not use {method} on dynamic property {declaring_class}::${property}"),
+            );
+            return None;
+        };
+        (key, slot, object.class_id)
+    };
+    let definition = eg.instance_property_definition(class_id, slot).cloned();
+    Some((target, key, slot, definition))
+}
+
+fn property_hint_accepts_string(hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::String => true,
+        ParamTypeHint::Nullable(inner) => property_hint_accepts_string(inner),
+        ParamTypeHint::Union(parts) => parts.iter().any(property_hint_accepts_string),
+        _ => false,
+    }
+}
+
+fn prepare_reflected_property_assignment(
+    eg: &mut ExecutorGlobals,
+    target: &Value,
+    definition: &PropertyDefinition,
+    value: Value,
+) -> Result<Option<Value>, VmError> {
+    let first_error = match crate::vm::execute::prepare_property_assignment(
+        value.clone(),
+        definition,
+        eg,
+        false,
+        target
+            .as_object()
+            .as_deref()
+            .map_or(definition.declaring_class.as_str(), |object| {
+                object.class_name.as_ref()
+            }),
+    ) {
+        Ok(value) => return Ok(Some(value)),
+        Err(message) => message,
+    };
+
+    if value.value_type() == ValueType::Object
+        && property_hint_accepts_string(&definition.type_hint)
+        && let Some(rendered) =
+            crate::stdlib::call_object_public_method(eg, &value, "__tostring", &[])?
+    {
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        let called_class = target
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| definition.declaring_class.clone());
+        match crate::vm::execute::prepare_property_assignment(
+            rendered,
+            definition,
+            eg,
+            false,
+            &called_class,
+        ) {
+            Ok(value) => return Ok(Some(value)),
+            Err(message) => {
+                eg.exception = Some(make_error_value("TypeError", &message));
+                return Ok(None);
+            }
+        }
+    }
+
+    eg.exception = Some(make_error_value("TypeError", &first_error));
+    Ok(None)
+}
+
 fn property_is_initialized(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -2655,17 +2775,9 @@ fn property_skip_lazy_initialization(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed) else {
-        return Ok(());
-    };
-    let Some(target) = reflected_property_object(ed, 1) else {
-        return Ok(());
-    };
-    let reflected_scope = reflected_property_scope(ed);
-    let Some((key, slot)) = target.as_object().and_then(|object| {
-        let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
-        object.property_slot(&key).map(|slot| (key, slot))
-    }) else {
+    let Some((target, _key, slot, _definition)) =
+        reflected_lazy_property_operation_target(ed, eg, "skipLazyInitialization")
+    else {
         return Ok(());
     };
     let became_initialized = eg.lazy_object_state_mut(&target).and_then(|state| {
@@ -2683,7 +2795,6 @@ fn property_skip_lazy_initialization(
     if became_initialized {
         eg.take_lazy_object_state(&target);
     }
-    let _ = key;
     Ok(())
 }
 
@@ -2692,21 +2803,64 @@ fn property_set_raw_value_without_lazy_initialization(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed) else {
+    let Some((target, key, slot, definition)) =
+        reflected_lazy_property_operation_target(ed, eg, "setRawValueWithoutLazyInitialization")
+    else {
         return Ok(());
     };
-    let Some(target) = reflected_property_object(ed, 1) else {
+    if definition.as_ref().is_some_and(|definition| {
+        definition.is_readonly
+            && target
+                .as_object()
+                .and_then(|object| {
+                    object
+                        .get_property_slot(slot)
+                        .map(|value| !value.is_undef())
+                })
+                .unwrap_or(false)
+    }) {
+        let definition = definition.as_ref().unwrap();
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!(
+                "Cannot modify readonly property {}::${}",
+                definition.declaring_class, definition.name
+            ),
+        ));
         return Ok(());
-    };
-    let reflected_scope = reflected_property_scope(ed);
-    let Some((key, slot)) = target.as_object().and_then(|object| {
-        let key = reflection_property_key(eg, &object, reflected_scope.as_deref(), &property);
-        object.property_slot(&key).map(|slot| (key, slot))
-    }) else {
-        return Ok(());
-    };
+    }
+
+    let mut value = with_argument(ed, 2, Clone::clone);
+    if let Some(definition) = definition.as_ref() {
+        let Some(prepared) = prepare_reflected_property_assignment(eg, &target, definition, value)?
+        else {
+            return Ok(());
+        };
+        value = prepared;
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        if let Some(declaration) = definition.generic_declaration
+            && let Err(message) = eg.check_cached_generic_property_value(
+                &target,
+                &definition.name,
+                &value,
+                declaration,
+            )
+        {
+            eg.exception = Some(make_error_value("TypeError", &message));
+            return Ok(());
+        }
+    }
+
+    let destructor = target.as_object().and_then(|object| {
+        object
+            .get_property_slot(slot)
+            .and_then(|current| crate::vm::execute::prepare_replaced_value_destructor(eg, current))
+    });
+    if let Some(mut object) = target.as_object_mut() {
+        object.set_property(&key, value);
+    }
     let became_initialized = if let Some(state) = eg.lazy_object_state_mut(&target) {
-        if state.proxy_instance.is_some() {
+        if state.proxy_instance.is_some() || !state.lazy_slots.contains(&slot) {
             false
         } else {
             state.lazy_slots.retain(|candidate| *candidate != slot);
@@ -2715,15 +2869,10 @@ fn property_set_raw_value_without_lazy_initialization(
     } else {
         false
     };
-    let value = with_argument(ed, 2, Clone::clone);
-    let write_target = eg.lazy_proxy_instance(&target).unwrap_or(target.clone());
-    if let Some(mut object) = write_target.as_object_mut() {
-        object.set_property(&key, value);
-    }
     if became_initialized {
         eg.take_lazy_object_state(&target);
     }
-    Ok(())
+    crate::vm::execute::run_prepared_value_destructor(eg, destructor)
 }
 
 fn class_file_name(

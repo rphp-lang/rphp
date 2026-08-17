@@ -208,7 +208,7 @@ fn property_diagnostic_class_name(class: &str) -> &str {
 }
 
 #[inline]
-fn prepare_property_assignment(
+pub(crate) fn prepare_property_assignment(
     value: Value,
     definition: &crate::compiler::compile::PropertyDefinition,
     eg: &ExecutorGlobals,

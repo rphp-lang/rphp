@@ -1072,6 +1072,72 @@ fn reflection_class_lazy_proxy_preserves_shell_identity_and_forwards_properties(
 }
 
 #[test]
+fn reflection_lazy_raw_writes_validate_atomically_and_skip_slots_independently() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class AtomicLazySlot {
+    public int $number;
+    public string $label = 'seed';
+}
+$reflection = new ReflectionClass(AtomicLazySlot::class);
+$number = $reflection->getProperty('number');
+$label = $reflection->getProperty('label');
+
+$rejected = $reflection->newLazyGhost(function ($object) {
+    ob_start();
+    var_dump($object);
+    $dump = ob_get_clean();
+    echo str_starts_with($dump, 'object(AtomicLazySlot)') ? "ordinary\n" : "lazy\n";
+    echo "initialize\n";
+    $object->number = 41;
+    $object->label = 'ready';
+});
+try {
+    $number->setRawValueWithoutLazyInitialization($rejected, new stdClass());
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+echo (int) $reflection->isUninitializedLazyObject($rejected), ':', $rejected->number, ':', $rejected->label, "\n";
+
+$partial = $reflection->newLazyGhost(function () { echo "unexpected\n"; });
+$number->setRawValueWithoutLazyInitialization($partial, '7');
+echo $partial->number, ':', (int) $reflection->isUninitializedLazyObject($partial), ':';
+$label->skipLazyInitialization($partial);
+echo (int) $reflection->isUninitializedLazyObject($partial), ':', $partial->label;
+"#,
+        ),
+        "Cannot assign stdClass to property AtomicLazySlot::$number of type int\n1:ordinary\ninitialize\n41:ready\n7:1:0:seed"
+    );
+}
+
+#[test]
+fn reflection_lazy_raw_write_reaches_terminal_nested_proxy_instance() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class NestedLazySlot {
+    public string $payload = 'initial';
+}
+$reflection = new ReflectionClass(NestedLazySlot::class);
+$first = new NestedLazySlot();
+$outer = $reflection->newLazyProxy(fn () => $first);
+$reflection->initializeLazyObject($outer);
+$reflection->resetAsLazyProxy($first, function () {
+    $last = new NestedLazySlot();
+    $last->payload = 'terminal';
+    return $last;
+});
+$last = $reflection->initializeLazyObject($first);
+$reflection->getProperty('payload')->setRawValueWithoutLazyInitialization($outer, 'written');
+echo $outer->payload, ':', $first->payload, ':', $last->payload;
+"#,
+        ),
+        "written:written:written"
+    );
+}
+
+#[test]
 fn lazy_proxy_magic_guards_follow_shell_and_real_instance_recursion() {
     assert_eq!(
         run_php(

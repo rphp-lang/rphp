@@ -760,6 +760,27 @@ generator chain without adding a pipe-specific path. Six other reached tests
 using the builtin remain blocked earlier by independent SPL or Reflection
 gaps and stay ordinary failures.
 
+Lazy Reflection property operations now validate declared, static, virtual,
+dynamic, typed and readonly targets before mutating lazy state. Raw writes
+commit their value before running a replaced receiver's destructor, preserve a
+lazy slot when coercion or `__toString()` fails, and follow initialized nested
+proxy chains to their terminal instance. Ghost defaults become visible while
+the initializer runs, when the object is also presented as ordinary rather
+than with a lazy dump prefix. Against the pinned 223-case PHP 8.5.6 lazy-object
+cluster this moves the exact pass set from 166 to 177, an exact +11/-0 delta.
+The three focused `realize*`, `setRawValueWithoutLazyInitialization*` and
+`skipLazyInitialization*` families pass 22 of 25 cases; the remaining three
+retain independent inherited-private-property and Reflection-output gaps.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting, Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass on
+AMD64. The production unsafe inventory remains 1,620 blocks below its 1,623
+ceiling and 289 functions at its ceiling. Twenty alternating release pairs of
+`bench_property.php` measured baseline p10/median/p90 of
+1.282391/1.292819/1.339814 seconds and candidate
+1.260106/1.275084/1.301365 seconds (median -1.37 percent), with the identical
+`12499997500000` result.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

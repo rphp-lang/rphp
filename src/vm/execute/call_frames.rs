@@ -185,7 +185,7 @@ fn run_frame_destructors(
 /// The caller chooses the opcode-specific commit boundary before invoking the
 /// returned receiver, so re-entrant code observes PHP's assignment ordering.
 #[cold]
-fn prepare_replaced_value_destructor(
+pub(crate) fn prepare_replaced_value_destructor(
     eg: &ExecutorGlobals,
     value: &Value,
 ) -> Option<Value> {
@@ -209,7 +209,7 @@ fn prepare_replaced_value_destructor(
 }
 
 #[cold]
-fn run_prepared_value_destructor(
+pub(crate) fn run_prepared_value_destructor(
     eg: &mut ExecutorGlobals,
     receiver: Option<Value>,
 ) -> Result<(), VmError> {

@@ -9202,6 +9202,7 @@ fn var_dump_debug_info_object(
         .map_or(object.class_name.as_ref(), |_| "class@anonymous");
     let lazy_prefix = eg
         .lazy_object_state(object_value)
+        .filter(|state| !state.initializing)
         .map_or("", |state| match state.strategy {
             crate::runtime::LazyObjectStrategy::Ghost => "lazy ghost ",
             crate::runtime::LazyObjectStrategy::Proxy => "lazy proxy ",
@@ -9338,7 +9339,13 @@ fn var_dump_value_inner(
                 return format!("{}*RECURSION*\n", prefix);
             }
             let object = val.as_object().unwrap();
-            let lazy_state = eg.lazy_object_state(val);
+            // PHP exposes an object as ordinary storage while its lazy
+            // initializer is running. This also keeps var_dump() inside a
+            // proxy factory from presenting the not-yet-produced instance as
+            // an initialized lazy proxy.
+            let lazy_state = eg
+                .lazy_object_state(val)
+                .filter(|state| !state.initializing);
             let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
             let output = if let Some(instance) = initialized_proxy {
                 let mut out = format!(

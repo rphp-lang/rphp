@@ -583,7 +583,28 @@ impl ExecutorGlobals {
         &self,
         object: &crate::value::Value,
     ) -> Option<crate::value::Value> {
-        self.lazy_object_state(object)?.proxy_instance.clone()
+        let mut instance = self.lazy_object_state(object)?.proxy_instance.clone()?;
+        let mut identities = Vec::with_capacity(4);
+        if let Some(identity) = object.object_identity() {
+            identities.push(identity);
+        }
+        for _ in 0..15 {
+            let Some(identity) = instance.object_identity() else {
+                break;
+            };
+            if identities.contains(&identity) {
+                break;
+            }
+            identities.push(identity);
+            let Some(next) = self
+                .lazy_object_state(&instance)
+                .and_then(|state| state.proxy_instance.clone())
+            else {
+                break;
+            };
+            instance = next;
+        }
+        Some(instance)
     }
 
     /// Property-operation guards are shared by every endpoint of an
