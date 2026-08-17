@@ -2541,8 +2541,21 @@ fn op_init_static_call<'a>(
     };
     let raw_class = class_name.as_str().unwrap_or("").to_string();
     let method = method_name.as_str().unwrap_or("").to_string();
-    let class = resolve_static_call_class(eg, frame, &raw_class, dynamic_scope)
-        .unwrap_or_else(|| raw_class.clone());
+    let resolved_class = resolve_static_call_class(eg, frame, &raw_class, dynamic_scope);
+    if raw_class.eq_ignore_ascii_case("parent") && resolved_class.is_none() {
+        let error = make_error_value(
+            "Error",
+            "Cannot use \"parent\" when current class scope has no parent",
+        );
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
+    let class = resolved_class.unwrap_or_else(|| raw_class.clone());
+    let num_args = opline.extended_value;
     let cached = op_array.cache[ip].func;
     let (func_ptr, method_is_non_static, magic_method) = if !cached.is_null() {
         let tagged = cached as usize;
@@ -2566,6 +2579,86 @@ fn op_init_static_call<'a>(
             }
             if !loaded {
                 let error = make_error_value("Error", &format!("Class \"{class}\" not found"));
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        }
+
+        // PHP exposes parent::$prop::get()/set() for ordinary backed
+        // properties as implicit, internal-like accessors. Keep their exact
+        // arity and property diagnostics here on the cold static-call path;
+        // explicit user hooks retain normal user-function surplus-argument
+        // semantics.
+        if raw_class.eq_ignore_ascii_case("parent")
+            && let Some((property, accessor)) = method
+                .strip_prefix('$')
+                .and_then(|name| name.rsplit_once("::"))
+            && matches!(accessor, "get" | "set")
+        {
+            let definition = eg
+                .find_class(&class)
+                .and_then(|definition| definition.properties.iter().find(|p| p.name == property));
+            let Some(definition) = definition else {
+                let error = make_error_value(
+                    "Error",
+                    &format!("Undefined property {}::${property}", class),
+                );
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            };
+            let caller_class = get_caller_class(frame, eg);
+            let visibility = if accessor == "set" {
+                definition.set_visibility.unwrap_or(definition.visibility)
+            } else {
+                definition.visibility
+            };
+            if !eg.check_visibility(
+                caller_class.as_deref(),
+                &definition.declaring_class,
+                visibility,
+            ) {
+                let visibility_name = match visibility {
+                    Visibility::Private => "private",
+                    Visibility::Protected => "protected",
+                    Visibility::Public => "public",
+                };
+                let error = make_error_value(
+                    "Error",
+                    &format!(
+                        "Cannot access {visibility_name} property {}::${property}",
+                        definition.declaring_class
+                    ),
+                );
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+            let implicit = if accessor == "get" {
+                !definition.has_get_hook
+            } else {
+                !definition.has_set_hook
+            };
+            let expected = u32::from(accessor == "set");
+            if implicit && num_args != expected {
+                let noun = if expected == 1 { "argument" } else { "arguments" };
+                let error = make_error_value(
+                    "ArgumentCountError",
+                    &format!(
+                        "{}::${property}::{accessor}() expects exactly {expected} {noun}, {num_args} given",
+                        class
+                    ),
+                );
                 return Ok(match throw_in_frame(eg, frame, error) {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
@@ -2648,7 +2741,6 @@ fn op_init_static_call<'a>(
         (resolved, method_is_non_static, magic_method)
     };
 
-    let num_args = opline.extended_value;
     let common = unsafe { &*func_ptr };
     let target_is_instance = method_is_non_static
         || (common.sig.this_offset == 1

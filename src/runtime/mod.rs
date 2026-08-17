@@ -1352,7 +1352,24 @@ impl ExecutorGlobals {
             let Some(required) = self.find_effective_method(parent, implementation.name) else {
                 continue;
             };
+            let required_is_implicit_property_accessor = required
+                .name
+                .strip_prefix('$')
+                .and_then(|name| name.split_once("::"))
+                .and_then(|(property_name, hook)| {
+                    parent
+                        .properties
+                        .iter()
+                        .find(|property| property.name.eq_ignore_ascii_case(property_name))
+                        .map(|property| match hook.to_ascii_lowercase().as_str() {
+                            "get" => !property.has_get_hook,
+                            "set" => !property.has_set_hook,
+                            _ => false,
+                        })
+                })
+                .unwrap_or(false);
             if required.visibility == Visibility::Private
+                || required_is_implicit_property_accessor
                 || (required.name.eq_ignore_ascii_case("__construct") && !required.is_abstract)
             {
                 continue;
@@ -1399,6 +1416,9 @@ impl ExecutorGlobals {
         let mut missing = Vec::new();
         let mut seen_missing = std::collections::HashSet::new();
         for requirement in requirements {
+            if self.concrete_property_implements_hook(class_def, requirement.name) {
+                continue;
+            }
             let Some(implementation) = self.find_effective_method(class_def, requirement.name)
             else {
                 continue;
@@ -2780,11 +2800,11 @@ impl ExecutorGlobals {
                 continue;
             }
             for requirement in self.collect_interface_methods(&iface_name) {
+                if self.concrete_property_implements_hook(class_def, requirement.name) {
+                    continue;
+                }
                 let Some(implementation) = self.find_effective_method(class_def, requirement.name)
                 else {
-                    if self.concrete_property_implements_hook(class_def, requirement.name) {
-                        continue;
-                    }
                     errors.push((requirement.owner.to_string(), requirement.name.to_string()));
                     continue;
                 };

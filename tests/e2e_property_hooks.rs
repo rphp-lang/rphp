@@ -717,3 +717,97 @@ var_dump($object->value);
         "int(42)\n"
     );
 }
+
+#[test]
+fn implicit_parent_property_accessors_use_backing_storage_and_exact_arity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PlainParentStorage {
+    public int $value;
+}
+class PlainChildHooks extends PlainParentStorage {
+    public int $value {
+        get => parent::$value::get();
+        set { parent::$value::set($value + 1); }
+    }
+}
+$object = new PlainChildHooks();
+$object->value = 40;
+var_dump($object->value);
+
+class ExtraArgumentParent { public $value = 42; }
+class ExtraArgumentChild extends ExtraArgumentParent {
+    public $value {
+        get {
+            try { parent::$value::get(1); } catch (ArgumentCountError $e) {
+                echo $e->getMessage(), "\n";
+            }
+            return parent::$value::get();
+        }
+        set {
+            try { parent::$value::set($value, 2); } catch (ArgumentCountError $e) {
+                echo $e->getMessage(), "\n";
+            }
+        }
+    }
+}
+$extra = new ExtraArgumentChild();
+$extra->value = 1;
+var_dump($extra->value);
+"#,
+        ),
+        concat!(
+            "int(41)\n",
+            "ExtraArgumentParent::$value::set() expects exactly 1 argument, 2 given\n",
+            "ExtraArgumentParent::$value::get() expects exactly 0 arguments, 1 given\n",
+            "NULL\n",
+        )
+    );
+}
+
+#[test]
+fn implicit_parent_property_accessors_report_property_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class MissingParentProperty {}
+class MissingChildProperty extends MissingParentProperty {
+    public $missing {
+        get {
+            try { return parent::$missing::get(); }
+            catch (Error $e) { echo $e->getMessage(), "\n"; return null; }
+        }
+    }
+}
+(new MissingChildProperty())->missing;
+
+class PrivateParentProperty { private $secret = 42; }
+class PrivateChildProperty extends PrivateParentProperty {
+    public $secret {
+        get {
+            try { return parent::$secret::get(); }
+            catch (Error $e) { echo $e->getMessage(), "\n"; return null; }
+        }
+    }
+}
+(new PrivateChildProperty())->secret;
+
+class NoParentProperty {
+    public $value {
+        get {
+            try { return parent::$value::get(); }
+            catch (Error $e) { echo $e->getMessage(), "\n"; return null; }
+        }
+    }
+}
+(new NoParentProperty())->value;
+"#,
+        ),
+        concat!(
+            "Undefined property MissingParentProperty::$missing\n",
+            "Cannot access private property PrivateParentProperty::$secret\n",
+            "Cannot use \"parent\" when current class scope has no parent\n",
+        )
+    );
+}
