@@ -636,3 +636,48 @@ handle(new Exception("test"));
         "test"
     );
 }
+
+#[test]
+fn standalone_keyword_literal_types_parse_and_enforce_exact_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function literals(true $yes, false $no, null $nothing): null {
+    echo $yes ? 'T' : 'x';
+    echo $no ? 'x' : 'F';
+    return $nothing;
+}
+class Flags { public true $yes; public false $no; }
+var_dump(literals(true, false, null));
+try { literals(1, false, null); } catch (TypeError $error) { echo $error->getMessage(); }
+$flags = new Flags();
+try { $flags->yes = false; } catch (TypeError $error) { echo "\n", $error->getMessage(); }
+try { $flags->no = true; } catch (TypeError $error) { echo "\n", $error->getMessage(); }
+"#
+        ),
+        "TFNULL\nliterals(): Argument #1 ($yes) must be of type true, int given, called in <main> on line 9\nCannot assign false to property Flags::$yes of type true\nCannot assign true to property Flags::$no of type false"
+    );
+}
+
+#[test]
+fn null_led_dnf_property_type_accepts_null_and_its_intersection_arm() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface Left {}
+interface Right {}
+class Both implements Left, Right {}
+class Box { public null|(Left&Right) $value; }
+function acceptDnf(null|(Left&Right) $value): void {}
+$box = new Box();
+$box->value = null;
+var_dump($box->value);
+$box->value = new Both();
+echo get_class($box->value);
+try { acceptDnf(new stdClass()); } catch (TypeError $error) { echo '|', $error->getMessage(); }
+try { $box->value = new stdClass(); } catch (TypeError $error) { echo '|', $error->getMessage(); }
+"#
+        ),
+        "NULL\nBoth|acceptDnf(): Argument #1 ($value) must be of type (Left&Right)|null, stdClass given, called in <main> on line 12|Cannot assign stdClass to property Box::$value of type (Left&Right)|null"
+    );
+}

@@ -1034,7 +1034,14 @@ impl ParamTypeHint {
             ParamTypeHint::Never => "never".to_string(),
             ParamTypeHint::Union(parts) => parts
                 .iter()
-                .map(|p| p.display_name())
+                .map(|part| {
+                    let name = part.display_name();
+                    if matches!(part, ParamTypeHint::Intersection(_)) {
+                        format!("({name})")
+                    } else {
+                        name
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("|"),
             ParamTypeHint::Intersection(parts) => parts
@@ -1087,7 +1094,14 @@ impl ParamTypeHint {
                 ordered.sort_by_key(|(index, part)| (rank(part), *index));
                 ordered
                     .into_iter()
-                    .map(|(_, part)| part.diagnostic_display_name())
+                    .map(|(_, part)| {
+                        let name = part.diagnostic_display_name();
+                        if matches!(part, ParamTypeHint::Intersection(_)) {
+                            format!("({name})")
+                        } else {
+                            name
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("|")
             }

@@ -259,6 +259,8 @@ impl Parser {
                 | Token::Namespace
                 | Token::ArrayKw
                 | Token::Null
+                | Token::True
+                | Token::False
                 | Token::Static
                 | Token::LParen(_)
                 | Token::Identifier(_, _)
@@ -474,6 +476,8 @@ impl Parser {
                         | Some(Token::Namespace)
                         | Some(Token::ArrayKw)
                         | Some(Token::Null)
+                        | Some(Token::True)
+                        | Some(Token::False)
                         | Some(Token::Static)
                 )
             }
@@ -487,7 +491,7 @@ impl Parser {
                 )
             }
             Token::Backslash | Token::Namespace => true,
-            Token::ArrayKw | Token::Null => {
+            Token::ArrayKw | Token::Null | Token::True | Token::False => {
                 matches!(
                     self.tokens.get(self.pos + 1),
                     Some(Token::Variable(_, _)) | Some(Token::Pipe) | Some(Token::Ampersand)
@@ -529,6 +533,8 @@ impl Parser {
                     | Some(Token::Namespace)
                     | Some(Token::ArrayKw)
                     | Some(Token::Null)
+                    | Some(Token::True)
+                    | Some(Token::False)
             );
             if is_type {
                 self.advance(); // consume '?'
@@ -572,7 +578,7 @@ impl Parser {
                 let hint = self.maybe_parse_compound_type(hint)?;
                 Ok(Some(hint))
             }
-            Token::ArrayKw => {
+            Token::ArrayKw | Token::Null | Token::True | Token::False => {
                 let next = self.tokens.get(self.pos + 1);
                 let is_type_context = matches!(
                     next,
@@ -582,8 +588,8 @@ impl Parser {
                         | Some(Token::Pipe)
                 );
                 if is_type_context {
-                    self.advance(); // consume 'array'
-                    let hint = self.maybe_parse_compound_type(TypeHint::Array)?;
+                    let hint = self.parse_base_type_hint()?;
+                    let hint = self.maybe_parse_compound_type(hint)?;
                     if Self::type_hint_uses_static(&hint) {
                         return Err("static is only allowed as a return type".to_string());
                     }

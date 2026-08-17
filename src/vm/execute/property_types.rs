@@ -185,15 +185,18 @@ fn coerce_union_value(value: &Value, parts: &[ParamTypeHint], weak: bool) -> Opt
 /// being assigned may be the same object whose property is currently guarded.
 #[inline(always)]
 fn property_assignment_type_name(value: &Value) -> &str {
-    if value.value_type() == ValueType::Object {
-        // SAFETY: the type tag was checked above and class names are immutable
-        // for the lifetime of the object allocation.
-        let class = unsafe { value.object_class_name_unchecked() };
-        class
-            .strip_prefix("class@anonymous#")
-            .map_or(class, |_| "class@anonymous")
-    } else {
-        value.type_name()
+    match value.value_type() {
+        ValueType::True => "true",
+        ValueType::False => "false",
+        ValueType::Object => {
+            // SAFETY: the type tag was checked above and class names are immutable
+            // for the lifetime of the object allocation.
+            let class = unsafe { value.object_class_name_unchecked() };
+            class
+                .strip_prefix("class@anonymous#")
+                .map_or(class, |_| "class@anonymous")
+        }
+        _ => value.type_name(),
     }
 }
 
@@ -229,7 +232,7 @@ fn prepare_property_assignment(
         property_assignment_type_name(&value),
         property_diagnostic_class_name(&definition.type_scope),
         definition.name,
-        definition.type_hint.display_name()
+        definition.type_hint.property_declaration_display_name()
     ))
 }
 
@@ -285,7 +288,7 @@ fn prepare_reference_assignment(
         property_assignment_type_name(&value),
         property_diagnostic_class_name(&constraint.declaring_class),
         constraint.property,
-        constraint.type_hint.display_name()
+        constraint.type_hint.property_declaration_display_name()
     ))
 }
 
@@ -315,10 +318,10 @@ fn prepare_typed_property_reference_attachment(
             original_type,
             property_diagnostic_class_name(&existing.declaring_class),
             existing.property,
-            existing.type_hint.display_name(),
+            existing.type_hint.property_declaration_display_name(),
             property_diagnostic_class_name(&definition.declaring_class),
             definition.name,
-            definition.type_hint.display_name()
+            definition.type_hint.property_declaration_display_name()
         ));
     }
     Ok(prepared)
