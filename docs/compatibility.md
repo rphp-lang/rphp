@@ -8,14 +8,27 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `67fff75`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,301 pass, 2,907 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `2575219`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,316 pass, 2,892 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-44.182%; 88.402% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +486/-0. The first four gains are
+44.470%; 88.114% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +501/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Intersection declarations now reject scalar, literal, array, callable, mixed,
+never, null, object, iterable and static members during compilation, including
+inside DNF types. Diagnostics use PHP 8.5's canonical type spelling, notably
+`Traversable|array` for `iterable`, and retain source context across functions,
+closures, methods, parameters and properties. This adds all fifteen non-nullable
+invalid-member PHPTs with no lost pass; the separate nullable-intersection parse
+case remains visible. Runtime reach decreases from 88.402% to 88.114% because
+the newly passing negative tests now stop at their correct compile stage. All
+five Cargo configurations, all-target, all-features check, unsafe, Composer S0,
+all four Symfony S1 gates and warmed-kernel S2 pass. Valid declaration bytecode,
+runtime type checks and generated code are unchanged, so no runtime performance
+benchmark applies.
 
 Enums now retain their declaration line through parsing and cold class-link
 metadata, so traits that contribute properties or forbidden magic methods fail
