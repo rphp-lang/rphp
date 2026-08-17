@@ -352,6 +352,17 @@ performance gate applies because execution paths and runtime layouts are
 unchanged. Runtime-published aliases still require delayed class linking;
 property hooks remain the larger language frontier.
 
+The `e1f9658` delayed-property-linking checkpoint reaches 2,061 passes with
+3,147 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. Named children whose invariant property contracts depend on an
+earlier runtime `class_alias()` remain unpublished until the alias resolves
+them; unresolved or incompatible contracts still fail at request completion.
+The exact PHP 8.5.6 delta is +1/-0, with the complete prior pass set preserved.
+All five feature configurations, all-target and unsafe gates pass. The queue is
+cold request-global class metadata and does not alter object, value, frame or
+successful property-access paths, so no hot-path performance gate applies.
+Property hooks remain the nearby language frontier.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
