@@ -952,10 +952,10 @@ fn op_fetch_obj_r_slow<'a>(
         let magic_get_can_handle = !declared_property
             && !dynamic_property
             && ((has_magic_get
-                && !property_guard_active(obj_val, &name, PROPERTY_GUARD_GET))
+                && !property_guard_active(eg, obj_val, &name, PROPERTY_GUARD_GET))
                 || (opline._pad & FETCH_OBJ_SILENT != 0
                     && has_magic_isset
-                    && !property_guard_active(obj_val, &name, PROPERTY_GUARD_ISSET)));
+                    && !property_guard_active(eg, obj_val, &name, PROPERTY_GUARD_ISSET)));
         let must_initialize = (property_accessible || force_dynamic)
             && !dynamic_property
             && !magic_get_can_handle
@@ -1041,7 +1041,9 @@ fn op_fetch_obj_r_slow<'a>(
             ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
-        if write_only_property && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_SET) {
+        if write_only_property
+            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
+        {
             let class_name = obj_val
                 .as_object()
                 .map(|object| object.class_name.to_string())
@@ -1055,8 +1057,8 @@ fn op_fetch_obj_r_slow<'a>(
         }
         if has_get_hook
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
-            && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_GET)
-            && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_SET)
+            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
         {
             let hook_name = format!("${name}::get");
             let hook_value = call_guarded_property_magic_method(
@@ -1116,8 +1118,17 @@ fn op_fetch_obj_r_slow<'a>(
             // An intermediate property in `isset($object->a->b)` first asks
             // `__isset(a)` and invokes `__get(a)` only when it returns true.
             if opline._pad & FETCH_OBJ_SILENT != 0 {
-                let isset_guarded =
-                    property_guard_active(magic_receiver, &name, PROPERTY_GUARD_ISSET);
+                let directly_isset_guarded = magic_receiver
+                    .as_object()
+                    .is_some_and(|object| {
+                        object.property_guard_active(&name, PROPERTY_GUARD_ISSET)
+                    });
+                let isset_guarded = directly_isset_guarded
+                    || eg.lazy_proxy_related_property_guard_active(
+                        magic_receiver,
+                        &name,
+                        PROPERTY_GUARD_ISSET,
+                    );
                 let magic_set = if isset_guarded {
                     None
                 } else {
@@ -1133,7 +1144,7 @@ fn op_fetch_obj_r_slow<'a>(
                 if let Some(result) = take_magic_exception(eg, frame) {
                     return Ok(result);
                 }
-                let guarded_lazy_get = isset_guarded
+                let guarded_lazy_get = directly_isset_guarded
                     && has_magic_get
                     && eg.lazy_object_state(magic_receiver).is_some();
                 if (!isset_guarded && !magic_set.is_some_and(|value| value.is_truthy()))
@@ -1145,7 +1156,7 @@ fn op_fetch_obj_r_slow<'a>(
             }
             // Property not found (or accepted by __isset) — try __get.
             if name.starts_with('\0')
-                && property_guard_active(magic_receiver, &name, PROPERTY_GUARD_GET)
+                && property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_GET)
             {
                 return Ok(object_property_throw(
                     eg,
@@ -1344,8 +1355,8 @@ fn op_isset_obj<'a>(
     let magic_receiver = object;
     let object = initialized_target.as_ref().unwrap_or(object);
     if has_get_hook
-        && !property_guard_active(magic_receiver, name, PROPERTY_GUARD_GET)
-        && !property_guard_active(magic_receiver, name, PROPERTY_GUARD_SET)
+        && !property_guard_active(eg, magic_receiver, name, PROPERTY_GUARD_GET)
+        && !property_guard_active(eg, magic_receiver, name, PROPERTY_GUARD_SET)
     {
         let hook_name = format!("${name}::get");
         let value = call_guarded_property_magic_method(
@@ -1380,7 +1391,9 @@ fn op_isset_obj<'a>(
     };
     drop(object_ref);
 
-    if write_only_property && !property_guard_active(magic_receiver, name, PROPERTY_GUARD_SET) {
+    if write_only_property
+        && !property_guard_active(eg, magic_receiver, name, PROPERTY_GUARD_SET)
+    {
         return Ok(object_property_throw(
             eg,
             frame,
@@ -1516,7 +1529,7 @@ fn op_unset_obj<'a>(
     drop(object_ref);
     let magic_unset_can_handle = !lazy_declared_property
         && !lazy_dynamic_property
-        && !property_guard_active(object, &name, PROPERTY_GUARD_UNSET)
+        && !property_guard_active(eg, object, &name, PROPERTY_GUARD_UNSET)
         && eg
             .find_function(&format!(
                 "{}::__unset",
@@ -1693,9 +1706,19 @@ fn op_bind_obj_prop_ref<'a>(
                 )
             })
             .unwrap_or((false, false));
+        let lazy_magic_get_directly_guarded = receiver
+            .as_object()
+            .is_some_and(|object| object.property_guard_active(&name, PROPERTY_GUARD_GET));
+        let lazy_magic_get_related_guarded = !lazy_magic_get_directly_guarded
+            && eg.lazy_proxy_related_property_guard_active(
+                &receiver,
+                &name,
+                PROPERTY_GUARD_GET,
+            );
         let lazy_magic_get_can_handle = !lazy_declared_property
             && !lazy_dynamic_property
-            && !property_guard_active(&receiver, &name, PROPERTY_GUARD_GET)
+            && !lazy_magic_get_directly_guarded
+            && !lazy_magic_get_related_guarded
             && eg
                 .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
                 .is_some();
@@ -1722,8 +1745,8 @@ fn op_bind_obj_prop_ref<'a>(
 
         if let Some(definition) = definition
             && definition.has_get_hook
-            && !property_guard_active(&receiver, &name, PROPERTY_GUARD_GET)
-            && !property_guard_active(&receiver, &name, PROPERTY_GUARD_SET)
+            && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_SET)
         {
             if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
                 return Ok(object_property_throw_at(
@@ -1782,8 +1805,32 @@ fn op_bind_obj_prop_ref<'a>(
                 .is_some_and(|object| {
                     object.get_dynamic_property_with_position(&key).is_none()
                 });
+        if missing_property && lazy_magic_get_related_guarded {
+            let receiver_class = receiver
+                .as_object()
+                .map(|object| object.class_name.to_string())
+                .unwrap_or(class_name.clone());
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!("Undefined property: {receiver_class}::${name}"),
+                false,
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
+            let mut binding = Value::owned_reference(Value::null());
+            if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
+                binding.mark_internal_reference_alias();
+            }
+            let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+            frame_slot_set(frame, destination, binding);
+            return Ok(ColdResult::Done);
+        }
         if missing_property
-            && !property_guard_active(&receiver, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_GET)
         {
             let returned = call_guarded_property_magic_method(
                 eg,
@@ -2334,7 +2381,7 @@ fn op_assign_obj_prop<'a>(
         drop(php_obj);
         let magic_set_can_handle = !lazy_declared_property
             && !lazy_dynamic_property
-            && !property_guard_active(obj, &name, PROPERTY_GUARD_SET)
+            && !property_guard_active(eg, obj, &name, PROPERTY_GUARD_SET)
             && eg
                 .find_function(&format!(
                     "{}::__set",
@@ -2488,8 +2535,8 @@ fn op_assign_obj_prop<'a>(
         drop(php_obj);
         if has_set_hook
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
-            && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_SET)
-            && !property_guard_active(magic_receiver, &name, PROPERTY_GUARD_GET)
+            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
+            && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_GET)
         {
             let hook_name = format!("${name}::set");
             let hook_value = call_guarded_property_magic_method(
@@ -2625,7 +2672,7 @@ fn op_assign_obj_prop<'a>(
             }
         } else {
             // Property not found — try __set magic method
-            let guarded = property_guard_active(magic_receiver, &name, PROPERTY_GUARD_SET);
+            let guarded = property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET);
             if name.starts_with('\0') && guarded {
                 return Ok(object_property_throw(
                     eg,

@@ -586,6 +586,71 @@ impl ExecutorGlobals {
         self.lazy_object_state(object)?.proxy_instance.clone()
     }
 
+    /// Property-operation guards are shared by every endpoint of an
+    /// initialized lazy-proxy chain. Zend may enter a magic method on the real
+    /// instance and recursively access the proxy shell (or initialize the
+    /// proxy while a shell method is active); both directions must observe the
+    /// same guard without enlarging the ordinary object layout.
+    #[cold]
+    pub(crate) fn lazy_proxy_related_property_guard_active(
+        &self,
+        object: &crate::value::Value,
+        name: &str,
+        operation: u8,
+    ) -> bool {
+        let Some(start) = object.object_identity() else {
+            return false;
+        };
+        let Some(objects) = self.lazy_objects.as_ref() else {
+            return false;
+        };
+
+        let mut connected = vec![start];
+        let mut cursor = 0;
+        while cursor < connected.len() {
+            let identity = connected[cursor];
+            cursor += 1;
+
+            if identity != start
+                && let Some(state) = objects.get(&identity)
+                && let Some(owner) = state.owner.upgrade()
+                && owner
+                    .try_borrow()
+                    .is_ok_and(|object| object.property_guard_active(name, operation))
+            {
+                return true;
+            }
+
+            for (shell, state) in objects.iter() {
+                if state.strategy != LazyObjectStrategy::Proxy {
+                    continue;
+                }
+                let Some(instance) = state.proxy_instance.as_ref() else {
+                    continue;
+                };
+                let Some(instance_identity) = instance.object_identity() else {
+                    continue;
+                };
+                if instance_identity == identity {
+                    if instance.as_object_rc().is_some_and(|owner| {
+                        owner
+                            .try_borrow()
+                            .is_ok_and(|object| object.property_guard_active(name, operation))
+                    }) {
+                        return true;
+                    }
+                    if !connected.contains(shell) {
+                        connected.push(*shell);
+                    }
+                }
+                if *shell == identity && !connected.contains(&instance_identity) {
+                    connected.push(instance_identity);
+                }
+            }
+        }
+        false
+    }
+
     #[inline]
     pub(crate) fn mark_initializing_lazy_property_written(
         &mut self,

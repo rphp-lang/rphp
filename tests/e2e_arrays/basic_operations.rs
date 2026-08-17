@@ -520,7 +520,7 @@ set_error_handler(function($code, $message) { echo 'handled:', $code, ':', $mess
 var_dump($null[1]);
 "
         ),
-        "\nWarning: Trying to access array offset on value of type int in <main> on line 3\nNULL\n\nWarning: Trying to access array offset on value of type bool in <main> on line 5\nNULL\n\nWarning: Trying to access array offset on value of type null in <main> on line 7\nNULL\nbool(false)\nNULL\nhandled:2:Trying to access array offset on value of type null\nNULL\n"
+        "\nWarning: Trying to access array offset on int in <main> on line 3\nNULL\n\nWarning: Trying to access array offset on bool in <main> on line 5\nNULL\n\nWarning: Trying to access array offset on null in <main> on line 7\nNULL\nbool(false)\nNULL\nhandled:2:Trying to access array offset on null\nNULL\n"
     );
 }
 

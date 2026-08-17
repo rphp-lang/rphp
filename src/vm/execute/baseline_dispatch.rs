@@ -3835,7 +3835,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array,
                             opline,
                             &format!(
-                                "Trying to access array offset on value of type {}",
+                                "Trying to access array offset on {}",
                                 arr_val.type_name()
                             ),
                             opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,

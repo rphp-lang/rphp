@@ -1072,6 +1072,81 @@ fn reflection_class_lazy_proxy_preserves_shell_identity_and_forwards_properties(
 }
 
 #[test]
+fn lazy_proxy_magic_guards_follow_shell_and_real_instance_recursion() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[AllowDynamicProperties]
+class GuardedProxyTarget {
+    public $_;
+    public function &__get($name) {
+        global $shell;
+        echo "get:$name\n";
+        return $shell->$name;
+    }
+    public function __isset($name) {
+        global $shell;
+        echo "isset:$name\n";
+        return isset($shell->$name);
+    }
+    public function __set($name, $value) {
+        global $shell;
+        echo "set:$name\n";
+        $shell->$name = $value;
+    }
+    public function __unset($name) {
+        global $shell;
+        echo "unset:$name\n";
+        unset($shell->$name);
+    }
+}
+set_error_handler(function ($code, $message) { echo "warning:$message\n"; return true; });
+$reflection = new ReflectionClass(GuardedProxyTarget::class);
+$shell = $reflection->newLazyProxy(fn () => new GuardedProxyTarget());
+$real = $reflection->initializeLazyObject($shell);
+$reference = &$real->missing;
+var_dump($reference);
+var_dump(isset($real->check));
+$real->written = 7;
+var_dump($real->written);
+unset($real->gone);
+"#,
+        ),
+        "get:missing\nwarning:Undefined property: GuardedProxyTarget::$missing\nNULL\nisset:check\nbool(false)\nset:written\nint(7)\nunset:gone\n"
+    );
+}
+
+#[test]
+fn lazy_proxy_magic_guard_survives_initialization_mid_access() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[AllowDynamicProperties]
+class MidAccessProxy {
+    public $_;
+    public function __isset($name) {
+        echo "isset:$name\n";
+        return isset($this->$name[0]);
+    }
+    public function __get($name) {
+        echo "get:$name\n";
+        return $this->$name[0];
+    }
+}
+set_error_handler(function ($code, $message) { echo "warning:$message\n"; return true; });
+$reflection = new ReflectionClass(MidAccessProxy::class);
+$shell = $reflection->newLazyProxy(function () {
+    echo "initialize\n";
+    return new MidAccessProxy();
+});
+var_dump(isset($shell->slot[0]));
+"#,
+        ),
+        "isset:slot\nget:slot\ninitialize\nwarning:Undefined property: MidAccessProxy::$slot\nwarning:Trying to access array offset on null\nbool(false)\n"
+    );
+}
+
+#[test]
 fn lazy_magic_property_access_stays_deferred_until_magic_observes_state() {
     assert_eq!(
         run_php(

@@ -607,10 +607,16 @@ const PROPERTY_GUARD_ISSET: u8 = 1 << 2;
 const PROPERTY_GUARD_UNSET: u8 = 1 << 3;
 
 #[inline]
-fn property_guard_active(object: &Value, name: &str, operation: u8) -> bool {
+fn property_guard_active(
+    eg: &ExecutorGlobals,
+    object: &Value,
+    name: &str,
+    operation: u8,
+) -> bool {
     object
         .as_object()
         .is_some_and(|object| object.property_guard_active(name, operation))
+        || eg.lazy_proxy_related_property_guard_active(object, name, operation)
 }
 
 #[inline]
@@ -687,7 +693,7 @@ fn call_guarded_property_magic_method(
     // writes cannot turn the borrowed slot into a scalar underneath the
     // follow-up call or guard cleanup.
     let receiver = object.clone();
-    if property_guard_active(&receiver, name, operation) {
+    if property_guard_active(eg, &receiver, name, operation) {
         return Ok(None);
     }
     set_property_guard(&receiver, name, operation, true);
