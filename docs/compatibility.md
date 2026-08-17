@@ -8,14 +8,32 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `0bbe72f`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,264 pass, 2,944 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `c95e7db`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,270 pass, 2,938 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-43.472%; 88.402% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +449/-0. The first four gains are
+43.587%; 88.402% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +455/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Union-typed calls now test exact members before PHP's scalar coercion
+precedence, preserve integer values for `int|float`, select floating-point for
+decimal numeric strings, and fall back from non-finite integer conversion to
+string or bool. Strict calls retain PHP's allowed int-to-float widening, a
+standalone `null` union member no longer accepts arbitrary values, built-in
+members have canonical diagnostic order, booleans use `true`/`false` in
+declared-type errors, and closure errors expose their source-qualified public
+name. Float string output also uses PHP's `INF`, `-INF` and `NAN` spellings.
+This adds six exact passes without losing a prior pass: both union type-checking
+cases, `closure_027.phpt`, `scalar_none.phpt`, `scalar_null.phpt` and
+`scalar_weak_reference.phpt`. All five Cargo configurations, all-target,
+unsafe, Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass. Ten
+interleaved five-million exact-union-call runs move the median from 0.92862 s to
+0.93402 s (+0.58%); five-million ordinary double-to-string conversions move
+from 0.51029 s to 0.51042 s (+0.03%), both within observed run distributions
+with identical checksums. The mismatch-only coercion selector is cold and
+non-inlined so the ordinary exact-member path remains compact.
 
 The canonical baseline and internal diagnostic routers now retain PHP's
 request-local last unhandled error for `error_get_last()`, while
