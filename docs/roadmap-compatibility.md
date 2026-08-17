@@ -415,7 +415,21 @@ against those capabilities. The exact PHP 8.5.6 delta is +43/-0. All five
 feature configurations, all-target and unsafe gates pass. Abstract capability
 flags share the existing cold source metadata word and validation helpers are
 cold/non-inlined; the final ordinary property A/B workload is +0.571%, while
-specialized lanes range from -0.774% to +1.218%. General by-reference hooks,
+specialized lanes range from -0.774% to +1.218%.
+
+The `08ad7a5` reference-property-hook checkpoint reaches 2,170 passes with
+3,038 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. Reference-returning getters preserve the returned alias for
+backed and virtual properties, plain properties satisfy reference-getter
+interface contracts, and invalid by-value implementations, reference setter
+parameters and backed inherited getter/setter combinations receive PHP 8.5
+diagnostics. Virtual hook storage is also excluded from ordinary object dumps.
+The exact PHP 8.5.6 delta is +9/-0, bringing the cumulative gain from the
+initial baseline to +355/-0. All five feature configurations, all-target and
+unsafe gates pass. The ordinary property A/B workload is -0.755%; specialized
+read and write lanes are -0.120% and +0.013%, while method and constructor
+lanes are +2.529% and +1.051%, within their five-percent ceiling. Indirect
+array modification through reference getters, by-reference object iteration,
 parent-hook calls and Reflection remain next.
 
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
