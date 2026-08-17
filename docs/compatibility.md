@@ -8,14 +8,29 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `78ea4b6`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,440 pass, 2,768 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `a82bfd2`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,446 pass, 2,762 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-46.851%; 87.154% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +625/-0. The first four gains are
+46.966%; 87.154% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +631/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Replacing the final CV handle to an object now commits the opcode-specific
+variable or reference state and invokes `__destruct()` at PHP's observable
+boundary. This covers ordinary assignment, reference rebinding, `foreach` and
+function-static binding, including throwing destructors and re-entrant
+`$GLOBALS` writes. Direct object RHS temporaries transfer ownership into their
+destination without changing reference-returning expression semantics, and
+dirty-global synchronization writes through a referenced CV without treating
+its external cell as frame storage. This adds six exact PHP 8.5.6 passes with
+no lost pass or moved failure stage. All five Cargo configurations,
+all-target/all-features and unsafe gates pass. Alternating AMD64 release runs
+showed unchanged medians for ten million scalar assignments (0.05 seconds) and
+five million object assignments (0.93 seconds). Property/static-property
+replacement, generator finalization and request-shutdown destruction remain
+separate lifecycle work.
 
 Each anonymous Closure object now owns its function-static cells. Repeated
 creation of the same declaration produces independent cells, ordinary aliases
