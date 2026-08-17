@@ -1072,6 +1072,54 @@ impl ParamTypeHint {
             _ => self.display_name(),
         }
     }
+
+    /// Canonical spelling used by invariant property-declaration errors.
+    pub(crate) fn property_declaration_display_name(&self) -> std::string::String {
+        match self {
+            ParamTypeHint::Nullable(inner) if matches!(inner.as_ref(), ParamTypeHint::None) => {
+                "null".to_string()
+            }
+            ParamTypeHint::Nullable(inner) => {
+                format!("?{}", inner.property_declaration_display_name())
+            }
+            ParamTypeHint::Intersection(parts) => parts
+                .iter()
+                .map(ParamTypeHint::property_declaration_display_name)
+                .collect::<Vec<_>>()
+                .join("&"),
+            ParamTypeHint::Union(parts) => {
+                let rank = |part: &ParamTypeHint| match part {
+                    ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("object") => 10,
+                    ParamTypeHint::Array => 20,
+                    ParamTypeHint::String => 30,
+                    ParamTypeHint::Int => 40,
+                    ParamTypeHint::Float => 50,
+                    ParamTypeHint::Bool => 60,
+                    ParamTypeHint::Nullable(inner)
+                        if matches!(inner.as_ref(), ParamTypeHint::None) =>
+                    {
+                        70
+                    }
+                    _ => 0,
+                };
+                let mut parts = parts.iter().enumerate().collect::<Vec<_>>();
+                parts.sort_by_key(|(index, part)| (rank(part), *index));
+                parts
+                    .into_iter()
+                    .map(|(_, part)| {
+                        let name = part.property_declaration_display_name();
+                        if matches!(part, ParamTypeHint::Intersection(_)) {
+                            format!("({name})")
+                        } else {
+                            name
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|")
+            }
+            _ => self.display_name(),
+        }
+    }
 }
 
 /// DoFcall dispatch: controls how much validation happens at call boundary.

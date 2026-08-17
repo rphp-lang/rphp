@@ -71,6 +71,10 @@ fn property_type_hint_key(hint: &crate::vm::function::ParamTypeHint) -> String {
                 }
                 parts.push("02:null".to_string());
             }
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable") => {
+                parts.push("01:array".to_string());
+                parts.push("03:traversable".to_string());
+            }
             part => parts.push(property_type_hint_key(part)),
         }
     }
@@ -86,6 +90,9 @@ fn property_type_hint_key(hint: &crate::vm::function::ParamTypeHint) -> String {
         ParamTypeHint::Void => "01:void".to_string(),
         ParamTypeHint::Mixed => "01:mixed".to_string(),
         ParamTypeHint::Never => "01:never".to_string(),
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable") => {
+            "04:01:array|03:traversable".to_string()
+        }
         ParamTypeHint::ClassName(name) => format!("03:{}", name.to_ascii_lowercase()),
         ParamTypeHint::Nullable(_) | ParamTypeHint::Union(_) => {
             let mut parts = Vec::new();
@@ -128,9 +135,11 @@ fn property_definitions_are_compatible(
 }
 
 fn validate_inherited_property_definition(
+    eg: &ExecutorGlobals,
     child: &PropertyDefinition,
     parent: &PropertyDefinition,
     child_class: &str,
+    linking_class: &ClassDef,
 ) -> Result<(), String> {
     let error = |message: String| {
         if let Some(file) = &child.source_file {
@@ -208,12 +217,32 @@ fn validate_inherited_property_definition(
             child.name
         )));
     }
-    if !property_type_hints_are_equivalent(&child.type_hint, &parent.type_hint) {
+    let types_are_invariant = property_type_hints_are_equivalent(&child.type_hint, &parent.type_hint)
+        || (eg.is_return_type_compatible(
+            &child.type_hint,
+            &parent.type_hint,
+            child_class,
+            &parent.declaring_class,
+            Some(linking_class),
+        ) && eg.is_return_type_compatible(
+            &parent.type_hint,
+            &child.type_hint,
+            &parent.declaring_class,
+            child_class,
+            Some(linking_class),
+        ));
+    if !types_are_invariant {
+        if matches!(parent.type_hint, crate::vm::function::ParamTypeHint::None) {
+            return Err(error(format!(
+                "Type of {}::${} must be omitted to match the parent definition in class {}",
+                child_class, child.name, parent.declaring_class
+            )));
+        }
         return Err(error(format!(
             "Type of {}::${} must be {} (as in class {})",
             child_class,
             child.name,
-            parent.type_hint.display_name(),
+            parent.type_hint.property_declaration_display_name(),
             parent.declaring_class
         )));
     }
@@ -221,6 +250,8 @@ fn validate_inherited_property_definition(
 }
 
 fn validate_property_inheritance(
+    eg: &ExecutorGlobals,
+    linking_class: &ClassDef,
     child_class: &str,
     child_instance: &[PropertyDefinition],
     child_static: &[PropertyDefinition],
@@ -241,7 +272,7 @@ fn validate_property_inheritance(
             .iter()
             .find(|parent| parent.name == child.name && parent.visibility != Visibility::Private)
         {
-            validate_inherited_property_definition(child, parent, child_class)?;
+            validate_inherited_property_definition(eg, child, parent, child_class, linking_class)?;
         }
     }
     for child in child_static {
@@ -258,7 +289,7 @@ fn validate_property_inheritance(
             .iter()
             .find(|parent| parent.name == child.name && parent.visibility != Visibility::Private)
         {
-            validate_inherited_property_definition(child, parent, child_class)?;
+            validate_inherited_property_definition(eg, child, parent, child_class, linking_class)?;
         }
     }
     Ok(())

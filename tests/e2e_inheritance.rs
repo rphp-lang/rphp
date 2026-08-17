@@ -7,6 +7,29 @@ use rphp::parser::Parser;
 use rphp::vm::opcode::OpCode;
 
 #[test]
+fn property_invariance_reduces_inheritance_intersections_and_iterable() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentType {}
+class ChildType extends ParentType {}
+interface Marker {}
+class ParentBox {
+    public ParentType&ChildType $reduced;
+    public iterable $iterable;
+}
+class ChildBox extends ParentBox {
+    public ChildType $reduced;
+    public array|Traversable $iterable;
+}
+echo "ok\n";
+"#,
+        ),
+        "ok\n"
+    );
+}
+
+#[test]
 fn static_asymmetric_visibility_guards_all_write_forms_but_not_nested_objects() {
     assert_eq!(
         run_php(

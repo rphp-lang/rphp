@@ -6331,6 +6331,7 @@ impl Compiler {
                 let sequence = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
                 let class_name = format!("class@anonymous#{sequence}");
                 let declaration = Stmt::Class {
+                    line: *call_line,
                     name: format!("\\{class_name}"),
                     parent: parent.clone(),
                     implements: implements.clone(),

@@ -3265,6 +3265,7 @@ impl Compiler {
                 }
             }
             Stmt::Class {
+                line: class_line,
                 name,
                 parent,
                 implements,
@@ -3618,7 +3619,7 @@ impl Compiler {
                         property_is_readonly,
                         type_hint_requires_reified_check(&prop.type_hint),
                     )
-                    .with_source_location(&self.source_file, prop.line);
+                    .with_source_location(&self.source_file, *class_line);
                     if prop.is_static {
                         compiled_static_props.push(definition);
                     } else {
@@ -3627,7 +3628,7 @@ impl Compiler {
                 }
 
                 // Add promoted properties
-                for (pname, line, pvis, pset_vis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
+                for (pname, _line, pvis, pset_vis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
                     let property_is_readonly = *is_readonly || *p_readonly;
                     compiled_props.push(PropertyDefinition::declared_with_set_visibility(
                         pname.clone(),
@@ -3638,7 +3639,7 @@ impl Compiler {
                         type_hint.clone(),
                         property_is_readonly,
                         *requires_reified_check,
-                    ).with_source_location(&self.source_file, *line));
+                    ).with_source_location(&self.source_file, *class_line));
                     if property_is_readonly {
                         readonly_props.push(pname.clone());
                     }

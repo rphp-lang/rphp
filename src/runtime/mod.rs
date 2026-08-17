@@ -1521,6 +1521,8 @@ impl ExecutorGlobals {
         if let Some(parent_name) = &class_def.parent {
             if let Some(parent) = self.class_table.get(parent_name.as_str()) {
                 validate_property_inheritance(
+                    self,
+                    &class_def,
                     &class_name,
                     &class_def.properties,
                     &class_def.static_properties,

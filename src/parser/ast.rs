@@ -819,6 +819,7 @@ pub enum Stmt {
         line: usize,
     },
     Class {
+        line: usize,
         name: String,
         parent: Option<GenericAncestor>,
         implements: Vec<GenericAncestor>,

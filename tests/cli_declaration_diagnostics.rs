@@ -78,3 +78,24 @@ fn readonly_property_contract_errors_include_the_declaration_location() {
         );
     }
 }
+
+#[test]
+fn inherited_property_errors_use_the_class_line_and_canonical_parent_type() {
+    let (status, stderr) = run_stdin(
+        "<?php\nclass X {}\ninterface Y {}\nclass ParentBox { public (X&Y)|string $value; }\nclass ChildBox extends ParentBox {\n    public int $value;\n}\n",
+    );
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Fatal error: Type of ChildBox::$value must be (X&Y)|string (as in class ParentBox) in Standard input code on line 5\n"
+    );
+
+    let (status, stderr) = run_stdin(
+        "<?php\nclass ParentBox { public $value; }\nclass ChildBox extends ParentBox { public mixed $value; }\n",
+    );
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Fatal error: Type of ChildBox::$value must be omitted to match the parent definition in class ParentBox in Standard input code on line 3\n"
+    );
+}

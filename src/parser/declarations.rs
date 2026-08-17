@@ -235,8 +235,8 @@ impl Parser {
             return Err("Cannot use the final modifier on an abstract class".into());
         }
         self.advance(); // consume 'class'
-        let name = match self.advance() {
-            Token::Identifier(n, _) => n,
+        let (name, line) = match self.advance() {
+            Token::Identifier(n, line) => (n, line),
             other => return Err(format!("Expected class name, got {:?}", other)),
         };
         let generic_params = self.parse_generic_parameters()?;
@@ -392,6 +392,7 @@ impl Parser {
         }
 
         Ok(Stmt::Class {
+            line,
             name,
             parent,
             implements,
