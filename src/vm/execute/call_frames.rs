@@ -178,6 +178,42 @@ fn run_frame_destructors(
     Ok(())
 }
 
+/// Retain and mark an object whose final PHP handle is about to be replaced.
+/// The caller chooses the opcode-specific commit boundary before invoking the
+/// returned receiver, so re-entrant code observes PHP's assignment ordering.
+#[cold]
+fn prepare_replaced_value_destructor(
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Option<Value> {
+    let value = value.dereferenced();
+    let Some(class_name) = value
+        .as_object()
+        .map(|object| object.class_name.to_string())
+    else {
+        return None;
+    };
+    if value.object_strong_count() != Some(1)
+        || eg.find_method_info(&class_name, "__destruct").is_none()
+        || !value.mark_object_destructed()
+    {
+        return None;
+    }
+    Some(value.clone())
+}
+
+#[cold]
+fn run_prepared_value_destructor(
+    eg: &mut ExecutorGlobals,
+    receiver: Option<Value>,
+) -> Result<(), VmError> {
+    let Some(receiver) = receiver else {
+        return Ok(());
+    };
+    let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
+    Ok(())
+}
+
 #[cold]
 fn release_statement_temps(
     eg: &mut ExecutorGlobals,

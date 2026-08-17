@@ -626,7 +626,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                         };
-                        if opline.op1_type != OpType::Cv && !(&*source).is_reference() {
+                        let nonreferenceable_source =
+                            opline.op1_type != OpType::Cv && !(&*source).is_reference();
+                        if nonreferenceable_source {
                             report_php_notice(
                                 eg,
                                 frame,
@@ -640,7 +642,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             binding.mark_internal_reference_alias();
                         }
                         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
-                        frame_slot_set(frame, destination, binding);
+                        let destructor = ((&*destination).dereferenced().value_type()
+                            == ValueType::Object)
+                            .then(|| prepare_replaced_value_destructor(eg, &*destination))
+                            .flatten();
+                        let destructor_ran = destructor.is_some();
+                        if nonreferenceable_source {
+                            run_prepared_value_destructor(eg, destructor)?;
+                            frame_slot_set(frame, destination, binding);
+                        } else {
+                            frame_slot_set(frame, destination, binding);
+                            run_prepared_value_destructor(eg, destructor)?;
+                        }
+                        if destructor_ran {
+                            resume_pending_exception!();
+                        }
                     } else {
                         // ASSIGN_CV op1=CV(dest), op2=value, result=optional copy
                         // Object-producing TMPs are SSA values. When an
@@ -656,18 +672,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let mut cloned = if movable_source {
                             let source = (*frame)
                                 .get_op_mut(opline.op2 as u32, opline.op2_type);
-                            let object_without_destructor = if (&*source).value_type()
-                                == ValueType::Object
-                            {
-                                let class_name = (&*source)
-                                    .as_object()
-                                    .map(|object| object.class_name.to_string())
-                                    .unwrap();
-                                eg.find_method_info(&class_name, "__destruct").is_none()
-                            } else {
-                                false
-                            };
-                            if object_without_destructor {
+                            if (&*source).value_type() == ValueType::Object {
                                 std::mem::replace(&mut *source, Value::undef())
                             } else {
                                 (&*source).clone()
@@ -689,6 +694,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                         };
+                        let destructor = ((&*dest).dereferenced().value_type()
+                            == ValueType::Object)
+                            .then(|| prepare_replaced_value_destructor(eg, &*dest))
+                            .flatten();
+                        let destructor_ran = destructor.is_some();
                         if destination_is_reference {
                             cloned = prepare_reference_write!(opline.op1 as u32, cloned);
                         }
@@ -721,6 +731,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             } else {
                                 slot_set(dest, cloned);
                             }
+                        }
+                        if destructor.is_some()
+                            && (*frame).prev_execute_data.is_null()
+                            && opline.op1_type == OpType::Cv
+                            && let Some((_, global_name)) = op_array
+                                .global_vars
+                                .iter()
+                                .find(|(cv, _)| *cv == u32::from(opline.op1))
+                        {
+                            globals_set(&mut eg.globals, global_name, (&*dest).clone());
+                        }
+                        run_prepared_value_destructor(eg, destructor)?;
+                        if destructor_ran {
+                            resume_pending_exception!();
                         }
                     }
                 }
@@ -5505,7 +5529,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BindStatic => {
-                op_bind_static(eg, frame, op_array, opline);
+                op_bind_static(eg, frame, op_array, opline)?;
+                resume_pending_exception!();
             }
 
             OpCode::Return => {

@@ -25,8 +25,12 @@ pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut 
             if eg.dirty_globals.contains(name)
                 && let Some(value) = eg.globals.get(name).cloned()
             {
-                let destination = frame.get_op_mut(*cv, OpType::Cv);
-                frame_slot_set(frame, destination, value);
+                let slot = frame.cv_mut(*cv) as *mut Value;
+                if (*slot).is_reference() {
+                    slot_set((*slot).as_ref_ptr(), value);
+                } else {
+                    frame_slot_set(frame, slot, value);
+                }
             }
         }
         if !vars.is_empty() {
@@ -3435,7 +3439,7 @@ fn op_bind_static(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) {
+) -> Result<(), VmError> {
     // SAFETY: BindStatic carries compiler-validated operands for this live
     // frame/op-array pair. Both raw writes replace initialized Values, and
     // the request-owned reference cell outlives the installed CV alias.
@@ -3483,8 +3487,12 @@ fn op_bind_static(
                 stored.clone_owned_reference_alias()
             },
         );
-        slot_set((*frame).cv_mut(opline.op1 as u32), binding);
+        let destination = (*frame).cv_mut(opline.op1 as u32);
+        let destructor = prepare_replaced_value_destructor(eg, &*destination);
+        slot_set(destination, binding);
+        run_prepared_value_destructor(eg, destructor)?;
     }
+    Ok(())
 }
 
 #[inline(never)]

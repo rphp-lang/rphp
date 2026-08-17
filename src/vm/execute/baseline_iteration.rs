@@ -1,18 +1,31 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 #[inline]
-fn assign_foreach_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
+fn assign_foreach_cv(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    cv: u32,
+    value: Value,
+) -> Result<(), VmError> {
     // SAFETY: `cv` is compiler-allocated in the active frame. Assignment may
     // follow a reference target outside the frame, so only direct CV writes use
     // frame bitmap bookkeeping.
     unsafe {
-        let slot = (*frame).cv_mut(cv);
-        if (*slot).is_reference() {
-            slot_set((*slot).as_ref_ptr(), value);
+        let slot = (*frame).cv_mut(cv) as *mut Value;
+        let target = if (*slot).is_reference() {
+            (*slot).as_ref_ptr()
         } else {
+            slot
+        };
+        let destructor = prepare_replaced_value_destructor(eg, &*target);
+        if target == slot {
             frame_slot_set(frame, slot, value);
+        } else {
+            slot_set(target, value);
         }
+        run_prepared_value_destructor(eg, destructor)?;
     }
+    Ok(())
 }
 
 fn unpack_throw<'a>(
@@ -594,14 +607,22 @@ fn op_add_call_unpack<'a>(
 }
 
 #[inline]
-fn bind_foreach_value_cv(frame: *mut ExecuteData, cv: u32, value: Value) {
+fn bind_foreach_value_cv(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    cv: u32,
+    value: Value,
+) -> Result<(), VmError> {
     // SAFETY: `cv` is compiler-allocated in the active frame. A by-reference
     // foreach value rebinds this CV itself, so the destination remains a frame
     // slot and must use frame bitmap bookkeeping.
     unsafe {
         let slot = (*frame).cv_mut(cv);
+        let destructor = prepare_replaced_value_destructor(eg, &*slot);
         frame_slot_set(frame, slot, value);
+        run_prepared_value_destructor(eg, destructor)?;
     }
+    Ok(())
 }
 
 #[inline]
@@ -1083,7 +1104,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             if let Some(control) = take_foreach_protocol_exception(eg, frame) {
                 return Ok(control);
             }
-            assign_foreach_cv(frame, val_cv, value.dereferenced().clone());
+            assign_foreach_cv(eg, frame, val_cv, value.dereferenced().clone())?;
             if key_encoded > 0 {
                 let key = crate::stdlib::call_object_protocol_method(
                     eg,
@@ -1096,7 +1117,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 if let Some(control) = take_foreach_protocol_exception(eg, frame) {
                     return Ok(control);
                 }
-                assign_foreach_cv(frame, key_encoded - 1, key.dereferenced().clone());
+                assign_foreach_cv(eg, frame, key_encoded - 1, key.dereferenced().clone())?;
             }
             let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
             unsafe {
@@ -1133,17 +1154,18 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             // Write current value to value_cv
             if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
                 bind_foreach_value_cv(
+                    eg,
                     frame,
                     val_cv,
                     clone_foreach_value::<BY_REFERENCE_LOOP>(&gen_data.value),
-                );
+                )?;
             } else {
-                assign_foreach_cv(frame, val_cv, gen_data.value.clone());
+                assign_foreach_cv(eg, frame, val_cv, gen_data.value.clone())?;
             }
             // Write key if requested
             if key_encoded > 0 {
                 let key_cv = key_encoded - 1;
-                assign_foreach_cv(frame, key_cv, gen_data.key.clone());
+                assign_foreach_cv(eg, frame, key_cv, gen_data.key.clone())?;
             }
             drop(gen_data);
             // Increment position
@@ -1177,7 +1199,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             .as_array_mut()
                             .and_then(|array| array.argument_unpack_reference_at(pos))
                             .expect("live foreach position must remain addressable");
-                        bind_foreach_value_cv(frame, val_cv, value);
+                        bind_foreach_value_cv(eg, frame, val_cv, value)?;
                         if key_encoded > 0 {
                             let key_cv = key_encoded - 1;
                             let key = arr_val
@@ -1190,37 +1212,39 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                                 ArrayKey::Int(key) => Value::long(key),
                                 ArrayKey::String(key) => Value::string(key),
                             };
-                            assign_foreach_cv(frame, key_cv, key_value);
+                            assign_foreach_cv(eg, frame, key_cv, key_value)?;
                         }
                     } else if key_encoded > 0 {
                         // Need both key and value — use get_at()
                         let (val, key) = arr.get_at(pos).unwrap();
                         if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
                             bind_foreach_value_cv(
+                                eg,
                                 frame,
                                 val_cv,
                                 clone_foreach_value::<BY_REFERENCE_LOOP>(val),
-                            );
+                            )?;
                         } else {
-                            assign_foreach_cv(frame, val_cv, val.clone());
+                            assign_foreach_cv(eg, frame, val_cv, val.clone())?;
                         }
                         let key_cv = key_encoded - 1;
                         let key_val = match key {
                             ArrayKey::Int(k) => Value::long(k),
                             ArrayKey::String(k) => Value::string(k),
                         };
-                        assign_foreach_cv(frame, key_cv, key_val);
+                        assign_foreach_cv(eg, frame, key_cv, key_val)?;
                     } else {
                         // Only value needed — use get_value_at() (avoids key clone)
                         let val = arr.get_value_at(pos).unwrap();
                         if BY_REFERENCE_LOOP || !ASSIGN_THROUGH_REFERENCE {
                             bind_foreach_value_cv(
+                                eg,
                                 frame,
                                 val_cv,
                                 clone_foreach_value::<BY_REFERENCE_LOOP>(val),
-                            );
+                            )?;
                         } else {
-                            assign_foreach_cv(frame, val_cv, val.clone());
+                            assign_foreach_cv(eg, frame, val_cv, val.clone())?;
                         }
                     }
                     let pos_ptr = (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
@@ -1388,13 +1412,13 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     );
                     (name, value)
                 };
-                bind_foreach_value_cv(frame, val_cv, value);
+                bind_foreach_value_cv(eg, frame, val_cv, value)?;
                 if key_encoded > 0 {
                     let key_cv = key_encoded - 1;
                     let key = canonical_decimal_array_key(&name)
                         .map(Value::long)
                         .unwrap_or_else(|| Value::string(name));
-                    assign_foreach_cv(frame, key_cv, key);
+                    assign_foreach_cv(eg, frame, key_cv, key)?;
                 }
                 let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
                 unsafe {
@@ -1413,6 +1437,10 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             false
         }
     };
+
+    if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+        return Ok(control);
+    }
 
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
     unsafe { frame_result_set(frame, result_ptr, opline.result_type, Value::bool(has_more)) };

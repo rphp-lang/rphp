@@ -303,6 +303,92 @@ fn destructors_are_not_suppressed_when_allocator_addresses_are_reused() {
 }
 
 #[test]
+fn replacing_a_foreach_cv_runs_its_last_objects_destructor_before_assignment() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ForeachReplacementDestructor {
+    public function __destruct() { throw new Exception('released'); }
+}
+$value = new ForeachReplacementDestructor();
+try {
+    foreach ([10, 20] as $value) {
+        echo "body";
+    }
+} catch (Exception $exception) {
+    echo $exception->getMessage(), '|';
+}
+var_dump($value);
+"#,
+        ),
+        "released|int(10)\n"
+    );
+}
+
+#[test]
+fn ordinary_cv_assignment_runs_the_replaced_objects_destructor_before_continuing() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class AssignedObjectDestructor {
+    public function __destruct() { echo 'released|'; }
+}
+$value = new AssignedObjectDestructor();
+echo 'before|';
+$value = 7;
+echo 'after|';
+var_dump($value);
+"#,
+        ),
+        "before|released|after|int(7)\n"
+    );
+}
+
+#[test]
+fn reference_rebinding_commits_before_a_reentrant_destructor_write() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReentrantReferenceDestructor {
+    public function __destruct() { $GLOBALS['target'] = null; }
+}
+$target = new ReentrantReferenceDestructor();
+$replacement = new stdClass();
+var_dump($target =& $replacement);
+var_dump($replacement);
+"#,
+        ),
+        "NULL\nNULL\n"
+    );
+}
+
+#[test]
+fn binding_a_static_cv_runs_the_replaced_objects_destructor_after_commit() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class StaticReplacementDestructor {
+    public function __destruct() { throw new Exception('released'); }
+}
+function replacementDefault() { echo 'default|'; return 42; }
+function replaceWithStatic(bool $object) {
+    if ($object) $value = new StaticReplacementDestructor();
+    static $value = replacementDefault();
+    var_dump($value);
+}
+try {
+    replaceWithStatic(true);
+} catch (Exception $exception) {
+    echo $exception->getMessage(), '|';
+}
+replaceWithStatic(false);
+"#,
+        ),
+        "default|released|int(42)\n"
+    );
+}
+
+#[test]
 fn destructor_order_is_scope_deterministic_and_revisits_released_dependencies() {
     assert_eq!(
         run_php(
