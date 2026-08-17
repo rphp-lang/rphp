@@ -9563,14 +9563,23 @@ fn fn_generator_send(
 fn fn_generator_get_return(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
+        ensure_generator_started(&gen_ref, eg)?;
+        if eg.exception.is_some() {
+            ret!(rv, Value::null());
+        }
         let gen_data = gen_ref.borrow();
-        if gen_data.state != crate::vm::generator::GeneratorState::Completed {
-            return Err(VmError::Fatal(
-                "Cannot get return value of a generator that hasn't returned".into(),
+        if gen_data.state != crate::vm::generator::GeneratorState::Completed
+            || !gen_data.has_returned
+        {
+            drop(gen_data);
+            eg.exception = Some(crate::value::make_error_value(
+                "Exception",
+                "Cannot get return value of a generator that hasn't returned",
             ));
+            ret!(rv, Value::null());
         }
         ret!(rv, gen_data.return_value.clone());
     }

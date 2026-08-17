@@ -52,6 +52,9 @@ pub struct Generator {
     pub send_value: Value,
     /// Return value (set when generator returns)
     pub return_value: Value,
+    /// True only after the generator reaches a normal explicit or implicit
+    /// return. Exceptional closure also uses Completed but has no return value.
+    pub has_returned: bool,
     /// Auto-incrementing key for yield without explicit key
     pub implicit_key: i64,
     /// Class scope captured when a generator closure/method is invoked.
@@ -109,6 +112,7 @@ impl Generator {
             key: Value::long(-1), // will become 0 on first yield
             send_value: Value::null(),
             return_value: Value::null(),
+            has_returned: false,
             implicit_key: 0,
             called_scope_class_id: 0,
             delegate: None,

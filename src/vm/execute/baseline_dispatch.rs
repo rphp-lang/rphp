@@ -5886,6 +5886,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             };
                             gen_data.return_value = retval.clone();
                         }
+                        gen_data.has_returned = true;
                         gen_data.state = crate::vm::generator::GeneratorState::Completed;
                         gen_data.value = Value::null();
                         gen_data.key = Value::null();

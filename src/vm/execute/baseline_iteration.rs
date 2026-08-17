@@ -1371,6 +1371,11 @@ fn op_yield<'a>(
         // Set yielded value/key
         gen_data.value = yielded_value;
         if let Some(key) = yielded_key {
+            if let Some(explicit) = key.as_long()
+                && explicit >= gen_data.implicit_key
+            {
+                gen_data.implicit_key = explicit.wrapping_add(1);
+            }
             gen_data.key = key;
         } else {
             gen_data.key = Value::long(gen_data.implicit_key);

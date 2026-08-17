@@ -154,6 +154,7 @@ function gen() {
     yield 2;
     return "done";
 }
+
 $g = gen();
 $g->next();
 $g->next();
@@ -161,6 +162,31 @@ echo $g->getReturn();
 "#
         ),
         "done"
+    );
+}
+
+#[test]
+fn generator_get_return_auto_primes_and_reports_incomplete_or_aborted_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function immediate() { return 42; yield; }
+var_dump(immediate()->getReturn());
+function pending() { yield 1; return 2; }
+$pending = pending();
+try { $pending->getReturn(); }
+catch (Exception $error) { echo $error->getMessage(), "\n"; }
+$pending->next();
+var_dump($pending->getReturn());
+function aborted() { throw new Exception('boom'); yield; }
+$aborted = aborted();
+try { $aborted->getReturn(); }
+catch (Exception $error) { echo $error->getMessage(), "\n"; }
+try { $aborted->getReturn(); }
+catch (Exception $error) { echo $error->getMessage(), "\n"; }
+"#
+        ),
+        "int(42)\nCannot get return value of a generator that hasn't returned\nint(2)\nboom\nCannot get return value of a generator that hasn't returned\n"
     );
 }
 
@@ -253,6 +279,32 @@ var_dump($generator);
 "#
         ),
         "object(Generator)#1 (1) {\n  [\"function\"]=>\n  string(6) \"values\"\n}\nobject(Generator)#1 (1) {\n  [\"function\"]=>\n  string(6) \"values\"\n}\nobject(Generator)#1 (1) {\n  [\"function\"]=>\n  string(6) \"values\"\n}\n"
+    );
+}
+
+#[test]
+fn explicit_integer_generator_keys_advance_but_never_rewind_the_implicit_key() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function keyed() {
+    yield 'zero';
+    yield 5 => 'five';
+    yield 'six';
+    yield 2 => 'two';
+    yield 'seven';
+    yield 'name' => 'named';
+    yield 'eight';
+}
+foreach (keyed() as $key => $value) echo $key, ':', $value, "\n";
+function overflowKey() {
+    yield 9223372036854775807 => 'max';
+    yield 'wrapped';
+}
+foreach (overflowKey() as $key => $value) echo $key, ':', $value, "\n";
+"#
+        ),
+        "0:zero\n5:five\n6:six\n2:two\n7:seven\nname:named\n8:eight\n9223372036854775807:max\n-9223372036854775808:wrapped\n"
     );
 }
 
