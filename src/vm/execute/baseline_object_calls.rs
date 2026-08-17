@@ -495,6 +495,7 @@ fn op_new_obj_resolved<'a>(
                 use_vars: Vec::new(),
                 called_scope_class_id: class_id,
                 bound_this: None,
+                closure_static_vars: None,
                 is_magic_call: false,
             };
             let source_file = if op_array.source_file.is_empty() {
@@ -3297,6 +3298,7 @@ fn init_resolved_user_call_mode(
     };
     let called_scope_class_id = resolved.called_scope_class_id;
     let bound_this = resolved.bound_this;
+    let closure_static_vars = resolved.closure_static_vars;
     let signature = unsafe { &(*resolved.func_ptr).sig };
     let public_end = signature.this_offset + explicit_args;
     let parameter_cv_count = signature.parameter_cv_count();
@@ -3315,6 +3317,9 @@ fn init_resolved_user_call_mode(
     }
     if called_scope_class_id != 0 {
         publish_late_static_call_class_id(eg, call, called_scope_class_id);
+    }
+    if let Some(storage) = closure_static_vars {
+        eg.publish_closure_static_vars(call as usize, storage);
     }
     if let Some(method) = magic_method {
         // Late-static scope stays below this entry and the receiver marker is
@@ -3544,6 +3549,7 @@ fn op_init_dynamic_call<'a>(
             use_vars: closure.clone_captures(),
             called_scope_class_id: closure.called_scope_class_id,
             bound_this,
+            closure_static_vars: closure.static_vars.clone(),
             is_magic_call: crate::stdlib::closure_is_magic_call(closure, eg),
         };
         let is_method = resolved.is_method();

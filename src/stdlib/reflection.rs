@@ -280,6 +280,7 @@ fn function_get_closure(
             is_static: false,
             bound_this: None,
             captures: vec![],
+            static_vars: None,
             has_heap_captures: false,
         }),
     )
@@ -2288,6 +2289,7 @@ fn method_get_closure(
             is_static,
             bound_this: (!is_static).then_some(object).flatten(),
             captures: vec![],
+            static_vars: None,
             has_heap_captures: false,
         }),
     )

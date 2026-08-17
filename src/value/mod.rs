@@ -3848,6 +3848,7 @@ mod closure_ownership_tests {
             is_static: true,
             bound_this: None,
             captures: vec![capture],
+            static_vars: None,
             has_heap_captures: true,
         })
     }
@@ -3894,6 +3895,8 @@ mod closure_ownership_tests {
 
 /// PHP closure — function pointer + captured values.
 /// Stored behind `Rc` in `Value`, like strings, arrays, and objects.
+pub(crate) type ClosureStaticVars = Rc<RefCell<HashMap<String, Value>>>;
+
 pub struct PhpClosure {
     /// Request-local Zend object-store handle. Closures are PHP objects and
     /// therefore consume the same diagnostic handle sequence as instances.
@@ -3911,6 +3914,9 @@ pub struct PhpClosure {
     pub bound_this: Option<Value>,
     /// Captured `use` variable values, in declaration order.
     pub captures: Vec<Value>,
+    /// Function-static cells owned by this Closure object. Ordinary Value
+    /// clones share the payload; an explicit Closure clone/bind snapshots it.
+    pub(crate) static_vars: Option<ClosureStaticVars>,
     /// True if any captured value needs cleanup (owned heap values/resources).
     /// When false, captures are all scalars — clone is a cheap memcpy.
     pub has_heap_captures: bool,
@@ -3918,6 +3924,28 @@ pub struct PhpClosure {
 
 impl Clone for PhpClosure {
     fn clone(&self) -> Self {
+        let static_vars = self.static_vars.as_ref().map(|source| {
+            let values: HashMap<String, Value> = source
+                .as_ref()
+                .borrow()
+                .iter()
+                .map(|(name, value)| {
+                    let value = if value.is_owned_reference() {
+                        // SAFETY: the source cell remains live throughout this
+                        // borrow. Binding snapshots its value into a new cell.
+                        let mut snapshot = Value::owned_reference(value.dereferenced().clone());
+                        if value.is_static_initializer_in_progress() {
+                            snapshot.mark_static_initializer_in_progress();
+                        }
+                        snapshot
+                    } else {
+                        value.clone()
+                    };
+                    (name.clone(), value)
+                })
+                .collect();
+            Rc::new(RefCell::new(values))
+        });
         Self {
             object_handle: 0,
             func: self.func,
@@ -3925,6 +3953,7 @@ impl Clone for PhpClosure {
             is_static: self.is_static,
             bound_this: self.bound_this.clone(),
             captures: self.clone_captures(),
+            static_vars,
             has_heap_captures: self.has_heap_captures,
         }
     }

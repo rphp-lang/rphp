@@ -63,6 +63,9 @@ pub struct Generator {
     /// Class scope captured when a generator closure/method is invoked.
     /// Resume frames republish it for visibility and late-static semantics.
     pub called_scope_class_id: u32,
+    /// Anonymous Closure-owned function statics retained across the short
+    /// creation frame and every suspended generator activation.
+    pub closure_static_vars: Option<crate::value::ClosureStaticVars>,
     /// Active `yield from` delegate (sub-generator or array)
     pub delegate: Option<YieldFromDelegate>,
     /// TMP slot index for writing `yield from` result when delegate completes
@@ -119,6 +122,7 @@ impl Generator {
             rewindable: true,
             implicit_key: 0,
             called_scope_class_id: 0,
+            closure_static_vars: None,
             delegate: None,
             yield_from_result_slot: 0,
             #[cfg(feature = "php-generics-reified")]

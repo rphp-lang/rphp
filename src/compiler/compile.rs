@@ -6970,6 +6970,7 @@ impl Compiler {
                 self.class_defs.extend(func_compiler.class_defs);
                 self.generic_declarations
                     .extend(nested_generic_declarations);
+                let has_static_vars = !user_func.op_array.static_vars.is_empty();
                 self.functions.push((closure_name.clone(), user_func));
 
                 // Build closure value with direct function pointer + captured values.
@@ -6995,6 +6996,9 @@ impl Compiler {
                 create.extended_value = use_vars.len() as u32;
                 if *is_static {
                     create._pad |= crate::vm::instruction::CLOSURE_FLAG_STATIC;
+                }
+                if has_static_vars {
+                    create._pad |= crate::vm::instruction::CLOSURE_FLAG_HAS_STATICS;
                 }
                 self.instructions.push(create);
 

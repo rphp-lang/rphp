@@ -114,6 +114,9 @@ pub const STATIC_PROP_INDIRECT_MODIFY: u16 = 1 << 9;
 /// CreateClosure flag: PHP's `static function`/`static fn` form cannot bind
 /// an object, even when created inside an instance method.
 pub const CLOSURE_FLAG_STATIC: u16 = 1;
+/// CreateClosure flag: allocate per-object function-static storage only when
+/// the compiled anonymous body contains a `static $variable` declaration.
+pub const CLOSURE_FLAG_HAS_STATICS: u16 = 1 << 1;
 
 /// ClosureUseVar flag: preserve the captured CV's PHP reference cell instead
 /// of snapshotting its current value.

@@ -2,6 +2,29 @@
 mod common;
 use common::run_php;
 
+#[test]
+fn generator_closures_retain_their_own_static_cells_across_suspension() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function makeGenerator() {
+    return function () {
+        static $count = 0;
+        yield ++$count;
+    };
+}
+$first = makeGenerator();
+$second = makeGenerator();
+$generators = [$first(), $first(), $second()];
+foreach ($generators as $generator) {
+    foreach ($generator as $value) echo $value;
+}
+"#
+        ),
+        "121"
+    );
+}
+
 // ── Basic generators ──
 
 #[test]

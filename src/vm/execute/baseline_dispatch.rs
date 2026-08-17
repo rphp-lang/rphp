@@ -5770,10 +5770,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // for hand-built op arrays that predate that contract.
                         if !value.is_owned_reference() {
                             let binding = Value::owned_reference(value.dereferenced().clone());
-                            eg.static_vars
-                                .entry(func_name.clone())
-                                .or_insert_with(HashMap::new)
-                                .insert(var_name.clone(), binding);
+                            eg.with_function_static_vars_mut(
+                                frame as usize,
+                                &func_name,
+                                |statics| {
+                                    statics.insert(var_name.clone(), binding);
+                                },
+                            );
                         }
                     }
                 }

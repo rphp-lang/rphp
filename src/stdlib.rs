@@ -20,7 +20,7 @@ use crate::compiler::{
 };
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
-use crate::value::{ArrayKey, PhpArray, PhpClosure, Value, ValueType};
+use crate::value::{ArrayKey, ClosureStaticVars, PhpArray, PhpClosure, Value, ValueType};
 use crate::vm::execute::{
     ScalarLongSortOrder, VmError, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
@@ -1895,6 +1895,7 @@ fn resolve_relative_from_callable(
             use_vars: vec![],
             called_scope_class_id: class_id,
             bound_this: None,
+            closure_static_vars: None,
             is_magic_call: false,
         }));
     }
@@ -1915,6 +1916,7 @@ fn resolve_relative_from_callable(
             .as_object()
             .map_or(class_id, |object| object.class_id),
         bound_this: Some(receiver),
+        closure_static_vars: None,
         is_magic_call: false,
     }))
 }
@@ -9269,13 +9271,16 @@ fn var_dump_value_inner(
                         .unwrap_or("unknown");
                     static_values.set_str(name, capture.clone_closure_capture());
                 }
+                let closure_statics = closure.static_vars.as_ref().map(|storage| storage.borrow());
                 let runtime_statics = eg.static_vars.get(&function.op_array.name);
                 for (_, name, default) in &function.op_array.static_vars {
-                    let value = runtime_statics
-                        .and_then(|values| values.get(name))
-                        .cloned()
-                        .or_else(|| default.clone())
-                        .unwrap_or_else(Value::null);
+                    let value = if let Some(values) = closure_statics.as_ref() {
+                        values.get(name).cloned()
+                    } else {
+                        runtime_statics.and_then(|values| values.get(name)).cloned()
+                    }
+                    .or_else(|| default.clone())
+                    .unwrap_or_else(Value::null);
                     static_values.set_str(name, value);
                 }
             }
@@ -10234,6 +10239,7 @@ pub(crate) fn call_object_public_method(
         use_vars: vec![],
         called_scope_class_id: class_id,
         bound_this: None,
+        closure_static_vars: None,
         is_magic_call: false,
     };
     call_resolved_with_values(eg, &resolved, args).map(Some)
@@ -10254,6 +10260,9 @@ pub(crate) struct ResolvedCallback {
     pub(crate) called_scope_class_id: u32,
     /// Object bound as `$this`; it is frame metadata, not a public argument.
     pub(crate) bound_this: Option<Value>,
+    /// Per-object function-static cells when this descriptor came from an
+    /// anonymous Closure. Named functions and methods leave this empty.
+    pub(crate) closure_static_vars: Option<ClosureStaticVars>,
     /// Invocation must pack the requested method name and public arguments for
     /// a resolved `__call` or `__callStatic` trampoline.
     pub(crate) is_magic_call: bool,
@@ -10293,6 +10302,7 @@ pub(crate) fn resolved_callback_into_closure(
     let is_static =
         bound_this.is_none() && !is_method && eg.declaring_class_of(resolved.func_ptr).is_some();
     let has_heap_captures = resolved.use_vars.iter().any(Value::needs_cleanup);
+    let static_vars = resolved.closure_static_vars;
     Value::closure(PhpClosure {
         object_handle: 0,
         func: resolved.func_ptr,
@@ -10300,6 +10310,7 @@ pub(crate) fn resolved_callback_into_closure(
         is_static,
         bound_this,
         captures: resolved.use_vars,
+        static_vars,
         has_heap_captures,
     })
 }
@@ -10399,6 +10410,7 @@ fn resolve_magic_callback(
         use_vars: vec![Value::string(requested_method)],
         called_scope_class_id: eg.find_class(class_name)?.class_id,
         bound_this: None,
+        closure_static_vars: None,
         is_magic_call: true,
     })
 }
@@ -10451,6 +10463,7 @@ fn resolve_callback(
                 use_vars: closure.clone_captures(),
                 called_scope_class_id: closure.called_scope_class_id,
                 bound_this: closure.bound_this.clone(),
+                closure_static_vars: closure.static_vars.clone(),
                 is_magic_call: closure_is_magic_call(closure, eg),
             };
             let prepend_args = if resolved.signature().this_offset == 1 {
@@ -10493,6 +10506,7 @@ fn resolve_callback(
                     use_vars: vec![],
                     called_scope_class_id: eg.find_class(class_name)?.class_id,
                     bound_this: None,
+                    closure_static_vars: None,
                     is_magic_call: false,
                 });
             }
@@ -10502,6 +10516,7 @@ fn resolve_callback(
                 use_vars: vec![],
                 called_scope_class_id: 0,
                 bound_this: None,
+                closure_static_vars: None,
                 is_magic_call: false,
             })
         }
@@ -10522,6 +10537,7 @@ fn resolve_callback(
                         use_vars,
                         called_scope_class_id: 0,
                         bound_this: None,
+                        closure_static_vars: None,
                         is_magic_call: false,
                     });
                 }
@@ -10603,6 +10619,7 @@ fn resolve_callback(
                     use_vars: vec![],
                     called_scope_class_id,
                     bound_this: None,
+                    closure_static_vars: None,
                     is_magic_call: false,
                 })
             } else if let Some(class_str) = obj_val.as_str() {
@@ -10672,6 +10689,7 @@ fn resolve_callback(
                     use_vars: vec![],
                     called_scope_class_id: eg.find_class(class_str)?.class_id,
                     bound_this: None,
+                    closure_static_vars: None,
                     is_magic_call: false,
                 })
             } else {
@@ -10689,6 +10707,7 @@ fn resolve_callback(
                 use_vars: vec![],
                 called_scope_class_id: 0,
                 bound_this: None,
+                closure_static_vars: None,
                 is_magic_call: false,
             })
         }
@@ -10856,6 +10875,7 @@ fn resolve_cached_string_callback(
         use_vars: vec![],
         called_scope_class_id: 0,
         bound_this: None,
+        closure_static_vars: None,
         is_magic_call: false,
     })
 }
@@ -11064,7 +11084,10 @@ where
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
     }
-    if !resolved.has_context() && resolved.use_vars.is_empty() {
+    if !resolved.has_context()
+        && resolved.use_vars.is_empty()
+        && resolved.closure_static_vars.is_none()
+    {
         call_function_iter(eg, resolved.func_ptr, num_args, args)
     } else {
         call_function_iter_with_context(
@@ -11075,6 +11098,7 @@ where
             resolved.called_scope_class_id,
             resolved.bound_this.as_ref(),
             resolved.use_vars.len(),
+            resolved.closure_static_vars.clone(),
         )
     }
 }
@@ -11102,7 +11126,10 @@ where
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
     }
-    if !resolved.has_context() && resolved.use_vars.is_empty() {
+    if !resolved.has_context()
+        && resolved.use_vars.is_empty()
+        && resolved.closure_static_vars.is_none()
+    {
         call_function_owned_iter(eg, resolved.func_ptr, num_args, args)
     } else {
         call_function_owned_iter_with_context(
@@ -11113,6 +11140,7 @@ where
             resolved.called_scope_class_id,
             resolved.bound_this.clone(),
             resolved.use_vars.len(),
+            resolved.closure_static_vars.clone(),
         )
     }
 }
@@ -11152,6 +11180,7 @@ where
         resolved.called_scope_class_id,
         resolved.bound_this.clone(),
         resolved.use_vars.len(),
+        resolved.closure_static_vars.clone(),
         named_variadic,
     )
 }
@@ -11188,6 +11217,7 @@ where
         args,
         resolved.called_scope_class_id,
         resolved.bound_this.clone(),
+        resolved.closure_static_vars.clone(),
     )
 }
 
@@ -11211,7 +11241,11 @@ pub(crate) fn call_resolved_with_values(
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
     }
-    if resolved.prepend_args.is_empty() && resolved.use_vars.is_empty() && !resolved.has_context() {
+    if resolved.prepend_args.is_empty()
+        && resolved.use_vars.is_empty()
+        && !resolved.has_context()
+        && resolved.closure_static_vars.is_none()
+    {
         if let Some(result) =
             unsafe { try_execute_scalar_long_callback(resolved.func_ptr, args.len(), args.iter()) }
         {
@@ -13027,7 +13061,10 @@ unsafe fn try_usort_scalar_long(
     items: &mut [Value],
     resolved: &ResolvedCallback,
 ) -> Result<bool, ()> {
-    if !resolved.prepend_args.is_empty() || !resolved.use_vars.is_empty() || resolved.has_context()
+    if !resolved.prepend_args.is_empty()
+        || !resolved.use_vars.is_empty()
+        || resolved.has_context()
+        || resolved.closure_static_vars.is_some()
     {
         return Ok(false);
     }
@@ -13356,7 +13393,10 @@ fn fn_array_intersect(
 /// Supports by-ref callbacks: function (&$val, $key) { $val *= 2; }
 #[inline(never)]
 unsafe fn try_array_walk_scalar_long(arr: &PhpArray, resolved: &ResolvedCallback) -> Option<()> {
-    if !resolved.prepend_args.is_empty() || !resolved.use_vars.is_empty() || resolved.has_context()
+    if !resolved.prepend_args.is_empty()
+        || !resolved.use_vars.is_empty()
+        || resolved.has_context()
+        || resolved.closure_static_vars.is_some()
     {
         return None;
     }

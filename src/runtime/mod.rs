@@ -10,7 +10,7 @@ use crate::compiler::compile::{
 use crate::generics::GenericType;
 use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
 use crate::parser::Visibility;
-use crate::value::{ObjectLayout, PhpArray, Value};
+use crate::value::{ClosureStaticVars, ObjectLayout, PhpArray, Value};
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
 use crate::vm::stack::VmStack;
@@ -186,6 +186,7 @@ pub(crate) struct AutoloadEntry {
     pub(crate) use_vars: Vec<Value>,
     pub(crate) called_scope_class_id: u32,
     pub(crate) bound_this: Option<Value>,
+    pub(crate) closure_static_vars: Option<ClosureStaticVars>,
     pub(crate) is_magic_call: bool,
 }
 
@@ -341,6 +342,9 @@ pub struct ExecutorGlobals {
     pub dirty_globals: std::collections::HashSet<String>,
     /// Static variables — persisted across function calls: func_name → (var_name → value)
     pub static_vars: HashMap<String, HashMap<String, crate::value::Value>>,
+    /// Closure-owned function-static cells for active or pending frames. The
+    /// sidecar is absent unless a static-bearing anonymous Closure is called.
+    closure_static_frames: Option<HashMap<usize, ClosureStaticVars>>,
     /// Packed internal `(call frame, $this)` pairs for dynamically resolved
     /// `__invoke` calls. The existing Option remains the cheap hot-path marker.
     pub pending_invoke_this: Option<crate::value::Value>,
@@ -585,6 +589,7 @@ impl ExecutorGlobals {
             dynamic_scope_owners: HashMap::new(),
             dirty_globals: std::collections::HashSet::new(),
             static_vars: HashMap::new(),
+            closure_static_frames: None,
             pending_invoke_this: None,
             included_files: std::collections::HashSet::new(),
             included_file_order: Vec::new(),
@@ -673,6 +678,7 @@ impl ExecutorGlobals {
             dynamic_scope_owners: HashMap::new(),
             dirty_globals: std::collections::HashSet::new(),
             static_vars: HashMap::new(),
+            closure_static_frames: None,
             pending_invoke_this: None,
             included_files: std::collections::HashSet::new(),
             included_file_order: Vec::new(),
@@ -714,6 +720,47 @@ impl ExecutorGlobals {
     pub(crate) fn discard_dynamic_scope(&mut self, frame: usize) {
         self.dynamic_scope_owners.remove(&frame);
         self.dynamic_variables.remove(&frame);
+    }
+
+    #[cold]
+    pub(crate) fn publish_closure_static_vars(&mut self, frame: usize, storage: ClosureStaticVars) {
+        self.closure_static_frames
+            .get_or_insert_with(HashMap::new)
+            .insert(frame, storage);
+    }
+
+    #[inline]
+    pub(crate) fn closure_static_vars(&self, frame: usize) -> Option<ClosureStaticVars> {
+        self.closure_static_frames
+            .as_ref()
+            .and_then(|frames| frames.get(&frame))
+            .cloned()
+    }
+
+    #[inline]
+    pub(crate) fn with_function_static_vars_mut<R>(
+        &mut self,
+        frame: usize,
+        function: &str,
+        callback: impl FnOnce(&mut HashMap<String, Value>) -> R,
+    ) -> R {
+        if let Some(storage) = self.closure_static_vars(frame) {
+            let mut values = storage.borrow_mut();
+            callback(&mut values)
+        } else {
+            callback(self.static_vars.entry(function.to_string()).or_default())
+        }
+    }
+
+    #[inline]
+    pub(crate) fn discard_closure_static_vars(&mut self, frame: usize) {
+        let Some(frames) = self.closure_static_frames.as_mut() else {
+            return;
+        };
+        frames.remove(&frame);
+        if frames.is_empty() {
+            self.closure_static_frames = None;
+        }
     }
 
     /// Reuse the existing cold packed call-side state so ordinary builds do

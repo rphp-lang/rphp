@@ -273,6 +273,7 @@ fn release_statement_temps(
 #[inline(always)]
 unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
+    eg.discard_closure_static_vars(call as usize);
     eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
     eg.finally_exceptions.remove(&(call as usize));
@@ -287,6 +288,7 @@ unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
 #[inline(never)]
 fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_late_static_scope(call as usize);
+    eg.discard_closure_static_vars(call as usize);
     eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
     eg.finally_exceptions.remove(&(call as usize));

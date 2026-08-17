@@ -2727,6 +2727,7 @@ fn execute_full_call<'a>(
                     user.op_array.num_temps,
                 );
                 generator.called_scope_class_id = late_static_call_class_id(eg, call);
+                generator.closure_static_vars = eg.closure_static_vars(call as usize);
                 #[cfg(feature = "php-generics-reified")]
                 {
                     generator.reified_context = eg.generator_reified_context(call as usize);

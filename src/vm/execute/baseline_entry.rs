@@ -371,6 +371,7 @@ where
         None,
         0,
         None,
+        None,
     )?;
     Ok(return_value)
 }
@@ -386,6 +387,7 @@ pub(crate) fn call_function_iter_with_context<'a, I>(
     called_scope_class_id: u32,
     bound_this: Option<&Value>,
     capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = &'a Value>,
@@ -405,6 +407,7 @@ where
         called_scope_class_id,
         bound_this.cloned(),
         capture_count,
+        closure_static_vars,
         None,
     )?;
     Ok(return_value)
@@ -423,7 +426,7 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, _) =
-        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args, 0, None, 0, None)?;
+        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args, 0, None, 0, None, None)?;
     Ok(return_value)
 }
 
@@ -436,6 +439,7 @@ pub(crate) fn call_function_owned_iter_with_context<I>(
     called_scope_class_id: u32,
     bound_this: Option<Value>,
     capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = Value>,
@@ -448,6 +452,7 @@ where
         called_scope_class_id,
         bound_this,
         capture_count,
+        closure_static_vars,
         None,
     )?;
     Ok(return_value)
@@ -461,6 +466,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named<I>(
     called_scope_class_id: u32,
     bound_this: Option<Value>,
     capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
     named_variadic: Vec<(String, Value)>,
 ) -> Result<Value, VmError>
 where
@@ -474,6 +480,7 @@ where
         called_scope_class_id,
         bound_this,
         capture_count,
+        closure_static_vars,
         Some(named_variadic),
     )?;
     Ok(return_value)
@@ -493,7 +500,7 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, arg0) =
-        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args, 0, None, 0, None)?;
+        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args, 0, None, 0, None, None)?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
 
@@ -505,6 +512,7 @@ pub(crate) fn call_function_owned_iter_readback_arg0_with_context<I>(
     args: I,
     called_scope_class_id: u32,
     bound_this: Option<Value>,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
 ) -> Result<(Value, Value), VmError>
 where
     I: Iterator<Item = Value>,
@@ -517,6 +525,7 @@ where
         called_scope_class_id,
         bound_this,
         0,
+        closure_static_vars,
         None,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
@@ -532,6 +541,7 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     called_scope_class_id: u32,
     bound_this: Option<Value>,
     capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
     named_variadic: Option<Vec<(String, Value)>>,
 ) -> Result<(Value, Option<Value>), VmError>
 where
@@ -648,6 +658,9 @@ where
         if called_scope_class_id != 0 {
             publish_late_static_call_class_id(eg, frame, called_scope_class_id);
         }
+        if let Some(storage) = closure_static_vars.clone() {
+            eg.publish_closure_static_vars(frame as usize, storage);
+        }
         initialize_bound_this_frame(frame, func_ptr, bound_this);
 
         // Detached callback entry bypasses DoFcall, whose full path normally
@@ -715,6 +728,7 @@ where
                 user.op_array.num_temps,
             );
             generator.called_scope_class_id = called_scope_class_id;
+            generator.closure_static_vars = closure_static_vars.clone();
             let generator_ref = new_generator_ref(generator);
             let mut object = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
             object.generator = Some(generator_ref);
@@ -884,6 +898,7 @@ where
         0,
         None,
         0,
+        None,
         None,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
@@ -1090,6 +1105,9 @@ fn materialize_generator_frame(
     );
     let gen_data = gen_ref.borrow();
     publish_late_static_call_class_id(eg, frame, gen_data.called_scope_class_id);
+    if let Some(storage) = gen_data.closure_static_vars.clone() {
+        eg.publish_closure_static_vars(frame as usize, storage);
+    }
     // SAFETY: push_call_frame returned this live compiler-sized generator
     // frame; every restored CV/TMP index comes from its retained snapshot and
     // ip_offset belongs to the same immutable generator op-array.

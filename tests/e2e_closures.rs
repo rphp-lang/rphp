@@ -3,6 +3,46 @@ mod common;
 use common::run_php;
 
 #[test]
+fn anonymous_closure_instances_own_independent_function_statics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function makeCounter() {
+    return function () {
+        static $count = 0;
+        return ++$count;
+    };
+}
+$first = makeCounter();
+$alias = $first;
+$second = makeCounter();
+echo $first(), $second(), $alias(), $second(), "\n";
+echo array_map($first, [0])[0], array_map($second, [0])[0];
+"#
+        ),
+        "1122\n33"
+    );
+}
+
+#[test]
+fn binding_a_closure_snapshots_its_current_function_statics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$original = function () {
+    static $count = 0;
+    return ++$count;
+};
+echo $original();
+$bound = $original->bindTo(null);
+echo $original(), $bound(), $original(), $bound();
+"#
+        ),
+        "12233"
+    );
+}
+
+#[test]
 fn test_closure_basic() {
     assert_eq!(
         run_php(

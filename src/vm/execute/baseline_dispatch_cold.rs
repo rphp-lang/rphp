@@ -3392,30 +3392,39 @@ fn op_check_static(
             globals_set(&mut eg.globals, global_name, value);
             eg.dirty_globals.insert(global_name.clone());
         }
-        let statics = eg.static_vars.entry(func_name).or_default();
-        if let Some(stored) = statics.get(&var_name) {
-            if stored.is_static_initializer_in_progress() {
-                // A recursive call entered while the initializer is still
-                // evaluating. PHP evaluates that recursive initializer too.
-                return false;
-            }
-            let binding = if stored.is_owned_reference() {
-                stored.clone_owned_reference_alias()
-            } else {
-                Value::owned_reference(stored.clone())
-            };
-            if !stored.is_owned_reference() {
-                statics.insert(var_name, binding.clone_owned_reference_alias());
-            }
+        let binding = eg.with_function_static_vars_mut(
+            frame as usize,
+            &func_name,
+            |statics| {
+                if let Some(stored) = statics.get(&var_name) {
+                    if stored.is_static_initializer_in_progress() {
+                        // A recursive call entered while the initializer is
+                        // still evaluating. PHP evaluates it recursively too.
+                        return None;
+                    }
+                    let binding = if stored.is_owned_reference() {
+                        stored.clone_owned_reference_alias()
+                    } else {
+                        Value::owned_reference(stored.clone())
+                    };
+                    if !stored.is_owned_reference() {
+                        statics.insert(var_name.clone(), binding.clone_owned_reference_alias());
+                    }
+                    return Some(binding);
+                }
+
+                let binding = Value::owned_reference(Value::null());
+                let mut stored = binding.clone_owned_reference_alias();
+                stored.mark_static_initializer_in_progress();
+                statics.insert(var_name.clone(), stored);
+                None
+            },
+        );
+        if let Some(binding) = binding {
             slot_set((*frame).cv_mut(opline.op1 as u32), binding);
             (*frame).opline = op_array.instructions.as_ptr().add(opline.result as usize);
             return true;
         }
-
-        let binding = Value::owned_reference(Value::null());
-        let mut stored = binding.clone_owned_reference_alias();
-        stored.mark_static_initializer_in_progress();
-        statics.insert(var_name, stored);
         false
     }
 }
@@ -3457,18 +3466,23 @@ fn op_bind_static(
             Value::null()
         };
 
-        let statics = eg.static_vars.entry(func_name).or_default();
-        let stored = statics
-            .entry(var_name)
-            .or_insert_with(|| Value::owned_reference(Value::null()));
-        if !stored.is_owned_reference() {
-            *stored = Value::owned_reference(stored.clone());
-        }
-        if stored.is_static_initializer_in_progress() {
-            slot_set(stored.as_ref_ptr(), initial);
-            stored.clear_static_initializer_in_progress();
-        }
-        let binding = stored.clone_owned_reference_alias();
+        let binding = eg.with_function_static_vars_mut(
+            frame as usize,
+            &func_name,
+            |statics| {
+                let stored = statics
+                    .entry(var_name)
+                    .or_insert_with(|| Value::owned_reference(Value::null()));
+                if !stored.is_owned_reference() {
+                    *stored = Value::owned_reference(stored.clone());
+                }
+                if stored.is_static_initializer_in_progress() {
+                    slot_set(stored.as_ref_ptr(), initial);
+                    stored.clear_static_initializer_in_progress();
+                }
+                stored.clone_owned_reference_alias()
+            },
+        );
         slot_set((*frame).cv_mut(opline.op1 as u32), binding);
     }
 }
@@ -3515,6 +3529,10 @@ fn op_create_closure(
     };
     let is_static = (opline._pad & crate::vm::instruction::CLOSURE_FLAG_STATIC) != 0;
     let bound_this = closure_bound_this(frame, op_array, is_static);
+    let static_vars = ((opline._pad & crate::vm::instruction::CLOSURE_FLAG_HAS_STATICS) != 0)
+        .then(|| {
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()))
+        });
     let closure = PhpClosure {
         object_handle: 0,
         func: func_ptr,
@@ -3522,6 +3540,7 @@ fn op_create_closure(
         is_static,
         bound_this,
         captures: Vec::with_capacity(opline.extended_value as usize),
+        static_vars,
         has_heap_captures: false,
     };
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
