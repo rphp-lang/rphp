@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `186c0ec`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,429 pass, 2,779 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `bd413d1`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,430 pass, 2,778 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-46.640%; 87.174% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +614/-0. The first four gains are
+46.659%; 87.174% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +615/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Closure debug metadata now exposes compile-time-known static-variable defaults
+before the first invocation and switches to the request-owned runtime cells
+after execution. Dynamic initializers remain `NULL` until their first runtime
+evaluation, matching PHP 8.5's lazy boundary. This adds the exact
+`Zend/tests/closures/closure_const_expr/static_variable.phpt` pass without
+losing a prior pass or changing runtime reach. All five Cargo test
+configurations pass. The new constant evaluation is confined to cold
+compilation and the metadata is read only by explicit closure `var_dump()`, so
+ordinary calls and generated code are unchanged and no runtime benchmark
+applies.
 
 Anonymous Closure dumps now expose PHP 8.5's source-qualified `name`, `file`
 and declaration `line` fields before captures, receiver and parameter metadata.
