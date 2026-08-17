@@ -163,6 +163,19 @@ unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     }
 }
 
+/// Transfer an initialized compiler-owned TMP/VAR out of a live frame slot.
+/// Callers expand this only inside an existing opcode-level unsafe region.
+macro_rules! frame_tmp_take {
+    ($frame:expr, $ptr:expr) => {{
+        let value = std::mem::replace(&mut *$ptr, Value::undef());
+        if (*$frame).num_cvs + (*$frame).num_temps <= 64 {
+            let index = slot_idx($frame, $ptr);
+            (*$frame).heap_bitmap &= !(1u64 << index);
+        }
+        value
+    }};
+}
+
 /// Write a Long value directly to a frame TMP slot. Zero overhead for scalar frames.
 #[inline(always)]
 pub(super) unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {

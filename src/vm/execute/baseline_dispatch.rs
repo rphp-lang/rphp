@@ -4497,7 +4497,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 val
                             }
                         };
-                        let mut cloned = val.clone();
+                        let mut cloned = if opline._pad & ASSIGN_PROP_MOVE_SOURCE != 0
+                            && matches!(opline.result_type, OpType::Tmp | OpType::Var)
+                        {
+                            unsafe {
+                                let source = (*frame)
+                                    .get_op_mut(opline.result as u32, opline.result_type);
+                                if (&*source).is_reference() {
+                                    val.clone()
+                                } else {
+                                    frame_tmp_take!(frame, source)
+                                }
+                            }
+                        } else {
+                            val.clone()
+                        };
                         unsafe {
                             let property = obj_val
                                 .object_property_slot_unchecked(ic.property_slot())
@@ -4506,7 +4520,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 (&*property).reference_property_constraints(),
                                 cloned
                             );
+                            let destructor = prepare_replaced_value_destructor(eg, &*property);
+                            let destructor_ran = destructor.is_some();
                             assignment_slot_set(&mut *property, cloned);
+                            run_prepared_value_destructor(eg, destructor)?;
+                            if destructor_ran {
+                                resume_pending_exception!();
+                            }
                         };
                     } else if property_flags == 2
                         && cache_matches

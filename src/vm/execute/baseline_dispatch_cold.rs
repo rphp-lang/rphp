@@ -2311,6 +2311,28 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     if opline._pad & STATIC_PROP_REFERENCE_BIND != 0 {
         return assign_static_property_reference::<LATE_STATIC>(eg, frame, op_array, opline);
     }
+    let source = unsafe {
+        &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
+    };
+    let source = if source.is_reference() {
+        unsafe { &*source.as_ref_ptr() }
+    } else {
+        source
+    };
+    let mut value = if opline._pad & ASSIGN_PROP_MOVE_SOURCE != 0
+        && matches!(opline.result_type, OpType::Tmp | OpType::Var)
+    {
+        unsafe {
+            let source = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            if (&*source).is_reference() {
+                clone_static_property_value(&*source)
+            } else {
+                frame_tmp_take!(frame, source)
+            }
+        }
+    } else {
+        clone_static_property_value(source)
+    };
     // Compact late-static frames already carry the called class ID. Check the
     // monomorphic untyped cache before decoding the two constant string
     // operands; a cache miss still takes the canonical resolver below.
@@ -2327,15 +2349,6 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
             && cache.typed_static_property_tag()
                 == crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT;
         if class_id != 0 && cache.class_id == class_id && (flags == 3 || exact_int) {
-            let source = unsafe {
-                &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
-            };
-            let source = if source.is_reference() {
-                unsafe { &*source.as_ref_ptr() }
-            } else {
-                source
-            };
-            let value = clone_static_property_value(source);
             if flags == 3 || value.value_type() == ValueType::Long {
                 return commit_cached_static_property_value(
                     eg,
@@ -2352,15 +2365,6 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let property_name =
         unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let source = unsafe {
-        &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
-    };
-    let source = if source.is_reference() {
-        unsafe { &*source.as_ref_ptr() }
-    } else {
-        source
-    };
-    let mut value = clone_static_property_value(source);
     let dynamic_owner = opline._pad & STATIC_PROP_DYNAMIC_OWNER != 0;
     let dynamic_owner_value = dynamic_owner
         .then(|| dynamic_static_property_owner(eg, class_name))
@@ -2543,7 +2547,7 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     let definition = &*resolved.definition;
     let called_class = eg
         .class_by_id(class_id)
-        .map_or(raw_class, |class| class.name.as_str());
+        .map_or_else(|| raw_class.to_string(), |class| class.name.clone());
     let binding = materialize_reference_alias(frame, source);
     let constraints = binding.reference_property_constraints();
     let current = (&*binding.as_ref_ptr()).clone();
@@ -2553,7 +2557,7 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
         &constraints,
         eg,
         op_array.strict_types,
-        called_class,
+        &called_class,
     ) {
         Ok(value) => value,
         Err(message) => {
@@ -2561,6 +2565,13 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
         }
     };
 
+    let destructor = eg
+        .static_property_value(resolved.storage_slot)
+        .and_then(|value| {
+            (!value.owned_reference_is_aliased())
+                .then(|| prepare_replaced_value_destructor(eg, value))
+                .flatten()
+        });
     if let Some(previous) = eg.static_property_value(resolved.storage_slot) {
         previous.remove_reference_property_constraint(resolved.storage_slot);
     }
@@ -2579,13 +2590,17 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
                 declaring_class: definition.declaring_class.clone(),
                 property: definition.name.clone(),
                 type_scope: definition.type_scope.clone(),
-                called_class: called_class.to_string(),
+                called_class: called_class.clone(),
                 type_hint: definition.type_hint.clone(),
             },
         );
     }
     if !eg.rebind_static_property_value(resolved.storage_slot, property_binding) {
         return Err(VmError::Fatal("Invalid static property storage slot".into()));
+    }
+    run_prepared_value_destructor(eg, destructor)?;
+    if let Some(result) = take_magic_exception(eg, frame) {
+        return Ok(result);
     }
     if definition
         .set_visibility

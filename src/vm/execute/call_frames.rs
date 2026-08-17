@@ -183,7 +183,7 @@ fn run_frame_destructors(
 /// returned receiver, so re-entrant code observes PHP's assignment ordering.
 #[cold]
 fn prepare_replaced_value_destructor(
-    eg: &mut ExecutorGlobals,
+    eg: &ExecutorGlobals,
     value: &Value,
 ) -> Option<Value> {
     let value = value.dereferenced();

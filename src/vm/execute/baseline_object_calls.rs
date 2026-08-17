@@ -1708,6 +1708,21 @@ fn op_bind_obj_prop_ref<'a>(
             std::ptr::drop_in_place(target);
             target.write(prepared);
             let property_binding = binding.clone_owned_reference_alias();
+            let destructor = {
+                let object = receiver.as_object().unwrap();
+                let previous = if force_dynamic {
+                    object
+                        .get_dynamic_property_with_position(&key)
+                        .map(|(value, _)| value)
+                } else {
+                    object.get_property(&key)
+                };
+                previous.and_then(|value| {
+                    (!value.owned_reference_is_aliased())
+                        .then(|| prepare_replaced_value_destructor(eg, value))
+                        .flatten()
+                })
+            };
             let mut object = receiver.as_object_mut().unwrap();
             if force_dynamic {
                 object.set_dynamic_property(&key, property_binding.clone_owned_reference_alias());
@@ -1715,6 +1730,10 @@ fn op_bind_obj_prop_ref<'a>(
                 object.set_property(&key, property_binding.clone_owned_reference_alias());
             }
             drop(object);
+            run_prepared_value_destructor(eg, destructor)?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
             if let (Some(definition), Some(owner)) = (definition, owner)
                 && definition.is_typed()
             {
@@ -1977,7 +1996,22 @@ fn op_assign_obj_prop<'a>(
             .dereferenced();
         (prop_name, val, obj)
     };
-    let mut assigned = val.clone();
+    let mut assigned = if opline._pad & ASSIGN_PROP_MOVE_SOURCE != 0
+        && matches!(opline.result_type, OpType::Tmp | OpType::Var)
+    {
+        // The statement compiler proved this source has no later consumer.
+        // `val` is no longer used after this transfer.
+        unsafe {
+            let source = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            if (&*source).is_reference() {
+                val.clone()
+            } else {
+                frame_tmp_take!(frame, source)
+            }
+        }
+    } else {
+        val.clone()
+    };
     let name = prop_name.echo_to_string();
 
     if let Some(php_obj) = obj.as_object_mut() {
@@ -2303,6 +2337,17 @@ fn op_assign_obj_prop<'a>(
         }
 
         if prop_exists {
+            let destructor = {
+                let object = obj.as_object().unwrap();
+                let property = if force_dynamic {
+                    object
+                        .get_dynamic_property_with_position(&key)
+                        .map(|(value, _)| value)
+                } else {
+                    object.get_property(&key)
+                };
+                property.and_then(|value| prepare_replaced_value_destructor(eg, value))
+            };
             if let Some(mut php_obj) = obj.as_object_mut() {
                 let property = if force_dynamic {
                     php_obj.get_dynamic_property_mut(&key)
@@ -2311,6 +2356,10 @@ fn op_assign_obj_prop<'a>(
                 }
                     .expect("existing property must remain addressable during assignment");
                 assignment_slot_set(property, assigned);
+            }
+            run_prepared_value_destructor(eg, destructor)?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
             }
         } else {
             // Property not found — try __set magic method

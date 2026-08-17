@@ -171,6 +171,10 @@ pub const ASSIGN_OBJ_MODIFY: u16 = 1;
 /// Property assignment emitted by PHP 8.5 clone-with. An initialized readonly
 /// property may be replaced once by this array entry after `__clone` returns.
 pub const ASSIGN_OBJ_CLONE_WITH: u16 = 1 << 1;
+/// A standalone property assignment has no observable expression result. Its
+/// TMP/VAR source can be transferred into property storage instead of leaving
+/// a compiler-only object handle alive until frame teardown.
+pub const ASSIGN_PROP_MOVE_SOURCE: u16 = 1 << 10;
 /// `CloneObj` is followed by the PHP 8.5 property-update loop.
 pub const CLONE_OBJ_WITH_PROPERTIES: u16 = 1;
 /// `BindObjPropRef` rebinds the property to the reference supplied in its

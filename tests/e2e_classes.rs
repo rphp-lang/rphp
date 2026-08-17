@@ -363,6 +363,87 @@ var_dump($replacement);
 }
 
 #[test]
+fn property_replacement_commits_before_a_reentrant_destructor_write() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReplacementSlot { public ?ReplacementValue $item; }
+class ReplacementValue {
+    public function __destruct() { $GLOBALS['slot']->item = null; }
+}
+function replaceItem(ReplacementSlot $slot): void {
+    var_dump($slot->item = new ReplacementValue());
+    var_dump($slot->item);
+}
+$slot = new ReplacementSlot();
+$slot->item = new ReplacementValue();
+replaceItem($slot);
+replaceItem($slot);
+"#,
+        ),
+        "object(ReplacementValue)#3 (0) {\n}\nNULL\nobject(ReplacementValue)#3 (0) {\n}\nobject(ReplacementValue)#3 (0) {\n}\n"
+    );
+}
+
+#[test]
+fn ordinary_property_write_updates_an_aliased_cell_before_reentrant_destruction() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class AliasedSlot { public ?AliasedValue $item; }
+class AliasedValue {
+    public static ?AliasedValue $mirror;
+    public function __destruct() { $GLOBALS['slot']->item = null; }
+}
+$slot = new AliasedSlot();
+$slot->item = new AliasedValue();
+AliasedValue::$mirror =& $slot->item;
+var_dump($slot->item = new AliasedValue());
+var_dump(AliasedValue::$mirror);
+"#,
+        ),
+        "object(AliasedValue)#3 (0) {\n}\nNULL\n"
+    );
+}
+
+#[test]
+fn static_property_reference_rebinding_runs_the_old_destructor_after_commit() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class StaticReferenceValue {
+    public static ?StaticReferenceValue $item;
+    public function __destruct() { self::$item = null; }
+}
+StaticReferenceValue::$item = new StaticReferenceValue();
+$replacement = new StaticReferenceValue();
+var_dump(StaticReferenceValue::$item =& $replacement);
+var_dump($replacement);
+"#,
+        ),
+        "NULL\nNULL\n"
+    );
+}
+
+#[test]
+fn ordinary_property_assignment_dereferences_a_reference_returning_rhs() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function &borrowedValue(&$value) { return $value; }
+class ReferencedRhsTarget { public int $number; }
+$target = new ReferencedRhsTarget();
+$text = "41";
+$target->number = borrowedValue($text);
+$target->number = borrowedValue($text);
+var_dump($target->number, $text);
+"#,
+        ),
+        "int(41)\nstring(2) \"41\"\n"
+    );
+}
+
+#[test]
 fn binding_a_static_cv_runs_the_replaced_objects_destructor_after_commit() {
     assert_eq!(
         run_php(
