@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `6fab588`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,355 pass, 2,853 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `e71309f`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,370 pass, 2,838 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-45.219%; 87.366% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +540/-0. The first four gains are
+45.507%; 87.135% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +555/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Declaration validation now requires `mixed`, `void` and `never` to remain
+standalone in nullable and union types, with PHP 8.5's type-specific diagnostic
+ordering. Properties reject `void`, `never` and every callable shape before
+RPHP creates its internal accessors, so ordinary, nullable and promoted
+properties retain PHP's property-qualified fatal. This adds fifteen exact
+passes without losing a prior pass. All five Cargo configurations, all-target,
+all-features check, unsafe, Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass. The change is confined to cold declaration validation;
+successful declarations, runtime bytecode and generated code are unchanged, so
+no runtime performance benchmark applies.
 
 Declared unions, intersections and DNF types now use one compile-time semantic
 normalization for case-insensitive names, namespace imports, `self`, `parent`,
