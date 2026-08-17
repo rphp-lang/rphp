@@ -774,7 +774,36 @@ impl Parser {
             }
             Token::Clone(line) => {
                 self.advance();
-                let expr = self.parse_unary()?;
+                let (expr, with_properties) = if matches!(self.peek(), Token::LParen(_)) {
+                    self.advance();
+                    let mut expr = self.parse_expr()?;
+                    let has_argument_separator = self.peek() == Token::Comma;
+                    let with_properties = if has_argument_separator {
+                        self.advance();
+                        if self.peek() == Token::RParen {
+                            None
+                        } else {
+                            let properties = Some(Box::new(self.parse_expr()?));
+                            if self.peek() == Token::Comma {
+                                self.advance();
+                            }
+                            properties
+                        }
+                    } else {
+                        None
+                    };
+                    self.expect(&Token::RParen)?;
+                    // Before PHP 8.5, whitespace-parenthesized clone operands
+                    // could continue with property/method postfixes outside
+                    // the grouping parentheses: `clone (new C)->property`.
+                    // A comma identifies the new argument-list form instead.
+                    if !has_argument_separator {
+                        expr = self.parse_postfix_chain(expr)?;
+                    }
+                    (expr, with_properties)
+                } else {
+                    (self.parse_unary()?, None)
+                };
                 // Assignment binds inside clone's operand in PHP's grammar:
                 // `clone $copy = new C` means `clone ($copy = new C)`.
                 // Finishing the tail at each recursive clone level also keeps
@@ -782,6 +811,7 @@ impl Parser {
                 let expr = self.finish_assignment_tail(expr)?;
                 Ok(Expr::Clone {
                     expr: Box::new(expr),
+                    with_properties,
                     line,
                 })
             }

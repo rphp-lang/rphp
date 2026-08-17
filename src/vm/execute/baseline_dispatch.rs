@@ -6047,6 +6047,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::ValidateCloneWith => {
+                match op_validate_clone_with(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
+                }
+            }
+
             OpCode::CreateClosure => {
                 op_create_closure(eg, frame, op_array, opline);
             }

@@ -428,8 +428,9 @@ pub enum Expr {
     BitwiseNot(Box<Expr>), // ~expr
     Clone {
         expr: Box<Expr>,
+        with_properties: Option<Box<Expr>>,
         line: usize,
-    }, // clone $expr
+    }, // clone $expr / clone($expr, $withProperties)
 }
 
 impl Expr {
@@ -452,8 +453,17 @@ impl Expr {
             | Expr::Include { path: inner, .. }
             | Expr::Eval { source: inner, .. }
             | Expr::BitwiseNot(inner)
-            | Expr::Clone { expr: inner, .. }
             | Expr::DynamicVariable { name: inner, .. } => inner.contains_yield(),
+            Expr::Clone {
+                expr,
+                with_properties,
+                ..
+            } => {
+                expr.contains_yield()
+                    || with_properties
+                        .as_deref()
+                        .is_some_and(Expr::contains_yield)
+            }
             Expr::Ternary {
                 condition,
                 then_expr,

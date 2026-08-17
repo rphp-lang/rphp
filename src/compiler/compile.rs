@@ -7493,8 +7493,21 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
-            Expr::Clone { expr: inner, line } => {
+            Expr::Clone {
+                expr: inner,
+                with_properties,
+                line,
+            } => {
                 let (src_op, src_type) = self.compile_expr(inner);
+                let properties = with_properties
+                    .as_ref()
+                    .map(|properties| self.compile_expr(properties));
+                if let Some((properties_op, properties_type)) = properties {
+                    let mut validate = Instruction::new(OpCode::ValidateCloneWith);
+                    validate.op1 = properties_op;
+                    validate.op1_type = properties_type;
+                    self.push_instruction_at_line(validate, *line);
+                }
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::CloneObj);
                 instr.op1 = src_op;
@@ -7502,6 +7515,58 @@ impl Compiler {
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
                 self.push_instruction_at_line(instr, *line);
+                if let Some((properties_op, properties_type)) = properties {
+                    // Reuse the canonical iteration and property-write paths so
+                    // clone-with inherits PHP ordering, visibility, hooks,
+                    // magic methods, type checks and exception behavior.
+                    let array_tmp = self.alloc_tmp();
+                    let position_tmp = self.alloc_tmp();
+                    let mut init = Instruction::new(OpCode::ForeachInit);
+                    init.op1 = properties_op;
+                    init.op1_type = properties_type;
+                    init.result = array_tmp;
+                    init.result_type = OpType::Tmp;
+                    init.extended_value = position_tmp as u32;
+                    let init_index = self.instructions.len();
+                    self.push_instruction_at_line(init, *line);
+
+                    let value_cv = self.resolve_cv(&format!("\0clone_with_value_{init_index}"));
+                    let key_cv = self.resolve_cv(&format!("\0clone_with_key_{init_index}"));
+                    let loop_start = self.instructions.len();
+                    let has_entry_tmp = self.alloc_tmp();
+                    let mut next = Instruction::new(OpCode::ForeachNext);
+                    next.op1 = array_tmp;
+                    next.op1_type = OpType::Tmp;
+                    next.op2 = position_tmp;
+                    next.op2_type = OpType::Tmp;
+                    next.result = has_entry_tmp;
+                    next.result_type = OpType::Tmp;
+                    next.extended_value = (((key_cv as u32) + 1) << 16) | value_cv as u32;
+                    self.instructions.push(next);
+
+                    let mut done = Instruction::new(OpCode::JmpZ);
+                    done.op1 = has_entry_tmp;
+                    done.op1_type = OpType::Tmp;
+                    let done_index = self.instructions.len();
+                    self.instructions.push(done);
+
+                    let mut assign = Instruction::new(OpCode::AssignObjProp);
+                    assign.op1 = tmp;
+                    assign.op1_type = OpType::Tmp;
+                    assign.op2 = key_cv;
+                    assign.op2_type = OpType::Cv;
+                    assign.result = value_cv;
+                    assign.result_type = OpType::Cv;
+                    self.push_instruction_at_line(assign, *line);
+
+                    let mut repeat = Instruction::new(OpCode::Jmp);
+                    repeat.op1 = loop_start as u16;
+                    self.instructions.push(repeat);
+
+                    let end = self.instructions.len() as u16;
+                    self.instructions[init_index].op2 = end;
+                    self.instructions[done_index].op2 = end;
+                }
                 (tmp, OpType::Tmp)
             }
         }

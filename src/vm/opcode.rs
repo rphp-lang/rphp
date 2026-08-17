@@ -229,6 +229,8 @@ pub enum OpCode {
     BindCvRef = 165,
     /// Compile and execute op1 as PHP source in the active lexical scope.
     Eval = 166,
+    /// Validate PHP 8.5 clone-with's property array before cloning begins.
+    ValidateCloneWith = 167,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

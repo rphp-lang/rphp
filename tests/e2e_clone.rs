@@ -198,7 +198,10 @@ try {
 }
 "#,
     );
-    assert_eq!(output, "Error|__clone method called on non-object");
+    assert_eq!(
+        output,
+        "TypeError|clone(): Argument #1 ($object) must be of type object, int given"
+    );
 }
 
 #[test]

@@ -68,7 +68,13 @@ fn op_clone_obj<'a>(
         let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
 
         if src_val.value_type() != ValueType::Object {
-            let error = make_error_value("Error", "__clone method called on non-object");
+            let error = make_error_value(
+                "TypeError",
+                &format!(
+                    "clone(): Argument #1 ($object) must be of type object, {} given",
+                    src_val.dereferenced().type_name()
+                ),
+            );
             let instruction_index = (opline as *const Instruction)
                 .offset_from(op_array.instructions.as_ptr()) as usize;
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
@@ -150,4 +156,48 @@ fn op_clone_obj<'a>(
         frame_result_set(frame, result_ptr, opline.result_type, cloned_val);
         Ok(ColdResult::Done)
     }
+}
+
+#[inline(never)]
+fn op_validate_clone_with<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let value = unsafe {
+        (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)).dereferenced()
+    };
+    let error = if let Some(properties) = value.as_array() {
+        properties
+            .iter()
+            .any(|(_, value)| value.owned_reference_is_aliased())
+            .then(|| {
+                make_error_value(
+                    "Error",
+                    "Cannot assign by reference when cloning with updated properties",
+                )
+            })
+    } else {
+        Some(make_error_value(
+            "TypeError",
+            &format!(
+                "clone(): Argument #2 ($withProperties) must be of type array, {} given",
+                value.type_name()
+            ),
+        ))
+    };
+    let Some(error) = error else {
+        return Ok(ColdResult::Done);
+    };
+    let instruction_index = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    Ok(match throw_in_frame(eg, frame, error) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    })
 }

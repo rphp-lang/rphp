@@ -769,6 +769,8 @@ mod inner {
             163 => Some("BindDynamicGlobal"),
             164 => Some("UnsetStaticProp"),
             165 => Some("BindCvRef"),
+            166 => Some("Eval"),
+            167 => Some("ValidateCloneWith"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),
