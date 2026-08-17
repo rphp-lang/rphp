@@ -6987,6 +6987,14 @@ impl Compiler {
                     && class_name.eq_ignore_ascii_case("parent")
                     && (hook.eq_ignore_ascii_case("get") || hook.eq_ignore_ascii_case("set"))
                 {
+                    if self.lexical_static_class.is_none() {
+                        self.deferred_error = Some(self.goto_error(
+                            "Cannot use \"parent\" when no class scope is active",
+                            *line,
+                        ));
+                        let null = self.add_literal(Value::null());
+                        return (null, OpType::Const);
+                    }
                     let current_hook = self
                         .current_function_name
                         .rsplit_once("::$")

@@ -673,3 +673,21 @@ class ParentHookOutside {
             .contains("Must not use parent::$value::get() outside a property hook")
     );
 }
+
+#[test]
+fn parent_hook_calls_without_class_scope_and_writable_call_results_are_rejected() {
+    let no_scope = run_php_expect_error("<?php parent::$value::get();");
+    assert!(format!("{no_scope:?}").contains("when no class scope is active"));
+
+    let writable_result = run_php_expect_error(
+        r#"<?php
+class ParentReadBase { public $value { get => 1; } }
+class ParentReadChild extends ParentReadBase {
+    public $value { get => ++parent::$value::get(); }
+}
+"#,
+    );
+    assert!(
+        format!("{writable_result:?}").contains("Can't use method return value in write context")
+    );
+}

@@ -935,6 +935,14 @@ impl Parser {
                     | Expr::DynamicNamedStaticProperty { .. }
                     | Expr::DynamicStaticProperty { .. }
                     | Expr::ArrayAccess { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
+                    Expr::FunctionCall { line, .. }
+                    | Expr::MethodCall { line, .. }
+                    | Expr::StaticCall { line, .. }
+                    | Expr::DynamicCall { line, .. }
+                    | Expr::DynamicStaticCall { line, .. } => Ok(Expr::CompileError {
+                        message: "Can't use method return value in write context".to_string(),
+                        line,
+                    }),
                     other => Err(format!("Invalid increment target: {other:?}")),
                 }
             }
@@ -958,6 +966,14 @@ impl Parser {
                     | Expr::DynamicNamedStaticProperty { .. }
                     | Expr::DynamicStaticProperty { .. }
                     | Expr::ArrayAccess { .. } => Ok(Expr::PreDecTarget(Box::new(target))),
+                    Expr::FunctionCall { line, .. }
+                    | Expr::MethodCall { line, .. }
+                    | Expr::StaticCall { line, .. }
+                    | Expr::DynamicCall { line, .. }
+                    | Expr::DynamicStaticCall { line, .. } => Ok(Expr::CompileError {
+                        message: "Can't use method return value in write context".to_string(),
+                        line,
+                    }),
                     other => Err(format!("Invalid decrement target: {other:?}")),
                 }
             }
