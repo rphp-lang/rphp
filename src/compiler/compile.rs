@@ -6420,6 +6420,8 @@ impl Compiler {
             }
             Expr::AnonymousNew {
                 args,
+                is_readonly,
+                allow_dynamic_properties,
                 parent,
                 implements,
                 properties,
@@ -6456,8 +6458,8 @@ impl Compiler {
                     implements: implements.clone(),
                     is_abstract: false,
                     is_final: false,
-                    is_readonly: false,
-                    allow_dynamic_properties: false,
+                    is_readonly: *is_readonly,
+                    allow_dynamic_properties: *allow_dynamic_properties,
                     properties: properties.clone(),
                     constants: constants.clone(),
                     methods: methods.clone(),

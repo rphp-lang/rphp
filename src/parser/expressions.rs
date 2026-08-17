@@ -1243,8 +1243,66 @@ impl Parser {
             Token::New(line) => {
                 let line = line as usize;
                 self.advance(); // consume 'new'
+                let mut anonymous_readonly = false;
+                let mut allow_dynamic_properties = false;
+                let mut allow_dynamic_properties_line = line;
+                loop {
+                    match self.peek() {
+                        Token::AllowDynamicPropertiesAttribute(attribute_line) => {
+                            allow_dynamic_properties = true;
+                            allow_dynamic_properties_line = attribute_line;
+                            self.advance();
+                        }
+                        Token::Identifier(ref name, _)
+                            if name.eq_ignore_ascii_case("readonly")
+                                && matches!(
+                                    self.peek_at(1),
+                                    Token::Class
+                                        | Token::Abstract
+                                        | Token::Final
+                                        | Token::AllowDynamicPropertiesAttribute(_)
+                                )
+                                || name.eq_ignore_ascii_case("readonly")
+                                    && matches!(
+                                        self.peek_at(1),
+                                        Token::Identifier(ref next, _)
+                                            if next.eq_ignore_ascii_case("readonly")
+                                    ) =>
+                        {
+                            if anonymous_readonly {
+                                self.compile_error(
+                                    "Multiple readonly modifiers are not allowed",
+                                    line,
+                                );
+                            }
+                            anonymous_readonly = true;
+                            self.advance();
+                        }
+                        Token::Abstract => {
+                            self.compile_error(
+                                "Cannot use the abstract modifier on an anonymous class",
+                                line,
+                            );
+                            self.advance();
+                        }
+                        Token::Final => {
+                            self.compile_error(
+                                "Cannot use the final modifier on an anonymous class",
+                                line,
+                            );
+                            self.advance();
+                        }
+                        _ => break,
+                    }
+                }
                 if self.peek() == Token::Class {
                     self.advance();
+                    if anonymous_readonly && allow_dynamic_properties {
+                        self.compile_error(
+                            "Cannot apply #[\\AllowDynamicProperties] to readonly class class@anonymous",
+                            allow_dynamic_properties_line,
+                        );
+                    }
                     let args = if matches!(self.peek(), Token::LParen(_)) {
                         self.expect_lparen()?;
                         if matches!(self.peek(), Token::DotDotDot(_))
@@ -1285,6 +1343,8 @@ impl Parser {
                     let (properties, constants, methods) = self.parse_anonymous_class_body()?;
                     return Ok(Expr::AnonymousNew {
                         args,
+                        is_readonly: anonymous_readonly,
+                        allow_dynamic_properties,
                         parent,
                         implements,
                         properties,

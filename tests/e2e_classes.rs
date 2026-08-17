@@ -3,6 +3,79 @@ mod common;
 use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
+fn readonly_classes_reject_every_dynamic_creation_path_but_allow_magic_set() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+readonly class Sealed {}
+$sealed = new Sealed();
+foreach (['direct', 'compound', 'increment', 'reference'] as $mode) {
+    try {
+        if ($mode === 'direct') $sealed->direct = 1;
+        elseif ($mode === 'compound') $sealed->compound += 1;
+        elseif ($mode === 'increment') $sealed->increment++;
+        else $reference =& $sealed->reference;
+    } catch (Error $error) {
+        echo $mode, ':', $error->getMessage(), "\n";
+    }
+}
+readonly class Overloaded {
+    public function __set($name, $value) { echo "set:$name:$value\n"; }
+}
+$overloaded = new Overloaded();
+$overloaded->accepted = 7;
+"#,
+        ),
+        "direct:Cannot create dynamic property Sealed::$direct\ncompound:Cannot create dynamic property Sealed::$compound\nincrement:Cannot create dynamic property Sealed::$increment\nreference:Cannot create dynamic property Sealed::$reference\nset:accepted:7\n"
+    );
+}
+
+#[test]
+fn anonymous_readonly_classes_preserve_semantics_and_modifier_diagnostics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$readonly = new readonly class {
+    public int $value;
+    public function __construct() { $this->value = 2; }
+};
+var_dump($readonly->value);
+try { $readonly->value = 3; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+$dynamic = new #[AllowDynamicProperties] class {};
+$dynamic->value = 4;
+var_dump($dynamic->value);
+"#,
+        ),
+        "int(2)\nCannot modify readonly property class@anonymous::$value\nint(4)\n"
+    );
+
+    for (source, expected) in [
+        (
+            "<?php new #[AllowDynamicProperties] readonly class {};",
+            "Cannot apply #[\\AllowDynamicProperties] to readonly class class@anonymous",
+        ),
+        (
+            "<?php new abstract class {};",
+            "Cannot use the abstract modifier on an anonymous class",
+        ),
+        (
+            "<?php new final class {};",
+            "Cannot use the final modifier on an anonymous class",
+        ),
+        (
+            "<?php new readonly readonly class {};",
+            "Multiple readonly modifiers are not allowed",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error for {source}: {error}"
+        );
+    }
+}
+
+#[test]
 fn allow_dynamic_properties_rejects_non_dynamic_class_targets() {
     for (source, expected) in [
         (

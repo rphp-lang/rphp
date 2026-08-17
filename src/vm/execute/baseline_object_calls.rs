@@ -1119,6 +1119,18 @@ fn op_fetch_obj_r_slow<'a>(
                 let write_flags =
                     opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND);
                 if write_flags != 0 {
+                    if eg
+                        .class_table
+                        .get(class_name.as_str())
+                        .is_some_and(|class_def| class_def.is_readonly)
+                    {
+                        return Ok(object_property_throw(
+                            eg,
+                            frame,
+                            "Error",
+                            format!("Cannot create dynamic property {class_name}::${name}"),
+                        ));
+                    }
                     let dynamic_properties_allowed = obj_val.as_object().is_some_and(|object| {
                         object.is_dynamic_std_class()
                             || eg
@@ -1624,6 +1636,22 @@ fn op_bind_obj_prop_ref<'a>(
             .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
             .is_some();
         if creates_dynamic_property
+            && !has_magic_get
+            && eg
+                .class_table
+                .get(class_name.as_str())
+                .is_some_and(|class_def| class_def.is_readonly)
+        {
+            return Ok(object_property_throw_at(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                "Error",
+                format!("Cannot create dynamic property {class_name}::${name}"),
+            ));
+        }
+        if creates_dynamic_property
             && !dynamic_properties_allowed
             && !has_magic_get
             && opline._pad & REFERENCE_RESULT_INTERNAL == 0
@@ -1947,6 +1975,11 @@ fn op_assign_obj_prop<'a>(
 
     if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
+        let object_display_class_name = if php_obj.class_name.starts_with("class@anonymous#") {
+            std::rc::Rc::<str>::from("class@anonymous")
+        } else {
+            php_obj.class_name.clone()
+        };
 
         // Same receiver-in-scope guard as FetchObjR — only allow
         // private bypass when the receiver is in the caller's hierarchy.
@@ -2031,7 +2064,7 @@ fn op_assign_obj_prop<'a>(
             if class_def.is_enum {
                 let err = make_error_value("Error", &format!(
                     "Cannot modify readonly property {}::${}",
-                    php_obj.class_name, name
+                    object_display_class_name, name
                 ));
                 drop(php_obj);
                 match throw_in_frame(eg, frame, err) {
@@ -2054,7 +2087,7 @@ fn op_assign_obj_prop<'a>(
                     {
                         let err = make_error_value("Error", &format!(
                             "Cannot indirectly modify readonly property {}::${}",
-                            php_obj.class_name, name
+                            object_display_class_name, name
                         ));
                         drop(php_obj);
                         match throw_in_frame(eg, frame, err) {
@@ -2070,7 +2103,7 @@ fn op_assign_obj_prop<'a>(
                     } else {
                         let err = make_error_value("Error", &format!(
                             "Cannot modify readonly property {}::${}",
-                            php_obj.class_name, name
+                            object_display_class_name, name
                         ));
                         drop(php_obj);
                         match throw_in_frame(eg, frame, err) {
@@ -2086,7 +2119,7 @@ fn op_assign_obj_prop<'a>(
                     if !in_declaring_scope {
                         let err = make_error_value("Error", &format!(
                             "Cannot initialize readonly property {}::${} from {}",
-                            php_obj.class_name, name,
+                            object_display_class_name, name,
                             caller_class.as_deref().map_or("global scope".to_string(), |c| format!("scope {}", c))
                         ));
                         drop(php_obj);
@@ -2140,6 +2173,10 @@ fn op_assign_obj_prop<'a>(
                     php_obj.class_name.to_ascii_lowercase()
                 ))
                 .is_some();
+        let readonly_class = eg
+            .class_table
+            .get(php_obj.class_name.as_ref())
+            .is_some_and(|class_def| class_def.is_readonly);
         let prop_exists = if force_dynamic {
             php_obj.get_dynamic_property_with_position(&key).is_some()
         } else {
@@ -2172,7 +2209,7 @@ fn op_assign_obj_prop<'a>(
                 eg,
                 frame,
                 "Error",
-                format!("Property {object_class_name}::${name} is read-only"),
+                format!("Property {object_display_class_name}::${name} is read-only"),
             ));
         }
         if !prop_exists && object_class_name.as_ref() == "Generator" {
@@ -2299,6 +2336,16 @@ fn op_assign_obj_prop<'a>(
                         "Cannot access property starting with \"\\0\"".into(),
                     ));
                 }
+                if readonly_class && !magic_get_handles_indirect_writeback {
+                    return Ok(object_property_throw(
+                        eg,
+                        frame,
+                        "Error",
+                        format!(
+                            "Cannot create dynamic property {object_display_class_name}::${name}"
+                        ),
+                    ));
+                }
                 if !dynamic_properties_allowed && !magic_get_handles_indirect_writeback {
                     report_php_deprecation(
                         eg,
@@ -2306,7 +2353,7 @@ fn op_assign_obj_prop<'a>(
                         op_array,
                         opline,
                         &format!(
-                            "Creation of dynamic property {object_class_name}::${name} is deprecated"
+                            "Creation of dynamic property {object_display_class_name}::${name} is deprecated"
                         ),
                     )?;
                     if let Some(result) = take_magic_exception(eg, frame) {

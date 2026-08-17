@@ -269,6 +269,8 @@ pub enum Expr {
     },
     AnonymousNew {
         args: Vec<CallArg>,
+        is_readonly: bool,
+        allow_dynamic_properties: bool,
         parent: Option<GenericAncestor>,
         implements: Vec<GenericAncestor>,
         properties: Vec<ClassProperty>,
