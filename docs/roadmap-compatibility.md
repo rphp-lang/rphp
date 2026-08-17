@@ -493,6 +493,15 @@ dispatch are unchanged. Implicit parent accessors for plain storage, hook
 method/raw-value Reflection, assertion AST rendering and full hooked iteration
 ordering remain next.
 
+The `ba41208` parent-hook-front-end-diagnostic checkpoint reaches 2,205 passes
+with 3,003 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts
+and zero crashes. Parent hook syntax outside class scope and writable call
+results now fail at compilation with PHP 8.5 diagnostics. The exact PHP 8.5.6
+delta is +2/-0, bringing the cumulative gain from the initial baseline to
++390/-0. All five feature configurations, all-target and unsafe gates pass; no
+runtime performance gate applies because valid bytecode is unchanged.
+Implicit parent accessors for plain storage remain the next parent-hook slice.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

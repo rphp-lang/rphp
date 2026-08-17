@@ -8,14 +8,22 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `ba8a678`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,203 pass, 3,005 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `ba41208`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,205 pass, 3,003 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-42.300%; 87.999% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +388/-0. The first four gains are
+42.339%; 88.038% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +390/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Parent property-hook syntax without an active class scope now reports PHP
+8.5's class-scope compile fatal before hook-context validation. Incrementing or
+decrementing any function or method return is likewise represented as PHP's
+compile-time write-context error rather than leaking an internal AST message.
+This adds two exact passes without losing a prior pass. All feature, target and
+unsafe gates pass. No performance gate applies because valid-program bytecode
+and runtime dispatch are unchanged.
 
 Explicit `parent::$property::get()` and `set()` calls inside matching property
 hooks now lower to the existing exact parent-method call protocol, preserving
