@@ -222,6 +222,13 @@ statically contain a `Generator` supertype. The exact PHP 8.5.6 delta is
 +10/-0 with no stage movement; the full feature matrix and unsafe gate pass.
 No performance gate applies because validation is compile-time only.
 
+The `cde7195` Generator debug-info checkpoint reaches 1,968 passes with 3,240
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Generator dumps expose the retained public function name in every
+lifecycle state without storing a duplicate property. The exact PHP 8.5.6
+delta is +6/-0 with no stage movement; the full feature matrix and unsafe gate
+pass. No performance gate applies because the work occurs only in `var_dump()`.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
