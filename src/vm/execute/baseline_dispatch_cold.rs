@@ -3368,41 +3368,42 @@ fn op_check_static(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> bool {
-    // SAFETY: the compiler validated the static-name operand for this live
-    // frame and its op array before dispatch reached this opcode.
-    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let var_name = name_val.as_str().unwrap_or("").to_string();
-    let func_name = op_array.literals[opline.extended_value as usize]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let statics = eg.static_vars.entry(func_name).or_default();
-    if let Some(stored) = statics.get(&var_name) {
-        if stored.is_static_initializer_in_progress() {
-            // A recursive call entered while the initializer is still
-            // evaluating. PHP evaluates that recursive initializer too.
-            return false;
-        }
-        let binding = if stored.is_owned_reference() {
-            stored.clone_owned_reference_alias()
-        } else {
-            Value::owned_reference(stored.clone())
-        };
-        if !stored.is_owned_reference() {
-            statics.insert(var_name, binding.clone_owned_reference_alias());
-        }
-        unsafe { slot_set((*frame).cv_mut(opline.op1 as u32), binding) };
-        unsafe {
+    // SAFETY: CheckStatic carries compiler-validated operands and a jump
+    // target within this live op array. The frame remains live throughout;
+    // replacing its raw CV intentionally installs the request-owned cell.
+    unsafe {
+        let name_val = &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array);
+        let var_name = name_val.as_str().unwrap_or("").to_string();
+        let func_name = op_array.literals[opline.extended_value as usize]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let statics = eg.static_vars.entry(func_name).or_default();
+        if let Some(stored) = statics.get(&var_name) {
+            if stored.is_static_initializer_in_progress() {
+                // A recursive call entered while the initializer is still
+                // evaluating. PHP evaluates that recursive initializer too.
+                return false;
+            }
+            let binding = if stored.is_owned_reference() {
+                stored.clone_owned_reference_alias()
+            } else {
+                Value::owned_reference(stored.clone())
+            };
+            if !stored.is_owned_reference() {
+                statics.insert(var_name, binding.clone_owned_reference_alias());
+            }
+            slot_set((*frame).cv_mut(opline.op1 as u32), binding);
             (*frame).opline = op_array.instructions.as_ptr().add(opline.result as usize);
+            return true;
         }
-        return true;
-    }
 
-    let binding = Value::owned_reference(Value::null());
-    let mut stored = binding.clone_owned_reference_alias();
-    stored.mark_static_initializer_in_progress();
-    statics.insert(var_name, stored);
-    false
+        let binding = Value::owned_reference(Value::null());
+        let mut stored = binding.clone_owned_reference_alias();
+        stored.mark_static_initializer_in_progress();
+        statics.insert(var_name, stored);
+        false
+    }
 }
 
 #[inline(never)]
@@ -3412,33 +3413,36 @@ fn op_bind_static(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) {
-    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let var_name = name_val.as_str().unwrap_or("").to_string();
-    let func_name = op_array.literals[opline.extended_value as usize]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let initial = if opline.result_type != OpType::Unused {
-        unsafe {
+    // SAFETY: BindStatic carries compiler-validated operands for this live
+    // frame/op-array pair. Both raw writes replace initialized Values, and
+    // the request-owned reference cell outlives the installed CV alias.
+    unsafe {
+        let name_val = &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array);
+        let var_name = name_val.as_str().unwrap_or("").to_string();
+        let func_name = op_array.literals[opline.extended_value as usize]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let initial = if opline.result_type != OpType::Unused {
             (&*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)).clone()
-        }
-    } else {
-        Value::null()
-    };
+        } else {
+            Value::null()
+        };
 
-    let statics = eg.static_vars.entry(func_name).or_default();
-    let stored = statics
-        .entry(var_name)
-        .or_insert_with(|| Value::owned_reference(Value::null()));
-    if !stored.is_owned_reference() {
-        *stored = Value::owned_reference(stored.clone());
+        let statics = eg.static_vars.entry(func_name).or_default();
+        let stored = statics
+            .entry(var_name)
+            .or_insert_with(|| Value::owned_reference(Value::null()));
+        if !stored.is_owned_reference() {
+            *stored = Value::owned_reference(stored.clone());
+        }
+        if stored.is_static_initializer_in_progress() {
+            slot_set(stored.as_ref_ptr(), initial);
+            stored.clear_static_initializer_in_progress();
+        }
+        let binding = stored.clone_owned_reference_alias();
+        slot_set((*frame).cv_mut(opline.op1 as u32), binding);
     }
-    if stored.is_static_initializer_in_progress() {
-        unsafe { slot_set(stored.as_ref_ptr(), initial) };
-        stored.clear_static_initializer_in_progress();
-    }
-    let binding = stored.clone_owned_reference_alias();
-    unsafe { slot_set((*frame).cv_mut(opline.op1 as u32), binding) };
 }
 
 #[inline(never)]
