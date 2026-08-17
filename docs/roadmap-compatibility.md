@@ -469,6 +469,18 @@ read/write/method/constructor lanes are +0.522%, +0.387%, +2.991% and +2.526%,
 within their ceilings. Reflection property-default support, assertion AST
 rendering, full hooked iteration ordering and parent-hook calls remain next.
 
+The `29f9a44` property-reflection-metadata checkpoint reaches 2,197 passes with
+3,011 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. `ReflectionProperty` now distinguishes implicit-null, explicit,
+typed-uninitialized and promoted defaults, emits the PHP 8.5 missing-default
+deprecation, and exposes final, abstract and virtual hook flags. The exact PHP
+8.5.6 delta is +3/-0, bringing the cumulative gain from the initial baseline to
++382/-0. All five feature configurations, all-target and unsafe gates pass.
+The ordinary property A/B workload is -1.976%; specialized
+read/write/method/constructor lanes are -0.183%, -0.206%, +1.869% and +1.934%,
+within their ceilings. Hook method reflection, raw-value access, assertion AST
+rendering, full hooked iteration ordering and parent-hook calls remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

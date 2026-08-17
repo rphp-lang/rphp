@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 2,194/5,599 with zero crashes or timeouts; constructor-promoted properties now retain and execute PHP 8.5 hooks, final and readonly rules, with full hooked iteration ordering, parent-hook calls, Reflection defaults and assertion AST rendering next. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 2,197/5,599 with zero crashes or timeouts; `ReflectionProperty` now reports default, final, abstract and virtual metadata, with hook method/raw-value reflection, full hooked iteration ordering, parent-hook calls and assertion AST rendering next. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
