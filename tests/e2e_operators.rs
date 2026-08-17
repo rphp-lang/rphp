@@ -426,6 +426,7 @@ fn test_e2e_dynamic_object_property_read_and_coalesce_assignment() {
     assert_eq!(
         run_php(
             r#"<?php
+#[AllowDynamicProperties]
 class DynamicProperties {
     public $values = ['ready' => 'yes'];
 }

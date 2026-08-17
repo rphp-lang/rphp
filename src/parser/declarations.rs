@@ -733,6 +733,7 @@ impl Parser {
             is_abstract,
             is_final,
             is_readonly,
+            allow_dynamic_properties: false,
             properties,
             constants,
             methods,

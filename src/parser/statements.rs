@@ -959,6 +959,19 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Throw { expr, line })
             }
+            Token::AllowDynamicPropertiesAttribute(_) => {
+                self.advance();
+                let mut declaration = self.parse_stmt()?;
+                let Stmt::Class {
+                    allow_dynamic_properties,
+                    ..
+                } = &mut declaration
+                else {
+                    return Err("Attribute \"AllowDynamicProperties\" cannot target this declaration".into());
+                };
+                *allow_dynamic_properties = true;
+                Ok(declaration)
+            }
             Token::Class | Token::Abstract | Token::Final => self.parse_class(),
             Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("class") => {
                 self.parse_class()

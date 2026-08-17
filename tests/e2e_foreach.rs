@@ -986,6 +986,7 @@ class ObjectForeachParent {
         unset($value);
     }
 }
+#[AllowDynamicProperties]
 class ObjectForeachChild extends ObjectForeachParent {
     public $shadow = 'child';
     public $child = 4;

@@ -1116,6 +1116,37 @@ fn op_fetch_obj_r_slow<'a>(
                     .as_object()
                     .map(|object| object.class_name.to_string())
                     .unwrap_or_else(|| "object".to_string());
+                let write_flags =
+                    opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND);
+                if write_flags != 0 {
+                    let dynamic_properties_allowed = obj_val.as_object().is_some_and(|object| {
+                        object.is_dynamic_std_class()
+                            || eg
+                                .class_table
+                                .get(object.class_name.as_ref())
+                                .is_some_and(|class_def| class_def.allow_dynamic_properties)
+                    });
+                    if !dynamic_properties_allowed {
+                        report_php_deprecation(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "Creation of dynamic property {class_name}::${name} is deprecated"
+                            ),
+                        )?;
+                        if let Some(result) = take_magic_exception(eg, frame) {
+                            return Ok(result);
+                        }
+                    }
+                    // Publish the missing member before the read-side warning.
+                    // The following reference/write opcode then observes the
+                    // same first-creation boundary and cannot diagnose twice.
+                    if let Some(mut object) = obj_val.as_object_mut() {
+                        object.set_property(&name, Value::null());
+                    }
+                }
                 report_php_warning(
                     eg,
                     frame,
@@ -1571,6 +1602,42 @@ fn op_bind_obj_prop_ref<'a>(
                     definition.declaring_class, definition.name
                 ),
             ));
+        }
+
+        let (creates_dynamic_property, dynamic_properties_allowed) = {
+            let object = receiver.as_object().unwrap();
+            let exists = if force_dynamic {
+                object.get_dynamic_property_with_position(&key).is_some()
+            } else {
+                object.contains_property(&key)
+            };
+            (
+                definition.is_none() && !exists,
+                object.is_dynamic_std_class()
+                    || eg
+                        .class_table
+                        .get(object.class_name.as_ref())
+                        .is_some_and(|class_def| class_def.allow_dynamic_properties),
+            )
+        };
+        let has_magic_get = eg
+            .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
+            .is_some();
+        if creates_dynamic_property
+            && !dynamic_properties_allowed
+            && !has_magic_get
+            && opline._pad & REFERENCE_RESULT_INTERNAL == 0
+        {
+            report_php_deprecation(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!("Creation of dynamic property {class_name}::${name} is deprecated"),
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
         }
 
         if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
@@ -2061,6 +2128,18 @@ fn op_assign_obj_prop<'a>(
         };
         let object_class_id = php_obj.class_id;
         let object_class_name = php_obj.class_name.clone();
+        let dynamic_properties_allowed = php_obj.is_dynamic_std_class()
+            || eg
+                .class_table
+                .get(php_obj.class_name.as_ref())
+                .is_some_and(|class_def| class_def.allow_dynamic_properties);
+        let magic_get_handles_indirect_writeback = opline._pad & ASSIGN_OBJ_MODIFY != 0
+            && eg
+                .find_function(&format!(
+                    "{}::__get",
+                    php_obj.class_name.to_ascii_lowercase()
+                ))
+                .is_some();
         let prop_exists = if force_dynamic {
             php_obj.get_dynamic_property_with_position(&key).is_some()
         } else {
@@ -2219,6 +2298,20 @@ fn op_assign_obj_prop<'a>(
                         "Error",
                         "Cannot access property starting with \"\\0\"".into(),
                     ));
+                }
+                if !dynamic_properties_allowed && !magic_get_handles_indirect_writeback {
+                    report_php_deprecation(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!(
+                            "Creation of dynamic property {object_class_name}::${name} is deprecated"
+                        ),
+                    )?;
+                    if let Some(result) = take_magic_exception(eg, frame) {
+                        return Ok(result);
+                    }
                 }
                 // No __set — fall back to direct insert
                 if let Some(mut php_obj) = obj.as_object_mut() {

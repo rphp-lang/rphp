@@ -228,6 +228,7 @@ class DeclaredDto {
         $this->second = $second;
     }
 }
+#[AllowDynamicProperties]
 class DynamicDto {
     public function __construct($value) { $this->value = $value; }
 }

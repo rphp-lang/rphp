@@ -57,6 +57,7 @@ fn clone_with_validates_array_and_live_references_before_cloning() {
     assert_eq!(
         run_php(
             r#"<?php
+#[AllowDynamicProperties]
 class CloneWithValidation {
     public function __clone() { echo "cloned\n"; }
 }

@@ -63,10 +63,11 @@ pub enum Token {
     Print,           // print
     Global,          // global
     Clone(usize),    // clone, source line
-    Include,         // include
-    IncludeOnce,     // include_once
-    Require,         // require
-    RequireOnce,     // require_once
+    AllowDynamicPropertiesAttribute(usize),
+    Include,     // include
+    IncludeOnce, // include_once
+    Require,     // require
+    RequireOnce, // require_once
     Goto {
         /// Preserve the lexeme because `goto` is also legal as a contextual
         /// identifier whose spelling can remain observably case-sensitive.
@@ -169,6 +170,7 @@ pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
     deferred_compile_errors: Vec<(String, usize)>,
+    pending_attributes: Vec<Token>,
 }
 
 /// PHP source is byte-oriented and may legally contain non-UTF-8 bytes in
@@ -220,6 +222,7 @@ impl<'a> Lexer<'a> {
             src: source.as_bytes(),
             pos: 0,
             deferred_compile_errors: Vec::new(),
+            pending_attributes: Vec::new(),
         }
     }
 
@@ -238,6 +241,7 @@ impl<'a> Lexer<'a> {
 
         loop {
             self.skip_whitespace()?;
+            tokens.append(&mut self.pending_attributes);
 
             if self.pos >= self.src.len() {
                 tokens.extend(
@@ -779,6 +783,18 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     if bracket_depth == 0 {
                         let attribute = &self.src[start..self.pos];
+                        let body = &attribute[2..attribute.len() - 1];
+                        if self.next_declaration_is_class()
+                            && body.split(|byte| *byte == b',').any(|name| {
+                                name.trim_ascii()
+                                    .strip_prefix(b"\\")
+                                    .unwrap_or(name.trim_ascii())
+                                    .eq_ignore_ascii_case(b"AllowDynamicProperties")
+                            })
+                        {
+                            self.pending_attributes
+                                .push(Token::AllowDynamicPropertiesAttribute(line));
+                        }
                         if attribute.windows(3).any(|window| window == b"...") {
                             self.deferred_compile_errors.push((
                                 "Cannot create Closure as attribute argument".to_string(),
@@ -795,6 +811,37 @@ impl<'a> Lexer<'a> {
         Err(format!(
             "Unterminated attribute starting at position {start}"
         ))
+    }
+
+    fn next_declaration_is_class(&self) -> bool {
+        let mut rest = &self.src[self.pos..];
+        loop {
+            rest = rest.trim_ascii_start();
+            if rest.starts_with(b"//") || (rest.starts_with(b"#") && !rest.starts_with(b"#[")) {
+                rest = rest
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(&[][..], |newline| &rest[newline + 1..]);
+                continue;
+            }
+            if rest.starts_with(b"/*") {
+                let Some(end) = rest.windows(2).position(|window| window == b"*/") else {
+                    return false;
+                };
+                rest = &rest[end + 2..];
+                continue;
+            }
+            break;
+        }
+
+        rest = rest.trim_ascii_start();
+        if let Some(after_readonly) = rest.strip_prefix(b"readonly") {
+            rest = after_readonly.trim_ascii_start();
+        }
+        rest.starts_with(b"class")
+            && rest
+                .get(5)
+                .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
     }
 
     fn starts_with(&self, prefix: &[u8]) -> bool {

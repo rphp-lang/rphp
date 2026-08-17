@@ -1664,6 +1664,10 @@ impl ExecutorGlobals {
                         )
                     });
                 }
+                // PHP propagates #[AllowDynamicProperties] through the class
+                // hierarchy, so descendants inherit the opt-out even when
+                // they do not repeat the attribute.
+                class_def.allow_dynamic_properties |= parent.allow_dynamic_properties;
                 merge_parent_constant_definitions(
                     &class_name,
                     &mut class_def.constants,

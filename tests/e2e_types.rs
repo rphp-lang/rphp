@@ -1553,7 +1553,7 @@ fn object_to_array_cast_projects_properties_instead_of_wrapping_the_object() {
 fn object_to_array_cast_mangles_visibility_and_skips_uninitialized_slots() {
     assert_eq!(
         run_php(
-            "<?php class CastBox { public $pub = 1; protected $prot = 2; private $priv = 3; public int $unset; } $box = new CastBox(); $box->dyn = 4; $keys = ['pub', \"\0*\0prot\", \"\0CastBox\0priv\", 'dyn']; $index = 0; $ok = true; foreach ((array) $box as $key => $value) { $ok = $ok && $key === $keys[$index] && $value === $index + 1; ++$index; } echo $ok ? 'OK:' : 'BAD:', $index;"
+            "<?php #[AllowDynamicProperties] class CastBox { public $pub = 1; protected $prot = 2; private $priv = 3; public int $unset; } $box = new CastBox(); $box->dyn = 4; $keys = ['pub', \"\0*\0prot\", \"\0CastBox\0priv\", 'dyn']; $index = 0; $ok = true; foreach ((array) $box as $key => $value) { $ok = $ok && $key === $keys[$index] && $value === $index + 1; ++$index; } echo $ok ? 'OK:' : 'BAD:', $index;"
         ),
         "OK:4"
     );

@@ -843,6 +843,7 @@ pub enum Stmt {
         is_abstract: bool,
         is_final: bool,
         is_readonly: bool,
+        allow_dynamic_properties: bool,
         properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,

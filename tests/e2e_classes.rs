@@ -3,6 +3,38 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn dynamic_property_deprecation_matches_php_85_creation_exceptions() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class PlainDynamic {}
+$plain = new PlainDynamic();
+$plain->value = 1;
+$plain->value = 2;
+
+#[\AllowDynamicProperties]
+class AllowedDynamic {}
+class InheritedDynamic extends AllowedDynamic {}
+$allowed = new InheritedDynamic();
+$allowed->value = 1;
+
+$standard = new stdClass();
+$standard->value = 1;
+
+class MagicDynamic {
+    public function __set($name, $value) { echo "set:$name\n"; }
+}
+$magic = new MagicDynamic();
+$magic->value = 1;
+"#,
+            "/virtual/dynamic-properties.php",
+            "/virtual",
+        ),
+        "\nDeprecated: Creation of dynamic property PlainDynamic::$value is deprecated in /virtual/dynamic-properties.php on line 4\nset:value\n"
+    );
+}
+
+#[test]
 fn asymmetric_property_visibility_separates_read_and_write_scope() {
     assert_eq!(
         run_php(
@@ -432,6 +464,7 @@ class TaxPolicy {
 }
 class RequestA { public $region; }
 class RequestB { public $padding; public $region; }
+#[AllowDynamicProperties]
 class DynamicRequest {}
 function quoteTax($policy, $request) {
     return $policy->amount(10000, $request->region);
@@ -873,6 +906,7 @@ class ObjectVarsParent {
     public int $typed;
     public function inspect(object $object): array { return get_object_vars($object); }
 }
+#[AllowDynamicProperties]
 class ObjectVarsChild extends ObjectVarsParent { public $shadow = 'child'; }
 $reference = ['initial'];
 $object = new ObjectVarsChild;

@@ -1618,6 +1618,7 @@ pub struct ClassDef {
     pub is_abstract: bool,
     pub is_final: bool,
     pub is_readonly: bool,
+    pub allow_dynamic_properties: bool,
     pub is_trait: bool,
     pub is_enum: bool,
     pub uses: Vec<String>, // trait names from `use Foo, Bar;`
@@ -6456,6 +6457,7 @@ impl Compiler {
                     is_abstract: false,
                     is_final: false,
                     is_readonly: false,
+                    allow_dynamic_properties: false,
                     properties: properties.clone(),
                     constants: constants.clone(),
                     methods: methods.clone(),

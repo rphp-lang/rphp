@@ -725,6 +725,7 @@ fn property_exists_sees_declared_static_inherited_trait_and_dynamic_properties()
             r#"<?php
 trait TraitProperty { private $traitPrivate; }
 class PropertyParent { private $parentPrivate; protected static $parentStatic; }
+#[AllowDynamicProperties]
 class PropertyChild extends PropertyParent { use TraitProperty; public int $uninitialized; }
 $object = new PropertyChild;
 $object->dynamic = 1;
@@ -988,6 +989,7 @@ class DumpParent {
     public int $typed;
     public $removed = 'gone';
 }
+#[AllowDynamicProperties]
 class DumpChild extends DumpParent {
     private $same = 'child';
     public $nullable;
