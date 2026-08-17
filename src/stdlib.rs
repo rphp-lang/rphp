@@ -8947,7 +8947,43 @@ fn var_dump_value_inner(
                 return format!("{}*RECURSION*\n", prefix);
             }
             let object = val.as_object().unwrap();
-            let output = if eg
+            let output = if let Some(generator) = object.generator.as_ref() {
+                let generator = generator.borrow();
+                // SAFETY: every live Generator is created from a retained user
+                // function allocation, and its pointer remains stable for the request.
+                let function = unsafe { generator.user_function() };
+                let internal_name = function.op_array.name.as_str();
+                let function_name = if internal_name.starts_with("__closure_")
+                    || internal_name
+                        .rsplit_once("::")
+                        .map_or(internal_name, |(_, method)| method)
+                        .starts_with("__closure_")
+                {
+                    internal_name
+                        .split_once('@')
+                        .map(|(_, public_name)| public_name)
+                        .unwrap_or("{closure}")
+                } else {
+                    internal_name
+                };
+                let mut out = format!(
+                    "{}object(Generator)#{} (1) {{\n{}  [\"function\"]=>\n",
+                    prefix,
+                    val.object_handle()
+                        .expect("live generator must retain its request-local handle"),
+                    prefix
+                );
+                out.push_str(&var_dump_value_inner(
+                    &Value::string(function_name),
+                    indent + 1,
+                    eg,
+                    false,
+                    visited_arrays,
+                    visited_objects,
+                ));
+                out.push_str(&format!("{}}}\n", prefix));
+                out
+            } else if eg
                 .class_table
                 .get(object.class_name.as_ref())
                 .is_some_and(|class| class.is_enum)

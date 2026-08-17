@@ -208,6 +208,7 @@ function consume(iterable $values): string {
     foreach ($values as $value) { $result .= $value; }
     return $result;
 }
+
 $generator = traversableValues();
 echo ($generator instanceof Iterator ? "i" : "x");
 echo ($generator instanceof Traversable ? "t" : "x");
@@ -234,6 +235,24 @@ invalidGenerator();
         rendered.contains("Generator return type must be a supertype of Generator")
             && rendered.contains("int"),
         "{rendered}"
+    );
+}
+
+#[test]
+fn generator_var_dump_exposes_the_public_function_name_in_every_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function values() { yield 1; }
+$generator = values();
+var_dump($generator);
+$generator->current();
+var_dump($generator);
+$generator->next();
+var_dump($generator);
+"#
+        ),
+        "object(Generator)#1 (1) {\n  [\"function\"]=>\n  string(6) \"values\"\n}\nobject(Generator)#1 (1) {\n  [\"function\"]=>\n  string(6) \"values\"\n}\nobject(Generator)#1 (1) {\n  [\"function\"]=>\n  string(6) \"values\"\n}\n"
     );
 }
 
