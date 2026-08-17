@@ -8,14 +8,24 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `64dfea6`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,001 pass, 3,207 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `91b8804`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,017 pass, 3,191 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-38.422%; 83.065% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +186/-0. The first four gains are
+38.729%; 83.698% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +202/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Typed instance properties and promoted constructor properties now retain a
+separate PHP 8.5 `private(set)`, `protected(set)` or `public(set)` visibility.
+Reads keep their declared visibility while assignments, indirect array writes,
+references and unsets enforce the narrower write scope; inheritance also
+retains final `private(set)` and set-scope variance. This adds 16 exact passes
+without losing a pass. Static asymmetric properties, property-hook interaction
+and several source-located declaration diagnostics remain incomplete. The
+instance-property A/B control measured +0.448%, and all four specialized
+typed/untyped property lanes remained within their five-percent ceiling.
 
 Binary operators now admit PHP's value-producing assignment expression in
 their right operand across power, multiplicative, additive, shift and bitwise
