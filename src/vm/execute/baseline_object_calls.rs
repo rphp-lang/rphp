@@ -1323,6 +1323,22 @@ fn op_unset_obj<'a>(
         drop(object_ref);
         return Ok(object_property_throw(eg, frame, "Error", message));
     }
+    let hooked_property = accessible
+        && !hidden_parent_private
+        && object_ref
+            .property_slot(&key)
+            .and_then(|slot| eg.instance_property_definition(object_ref.class_id, slot))
+            .is_some_and(|definition| definition.has_get_hook || definition.has_set_hook);
+    if hooked_property {
+        let class_name = object_ref.class_name.clone();
+        drop(object_ref);
+        return Ok(object_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Cannot unset hooked property {class_name}::${name}"),
+        ));
+    }
     let removed = if hidden_parent_private {
         object_ref.get_dynamic_property_with_position(&key).is_some()
     } else {

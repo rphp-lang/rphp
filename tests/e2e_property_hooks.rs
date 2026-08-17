@@ -830,3 +830,33 @@ var_dump(ChildClassNameStorage::read());
         "int(42)\n"
     );
 }
+
+#[test]
+fn hooked_properties_cannot_be_unset_and_keep_their_backing_value() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class HookedUnset {
+    public int $backed {
+        get => $this->backed;
+        set { $this->backed = $value; }
+    }
+    public $virtual { get => 42; }
+}
+$object = new HookedUnset();
+$object->backed = 41;
+foreach (['backed', 'virtual'] as $property) {
+    try { unset($object->{$property}); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+}
+var_dump($object->backed, $object->virtual);
+"#,
+        ),
+        concat!(
+            "Cannot unset hooked property HookedUnset::$backed\n",
+            "Cannot unset hooked property HookedUnset::$virtual\n",
+            "int(41)\n",
+            "int(42)\n",
+        )
+    );
+}
