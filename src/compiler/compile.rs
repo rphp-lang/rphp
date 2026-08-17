@@ -1311,6 +1311,10 @@ pub struct PropertyDefinition {
     /// mode (for example `Box<int>`). Its full type stays interned in the
     /// executor-wide GenericMetadata graph.
     pub requires_reified_check: bool,
+    /// Explicit getter hook. Hook execution stays on the cold property path.
+    pub has_get_hook: bool,
+    /// The getter directly accesses `$this` backing storage for this property.
+    pub get_hook_is_backed: bool,
     /// Runtime-local class declaration used by warmed instance-property
     /// writes. Registration rewrites inherited definitions to the concrete
     /// receiver declaration, so one cached definition pointer carries both
@@ -1345,6 +1349,8 @@ impl PropertyDefinition {
             generic_declaration: None,
             source_file: None,
             source_line: 0,
+            has_get_hook: false,
+            get_hook_is_backed: false,
         }
     }
 
@@ -1371,6 +1377,8 @@ impl PropertyDefinition {
             generic_declaration: None,
             source_file: None,
             source_line: 0,
+            has_get_hook: false,
+            get_hook_is_backed: false,
         }
     }
 
@@ -1994,6 +2002,8 @@ impl Compiler {
             "__FUNCTION__" => {
                 let function = if self.current_function_name.starts_with("__closure_") {
                     "{closure}".to_string()
+                } else if let Some((_, hook)) = self.current_function_name.split_once("::$") {
+                    format!("${hook}")
                 } else if self.lexical_static_class.is_some() {
                     self.current_function_name.rsplit_once("::").map_or_else(
                         || self.current_function_name.clone(),
@@ -2159,6 +2169,9 @@ impl Compiler {
             variance_uses,
             methods: methods
                 .iter()
+                // Property hooks reuse method bytecode and ordinary method
+                // LSP validation, but they are not generic class methods.
+                .filter(|method| !(method.name.starts_with('$') && method.name.ends_with("::get")))
                 .map(|method| PendingGenericMethodMetadata {
                     name: method.name.clone(),
                     parameters: method.generic_params.clone(),

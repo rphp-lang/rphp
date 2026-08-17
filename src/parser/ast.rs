@@ -1078,6 +1078,8 @@ pub struct ClassProperty {
     pub default: Option<Expr>,
     pub is_static: bool,
     pub is_readonly: bool,
+    /// An explicit PHP 8.4+ `get` hook is compiled as an engine-owned method.
+    pub has_get_hook: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

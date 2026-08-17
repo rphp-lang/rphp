@@ -212,6 +212,8 @@ fn property_definitions_are_compatible(
         && left.set_visibility == right.set_visibility
         && property_type_hints_are_equivalent(&left.type_hint, &right.type_hint)
         && left.is_readonly == right.is_readonly
+        && left.has_get_hook == right.has_get_hook
+        && left.get_hook_is_backed == right.get_hook_is_backed
         && match (&left.default, &right.default) {
             (None, None) => true,
             (Some(left), Some(right)) => left.structurally_equal(right),

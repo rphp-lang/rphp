@@ -6797,6 +6797,9 @@ fn collect_composed_trait_methods(
         return;
     };
     for (name, visibility, _, _, _) in &trait_def.methods {
+        if name.starts_with('$') && name.ends_with("::get") {
+            continue;
+        }
         for adaptation in adaptation_owner.trait_aliases.iter().filter(|adaptation| {
             adaptation.alias.is_some()
                 && adaptation.method.eq_ignore_ascii_case(name)
@@ -6851,6 +6854,9 @@ fn collect_visible_class_methods(
         return;
     };
     for (name, visibility, _, _, _) in &class.methods {
+        if name.starts_with('$') && name.ends_with("::get") {
+            continue;
+        }
         if seen.insert(name.to_ascii_lowercase())
             && method_visible_from_scope(eg, *visibility, &class.name, caller_class)
         {

@@ -29,7 +29,7 @@ impl Parser {
     fn parse_property_declaration(
         &mut self,
         modifiers: &MemberModifiers,
-    ) -> Result<Vec<ClassProperty>, String> {
+    ) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>), String> {
         if modifiers.is_abstract {
             return Err("Properties cannot be declared abstract".into());
         }
@@ -42,6 +42,7 @@ impl Parser {
         }
         let type_hint = self.try_parse_type_hint()?;
         let mut properties = Vec::new();
+        let mut hook_methods = Vec::new();
         loop {
             let (name, line) = match self.advance() {
                 Token::Variable(name, line) => (name, line),
@@ -62,14 +63,59 @@ impl Parser {
                 default,
                 is_static: modifiers.is_static,
                 is_readonly: modifiers.is_readonly,
+                has_get_hook: false,
             });
             if self.peek() != Token::Comma {
                 break;
             }
             self.advance();
         }
+        if self.peek() == Token::LBrace {
+            if properties.len() != 1 {
+                return Err("Hooked properties cannot declare multiple properties".into());
+            }
+            if modifiers.is_static {
+                return Err("Hooked properties cannot be static".into());
+            }
+            self.advance();
+            let property = properties.last_mut().unwrap();
+            while self.peek() != Token::RBrace && !self.at_eof() {
+                let (hook, hook_line) = match self.advance() {
+                    Token::Identifier(name, line) => (name, line),
+                    other => return Err(format!("Expected property hook, got {other:?}")),
+                };
+                if !hook.eq_ignore_ascii_case("get") {
+                    return Err(format!("Unsupported property hook {hook}"));
+                }
+                if property.has_get_hook {
+                    return Err(format!("Cannot redeclare property hook get"));
+                }
+                self.expect(&Token::LBrace)?;
+                let mut body = Vec::new();
+                while self.peek() != Token::RBrace && !self.at_eof() {
+                    body.push(self.parse_stmt()?);
+                }
+                self.expect(&Token::RBrace)?;
+                property.has_get_hook = true;
+                hook_methods.push(ClassMethod {
+                    line: hook_line,
+                    visibility: property.visibility,
+                    name: format!("${}::get", property.name),
+                    params: Vec::new(),
+                    body,
+                    is_static: false,
+                    is_final: false,
+                    is_abstract: false,
+                    returns_by_ref: false,
+                    return_type: property.type_hint.clone(),
+                    generic_params: Vec::new(),
+                });
+            }
+            self.expect(&Token::RBrace)?;
+            return Ok((properties, hook_methods));
+        }
         self.expect(&Token::Semicolon)?;
-        Ok(properties)
+        Ok((properties, hook_methods))
     }
 
     fn parse_anonymous_class_body(
@@ -124,7 +170,9 @@ impl Parser {
             } else if self.peek() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
-                properties.extend(self.parse_property_declaration(&modifiers)?);
+                let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
+                properties.extend(declared);
+                methods.extend(hooks);
             } else {
                 return Err(format!(
                     "Unexpected token in anonymous class body: {:?}",
@@ -373,7 +421,9 @@ impl Parser {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
-                properties.extend(self.parse_property_declaration(&modifiers)?);
+                let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
+                properties.extend(declared);
+                methods.extend(hooks);
             } else {
                 return Err(format!("Unexpected token in class body: {:?}", self.peek()));
             }
@@ -522,7 +572,9 @@ impl Parser {
                 constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
-                properties.extend(self.parse_property_declaration(&modifiers)?);
+                let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
+                properties.extend(declared);
+                methods.extend(hooks);
             } else {
                 return Err(format!("Unexpected token in trait body: {:?}", self.peek()));
             }

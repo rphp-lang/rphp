@@ -3609,7 +3609,7 @@ impl Compiler {
                     if property_is_readonly && !prop.is_static {
                         readonly_props.push(prop.name.clone());
                     }
-                    let definition = PropertyDefinition::declared_with_set_visibility(
+                    let mut definition = PropertyDefinition::declared_with_set_visibility(
                         prop.name.clone(),
                         default,
                         prop.visibility,
@@ -3620,6 +3620,23 @@ impl Compiler {
                         type_hint_requires_reified_check(&prop.type_hint),
                     )
                     .with_source_location(&self.source_file, *class_line);
+                    definition.has_get_hook = prop.has_get_hook;
+                    definition.get_hook_is_backed = prop.has_get_hook
+                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
+                            method.eq_ignore_ascii_case(&format!("${}::get", prop.name))
+                                && function.op_array.instructions.iter().any(|instruction| {
+                                    instruction.opcode == OpCode::FetchObjR
+                                        && instruction.op1_type == OpType::Cv
+                                        && instruction.op1 == 0
+                                        && instruction.op2_type == OpType::Const
+                                        && function
+                                            .op_array
+                                            .literals
+                                            .get(instruction.op2 as usize)
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|name| name == prop.name)
+                                })
+                        });
                     if prop.is_static {
                         compiled_static_props.push(definition);
                     } else {
@@ -4020,7 +4037,7 @@ impl Compiler {
                             })
                         })
                         .transpose()?;
-                    let definition = PropertyDefinition::declared_with_set_visibility(
+                    let mut definition = PropertyDefinition::declared_with_set_visibility(
                         prop.name.clone(),
                         default,
                         prop.visibility,
@@ -4030,6 +4047,23 @@ impl Compiler {
                         prop.is_readonly,
                         type_hint_requires_reified_check(&prop.type_hint),
                     );
+                    definition.has_get_hook = prop.has_get_hook;
+                    definition.get_hook_is_backed = prop.has_get_hook
+                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
+                            method.eq_ignore_ascii_case(&format!("${}::get", prop.name))
+                                && function.op_array.instructions.iter().any(|instruction| {
+                                    instruction.opcode == OpCode::FetchObjR
+                                        && instruction.op1_type == OpType::Cv
+                                        && instruction.op1 == 0
+                                        && instruction.op2_type == OpType::Const
+                                        && function
+                                            .op_array
+                                            .literals
+                                            .get(instruction.op2 as usize)
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|name| name == prop.name)
+                                })
+                        });
                     if prop.is_static {
                         compiled_static_props.push(definition);
                     } else {

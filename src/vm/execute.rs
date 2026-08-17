@@ -2140,6 +2140,12 @@ fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommo
 
 fn displayed_function_name(eg: &ExecutorGlobals, function: *const FunctionCommon) -> String {
     let registered_name = registered_function_name(eg, function);
+    if let Some((_, hook)) = registered_name.split_once("::$") {
+        return eg
+            .declaring_class_of(function)
+            .map(|class| format!("{class}::${hook}"))
+            .unwrap_or_else(|| registered_name.to_string());
+    }
     if registered_name.starts_with("__closure_")
         || registered_name
             .rsplit_once("::")

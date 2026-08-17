@@ -930,6 +930,9 @@ fn op_fetch_obj_r_slow<'a>(
             is_public && key == name && obj.is_dynamic_std_class();
         if is_public && key == name && obj.class_id != 0 {
             if let Some(slot) = obj.property_slot(&key) {
+                let has_get_hook = eg
+                    .instance_property_definition(obj.class_id, slot)
+                    .is_some_and(|definition| definition.has_get_hook);
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let mut flags: u32 = 1; // read-safe
                 let writable = eg.class_table.get(obj.class_name.as_ref()).is_none_or(|cd| {
@@ -942,7 +945,9 @@ fn op_fetch_obj_r_slow<'a>(
                 if writable {
                     flags |= 2;
                 }
-                ic_mut.set_property(obj.class_id, slot, flags);
+                if !has_get_hook {
+                    ic_mut.set_property(obj.class_id, slot, flags);
+                }
             }
         }
 
@@ -952,6 +957,10 @@ fn op_fetch_obj_r_slow<'a>(
         let definition = declared_slot.and_then(|slot| {
             eg.instance_property_definition(obj.class_id, slot)
         });
+        let has_get_hook = definition.is_some_and(|definition| definition.has_get_hook);
+        let typed_property = definition
+            .filter(|definition| definition.is_typed())
+            .map(|definition| (definition.type_scope.clone(), definition.name.clone()));
         let (found_val, dynamic_position) = if force_dynamic {
             match obj.get_dynamic_property_with_position(&key) {
                 Some((value, position)) => (Some(value.clone()), position),
@@ -975,18 +984,36 @@ fn op_fetch_obj_r_slow<'a>(
             ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
+        if has_get_hook && !property_guard_active(obj_val, &name, PROPERTY_GUARD_GET) {
+            let hook_name = format!("${name}::get");
+            let hook_value = call_guarded_property_magic_method(
+                eg,
+                obj_val,
+                &name,
+                PROPERTY_GUARD_GET,
+                &hook_name,
+                &[],
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame) {
+                return Ok(result);
+            }
+            if let Some(value) = hook_value {
+                set_result(value);
+                return Ok(ColdResult::Done);
+            }
+        }
         if let Some(val) = found_val {
-            if val.is_undef() && definition.is_some_and(|definition| definition.is_typed()) {
+            if val.is_undef() && typed_property.is_some() {
                 if opline._pad & FETCH_OBJ_SILENT != 0 {
                     set_result(Value::null());
                     return Ok(ColdResult::Done);
                 }
-                let definition = definition.unwrap();
+                let (type_scope, property_name) = typed_property.as_ref().unwrap();
                 let error = make_error_value(
                     "Error",
                     &format!(
                         "Typed property {}::${} must not be accessed before initialization",
-                        definition.type_scope, definition.name
+                        type_scope, property_name
                     ),
                 );
                 return Ok(match throw_in_frame(eg, frame, error) {
@@ -1860,6 +1887,9 @@ fn op_assign_obj_prop<'a>(
         let definition = declared_slot.and_then(|slot| {
             eg.instance_property_definition(php_obj.class_id, slot)
         });
+        let getter_only_property = definition.is_some_and(|definition| {
+            definition.has_get_hook && !definition.get_hook_is_backed
+        });
         let property_constraints = if force_dynamic {
             php_obj
                 .get_dynamic_property_with_position(&key)
@@ -1879,6 +1909,14 @@ fn op_assign_obj_prop<'a>(
             property_accessible && php_obj.contains_property(&key)
         };
         drop(php_obj);
+        if getter_only_property {
+            return Ok(object_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Property {object_class_name}::${name} is read-only"),
+            ));
+        }
         if !prop_exists && object_class_name.as_ref() == "Generator" {
             return Ok(object_property_throw(
                 eg,
