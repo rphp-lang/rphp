@@ -363,6 +363,17 @@ cold request-global class metadata and does not alter object, value, frame or
 successful property-access paths, so no hot-path performance gate applies.
 Property hooks remain the nearby language frontier.
 
+The `0fc54e9` property-getter-hook checkpoint reaches 2,068 passes with 3,140
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Block-form getters execute through ordinary user-method bytecode,
+distinguish backed reentrance from virtual read-only properties, preserve hook
+magic names and inheritance variance, and stay hidden from ordinary method
+introspection. The exact PHP 8.5.6 delta is +7/-0. All feature configurations,
+all-target and unsafe gates pass. The final ordinary property A/B result is
+-0.718%; a 40-pair typed/untyped property-method lane is +2.176%, under its
+five-percent ceiling. Setter, arrow, abstract/final, by-reference and Reflection
+forms remain the next property-hook slices.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

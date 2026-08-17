@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `e1f9658`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,061 pass, 3,147 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `0fc54e9`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,068 pass, 3,140 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-39.574%; 83.391% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +246/-0. The first four gains are
+39.708%; 83.871% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +253/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Explicit block-form property `get` hooks now compile through the ordinary user
+method engine and execute on the cold declared-property path. Reentrant
+`$this->property` access reaches backing storage, while a virtual getter remains
+read-only; hook return contracts, magic constants, static locals, closure
+capture and inheritance variance reuse their general method semantics. Hook
+methods remain hidden from `get_class_methods()`. This adds seven exact passes
+without losing a prior pass. The final 20-pair ordinary property A/B gate is
+-0.718%; the 40-pair typed/untyped method lane is +2.176%, below its five-percent
+ceiling. `set`, arrow, abstract, final, by-reference and Reflection hook forms
+remain explicit follow-up work.
 
 Named child classes whose invariant property types depend on an alias published
 by an earlier runtime `class_alias()` now wait in a cold linking queue. Alias

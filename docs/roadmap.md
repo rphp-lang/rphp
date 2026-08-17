@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 2,061/5,599 with zero crashes or timeouts; delayed invariant-property linking for runtime-published aliases is complete, and property hooks remain the nearby language frontier. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 2,068/5,599 with zero crashes or timeouts; block-form property getters are admitted, with setter, arrow, abstract/final, by-reference and Reflection hook forms next. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
