@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `46464fb`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,298 pass, 2,910 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `67fff75`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,301 pass, 2,907 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-44.124%; 88.402% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +483/-0. The first four gains are
+44.182%; 88.402% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +486/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Enums now retain their declaration line through parsing and cold class-link
+metadata, so traits that contribute properties or forbidden magic methods fail
+with PHP 8.5's enum source location. The same validation covers nested trait
+composition and aliases that introduce a forbidden magic name, while invocation
+magic methods remain permitted. This adds the three `traits-no-*` enum cases
+with no lost pass. All five Cargo configurations, all-target, all-features
+check, unsafe, Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass.
+The added metadata is confined to class declarations and the validation runs
+only while traits are composed; ordinary objects, calls, dispatch and generated
+code are unchanged, so no runtime performance benchmark applies.
 
 Magic-method declarations now enforce PHP 8.5's covariant return contracts in
 classes, interfaces and traits, including `never`, literal booleans, nullable
