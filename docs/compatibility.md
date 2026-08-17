@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `777552e`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,941 pass, 3,267 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `f985350`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,952 pass, 3,256 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-37.270%; 82.796% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +126/-0. The first four gains are
+37.481%; 82.796% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +137/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -35,6 +35,14 @@ pending callee before cleanup, so Throwable origin points to the declaration
 while trace frame zero still contains the call site and rejected arguments.
 This adds 16 exact PHP 8.5.6 passes without a lost pass or stage movement and
 also removes one redundant unsafe cleanup block.
+
+Exceptions suspended while a `finally` block executes now live in a cold,
+frame-scoped sidecar instead of occupying the active VM exception slot. A new
+exception can therefore escape the block, retains its explicit `previous`
+chain, and appends the displaced exception without creating recursive chains;
+locally caught exceptions leave the suspended value untouched. Coroutine
+exchange and frame cleanup carry the same state. This adds 11 exact PHP 8.5.6
+passes without losing a pass or moving a remaining failure stage.
 
 Recursive array identity and loose object comparison now track active compound
 values and enforce a bounded comparison depth. Cycles between distinct values

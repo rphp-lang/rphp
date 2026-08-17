@@ -205,6 +205,15 @@ gate pass, with the production unsafe-block inventory reduced from 1,623 to
 1,622. No runtime performance gate applies because successful calls retain one
 existing post-validation error branch and the new work is confined to failure.
 
+The `f985350` finally-exception checkpoint reaches 1,952 passes with 3,256
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Pending exceptions are suspended in frame-scoped cold state while
+`finally` runs, so an escaping replacement preserves PHP's explicit and
+implicit `previous` order without cycles, while a locally caught exception
+does not disturb the pending one. The exact PHP 8.5.6 delta is +11/-0 with no
+stage movement; the full feature matrix and unsafe gate pass. No performance
+gate applies because the new work is confined to active finally/throw paths.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
