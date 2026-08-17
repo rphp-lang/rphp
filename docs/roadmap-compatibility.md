@@ -515,6 +515,15 @@ Typed/untyped read/write/method/constructor lanes are -0.642%, -0.742%,
 +0.982% and +2.863%, within their five-percent ceiling. Parenthesized parent
 property-call syntax remains a separate parser/AST slice.
 
+The `dffa9c0` parenthesized-static-property checkpoint reaches 2,219 passes
+with 2,989 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts
+and zero crashes. Parser AST metadata now distinguishes a direct parent
+property-hook call from a parenthesized static-property value followed by a
+dynamic static call. The exact PHP 8.5.6 delta is +1/-0, bringing the cumulative
+gain from the initial baseline to +404/-0. All five feature configurations,
+all-target and unsafe gates pass. No runtime performance gate applies because
+the change does not alter runtime structures, bytecode or VM dispatch.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

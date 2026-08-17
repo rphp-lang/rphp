@@ -8,14 +8,23 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `d85aaa9`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,218 pass, 2,990 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `dffa9c0`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,219 pass, 2,989 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-42.588%; 87.999% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +403/-0. The first four gains are
+42.608%; 87.999% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +404/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Parenthesized static-property expressions now retain their value-call boundary
+in the parser AST. Consequently `(parent::$property)::method()` fetches the
+parent's static property and invokes the method on the resulting class name,
+while unparenthesized `parent::$property::get()` and `set()` retain their PHP
+8.5 property-hook meaning. This adds the exact `parent_syntax.phpt` pass without
+losing a prior pass. All five feature configurations, all-target and unsafe
+gates pass. No runtime performance gate applies because bytecode and VM paths
+are unchanged; the distinction is cold parser metadata only.
 
 Plain backed properties now provide PHP 8.5's implicit
 `parent::$property::get()` and `set()` accessors to overriding hooks. They use
@@ -27,8 +36,7 @@ without losing a prior pass, including default-value inheritance and generator
 hook interactions. All five feature configurations, all-target, unsafe,
 Composer S0, Symfony S1 and warmed-kernel S2 gates pass. Typed/untyped
 read/write/method/constructor performance lanes measure -0.642%, -0.742%,
-+0.982% and +2.863%, within their five-percent ceiling. The parenthesized
-`(parent::$property)::get()` syntax remains a separate parser/AST boundary.
++0.982% and +2.863%, within their five-percent ceiling.
 
 Parent property-hook syntax without an active class scope now reports PHP
 8.5's class-scope compile fatal before hook-context validation. Incrementing or
