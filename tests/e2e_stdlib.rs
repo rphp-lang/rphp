@@ -3,6 +3,27 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn last_error_tracks_unhandled_diagnostics_even_when_suppressed() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(error_get_last());
+@trigger_error('hidden', E_USER_NOTICE);
+$hidden = error_get_last();
+echo $hidden['type'], ':', $hidden['message'], ':', $hidden['line'], "\n";
+set_error_handler(function ($level, $message) { echo "handled:$message\n"; return true; });
+trigger_error('claimed', E_USER_WARNING);
+echo error_get_last()['message'], "\n";
+restore_error_handler();
+error_clear_last();
+var_dump(error_get_last());
+"#,
+        ),
+        "NULL\n1024:hidden:3\nhandled:claimed\nhidden\nNULL\n"
+    );
+}
+
+#[test]
 fn strstr_is_binary_safe_and_supports_the_before_needle_boundary() {
     assert_eq!(
         run_php(

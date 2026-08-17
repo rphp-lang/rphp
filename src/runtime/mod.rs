@@ -232,6 +232,14 @@ impl Default for AssertionState {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct PhpErrorRecord {
+    pub(crate) level: i64,
+    pub(crate) message: String,
+    pub(crate) file: String,
+    pub(crate) line: usize,
+}
+
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -288,6 +296,10 @@ pub struct ExecutorGlobals {
     pub(crate) error_handler: Option<crate::value::Value>,
     pub(crate) error_handler_levels: i64,
     pub(crate) error_handler_stack: Vec<(Option<crate::value::Value>, i64)>,
+    /// Most recent unhandled PHP diagnostic, including diagnostics hidden by
+    /// `@` or the current reporting mask. Allocated strings stay on this cold
+    /// observability path and do not enlarge call frames or values.
+    pub(crate) last_error: Option<PhpErrorRecord>,
     /// PHP never recursively invokes a user error handler for a diagnostic
     /// raised while that handler is active.
     pub(crate) handling_error: bool,
@@ -427,6 +439,15 @@ pub(crate) enum ClassAliasRegistrationError {
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
 
 impl ExecutorGlobals {
+    pub(crate) fn record_last_error(&mut self, level: i64, message: &str, file: &str, line: usize) {
+        self.last_error = Some(PhpErrorRecord {
+            level,
+            message: message.to_string(),
+            file: file.to_string(),
+            line,
+        });
+    }
+
     pub(crate) fn begin_error_suppression(&mut self, frame: usize) {
         self.error_suppression_frames
             .push((frame, self.error_reporting));
@@ -523,6 +544,7 @@ impl ExecutorGlobals {
             error_handler: None,
             error_handler_levels: 32767,
             error_handler_stack: Vec::new(),
+            last_error: None,
             handling_error: false,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
@@ -609,6 +631,7 @@ impl ExecutorGlobals {
             error_handler: None,
             error_handler_levels: 32767,
             error_handler_stack: Vec::new(),
+            last_error: None,
             handling_error: false,
             exception_handler: None,
             exception_handler_stack: Vec::new(),

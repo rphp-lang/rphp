@@ -985,6 +985,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("restore_error_handler", fn_restore_error_handler, 0, 0);
     reg!("get_error_handler", fn_get_error_handler, 0, 0);
+    reg!("error_get_last", fn_error_get_last, 0, 0);
+    reg!("error_clear_last", fn_error_clear_last, 0, 0);
     reg!(
         "trigger_error",
         fn_trigger_error,
@@ -7873,6 +7875,31 @@ fn fn_get_error_handler(
     ret!(rv, eg.error_handler.clone().unwrap_or_else(Value::null));
 }
 
+fn fn_error_get_last(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(error) = eg.last_error.as_ref() else {
+        ret!(rv, Value::null());
+    };
+    let mut result = PhpArray::with_hash_capacity(4);
+    result.set_str("type", Value::long(error.level));
+    result.set_str("message", Value::string(error.message.clone()));
+    result.set_str("file", Value::string(error.file.clone()));
+    result.set_str("line", Value::long(error.line as i64));
+    ret!(rv, Value::array(result));
+}
+
+fn fn_error_clear_last(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    eg.last_error = None;
+    ret!(rv, Value::null());
+}
+
 const E_USER_ERROR: i64 = 256;
 const E_USER_WARNING: i64 = 512;
 const E_USER_NOTICE: i64 = 1024;
@@ -8006,6 +8033,9 @@ fn report_internal_diagnostic(
 ) -> Result<bool, VmError> {
     let (file, line) = internal_call_source(ed);
     let handled = dispatch_php_error(eg, ed, level, message, &file, line)?;
+    if !handled {
+        eg.record_last_error(level, message, &file, line);
+    }
     if !handled && eg.error_reporting & level != 0 {
         eg.write_output(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
     }
