@@ -113,12 +113,35 @@ impl Parser {
                         promotion: None,
                     }]
                 };
-                self.expect(&Token::LBrace)?;
-                let mut body = Vec::new();
-                while self.peek() != Token::RBrace && !self.at_eof() {
-                    body.push(self.parse_stmt()?);
-                }
-                self.expect(&Token::RBrace)?;
+                let body = if self.peek() == Token::DoubleArrow {
+                    self.advance();
+                    let expression = self.parse_expr()?;
+                    self.expect(&Token::Semicolon)?;
+                    if is_get {
+                        vec![Stmt::Return {
+                            expr: Some(expression),
+                            line: hook_line,
+                        }]
+                    } else {
+                        vec![Stmt::AssignProp {
+                            object: Expr::Variable {
+                                name: "this".to_string(),
+                                line: hook_line,
+                            },
+                            property: property.name.clone(),
+                            expr: expression,
+                            line: hook_line,
+                        }]
+                    }
+                } else {
+                    self.expect(&Token::LBrace)?;
+                    let mut body = Vec::new();
+                    while self.peek() != Token::RBrace && !self.at_eof() {
+                        body.push(self.parse_stmt()?);
+                    }
+                    self.expect(&Token::RBrace)?;
+                    body
+                };
                 property.has_get_hook |= is_get;
                 property.has_set_hook |= !is_get;
                 hook_methods.push(ClassMethod {

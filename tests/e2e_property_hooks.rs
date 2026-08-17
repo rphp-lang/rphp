@@ -134,3 +134,40 @@ var_dump($guarded->value);
         "int(42)\nint(42)\n"
     );
 }
+
+#[test]
+fn arrow_getter_returns_its_expression() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ArrowReading {
+    public int $base = 20;
+    public int $answer { get => $this->base + 22; }
+}
+$reading = new ArrowReading();
+var_dump($reading->answer);
+"#,
+        ),
+        "int(42)\n"
+    );
+}
+
+#[test]
+fn arrow_setter_stores_transformed_value_but_assignment_returns_input() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ArrowLabel {
+    public string $value {
+        get => $this->value;
+        set => strtoupper($value);
+    }
+}
+$label = new ArrowLabel();
+var_dump($label->value = 'mixed');
+var_dump($label->value);
+"#,
+        ),
+        "string(5) \"mixed\"\nstring(5) \"MIXED\"\n"
+    );
+}
