@@ -1,5 +1,5 @@
 mod common;
-use common::{run_php, run_php_expect_error_with_source_context};
+use common::{run_php, run_php_expect_error, run_php_expect_error_with_source_context};
 
 #[test]
 fn test_tostring_echo() {
@@ -468,4 +468,37 @@ echo $invoke('mixed', suffix: '-named');
         ),
         "default:64|positional:64|named:64|mixed-named:64"
     );
+}
+
+#[test]
+fn var_dump_projects_objects_through_debug_info() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DebugView {
+    public int $hidden = 9;
+    public function __debugInfo(): array { return ['shown' => 4]; }
+}
+var_dump(new DebugView());
+"#
+        ),
+        "object(DebugView)#1 (1) {\n  [\"shown\"]=>\n  int(4)\n}\n"
+    );
+}
+
+#[test]
+fn var_dump_rejects_non_array_debug_info_results() {
+    assert!(matches!(
+        run_php_expect_error(
+            r#"<?php
+class InvalidDebugView {
+    public function __debugInfo() { return 4; }
+}
+var_dump(new InvalidDebugView());
+"#
+        ),
+        rphp::vm::execute::VmError::Fatal(message)
+            if message.starts_with("__debuginfo() must return an array in ")
+                && message.ends_with(" on line 5")
+    ));
 }

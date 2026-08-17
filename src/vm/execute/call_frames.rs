@@ -704,6 +704,16 @@ pub(crate) fn call_object_string_conversion(
     call_magic_method(eg, object, "__tostring", &[])
 }
 
+/// Reuse PHP object debug projection from output handlers. The method runs on
+/// the original receiver so a lazy object's property reads cross the ordinary
+/// initialization boundary instead of being eagerly realized by var_dump().
+pub(crate) fn call_object_debug_info(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+) -> Result<Option<Value>, VmError> {
+    call_magic_method(eg, object, "__debuginfo", &[])
+}
+
 /// Execute a top-level script.
 /// Result of throw_in_frame: either the exception was handled (new frame + op_array)
 /// or it was not and should propagate via eg.exception.

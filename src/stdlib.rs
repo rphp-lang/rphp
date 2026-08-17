@@ -7739,19 +7739,32 @@ fn fn_var_dump(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let first = var_dump_value(arg!(ed, 0), 0, eg);
+    let first_value = arg!(ed, 0).clone();
+    let remaining = arg!(ed, 1)
+        .as_array()
+        .map(|arguments| arguments.values().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let first = var_dump_output_value(&first_value, eg, ed)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     eg.write_output(first.as_bytes());
-    if let Some(arguments) = arg!(ed, 1).as_array() {
-        for value in arguments.values() {
-            let output = var_dump_value(value, 0, eg);
-            eg.write_output(output.as_bytes());
+    for value in remaining {
+        let output = var_dump_output_value(&value, eg, ed)?;
+        if eg.exception.is_some() {
+            return Ok(());
         }
+        eg.write_output(output.as_bytes());
     }
     Ok(())
 }
 
-fn debug_zval_dump_value(value: &Value, eg: &ExecutorGlobals) -> String {
-    let dump = var_dump_value(value, 0, eg);
+fn debug_zval_dump_value(
+    value: &Value,
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+) -> Result<String, VmError> {
+    let dump = var_dump_output_value(value, eg, ed)?;
     let mut output = String::with_capacity(dump.len() + 32);
     for line in dump.split_inclusive('\n') {
         let value_line = line.trim_start();
@@ -7765,7 +7778,7 @@ fn debug_zval_dump_value(value: &Value, eg: &ExecutorGlobals) -> String {
             output.push_str(line);
         }
     }
-    output
+    Ok(output)
 }
 
 fn fn_debug_zval_dump(
@@ -7773,13 +7786,22 @@ fn fn_debug_zval_dump(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let first = debug_zval_dump_value(arg!(ed, 0), eg);
+    let first_value = arg!(ed, 0).clone();
+    let remaining = arg!(ed, 1)
+        .as_array()
+        .map(|arguments| arguments.values().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let first = debug_zval_dump_value(&first_value, eg, ed)?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     eg.write_output(first.as_bytes());
-    if let Some(arguments) = arg!(ed, 1).as_array() {
-        for value in arguments.values() {
-            let output = debug_zval_dump_value(value, eg);
-            eg.write_output(output.as_bytes());
+    for value in remaining {
+        let output = debug_zval_dump_value(&value, eg, ed)?;
+        if eg.exception.is_some() {
+            return Ok(());
         }
+        eg.write_output(output.as_bytes());
     }
     Ok(())
 }
@@ -9110,6 +9132,129 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+fn var_dump_output_value(
+    value: &Value,
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+) -> Result<String, VmError> {
+    if value.value_type() != ValueType::Object {
+        return Ok(var_dump_value(value, 0, eg));
+    }
+
+    // Retain the receiver across the synchronous user call. __debugInfo() may
+    // rebind the variable that supplied var_dump() or initialize a lazy proxy.
+    let receiver = value.clone();
+    let Some(debug_info) = crate::vm::execute::call_object_debug_info(eg, &receiver)? else {
+        return Ok(var_dump_value(&receiver, 0, eg));
+    };
+    if eg.exception.is_some() {
+        return Ok(String::new());
+    }
+    let debug_info = debug_info.dereferenced();
+    let empty_projection;
+    let debug_info = if debug_info.value_type() == ValueType::Null {
+        let class_name = receiver
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| "object".to_string());
+        report_internal_deprecation(
+            eg,
+            ed,
+            &format!(
+                "Returning null from {class_name}::__debugInfo() is deprecated, return an empty array instead"
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(String::new());
+        }
+        // The legacy null form projects an empty object rather than falling
+        // back to the receiver's ordinary properties.
+        empty_projection = Value::array(PhpArray::new());
+        &empty_projection
+    } else if debug_info.value_type() == ValueType::Array {
+        debug_info
+    } else {
+        // Invalid __debugInfo() returns are an engine fatal, not a catchable
+        // TypeError. This boundary intentionally escapes the internal call.
+        let (file, line) = internal_call_source(ed);
+        return Err(VmError::Fatal(format!(
+            "__debuginfo() must return an array in {file} on line {line}"
+        )));
+    };
+    Ok(var_dump_debug_info_object(&receiver, debug_info, 0, eg))
+}
+
+fn var_dump_debug_info_object(
+    object_value: &Value,
+    debug_info: &Value,
+    indent: usize,
+    eg: &ExecutorGlobals,
+) -> String {
+    let prefix = "  ".repeat(indent);
+    let object = object_value
+        .as_object()
+        .expect("debug projection receiver must remain an object");
+    let display_class = object
+        .class_name
+        .strip_prefix("class@anonymous#")
+        .map_or(object.class_name.as_ref(), |_| "class@anonymous");
+    let lazy_prefix = eg
+        .lazy_object_state(object_value)
+        .map_or("", |state| match state.strategy {
+            crate::runtime::LazyObjectStrategy::Ghost => "lazy ghost ",
+            crate::runtime::LazyObjectStrategy::Proxy => "lazy proxy ",
+        });
+    let properties = debug_info
+        .as_array()
+        .expect("validated debug projection must remain an array");
+    let mut output = format!(
+        "{}{}object({})#{} ({}) {{\n",
+        prefix,
+        lazy_prefix,
+        display_class,
+        object_value
+            .object_handle()
+            .expect("live debug projection receiver must retain its handle"),
+        properties.len()
+    );
+    drop(object);
+
+    let mut visited_arrays = std::collections::HashSet::new();
+    let mut visited_objects = std::collections::HashSet::new();
+    if let Some(identity) = object_value.object_identity() {
+        visited_objects.insert(identity);
+    }
+    for (key, value) in properties.iter() {
+        let key = match key {
+            ArrayKey::Int(key) => format!("[{key}]"),
+            ArrayKey::String(key) => var_dump_debug_info_key(&key),
+        };
+        output.push_str(&format!("{}  {}=>\n", prefix, key));
+        output.push_str(&var_dump_value_inner(
+            value,
+            indent + 1,
+            eg,
+            true,
+            &mut visited_arrays,
+            &mut visited_objects,
+        ));
+    }
+    output.push_str(&format!("{}}}\n", prefix));
+    output
+}
+
+fn var_dump_debug_info_key(key: &str) -> String {
+    if let Some(property) = key.strip_prefix("\0*\0") {
+        return format!("[\"{property}\":protected]");
+    }
+    if let Some(private) = key.strip_prefix('\0')
+        && let Some((class, property)) = private.split_once('\0')
+    {
+        return format!("[\"{property}\":\"{class}\":private]");
+    }
+    format!("[\"{key}\"]")
 }
 
 fn var_dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
