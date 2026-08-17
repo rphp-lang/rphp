@@ -535,6 +535,16 @@ configurations, all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel
 S2 gates pass. No ordinary property performance gate applies because the new
 metadata check is confined to the cold `UnsetObj` handler.
 
+The `4ffc25a` hidden-property-hook-callback checkpoint reaches 2,221 passes
+with 2,987 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts
+and zero crashes. Direct object callbacks can no longer invoke internal
+`$property::get` or `$property::set` implementations; undefined-method
+diagnostics and public `__call` fallback match PHP 8.5. The exact PHP 8.5.6
+delta is +1/-0, bringing the cumulative gain from the initial baseline to
++406/-0. All five feature configurations, all-target, unsafe, Composer S0,
+Symfony S1 and warmed-kernel S2 gates pass. The check remains in dynamic
+callback resolution, leaving ordinary cached method dispatch unchanged.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

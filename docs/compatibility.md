@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `f07d8be`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,220 pass, 2,988 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `4ffc25a`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,221 pass, 2,987 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-42.627%; 87.999% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +405/-0. The first four gains are
+42.646%; 87.999% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +406/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Property hook implementation names such as `$property::get` and
+`$property::set` are now hidden from direct object callbacks. A direct call
+therefore reports PHP 8.5's undefined-method error, while a public `__call`
+still receives the requested name and arguments. The shared dynamic callback
+resolver enforces the rule for variable and braced method names without adding
+work to ordinary cached method dispatch. This adds the exact
+`direct_hook_call.phpt` pass without losing a prior pass. All five feature
+configurations, all-target, unsafe, Composer S0, Symfony S1 and warmed-kernel
+S2 gates pass. No ordinary method performance gate applies because its hot
+resolver and inline-cache path are unchanged.
 
 Unsetting an accessible hooked property now raises PHP 8.5's catchable
 `Cannot unset hooked property` error before changing backed storage or invoking
