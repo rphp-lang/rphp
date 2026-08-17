@@ -8,11 +8,11 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `2b90e00`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 1,993 pass, 3,215 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `73539fa`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 1,999 pass, 3,209 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-38.268%; 82.796% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +178/-0. The first four gains are
+38.383%; 83.007% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +184/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
@@ -108,6 +108,16 @@ runs before either generator state is borrowed, eliminating the prior public
 Rust `RefCell` panic without creating a partial delegation. This adds one exact
 PHP 8.5.6 pass with no lost pass. The 200-pair generator resume control measured
 +0.436%, within the one-percent regression ceiling.
+
+Keyword `and`, `xor` and `or` now occupy PHP's three distinct precedence
+levels below assignment and `yield`, independently of symbolic `&&` and `||`.
+Yield operands admit assignments and nested yields, while a valueless yield can
+participate in the surrounding binary expression. This corrects assignment
+side effects, short-circuit order, keyed nested yields and unary/multiplicative
+forms through the lexer and parser without changing runtime dispatch. It adds
+six exact PHP 8.5.6 passes with no lost pass and moves additional valid cases
+from front-end rejection to runtime. No runtime performance gate applies to
+this lexer/parser-only checkpoint.
 
 Recursive array identity and loose object comparison now track active compound
 values and enforce a bounded comparison depth. Cycles between distinct values
