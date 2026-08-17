@@ -457,6 +457,18 @@ performance gate applies because valid declarations retain identical bytecode
 and the checks are parser/cold compiler work. Constructor-promoted hooks, full
 hooked iteration ordering, parent-hook calls and Reflection remain next.
 
+The `3854982` constructor-promoted-property-hook checkpoint reaches 2,194
+passes with 3,014 failures, 110 skips, one XFAIL, 280 unsupported cases, zero
+timeouts and zero crashes. Promoted parameters now retain full property and
+hook declarations; implicit constructor writes invoke setters before the user
+body, hook-only parameters are public, and final/readonly rules match PHP 8.5.
+The exact PHP 8.5.6 delta is +10/-0, bringing the cumulative gain from the
+initial baseline to +379/-0. All five feature configurations, all-target and
+unsafe gates pass. The ordinary property A/B workload is +0.457%; specialized
+read/write/method/constructor lanes are +0.522%, +0.387%, +2.991% and +2.526%,
+within their ceilings. Reflection property-default support, assertion AST
+rendering, full hooked iteration ordering and parent-hook calls remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

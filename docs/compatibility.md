@@ -8,14 +8,26 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `9e9141f`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,184 pass, 3,024 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `3854982`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,194 pass, 3,014 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-41.935%; 87.750% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +369/-0. The first four gains are
+42.127%; 87.999% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +379/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Constructor-promoted properties now retain their complete declaration shape,
+including PHP 8.5 `final`, asymmetric visibility, type, readonly and hook
+metadata. Promoted getter/setter bodies are compiled as property hooks, and the
+implicit constructor assignment invokes the setter before the user constructor
+body. Hook-only parameters use PHP's implicit public promotion. This adds ten
+exact passes without losing a prior pass. All feature, target and unsafe gates
+pass. The 40-pair ordinary property A/B workload is +0.457%; specialized
+typed/untyped read, write, method and constructor lanes are +0.522%, +0.387%,
++2.991% and +2.526%, within their respective one- and five-percent ceilings.
+The remaining `cpp.phpt` case depends on Reflection property-default support;
+AST-rendering cases remain separate follow-up work.
 
 Property-hook declaration validation now reports PHP 8.5 compile fatals for
 empty or duplicate hook lists, unknown hook names, hook visibility/static
