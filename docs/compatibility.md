@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `925bc63`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,018 pass, 3,190 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `11f2046`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,046 pass, 3,162 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-38.748%; 83.717% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +203/-0. The first four gains are
+39.286%; 83.276% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +231/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Property declarations now retain their source line through compilation and
+cold class linking. Asymmetric set-scope, readonly, final and invariant type
+errors therefore include PHP's file/line suffix; a second asymmetric access
+modifier is emitted as a located compile fatal. This adds 28 exact diagnostic
+passes without losing a pass. Fifteen remaining failures move from the
+runner's `runtime` classification to the correct front-end `compile` stage
+because their location now matches, while another diagnostic detail remains
+different. The general property workload measured -0.281%; typed/untyped read,
+write, method and constructor lanes ranged from -0.742% to +3.264%, within
+their five-percent ceiling.
 
 Static properties now enforce the same asymmetric set visibility across direct
 assignment, increment, compound and dimension mutation, reference access and

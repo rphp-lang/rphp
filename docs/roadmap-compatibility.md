@@ -328,6 +328,19 @@ measure +0.068% and +0.188%; specialized read/write lanes remain under their
 five-percent ceiling. Hooks and source-located declaration diagnostics remain
 the asymmetric-property follow-up.
 
+The `11f2046` property-declaration-location checkpoint reaches 2,046 passes
+with 3,162 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts
+and zero crashes. Property AST and cold declaration metadata retain exact
+source lines, duplicate asymmetric modifiers become located compile fatals,
+and asymmetric, readonly and invariant inheritance diagnostics use PHP's
+file/line shape. The exact PHP 8.5.6 delta is +28/-0. Fifteen remaining
+diagnostic failures move from the runner's runtime category to the correct
+compile stage because their location now matches; no executable pass regresses.
+All five feature configurations, all-target and unsafe gates pass. The general
+property A/B control is -0.281%, and four specialized lanes range from -0.742%
+to +3.264%, below their five-percent ceiling. Property hooks and the remaining
+message/type-normalization slices are explicit follow-up work.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
