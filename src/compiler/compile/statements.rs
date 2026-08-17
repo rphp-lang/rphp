@@ -1945,6 +1945,7 @@ impl Compiler {
                 func_compiler.returns_reference_context = *returns_by_ref;
                 func_compiler.contains_yield = body.iter().any(Stmt::contains_yield);
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
+                self.validate_declared_type_hint(return_type, *line)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 func_compiler.return_type_context = cp.return_type_hint.clone();
                 self.validate_generator_return_type(
@@ -3530,6 +3531,7 @@ impl Compiler {
                     let context = format!("method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    self.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     self.validate_magic_method_return_type(
                         &resolved_class,
@@ -3787,6 +3789,7 @@ impl Compiler {
                             prop.line,
                         ));
                     }
+                    self.validate_declared_type_hint(&prop.type_hint, prop.line)?;
                     let type_hint = self.resolve_declared_property_type_hint(
                         self.convert_type_hint(&prop.type_hint),
                         &resolved_class,
@@ -4054,6 +4057,7 @@ impl Compiler {
                     let context = format!("interface method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    self.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     self.validate_magic_method_return_type(
                         &resolved_iface,
@@ -4162,6 +4166,7 @@ impl Compiler {
                             property.line,
                         ));
                     }
+                    self.validate_declared_type_hint(&property.type_hint, property.line)?;
                     let type_hint = self.resolve_declared_property_type_hint(
                         self.convert_type_hint(&property.type_hint),
                         &resolved_iface,
@@ -4276,6 +4281,7 @@ impl Compiler {
                     let context = format!("trait method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    self.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     self.validate_magic_method_return_type(
                         &resolved_trait,
@@ -4413,6 +4419,7 @@ impl Compiler {
                             name, prop.name
                         ));
                     }
+                    self.validate_declared_type_hint(&prop.type_hint, prop.line)?;
                     let type_hint = self.convert_type_hint(&prop.type_hint);
                     let default = match &prop.default {
                         Some(expr) => Some(self.eval_const_expr_in_source(expr, &self.known_constants).map_err(|e| {
@@ -4795,6 +4802,7 @@ impl Compiler {
                     let context = format!("enum method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    self.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     self.validate_magic_method_return_type(
                         &resolved_enum,

@@ -1,6 +1,9 @@
 /// Tests for parameter type hints
 mod common;
-use common::{run_php, run_php_expect_error, run_php_with_source_context};
+use common::{
+    run_php, run_php_expect_error, run_php_expect_error_with_source_context,
+    run_php_with_source_context,
+};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;

@@ -3723,6 +3723,7 @@ impl Compiler {
             if param.name == "this" {
                 return Err(self.goto_error("Cannot use $this as parameter", param.line));
             }
+            self.validate_declared_type_hint(&param.type_hint, param.line)?;
             match param.type_hint.as_ref() {
                 Some(crate::parser::TypeHint::Never) => {
                     return Err(
@@ -3833,6 +3834,59 @@ impl Compiler {
                     "Generator return type must be a supertype of Generator, {} given",
                     hint.display_name()
                 ),
+                line,
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_declared_type_hint(
+        &self,
+        hint: &Option<crate::parser::TypeHint>,
+        line: usize,
+    ) -> Result<(), String> {
+        use crate::parser::TypeHint;
+
+        fn intersection_member_name(hint: &TypeHint) -> Option<String> {
+            match hint {
+                TypeHint::ClassName(name) => match name.to_ascii_lowercase().as_str() {
+                    "false" => Some("false".to_string()),
+                    "true" => Some("true".to_string()),
+                    "object" => Some("object".to_string()),
+                    "static" => Some("static".to_string()),
+                    "iterable" => Some("Traversable|array".to_string()),
+                    _ => None,
+                },
+                TypeHint::Int => Some("int".to_string()),
+                TypeHint::Float => Some("float".to_string()),
+                TypeHint::String => Some("string".to_string()),
+                TypeHint::Bool => Some("bool".to_string()),
+                TypeHint::Array => Some("array".to_string()),
+                TypeHint::Callable => Some("callable".to_string()),
+                TypeHint::Null => Some("null".to_string()),
+                TypeHint::Void => Some("void".to_string()),
+                TypeHint::Mixed => Some("mixed".to_string()),
+                TypeHint::Never => Some("never".to_string()),
+                TypeHint::Nullable(_) | TypeHint::Union(_) | TypeHint::Intersection(_) => None,
+                TypeHint::GenericParameter { .. } | TypeHint::GenericApplication { .. } => None,
+            }
+        }
+
+        fn first_invalid_intersection_member(hint: &TypeHint) -> Option<String> {
+            match hint {
+                TypeHint::Intersection(parts) => parts.iter().find_map(|part| {
+                    intersection_member_name(part)
+                        .or_else(|| first_invalid_intersection_member(part))
+                }),
+                TypeHint::Union(parts) => parts.iter().find_map(first_invalid_intersection_member),
+                TypeHint::Nullable(inner) => first_invalid_intersection_member(inner),
+                _ => None,
+            }
+        }
+
+        if let Some(invalid) = hint.as_ref().and_then(first_invalid_intersection_member) {
+            return Err(self.goto_error(
+                &format!("Type {invalid} cannot be part of an intersection type"),
                 line,
             ));
         }
@@ -6244,6 +6298,9 @@ impl Compiler {
                         }
                     }
                 };
+                if let Err(error) = self.validate_declared_type_hint(return_type, *line) {
+                    self.deferred_error = Some(error);
+                }
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 func_compiler.return_type_context = cp.return_type_hint.clone();
                 if let Err(error) = self.validate_generator_return_type(

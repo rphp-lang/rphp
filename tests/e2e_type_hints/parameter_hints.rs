@@ -346,6 +346,67 @@ try {
     );
 }
 
+#[test]
+fn intersection_types_reject_non_class_members_at_declaration_time() {
+    for (declared, diagnostic) in [
+        ("array", "array"),
+        ("bool", "bool"),
+        ("callable", "callable"),
+        ("false", "false"),
+        ("float", "float"),
+        ("int", "int"),
+        ("iterable", "Traversable|array"),
+        ("mixed", "mixed"),
+        ("never", "never"),
+        ("null", "null"),
+        ("object", "object"),
+        ("string", "string"),
+        ("true", "true"),
+        ("void", "void"),
+    ] {
+        let source = format!("<?php\nfunction invalid(): {declared}&Iterator {{}}");
+        let error = run_php_expect_error_with_source_context(
+            &source,
+            "intersection-type.php",
+            ".",
+        );
+        let expected = format!(
+            "Type {diagnostic} cannot be part of an intersection type in intersection-type.php on line 2"
+        );
+        assert!(
+            error.to_string().contains(&expected),
+            "unexpected error for {declared}: {error}"
+        );
+    }
+
+    for source in [
+        "<?php\nfunction invalid(int&Iterator $value) {}",
+        "<?php\nclass InvalidProperty { public int&Iterator $value; }",
+        "<?php\n$invalid = function (): int&Iterator {};",
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "intersection-type.php",
+            ".",
+        );
+        assert!(
+            error.to_string().contains(
+                "Type int cannot be part of an intersection type in intersection-type.php on line 2"
+            ),
+            "unexpected contextual error: {error}"
+        );
+    }
+
+    let error = run_php_expect_error_with_source_context(
+        "<?php\ninterface Contract {} class InvalidStatic { function invalid(): static&Contract {} }",
+        "intersection-type.php",
+        ".",
+    );
+    assert!(error.to_string().contains(
+        "Type static cannot be part of an intersection type in intersection-type.php on line 2"
+    ));
+}
+
 // ── Type hints with defaults ──
 
 #[test]
