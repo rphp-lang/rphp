@@ -341,6 +341,17 @@ property A/B control is -0.281%, and four specialized lanes range from -0.742%
 to +3.264%, below their five-percent ceiling. Property hooks and the remaining
 message/type-normalization slices are explicit follow-up work.
 
+The `3d2dad8` invariant-property-type checkpoint reaches 2,060 passes with
+3,148 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. Property invariance now uses mutual subtype reduction for class
+inheritance, intersections, unions, link-time aliases and `iterable`; invalid
+parent types use canonical DNF/built-in/omitted rendering and the child class
+line. The exact PHP 8.5.6 delta is +14/-0 with no remaining-failure stage move.
+All five feature configurations, all-target and unsafe gates pass. No runtime
+performance gate applies because execution paths and runtime layouts are
+unchanged. Runtime-published aliases still require delayed class linking;
+property hooks remain the larger language frontier.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

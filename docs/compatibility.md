@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `11f2046`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,046 pass, 3,162 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `3d2dad8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,060 pass, 3,148 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-39.286%; 83.276% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +231/-0. The first four gains are
+39.555%; 83.372% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +245/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Invariant property types now compare their reduced PHP value sets in both
+directions, including inheritance-reduced intersections, redundant unions,
+aliases available at link time and `iterable` as `array|Traversable`. Invalid
+declarations render parent DNF, built-in union and omitted-type contracts in
+PHP's canonical form, and inheritance errors point to the child class line.
+This adds 14 exact passes without losing a pass or moving a remaining failure
+stage. The change is confined to parsing and cold class linking; runtime value,
+object, property-cache and executor layouts and successful property execution
+paths are unchanged, so no runtime performance gate applies. Property aliases
+published by earlier runtime statements still require delayed class linking.
 
 Property declarations now retain their source line through compilation and
 cold class linking. Asymmetric set-scope, readonly, final and invariant type
