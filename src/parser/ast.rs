@@ -836,6 +836,7 @@ pub enum Stmt {
     Interface {
         name: String,
         extends: Vec<GenericAncestor>,
+        properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>, // all public, abstract (no body)
         generic_params: Vec<GenericParameter>,
@@ -1080,10 +1081,16 @@ pub struct ClassProperty {
     pub is_readonly: bool,
     /// A final property cannot be redeclared by a child class.
     pub is_final: bool,
+    /// The declaration used the property-level `abstract` modifier.
+    pub is_abstract: bool,
     /// An explicit PHP 8.4+ `get` hook is compiled as an engine-owned method.
     pub has_get_hook: bool,
+    /// The getter was declared without a body.
+    pub has_abstract_get_hook: bool,
     /// An explicit PHP 8.4+ `set` hook is compiled as an engine-owned method.
     pub has_set_hook: bool,
+    /// The setter was declared without a body.
+    pub has_abstract_set_hook: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

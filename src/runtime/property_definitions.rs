@@ -1,10 +1,40 @@
 /// Merge inherited declarations while preserving PHP's private-slot rule.
 /// The same rule applies to instance and static properties; keeping it here
 /// prevents their registration paths from drifting.
+#[cold]
+#[inline(never)]
 fn inherit_property_definitions(
     child: &mut Vec<PropertyDefinition>,
     parent: &[PropertyDefinition],
 ) {
+    // A hooked child declaration inherits a concrete parent hook that it does
+    // not replace. A plain child declaration intentionally replaces the whole
+    // property surface and can satisfy abstract hook requirements directly.
+    for child_property in child.iter_mut() {
+        if !child_property.has_get_hook && !child_property.has_set_hook {
+            continue;
+        }
+        let Some(parent_property) = parent.iter().find(|parent_property| {
+            parent_property.name == child_property.name
+                && parent_property.visibility != Visibility::Private
+        }) else {
+            continue;
+        };
+        if !child_property.has_get_hook
+            && parent_property.has_get_hook
+            && !parent_property.abstract_get_hook()
+        {
+            child_property.has_get_hook = true;
+            child_property.get_hook_is_backed = parent_property.get_hook_is_backed;
+        }
+        if !child_property.has_set_hook
+            && parent_property.has_set_hook
+            && !parent_property.abstract_set_hook()
+        {
+            child_property.has_set_hook = true;
+            child_property.set_hook_is_backed = parent_property.set_hook_is_backed;
+        }
+    }
     let child_names: std::collections::HashSet<&str> = child
         .iter()
         .map(|property| property.name.as_str())
@@ -213,6 +243,8 @@ fn property_definitions_are_compatible(
         && property_type_hints_are_equivalent(&left.type_hint, &right.type_hint)
         && left.is_readonly == right.is_readonly
         && left.is_final() == right.is_final()
+        && left.abstract_get_hook() == right.abstract_get_hook()
+        && left.abstract_set_hook() == right.abstract_set_hook()
         && left.has_get_hook == right.has_get_hook
         && left.get_hook_is_backed == right.get_hook_is_backed
         && left.has_set_hook == right.has_set_hook

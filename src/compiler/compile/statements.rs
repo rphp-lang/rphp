@@ -3343,6 +3343,15 @@ impl Compiler {
                             method.line,
                         ));
                     }
+                    if method.name.starts_with('$')
+                        && method.is_abstract
+                        && method.visibility == Visibility::Private
+                    {
+                        return Err(self.goto_error(
+                            "Property hook cannot be both abstract and private",
+                            method.line,
+                        ));
+                    }
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_class, method.name),
@@ -3545,6 +3554,30 @@ impl Compiler {
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
+                    if prop.is_abstract && prop.is_final {
+                        return Err(self.goto_error(
+                            "Cannot use the final modifier on an abstract property",
+                            prop.line,
+                        ));
+                    }
+                    if prop.is_abstract && !prop.has_get_hook && !prop.has_set_hook {
+                        return Err(self.goto_error(
+                            "Only hooked properties may be declared abstract",
+                            prop.line,
+                        ));
+                    }
+                    if prop.is_abstract
+                        && !prop.has_abstract_get_hook
+                        && !prop.has_abstract_set_hook
+                    {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Abstract property {}::${} must specify at least one abstract hook",
+                                name, prop.name
+                            ),
+                            prop.line,
+                        ));
+                    }
                     if prop.is_final && prop.visibility == Visibility::Private {
                         return Err(self.goto_error(
                             "Property cannot be both final and private",
@@ -3642,6 +3675,10 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, *class_line);
                     definition.set_final(prop.is_final);
+                    definition.set_abstract_hooks(
+                        prop.has_abstract_get_hook,
+                        prop.has_abstract_set_hook,
+                    );
                     definition.has_get_hook = prop.has_get_hook;
                     definition.get_hook_is_backed = prop.has_get_hook
                         && compiled_methods.iter().any(|(method, _, _, _, function)| {
@@ -3750,6 +3787,7 @@ impl Compiler {
             Stmt::Interface {
                 name,
                 extends,
+                properties,
                 constants,
                 methods,
                 generic_params,
@@ -3766,7 +3804,7 @@ impl Compiler {
                         crate::generics::GenericDeclarationKind::Interface,
                         resolved_iface.clone(),
                         generic_params,
-                        &[],
+                        properties,
                         methods,
                     );
                 }
@@ -3781,6 +3819,21 @@ impl Compiler {
                 // never be called directly (implementing class provides the body).
                 let mut compiled_methods = Vec::new();
                 for method in methods {
+                    if method.name.starts_with('$')
+                        && method.is_abstract
+                        && method.visibility == Visibility::Private
+                    {
+                        return Err(self.goto_error(
+                            "Property hook cannot be both abstract and private",
+                            method.line,
+                        ));
+                    }
+                    if method.name.starts_with('$') && method.is_final && method.is_abstract {
+                        return Err(self.goto_error(
+                            "Property hook cannot be both abstract and final",
+                            method.line,
+                        ));
+                    }
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_iface, method.name),
@@ -3878,6 +3931,56 @@ impl Compiler {
                     extends.iter().map(|e| self.resolve_name(&e.name)).collect();
                 let compiled_constants =
                     self.compile_class_constants(&resolved_iface, None, constants)?;
+                let mut compiled_properties = Vec::new();
+                for property in properties {
+                    if property.is_abstract {
+                        return Err(self.goto_error(
+                            "Property in interface cannot be explicitly abstract. All interface members are implicitly abstract",
+                            property.line,
+                        ));
+                    }
+                    if property.is_final {
+                        return Err(self.goto_error(
+                            "Property in interface cannot be final",
+                            property.line,
+                        ));
+                    }
+                    if property.visibility != Visibility::Public {
+                        return Err(self.goto_error(
+                            "Property in interface cannot be protected or private",
+                            property.line,
+                        ));
+                    }
+                    if property.is_static {
+                        return Err(self.goto_error(
+                            "Hooked properties cannot be static",
+                            property.line,
+                        ));
+                    }
+                    let type_hint = self.resolve_declared_property_type_hint(
+                        self.convert_type_hint(&property.type_hint),
+                        &resolved_iface,
+                        None,
+                    );
+                    let mut definition = PropertyDefinition::declared_with_set_visibility(
+                        property.name.clone(),
+                        None,
+                        property.visibility,
+                        property.set_visibility,
+                        resolved_iface.clone(),
+                        type_hint,
+                        property.is_readonly,
+                        type_hint_requires_reified_check(&property.type_hint),
+                    )
+                    .with_source_location(&self.source_file, property.line);
+                    definition.has_get_hook = property.has_get_hook;
+                    definition.has_set_hook = property.has_set_hook;
+                    definition.set_abstract_hooks(
+                        property.has_get_hook,
+                        property.has_set_hook,
+                    );
+                    compiled_properties.push(definition);
+                }
                 self.class_defs.push(ClassDef {
                     name: resolved_iface,
                     source_file: (!self.source_file.is_empty())
@@ -3892,7 +3995,7 @@ impl Compiler {
                     is_enum: false,
                     uses: vec![],
                     trait_aliases: vec![],
-                    properties: vec![],
+                    properties: compiled_properties,
                     static_properties: vec![],
                     constants: compiled_constants,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
@@ -3930,6 +4033,21 @@ impl Compiler {
                 // Trait methods get compiled exactly like class methods.
                 let mut compiled_methods = Vec::new();
                 for method in methods {
+                    if method.name.starts_with('$')
+                        && method.is_abstract
+                        && method.visibility == Visibility::Private
+                    {
+                        return Err(self.goto_error(
+                            "Property hook cannot be both abstract and private",
+                            method.line,
+                        ));
+                    }
+                    if method.name.starts_with('$') && method.is_final && method.is_abstract {
+                        return Err(self.goto_error(
+                            "Property hook cannot be both abstract and final",
+                            method.line,
+                        ));
+                    }
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_trait, method.name),
@@ -4032,6 +4150,30 @@ impl Compiler {
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 for prop in properties {
+                    if prop.is_abstract && prop.is_final {
+                        return Err(self.goto_error(
+                            "Cannot use the final modifier on an abstract property",
+                            prop.line,
+                        ));
+                    }
+                    if prop.is_abstract && !prop.has_get_hook && !prop.has_set_hook {
+                        return Err(self.goto_error(
+                            "Only hooked properties may be declared abstract",
+                            prop.line,
+                        ));
+                    }
+                    if prop.is_abstract
+                        && !prop.has_abstract_get_hook
+                        && !prop.has_abstract_set_hook
+                    {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Abstract property {}::${} must specify at least one abstract hook",
+                                name, prop.name
+                            ),
+                            prop.line,
+                        ));
+                    }
                     if let Some(set_visibility) = prop.set_visibility {
                         let rank = |visibility| match visibility {
                             Visibility::Private => 0,
@@ -4085,6 +4227,12 @@ impl Compiler {
                         type_hint,
                         prop.is_readonly,
                         type_hint_requires_reified_check(&prop.type_hint),
+                    )
+                    .with_source_location(&self.source_file, prop.line);
+                    definition.set_final(prop.is_final);
+                    definition.set_abstract_hooks(
+                        prop.has_abstract_get_hook,
+                        prop.has_abstract_set_hook,
                     );
                     definition.has_get_hook = prop.has_get_hook;
                     definition.get_hook_is_backed = prop.has_get_hook

@@ -1377,6 +1377,8 @@ impl ExecutorGlobals {
         Ok(())
     }
 
+    #[cold]
+    #[inline(never)]
     fn validate_abstract_method_contracts(&self, class_def: &ClassDef) -> Result<(), String> {
         if class_def.is_interface || class_def.is_trait {
             return Ok(());
@@ -1387,16 +1389,25 @@ impl ExecutorGlobals {
             &mut requirements,
             &mut std::collections::HashSet::new(),
         );
+        let mut missing = Vec::new();
+        let mut seen_missing = std::collections::HashSet::new();
         for requirement in requirements {
             let Some(implementation) = self.find_effective_method(class_def, requirement.name)
             else {
                 continue;
             };
             if implementation.is_abstract && !class_def.is_abstract {
-                return Err(format!(
-                    "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining methods ({}::{})",
-                    class_def.name, requirement.owner, requirement.name
-                ));
+                if self.concrete_property_implements_hook(class_def, requirement.name) {
+                    continue;
+                }
+                if seen_missing.insert(requirement.name.to_ascii_lowercase()) {
+                    let owner = self
+                        .find_class(requirement.owner)
+                        .filter(|owner| owner.is_trait)
+                        .map_or(requirement.owner, |_| class_def.name.as_str());
+                    missing.push(format!("{}::{}", owner, requirement.name));
+                }
+                continue;
             }
             if let Some(reason) = self
                 .method_contract_errors(requirement, implementation, Some(class_def))
@@ -1413,7 +1424,55 @@ impl ExecutorGlobals {
                 ));
             }
         }
+        if !missing.is_empty() {
+            let count = missing.len();
+            let (method_word, remaining_word) = if count == 1 {
+                ("method", "method")
+            } else {
+                ("methods", "methods")
+            };
+            let location = class_def
+                .source_file
+                .as_ref()
+                .map_or_else(String::new, |file| format!(" in {file} on line 0"));
+            return Err(format!(
+                "Class {} contains {} abstract {} and must therefore be declared abstract or implement the remaining {} ({}){}",
+                class_def.name,
+                count,
+                method_word,
+                remaining_word,
+                missing.join(", "),
+                location
+            ));
+        }
         Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn concrete_property_implements_hook(&self, class_def: &ClassDef, method_name: &str) -> bool {
+        let Some((property_name, hook)) = method_name
+            .strip_prefix('$')
+            .and_then(|name| name.split_once("::"))
+        else {
+            return false;
+        };
+        let Some(property) = class_def
+            .properties
+            .iter()
+            .find(|property| property.name.eq_ignore_ascii_case(property_name))
+        else {
+            return false;
+        };
+        if hook.eq_ignore_ascii_case("get") {
+            !property.abstract_get_hook() && (!property.has_set_hook || property.has_get_hook)
+        } else if hook.eq_ignore_ascii_case("set") {
+            !property.is_readonly
+                && !property.abstract_set_hook()
+                && (!property.has_get_hook || property.has_set_hook)
+        } else {
+            false
+        }
     }
 
     /// Register an ordinary compiled class immediately, or retain an
@@ -1951,16 +2010,71 @@ impl ExecutorGlobals {
                 .insert(func_ptr, class_name.clone());
         }
 
+        self.validate_interface_property_contracts(&class_name)?;
+
         // Validate interface contracts for concrete classes
         let missing = self.validate_interface_contracts(&class_name);
         if !missing.is_empty() {
-            let (iface, method) = &missing[0];
+            let count = missing.len();
+            let (method_word, remaining_word) = if count == 1 {
+                ("method", "method")
+            } else {
+                ("methods", "methods")
+            };
+            let requirements = missing
+                .iter()
+                .map(|(interface, method)| format!("{interface}::{method}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let location = self
+                .class_table
+                .get(&class_name)
+                .and_then(|class| class.source_file.as_ref())
+                .map_or_else(String::new, |file| format!(" in {file} on line 0"));
             return Err(format!(
-                "Class {} contains 1 abstract method and must therefore be declared abstract or implement the remaining methods ({}::{})",
-                class_name, iface, method
+                "Class {} contains {} abstract {} and must therefore be declared abstract or implement the remaining {} ({}){}",
+                class_name, count, method_word, remaining_word, requirements, location
             ));
         }
 
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn validate_interface_property_contracts(&self, class_name: &str) -> Result<(), String> {
+        let Some(class_def) = self.class_table.get(class_name) else {
+            return Ok(());
+        };
+        if class_def.is_interface || class_def.is_abstract || class_def.is_trait {
+            return Ok(());
+        }
+        for interface_name in self.collect_all_interfaces(class_name) {
+            let Some(interface) = self.class_table.get(&interface_name) else {
+                continue;
+            };
+            for required in &interface.properties {
+                let Some(property) = class_def
+                    .properties
+                    .iter()
+                    .find(|property| property.name == required.name)
+                else {
+                    continue;
+                };
+                if required.has_set_hook && property.is_readonly {
+                    let location = property
+                        .source_file
+                        .as_ref()
+                        .map_or_else(String::new, |file| {
+                            format!(" in {file} on line {}", property.declaration_line())
+                        });
+                    return Err(format!(
+                        "Set access level of {}::${} must be omitted (as in class {}){}",
+                        class_name, property.name, interface.name, location
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2617,6 +2731,8 @@ impl ExecutorGlobals {
     /// Shared contract logic covers visibility, staticness, arity, reference
     /// mode, parameter contravariance and return covariance.
     /// Returns a list of (interface_name, error_description), empty if all satisfied.
+    #[cold]
+    #[inline(never)]
     pub fn validate_interface_contracts(&self, class_name: &str) -> Vec<(String, String)> {
         let mut errors = Vec::new();
         let Some(class_def) = self.class_table.get(class_name) else {
@@ -2635,10 +2751,16 @@ impl ExecutorGlobals {
             for requirement in self.collect_interface_methods(&iface_name) {
                 let Some(implementation) = self.find_effective_method(class_def, requirement.name)
                 else {
+                    if self.concrete_property_implements_hook(class_def, requirement.name) {
+                        continue;
+                    }
                     errors.push((requirement.owner.to_string(), requirement.name.to_string()));
                     continue;
                 };
                 if implementation.is_abstract {
+                    if self.concrete_property_implements_hook(class_def, requirement.name) {
+                        continue;
+                    }
                     errors.push((requirement.owner.to_string(), requirement.name.to_string()));
                     continue;
                 }

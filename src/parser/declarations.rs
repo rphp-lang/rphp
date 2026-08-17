@@ -30,9 +30,6 @@ impl Parser {
         &mut self,
         modifiers: &MemberModifiers,
     ) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>), String> {
-        if modifiers.is_abstract {
-            return Err("Properties cannot be declared abstract".into());
-        }
         if modifiers.has_duplicate_set_visibility {
             let line = modifiers.duplicate_set_visibility_line.unwrap_or(1);
             return Err(self.source_error(
@@ -64,8 +61,11 @@ impl Parser {
                 is_static: modifiers.is_static,
                 is_readonly: modifiers.is_readonly,
                 is_final: modifiers.is_final,
+                is_abstract: modifiers.is_abstract,
                 has_get_hook: false,
+                has_abstract_get_hook: false,
                 has_set_hook: false,
+                has_abstract_set_hook: false,
             });
             if self.peek() != Token::Comma {
                 break;
@@ -155,6 +155,8 @@ impl Parser {
                 };
                 property.has_get_hook |= is_get;
                 property.has_set_hook |= !is_get;
+                property.has_abstract_get_hook |= is_get && hook_is_abstract;
+                property.has_abstract_set_hook |= !is_get && hook_is_abstract;
                 hook_methods.push(ClassMethod {
                     line: hook_line,
                     visibility: property.visibility,
@@ -491,9 +493,9 @@ impl Parser {
         self.pop_generic_scope();
 
         if !is_abstract
-            && let Some(method) = methods.iter().find(|method| {
-                method.is_abstract && !(method.is_final && method.name.starts_with('$'))
-            })
+            && let Some(method) = methods
+                .iter()
+                .find(|method| method.is_abstract && !method.name.starts_with('$'))
         {
             return Err(format!(
                 "Class {} declares abstract method {}() and must therefore be declared abstract",
@@ -680,6 +682,7 @@ impl Parser {
         };
         self.expect(&Token::LBrace)?;
 
+        let mut properties = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
@@ -732,6 +735,10 @@ impl Parser {
                     return_type,
                     generic_params: method_generic_params,
                 });
+            } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
+                let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
+                properties.extend(declared);
+                methods.extend(hooks);
             } else {
                 return Err(format!(
                     "Unexpected token in interface body: {:?}",
@@ -745,6 +752,7 @@ impl Parser {
         Ok(Stmt::Interface {
             name,
             extends,
+            properties,
             constants,
             methods,
             generic_params,

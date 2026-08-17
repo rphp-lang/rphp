@@ -1420,6 +1420,10 @@ impl PropertyDefinition {
     }
 
     const FINAL_FLAG: usize = 1usize << (usize::BITS - 1);
+    const ABSTRACT_GET_FLAG: usize = 1usize << (usize::BITS - 2);
+    const ABSTRACT_SET_FLAG: usize = 1usize << (usize::BITS - 3);
+    const DECLARATION_FLAGS: usize =
+        Self::FINAL_FLAG | Self::ABSTRACT_GET_FLAG | Self::ABSTRACT_SET_FLAG;
 
     /// Finality is cold declaration metadata. Store it in the otherwise
     /// unused high bit of the source-line word so ordinary property metadata
@@ -1439,8 +1443,29 @@ impl PropertyDefinition {
     }
 
     #[inline]
+    pub fn abstract_get_hook(&self) -> bool {
+        self.source_line & Self::ABSTRACT_GET_FLAG != 0
+    }
+
+    #[inline]
+    pub fn abstract_set_hook(&self) -> bool {
+        self.source_line & Self::ABSTRACT_SET_FLAG != 0
+    }
+
+    #[inline]
+    pub fn set_abstract_hooks(&mut self, get: bool, set: bool) {
+        self.source_line &= !(Self::ABSTRACT_GET_FLAG | Self::ABSTRACT_SET_FLAG);
+        if get {
+            self.source_line |= Self::ABSTRACT_GET_FLAG;
+        }
+        if set {
+            self.source_line |= Self::ABSTRACT_SET_FLAG;
+        }
+    }
+
+    #[inline]
     pub fn declaration_line(&self) -> usize {
-        self.source_line & !Self::FINAL_FLAG
+        self.source_line & !Self::DECLARATION_FLAGS
     }
 
     #[inline]

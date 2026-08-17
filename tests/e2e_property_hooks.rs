@@ -223,3 +223,90 @@ fn final_private_property_and_hook_are_rejected() {
         );
     }
 }
+
+#[test]
+fn abstract_getter_can_be_implemented_while_inheriting_a_concrete_setter() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class AbstractReading {
+    public abstract int $value {
+        get;
+        set { $this->value = $value; }
+    }
+}
+class ConcreteReading extends AbstractReading {
+    public int $value { get => $this->value; }
+}
+$reading = new ConcreteReading();
+$reading->value = 42;
+var_dump($reading->value);
+"#,
+        ),
+        "int(42)\n"
+    );
+}
+
+#[test]
+fn plain_property_implements_both_abstract_hook_requirements() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class AbstractStorage {
+    public abstract int $value { get; set; }
+}
+class ConcreteStorage extends AbstractStorage {
+    public int $value = 42;
+}
+var_dump((new ConcreteStorage())->value);
+"#,
+        ),
+        "int(42)\n"
+    );
+}
+
+#[test]
+fn concrete_class_reports_all_unimplemented_property_hooks() {
+    let error = run_php_expect_error(
+        r#"<?php
+class IncompleteStorage {
+    public abstract int $value { get; set; }
+}
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("contains 2 abstract methods"));
+    assert!(rendered.contains("IncompleteStorage::$value::get"));
+    assert!(rendered.contains("IncompleteStorage::$value::set"));
+}
+
+#[test]
+fn interface_property_hooks_accept_plain_and_readonly_get_implementations() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface ReadableValue { public int $value { get; } }
+class FixedValue implements ReadableValue {
+    public function __construct(public readonly int $value) {}
+}
+var_dump((new FixedValue(42))->value);
+"#,
+        ),
+        "int(42)\n"
+    );
+}
+
+#[test]
+fn readonly_property_does_not_implement_interface_set_hook() {
+    let error = run_php_expect_error(
+        r#"<?php
+interface MutableValue { public int $value { get; set; } }
+class FixedValue implements MutableValue {
+    public function __construct(public readonly int $value) {}
+}
+"#,
+    );
+    assert!(format!("{error:?}").contains(
+        "Set access level of FixedValue::$value must be omitted (as in class MutableValue)"
+    ));
+}
