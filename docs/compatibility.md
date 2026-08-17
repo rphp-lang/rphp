@@ -8,23 +8,38 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `c57a763`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,394 pass, 2,814 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `e63a903`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,411 pass, 2,797 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-45.968%; 87.346% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +579/-0. The first four gains are
+46.294%; 87.174% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +596/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Parameters before the final parameter without a default now follow PHP 8.5's
+required-arity contract, including named calls, while declaration deprecations
+identify each affected optional parameter and coexist with later compile or
+class-link fatals. Typed literal defaults are validated during compilation,
+integer defaults widen to `float`, symbolic constant and `new` defaults retain
+their deferred runtime behavior, and built-in type names normalize
+case-insensitively. Parent-method compatibility errors also recover the child
+method's declaration line from existing cold source metadata. This adds
+seventeen exact passes without losing a prior pass. One closure case advances
+to its independent incomplete debug-dump metadata. All five Cargo
+configurations, all-target, all-features check, unsafe, Composer S0, all four
+Symfony S1 gates and warmed-kernel S2 pass. The changes are confined to cold
+compilation/linking and deprecated/defaulted signatures; ordinary required
+calls and generated code are unchanged, so no runtime performance benchmark
+applies.
 
 Legacy parameter declarations spelled `T $value = null` now retain PHP 8.5's
 implicitly nullable callable contract while emitting the declaration-time
 deprecation with the canonical function, method or closure name and source
 line. The same diagnostics are emitted for included compilation units, and
 nullable intersection diagnostics use `(A&B)|null`. This adds nine exact
-passes without losing a prior pass. Four adjacent cases remain behind the
-independent required-parameter-after-optional and invalid-default validation
-contracts. All five Cargo configurations, all-target, all-features check,
+passes without losing a prior pass. All five Cargo configurations, all-target,
+all-features check,
 unsafe, Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass. The
 new work is confined to cold declaration compilation and deprecated signatures;
 ordinary explicitly typed call dispatch and generated code are unchanged, so
