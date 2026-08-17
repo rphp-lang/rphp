@@ -445,6 +445,18 @@ object-foreach control is +0.102%, and specialized read/write/method/constructor
 lanes are +0.039%, +0.118%, +2.381% and +0.435%. Full hooked object-iteration
 ordering, parent-hook calls and Reflection remain next.
 
+The `9e9141f` property-hook-declaration checkpoint reaches 2,184 passes with
+3,024 failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and
+zero crashes. Empty and duplicate hook lists, unknown hook names, illegal hook
+modifiers, static hooked properties, getter parameter lists and invalid setter
+parameter shapes now fail at declaration compilation with PHP 8.5's class,
+property, hook and source-location diagnostics. The exact PHP 8.5.6 delta is
++10/-0, bringing the cumulative gain from the initial baseline to +369/-0.
+All five feature configurations, all-target and unsafe gates pass. No runtime
+performance gate applies because valid declarations retain identical bytecode
+and the checks are parser/cold compiler work. Constructor-promoted hooks, full
+hooked iteration ordering, parent-hook calls and Reflection remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more

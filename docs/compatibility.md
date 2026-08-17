@@ -8,14 +8,24 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `2ad9fa5`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,174 pass, 3,034 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `9e9141f`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,184 pass, 3,024 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-41.743%; 87.634% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +359/-0. The first four gains are
+41.935%; 87.750% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +369/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Property-hook declaration validation now reports PHP 8.5 compile fatals for
+empty or duplicate hook lists, unknown hook names, hook visibility/static
+modifiers, hooks on static properties, getter parameter lists, and invalid
+setter arity, defaults or variadics. Parsing retains enough cold
+declaration shape to include the class and property in each diagnostic without
+exposing invalid parameters to executable code. This adds ten exact passes
+without losing a prior pass. All feature, target and unsafe gates pass. No
+runtime performance gate applies because valid declarations generate unchanged
+bytecode and the new checks remain in parsing and cold class compilation.
 
 Indirect mutation through a by-value property getter now raises PHP 8.5's
 property-specific error before modifying a detached array, while objects
@@ -26,8 +36,8 @@ exact passes without losing a prior pass. The 40-pair ordinary property A/B
 workload is -1.074%; a separate 20-pair hookless object-foreach control is
 +0.102%. Typed/untyped read, write, method and constructor lanes are +0.039%,
 +0.118%, +2.381% and +0.435%, within their five-percent ceiling. Full hooked
-object-iteration ordering, parent-hook calls and Reflection remain follow-up
-work.
+object-iteration ordering, constructor-promoted hooks, parent-hook calls and
+Reflection remain follow-up work.
 
 Abstract properties and body-less hooks now form real class, trait and
 interface contracts. A plain property supplies both ordinary accessors, a
