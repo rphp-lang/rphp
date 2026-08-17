@@ -254,6 +254,9 @@ pub struct ExecutorGlobals {
     /// expression executes. Eager registration would autoload dependencies
     /// from branches that PHP never evaluates.
     pending_anonymous_classes: HashMap<String, ClassDef>,
+    /// Named declarations whose invariant property contracts depend on a
+    /// class alias that top-level execution has not published yet.
+    pending_named_classes: Vec<ClassDef>,
     /// Cold generic declaration side table. Ordinary dispatch never reads it.
     pub generic_metadata: GenericMetadata,
     /// Constant table — name → Value (case-sensitive, like PHP)
@@ -411,6 +414,11 @@ pub struct ExecutorGlobals {
     pub(crate) generator_delegation_depth: u32,
 }
 
+pub(crate) enum ClassAliasRegistrationError {
+    NameConflict,
+    DelayedLink(String),
+}
+
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
 
 impl ExecutorGlobals {
@@ -472,6 +480,7 @@ impl ExecutorGlobals {
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
+            pending_named_classes: Vec::new(),
             generic_metadata: GenericMetadata::default(),
             #[cfg(feature = "php-generics-reified")]
             reified_bindings: Vec::new(),
@@ -555,6 +564,7 @@ impl ExecutorGlobals {
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
+            pending_named_classes: Vec::new(),
             generic_metadata: GenericMetadata::default(),
             #[cfg(feature = "php-generics-reified")]
             reified_bindings: Vec::new(),
@@ -1420,8 +1430,61 @@ impl ExecutorGlobals {
             }
             Ok(())
         } else {
-            self.register_class(class_def)
+            if self
+                .pending_named_classes
+                .iter()
+                .any(|pending| pending.name.eq_ignore_ascii_case(&class_def.name))
+            {
+                return Err(format!(
+                    "Cannot declare class {}, because the name is already in use",
+                    class_def.name
+                ));
+            }
+            if self.class_definition_requires_delayed_linking(&class_def) {
+                self.pending_named_classes.push(class_def);
+                return Ok(());
+            }
+            self.register_class(class_def)?;
+            self.retry_pending_named_classes()
         }
+    }
+
+    fn class_definition_requires_delayed_linking(&self, class_def: &ClassDef) -> bool {
+        class_def
+            .parent
+            .as_deref()
+            .and_then(|parent| self.find_class(parent))
+            .is_some_and(|parent| {
+                property_inheritance_requires_delayed_linking(self, class_def, parent)
+            })
+    }
+
+    fn retry_pending_named_classes(&mut self) -> Result<(), String> {
+        loop {
+            let Some(index) = self
+                .pending_named_classes
+                .iter()
+                .position(|class_def| !self.class_definition_requires_delayed_linking(class_def))
+            else {
+                return Ok(());
+            };
+            let class_def = self.pending_named_classes.remove(index);
+            self.register_class(class_def)?;
+        }
+    }
+
+    /// Finish linking declarations that waited for a runtime alias. Once the
+    /// source unit has executed, no later statement in it can satisfy their
+    /// unresolved invariant property types, so validate them normally and
+    /// surface PHP's declaration error.
+    pub(crate) fn finalize_pending_named_classes(&mut self) -> Result<(), String> {
+        self.retry_pending_named_classes()?;
+        while !self.pending_named_classes.is_empty() {
+            let class_def = self.pending_named_classes.remove(0);
+            self.register_class(class_def)?;
+            self.retry_pending_named_classes()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn take_pending_anonymous_class(&mut self, name: &str) -> Option<ClassDef> {
@@ -2201,7 +2264,7 @@ impl ExecutorGlobals {
         &mut self,
         original: &str,
         alias: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, ClassAliasRegistrationError> {
         let original = original.strip_prefix('\\').unwrap_or(original);
         let alias = alias.strip_prefix('\\').unwrap_or(alias);
         if self
@@ -2209,17 +2272,14 @@ impl ExecutorGlobals {
             .keys()
             .any(|registered| registered.eq_ignore_ascii_case(alias))
         {
-            return Err(format!(
-                "Cannot declare class {}, because the name is already in use",
-                alias
-            ));
+            return Err(ClassAliasRegistrationError::NameConflict);
         }
         let class = self
             .class_table
             .iter()
             .find(|(registered, _)| registered.eq_ignore_ascii_case(original))
             .map(|(_, class)| class.clone())
-            .ok_or_else(|| format!("Class \"{}\" not found", original))?;
+            .ok_or(ClassAliasRegistrationError::NameConflict)?;
         let aliases_interface = class.is_interface;
 
         // Registration has already flattened inherited and trait-composed
@@ -2243,6 +2303,8 @@ impl ExecutorGlobals {
             );
         }
         self.class_table.insert(alias.to_string(), class);
+        self.retry_pending_named_classes()
+            .map_err(ClassAliasRegistrationError::DelayedLink)?;
         Ok(aliases_interface
             .then(|| self.duplicate_interface_identity_error())
             .flatten())

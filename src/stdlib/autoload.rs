@@ -435,7 +435,10 @@ pub(crate) fn fn_class_alias(
                 "{message} in {file} on line {line}"
             )))
         }
-        Err(_) => {
+        Err(crate::runtime::ClassAliasRegistrationError::DelayedLink(message)) => {
+            Err(VmError::Fatal(message))
+        }
+        Err(crate::runtime::ClassAliasRegistrationError::NameConflict) => {
             report_class_alias_warning(
                 ed,
                 eg,

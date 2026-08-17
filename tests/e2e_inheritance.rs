@@ -7,6 +7,52 @@ use rphp::parser::Parser;
 use rphp::vm::opcode::OpCode;
 
 #[test]
+fn runtime_class_alias_completes_pending_property_invariance_linking() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class OriginalType {}
+class ParentBox { public OriginalType $value; }
+var_dump(class_exists('ChildBox', false));
+class_alias('OriginalType', 'AliasType');
+class ChildBox extends ParentBox { public AliasType $value; }
+var_dump(class_exists('ChildBox', false));
+"#,
+        ),
+        "bool(false)\nbool(true)\n"
+    );
+
+    let error = run_php_expect_error(
+        r#"<?php
+class ExpectedType {}
+class OtherType {}
+class ParentBox { public ExpectedType $value; }
+class_alias('OtherType', 'AliasType');
+class ChildBox extends ParentBox { public AliasType $value; }
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Type of ChildBox::$value must be ExpectedType (as in class ParentBox)\")"
+    );
+}
+
+#[test]
+fn unresolved_pending_property_invariance_still_fails() {
+    let error = run_php_expect_error(
+        r#"<?php
+class Known {}
+class ParentClass { public Known $property; }
+class ChildClass extends ParentClass { public Missing $property; }
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Type of ChildClass::$property must be Known (as in class ParentClass)\")"
+    );
+}
+
+#[test]
 fn property_invariance_reduces_inheritance_intersections_and_iterable() {
     assert_eq!(
         run_php(

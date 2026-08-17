@@ -118,6 +118,91 @@ fn property_type_hints_are_equivalent(
     left == right || property_type_hint_key(left) == property_type_hint_key(right)
 }
 
+fn property_type_hints_are_invariant(
+    eg: &ExecutorGlobals,
+    child: &PropertyDefinition,
+    parent: &PropertyDefinition,
+    child_class: &str,
+    linking_class: &ClassDef,
+) -> bool {
+    property_type_hints_are_equivalent(&child.type_hint, &parent.type_hint)
+        || (eg.is_return_type_compatible(
+            &child.type_hint,
+            &parent.type_hint,
+            child_class,
+            &parent.declaring_class,
+            Some(linking_class),
+        ) && eg.is_return_type_compatible(
+            &parent.type_hint,
+            &child.type_hint,
+            &parent.declaring_class,
+            child_class,
+            Some(linking_class),
+        ))
+}
+
+fn property_type_has_unknown_class(
+    eg: &ExecutorGlobals,
+    hint: &crate::vm::function::ParamTypeHint,
+    linking_class: &ClassDef,
+) -> bool {
+    use crate::vm::function::ParamTypeHint;
+
+    match hint {
+        ParamTypeHint::ClassName(name)
+            if name.eq_ignore_ascii_case("object")
+                || name.eq_ignore_ascii_case("iterable") =>
+        {
+            false
+        }
+        ParamTypeHint::ClassName(name) => {
+            !eg.variance_class_is_known(name, Some(linking_class))
+        }
+        ParamTypeHint::Nullable(inner) => {
+            property_type_has_unknown_class(eg, inner, linking_class)
+        }
+        ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => parts
+            .iter()
+            .any(|part| property_type_has_unknown_class(eg, part, linking_class)),
+        _ => false,
+    }
+}
+
+fn property_inheritance_requires_delayed_linking(
+    eg: &ExecutorGlobals,
+    class_def: &ClassDef,
+    parent: &ClassDef,
+) -> bool {
+    let declarations_require_delayed_linking =
+        |children: &[PropertyDefinition], parents: &[PropertyDefinition]| {
+            children.iter().any(|child| {
+                let parent_property = parents.iter().find(|candidate| {
+                    candidate.name == child.name && candidate.visibility != Visibility::Private
+                });
+                parent_property.is_some_and(|parent_property| {
+                    !property_type_hints_are_invariant(
+                        eg,
+                        child,
+                        parent_property,
+                        &class_def.name,
+                        class_def,
+                    ) && (property_type_has_unknown_class(eg, &child.type_hint, class_def)
+                        || property_type_has_unknown_class(
+                            eg,
+                            &parent_property.type_hint,
+                            class_def,
+                        ))
+                })
+            })
+        };
+
+    declarations_require_delayed_linking(&class_def.properties, &parent.properties)
+        || declarations_require_delayed_linking(
+            &class_def.static_properties,
+            &parent.static_properties,
+        )
+}
+
 #[inline]
 fn property_definitions_are_compatible(
     left: &PropertyDefinition,
@@ -217,20 +302,8 @@ fn validate_inherited_property_definition(
             child.name
         )));
     }
-    let types_are_invariant = property_type_hints_are_equivalent(&child.type_hint, &parent.type_hint)
-        || (eg.is_return_type_compatible(
-            &child.type_hint,
-            &parent.type_hint,
-            child_class,
-            &parent.declaring_class,
-            Some(linking_class),
-        ) && eg.is_return_type_compatible(
-            &parent.type_hint,
-            &child.type_hint,
-            &parent.declaring_class,
-            child_class,
-            Some(linking_class),
-        ));
+    let types_are_invariant =
+        property_type_hints_are_invariant(eg, child, parent, child_class, linking_class);
     if !types_are_invariant {
         if matches!(parent.type_hint, crate::vm::function::ParamTypeHint::None) {
             return Err(error(format!(
