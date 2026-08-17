@@ -301,6 +301,43 @@ catch (LogicException $reraisedError) {
 }
 
 #[test]
+fn reentrant_generator_resume_throws_a_catchable_error() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function reentrantNext() {
+    $generator = yield;
+    try { $generator->next(); }
+    catch (Error $error) {
+        echo $error->getMessage(), "\n";
+        echo $error->getTrace()[0]['class'], '->', $error->getTrace()[0]['function'], "\n";
+    }
+}
+$next = reentrantNext();
+$next->send($next);
+
+function reentrantSend() {
+    $generator = yield;
+    $generator->send(null);
+}
+$send = reentrantSend();
+try { $send->send($send); }
+catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+
+function reentrantThrow() {
+    $generator = yield;
+    $generator->throw(new Exception('ignored'));
+}
+$throw = reentrantThrow();
+try { $throw->send($throw); }
+catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+"#
+        ),
+        "Cannot resume an already running generator\nGenerator->next\nCannot resume an already running generator\nCannot resume an already running generator\n"
+    );
+}
+
+#[test]
 fn test_typed_generator_completion_and_internal_return_value() {
     assert_eq!(
         run_php(

@@ -1181,12 +1181,6 @@ fn execute_resumed_generator_frame(
     if let Some(exception) = escaped_exception.as_ref()
         && !saved_execute_data.is_null()
         && exception.object_identity() != injected_exception_identity
-        && exception.as_object().is_some_and(|object| {
-            object
-                .get_property("trace")
-                .and_then(Value::as_array)
-                .is_none_or(PhpArray::is_empty)
-        })
     {
         let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
             .as_deref()
@@ -1195,7 +1189,7 @@ fn execute_resumed_generator_frame(
         // saved_execute_data is the still-live internal caller retained by
         // this synchronous resume. Its predecessor is likewise live while we
         // temporarily advance and restore the call-site pointer.
-        let trace = unsafe {
+        let continuation = unsafe {
             let internal_caller = (*saved_execute_data).prev_execute_data;
             let (caller_opline, can_advance) = if internal_caller.is_null() {
                 (std::ptr::null(), false)
@@ -1227,6 +1221,25 @@ fn execute_resumed_generator_frame(
             }
             trace
         };
+        let trace = exception
+            .as_object()
+            .and_then(|object| {
+                object
+                    .get_property("trace")
+                    .and_then(Value::as_array)
+                    .filter(|trace| !trace.is_empty())
+                    .map(|trace| trace.values().cloned().collect::<Vec<_>>())
+            })
+            .map_or(continuation.clone(), |prefix| {
+                let mut complete = PhpArray::new();
+                for value in prefix {
+                    complete.push(value);
+                }
+                for value in continuation.values() {
+                    complete.push(value.clone());
+                }
+                complete
+            });
         if let Some(mut object) = exception.as_object_mut() {
             object.set_property("trace", Value::array(trace));
         }

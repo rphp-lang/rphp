@@ -9478,6 +9478,15 @@ fn resume_generator_method(
     }
 }
 
+#[cold]
+#[inline(never)]
+fn reject_running_generator(eg: &mut ExecutorGlobals) {
+    eg.exception = Some(crate::value::make_error_value(
+        "Error",
+        "Cannot resume an already running generator",
+    ));
+}
+
 fn fn_generator_current(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -9518,7 +9527,9 @@ fn fn_generator_next(
         ensure_generator_started(ed, &gen_ref, eg)?;
         // Advance past current yield
         let state = gen_ref.borrow().state;
-        if state == crate::vm::generator::GeneratorState::Suspended {
+        if state == crate::vm::generator::GeneratorState::Running {
+            reject_running_generator(eg);
+        } else if state == crate::vm::generator::GeneratorState::Suspended {
             if gen_ref.borrow().rewindable {
                 gen_ref.borrow_mut().rewindable = false;
             }
@@ -9581,6 +9592,8 @@ fn fn_generator_send(
                 gen_ref.borrow_mut().rewindable = false;
                 resume_generator_method(ed, eg, &gen_ref, send_val)?;
             }
+        } else if state == crate::vm::generator::GeneratorState::Running {
+            reject_running_generator(eg);
         } else if state == crate::vm::generator::GeneratorState::Suspended {
             if gen_ref.borrow().rewindable {
                 gen_ref.borrow_mut().rewindable = false;
@@ -9669,9 +9682,7 @@ fn fn_generator_throw(
                 eg.exception = Some(exception);
             }
             crate::vm::generator::GeneratorState::Running => {
-                return Err(VmError::Fatal(
-                    "Cannot resume an already running generator".into(),
-                ));
+                reject_running_generator(eg);
             }
             crate::vm::generator::GeneratorState::Created => unreachable!(),
         }
