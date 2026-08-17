@@ -1974,6 +1974,7 @@ fn op_assign_obj_prop<'a>(
             }
         }
         // Readonly property check
+        let mut consume_clone_reinitialization = false;
         if let Some(class_def) = eg.class_table.get(php_obj.class_name.as_ref()) {
             if class_def.readonly_props.contains(&name) {
                 prop_is_writable = false;
@@ -1981,15 +1982,34 @@ fn op_assign_obj_prop<'a>(
                 let already_init = php_obj.get_property(&key_check)
                     .map_or(false, |v| !v.is_undef());
                 if already_init {
-                    // Already initialized — always error
-                    let err = make_error_value("Error", &format!(
-                        "Cannot modify readonly property {}::${}",
-                        php_obj.class_name, name
-                    ));
-                    drop(php_obj);
-                    match throw_in_frame(eg, frame, err) {
-                        ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
-                        ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                    if opline._pad & ASSIGN_OBJ_MODIFY != 0
+                        && assigned.value_type() == ValueType::Array
+                    {
+                        let err = make_error_value("Error", &format!(
+                            "Cannot indirectly modify readonly property {}::${}",
+                            php_obj.class_name, name
+                        ));
+                        drop(php_obj);
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                            ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                        }
+                    } else if readonly_clone_reinitialization_allowed(eg, obj, &name) {
+                        consume_clone_reinitialization = true;
+                    } else if opline._pad & ASSIGN_OBJ_CLONE_WITH != 0
+                        && consume_readonly_clone_with_update(eg, frame, obj, &name)
+                    {
+                        // The pre-update snapshot grants this one direct write.
+                    } else {
+                        let err = make_error_value("Error", &format!(
+                            "Cannot modify readonly property {}::${}",
+                            php_obj.class_name, name
+                        ));
+                        drop(php_obj);
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                            ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                        }
                     }
                 } else {
                     // PHP 8.4+ readonly writes are protected(set): first
@@ -2151,6 +2171,12 @@ fn op_assign_obj_prop<'a>(
                     ic_mut.set_property(object_class_id, slot, 3);
                 }
             }
+        }
+
+        // A failed type/reference check must not consume PHP's one successful
+        // readonly reinitialization opportunity during `__clone`.
+        if consume_clone_reinitialization {
+            consume_readonly_clone_reinitialization(eg, obj, &name);
         }
 
         if prop_exists {

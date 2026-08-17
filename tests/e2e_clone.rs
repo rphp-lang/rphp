@@ -205,6 +205,52 @@ try {
 }
 
 #[test]
+fn automatic_clone_allows_one_successful_readonly_reinitialization() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReadonlyCloneWindow {
+    public function __construct(public readonly int $value) {}
+    public function __clone() {
+        try { $this->value = 'bad'; } catch (TypeError $error) { echo "type:"; }
+        $this->value += 1;
+        try { $this->value = 99; } catch (Error $error) { echo "twice:"; }
+    }
+}
+$original = new ReadonlyCloneWindow(1);
+$copy = clone $original;
+echo $original->value, ':', $copy->value, "\n";
+try { $original->__clone(); } catch (Error $error) { echo "manual\n"; }
+"#,
+        ),
+        "type:twice:1:2\nmanual\n"
+    );
+}
+
+#[test]
+fn readonly_clone_rejects_indirect_updates_but_clone_with_replaces_directly() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReadonlyCloneArray {
+    public function __construct(public public(set) readonly array $items) {}
+    public function __clone() {
+        try { $this->items[] = 'bad'; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+    }
+}
+$original = new ReadonlyCloneArray(['old']);
+$copy = clone($original, ['items' => ['new']]);
+echo $original->items[0], ':', $copy->items[0], "\n";
+"#,
+        ),
+        concat!(
+            "Cannot indirectly modify readonly property ReadonlyCloneArray::$items\n",
+            "old:new\n",
+        )
+    );
+}
+
+#[test]
 fn dynamic_new_accepts_an_object_and_rejects_other_non_strings() {
     let output = run_php(
         r#"<?php

@@ -270,6 +270,11 @@ pub struct ExecutorGlobals {
     /// Exceptions suspended while their frame executes a finally block. This
     /// cold sidecar keeps them separate from newly raised VM exceptions.
     pub(crate) finally_exceptions: HashMap<usize, Vec<crate::value::Value>>,
+    /// Per-clone readonly properties that may be reinitialized once while the
+    /// engine invokes `__clone`. Kept cold to preserve object/frame layouts.
+    pub(crate) clone_readonly_reinitialization: Vec<(usize, std::collections::HashSet<String>)>,
+    /// Snapshot of initialized readonly properties eligible for clone-with.
+    pub(crate) clone_with_readonly_updates: Vec<(usize, usize, std::collections::HashSet<String>)>,
     /// Legacy assert_options() settings are request-local and consulted only
     /// by assert(), keeping ordinary call frames and dispatch paths unchanged.
     pub(crate) assertion_state: AssertionState,
@@ -510,6 +515,8 @@ impl ExecutorGlobals {
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             finally_exceptions: HashMap::new(),
+            clone_readonly_reinitialization: Vec::new(),
+            clone_with_readonly_updates: Vec::new(),
             assertion_state: AssertionState::default(),
             error_reporting: 32767,
             error_suppression_frames: Vec::new(),
@@ -594,6 +601,8 @@ impl ExecutorGlobals {
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             finally_exceptions: HashMap::new(),
+            clone_readonly_reinitialization: Vec::new(),
+            clone_with_readonly_updates: Vec::new(),
             assertion_state: AssertionState::default(),
             error_reporting: 32767,
             error_suppression_frames: Vec::new(),

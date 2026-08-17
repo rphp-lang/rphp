@@ -231,6 +231,8 @@ pub enum OpCode {
     Eval = 166,
     /// Validate PHP 8.5 clone-with's property array before cloning begins.
     ValidateCloneWith = 167,
+    /// Close the frame-local readonly update window after clone-with.
+    EndCloneWith = 169,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

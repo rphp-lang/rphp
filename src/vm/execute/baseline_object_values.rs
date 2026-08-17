@@ -143,7 +143,22 @@ fn op_clone_obj<'a>(
             eg.bind_reified_object(&cloned_val, binding);
         }
 
-        let _ = call_magic_method(eg, &cloned_val, "__clone", &[])?;
+        let clone_identity = cloned_val
+            .object_identity()
+            .expect("cloned object has stable identity");
+        let readonly_properties = {
+            let cloned = cloned_val.as_object().unwrap();
+            eg.class_table
+                .get(cloned.class_name.as_ref())
+                .map(|class| class.readonly_props.iter().cloned().collect())
+                .unwrap_or_default()
+        };
+        eg.clone_readonly_reinitialization
+            .push((clone_identity, readonly_properties));
+        let clone_result = call_magic_method(eg, &cloned_val, "__clone", &[]);
+        let popped = eg.clone_readonly_reinitialization.pop();
+        debug_assert!(popped.is_some_and(|(identity, _)| identity == clone_identity));
+        let _ = clone_result?;
 
     // If __clone threw an exception, propagate it
         if let Some(exc) = eg.exception.take() {
@@ -151,6 +166,10 @@ fn op_clone_obj<'a>(
                 ThrowResult::Handled(nf, no) => return Ok(ColdResult::NewFrame(nf, no)),
                 ThrowResult::Unhandled(t) => return Ok(ColdResult::Unhandled(t)),
             }
+        }
+
+        if opline._pad & CLONE_OBJ_WITH_PROPERTIES != 0 {
+            begin_clone_with_readonly_updates(eg, frame, &cloned_val);
         }
 
         frame_result_set(frame, result_ptr, opline.result_type, cloned_val);
@@ -200,4 +219,51 @@ fn op_validate_clone_with<'a>(
         }
         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
     })
+}
+
+fn begin_clone_with_readonly_updates(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    object: &Value,
+) {
+    let Some(identity) = object.object_identity() else {
+        return;
+    };
+    let Some(object_ref) = object.as_object() else {
+        return;
+    };
+    let initialized = eg
+        .class_table
+        .get(object_ref.class_name.as_ref())
+        .map(|class| {
+            class
+                .readonly_props
+                .iter()
+                .filter(|name| {
+                    let key = crate::runtime::resolve_property_key(
+                        eg,
+                        &object_ref.class_name,
+                        name,
+                        Some(&object_ref.class_name),
+                    );
+                    object_ref
+                        .get_property(&key)
+                        .is_some_and(|value| !value.is_undef())
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    eg.clone_with_readonly_updates
+        .push((frame as usize, identity, initialized));
+}
+
+fn op_end_clone_with(eg: &mut ExecutorGlobals, frame: *mut ExecuteData) {
+    if let Some(index) = eg
+        .clone_with_readonly_updates
+        .iter()
+        .rposition(|(owner, _, _)| *owner == frame as usize)
+    {
+        eg.clone_with_readonly_updates.remove(index);
+    }
 }

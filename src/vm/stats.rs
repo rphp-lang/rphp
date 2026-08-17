@@ -771,6 +771,7 @@ mod inner {
             165 => Some("BindCvRef"),
             166 => Some("Eval"),
             167 => Some("ValidateCloneWith"),
+            169 => Some("EndCloneWith"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),

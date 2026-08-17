@@ -165,6 +165,11 @@ pub const OBJ_PROP_HOOK_BYPASS: u16 = 1 << 5;
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;
+/// Property assignment emitted by PHP 8.5 clone-with. An initialized readonly
+/// property may be replaced once by this array entry after `__clone` returns.
+pub const ASSIGN_OBJ_CLONE_WITH: u16 = 1 << 1;
+/// `CloneObj` is followed by the PHP 8.5 property-update loop.
+pub const CLONE_OBJ_WITH_PROPERTIES: u16 = 1;
 /// `BindObjPropRef` rebinds the property to the reference supplied in its
 /// result CV. Without this flag the opcode promotes/fetches the property cell
 /// and rebinds the result CV instead.

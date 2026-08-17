@@ -567,6 +567,58 @@ fn property_guard_active(object: &Value, name: &str, operation: u8) -> bool {
 }
 
 #[inline]
+fn readonly_clone_reinitialization_allowed(
+    eg: &ExecutorGlobals,
+    object: &Value,
+    property: &str,
+) -> bool {
+    let Some(identity) = object.object_identity() else {
+        return false;
+    };
+    eg.clone_readonly_reinitialization
+        .iter()
+        .rev()
+        .find(|(candidate, _)| *candidate == identity)
+        .is_some_and(|(_, remaining)| remaining.contains(property))
+}
+
+#[inline]
+fn consume_readonly_clone_reinitialization(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    property: &str,
+) {
+    let Some(identity) = object.object_identity() else {
+        return;
+    };
+    if let Some((_, remaining)) = eg
+        .clone_readonly_reinitialization
+        .iter_mut()
+        .rev()
+        .find(|(candidate, _)| *candidate == identity)
+    {
+        remaining.remove(property);
+    }
+}
+
+#[inline]
+fn consume_readonly_clone_with_update(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    object: &Value,
+    property: &str,
+) -> bool {
+    let Some(identity) = object.object_identity() else {
+        return false;
+    };
+    eg.clone_with_readonly_updates
+        .iter_mut()
+        .rev()
+        .find(|(owner, candidate, _)| *owner == frame as usize && *candidate == identity)
+        .is_some_and(|(_, _, remaining)| remaining.remove(property))
+}
+
+#[inline]
 fn set_property_guard(object: &Value, name: &str, operation: u8, active: bool) {
     if let Some(mut object) = object.as_object_mut() {
         object.set_property_guard(name, operation, active);
@@ -850,6 +902,10 @@ fn throw_in_frame<'a>(
     mut frame: *mut ExecuteData,
     thrown: Value,
 ) -> ThrowResult<'a> {
+    // A clone-with expression aborts on the first escaping property error,
+    // including when a handler in this same frame catches it.
+    eg.clone_with_readonly_updates
+        .retain(|(owner, _, _)| *owner != frame as usize);
     // Runtime helpers commonly construct Error/TypeError immediately before
     // entering this shared throw boundary. Stamp that first raise site here so
     // every catchable runtime error exposes the same immutable file, line and

@@ -4703,6 +4703,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let property_definition = php_obj
                         .property_slot(&storage_key)
                         .and_then(|slot| eg.instance_property_definition(php_obj.class_id, slot));
+                    let readonly_initialized = eg
+                        .class_table
+                        .get(php_obj.class_name.as_ref())
+                        .is_some_and(|class| class.readonly_props.contains(&prop_name))
+                        && php_obj
+                            .get_property(&storage_key)
+                            .is_some_and(|value| !value.is_undef());
+                    if readonly_initialized {
+                        drop(php_obj);
+                        let error = make_error_value(
+                            "Error",
+                            &format!(
+                                "Cannot indirectly modify readonly property {object_class_name}::${prop_name}"
+                            ),
+                        );
+                        match throw_in_frame(eg, frame, error) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
 
                     if let Some(arr_val) = php_obj.get_property_mut(&storage_key) {
                         // Property exists — mutate the array in place
@@ -6054,6 +6081,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     _ => {}
                 }
             }
+
+            OpCode::EndCloneWith => op_end_clone_with(eg, frame),
 
             OpCode::CreateClosure => {
                 op_create_closure(eg, frame, op_array, opline);
