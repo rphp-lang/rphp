@@ -38,8 +38,9 @@ use crate::vm::instruction::{
     NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
     OBJ_PROP_REFERENCE_BIND, OpType, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_REFERENCE_BIND,
-    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
+    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
+    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -3807,6 +3808,7 @@ impl Compiler {
         fetch.result = destination;
         fetch.result_type = OpType::Cv;
         fetch._pad |= STATIC_PROP_REFERENCE_FETCH;
+        fetch._pad |= STATIC_PROP_INDIRECT_MODIFY;
         if internal_result {
             fetch._pad |= REFERENCE_RESULT_INTERNAL;
         }
@@ -3842,6 +3844,7 @@ impl Compiler {
         assign.result = source;
         assign.result_type = source_type;
         assign._pad |= STATIC_PROP_REFERENCE_BIND;
+        assign._pad |= STATIC_PROP_INDIRECT_MODIFY;
         if source_is_internal {
             assign._pad |= REFERENCE_RESULT_INTERNAL;
         }

@@ -1832,7 +1832,7 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         class_id,
         raw_class,
         prop,
-        opline._pad & STATIC_PROP_SILENT != 0,
+        opline._pad,
     )
 }
 
@@ -2471,6 +2471,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         raw_class,
         property,
         value,
+        opline._pad & STATIC_PROP_INDIRECT_MODIFY != 0,
     )
 }
 
@@ -2518,7 +2519,14 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
         || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
         |(_, class_id)| *class_id,
     );
-    let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, true) {
+    let resolved = match resolve_static_property(
+        eg,
+        frame,
+        class_id,
+        raw_class,
+        property,
+        Some("indirectly modify"),
+    ) {
         Ok(resolved) => resolved,
         Err(VmError::Fatal(message)) => {
             return Ok(static_property_throw(eg, frame, "Error", message));
@@ -2572,7 +2580,12 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     if !eg.rebind_static_property_value(resolved.storage_slot, property_binding) {
         return Err(VmError::Fatal("Invalid static property storage slot".into()));
     }
-    cache.set_property(class_id, resolved.storage_slot, 1);
+    if definition
+        .set_visibility
+        .is_none_or(|visibility| visibility == Visibility::Public)
+    {
+        cache.set_property(class_id, resolved.storage_slot, 1);
+    }
     Ok(ColdResult::Done)
     }
 }
@@ -2669,8 +2682,17 @@ fn assign_static_property_cache_miss<'a>(
     raw_class: &str,
     property: &str,
     mut value: Value,
+    indirect: bool,
 ) -> Result<ColdResult<'a>, VmError> {
-    let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, true) {
+    let action = if indirect { "indirectly modify" } else { "modify" };
+    let resolved = match resolve_static_property(
+        eg,
+        frame,
+        class_id,
+        raw_class,
+        property,
+        Some(action),
+    ) {
         Ok(resolved) => resolved,
         Err(VmError::Fatal(message)) => {
             return Ok(static_property_throw(eg, frame, "Error", message));
@@ -2740,18 +2762,21 @@ fn assign_static_property_cache_miss<'a>(
     if !eg.set_static_property_value(resolved.storage_slot, value) {
         return Err(VmError::Fatal("Invalid static property storage slot".into()));
     }
+    let cacheable_write = definition
+        .set_visibility
+        .is_none_or(|visibility| visibility == Visibility::Public);
     #[cfg(feature = "php-generics-reified")]
-    if !reified_contract.is_null() {
+    if cacheable_write && !reified_contract.is_null() {
         cache.set_reified_static_property(reified_contract, class_id, resolved.storage_slot);
-    } else if definition.is_typed() {
+    } else if cacheable_write && definition.is_typed() {
         cache.set_typed_static_property(definition, class_id, resolved.storage_slot);
-    } else {
+    } else if cacheable_write {
         cache.set_property(class_id, resolved.storage_slot, 3);
     }
     #[cfg(not(feature = "php-generics-reified"))]
-    if definition.is_typed() {
+    if cacheable_write && definition.is_typed() {
         cache.set_typed_static_property(definition, class_id, resolved.storage_slot);
-    } else {
+    } else if cacheable_write {
         cache.set_property(class_id, resolved.storage_slot, 3);
     }
     Ok(ColdResult::Done)
@@ -2767,9 +2792,19 @@ fn resolve_static_property_read_cache_miss<'a>(
     class_id: u32,
     raw_class: &str,
     property: &str,
-    silent: bool,
+    flags: u16,
 ) -> Result<ColdResult<'a>, VmError> {
-    let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, false) {
+    let silent = flags & STATIC_PROP_SILENT != 0;
+    let indirect = flags & STATIC_PROP_INDIRECT_MODIFY != 0;
+    let write_action = indirect.then_some("indirectly modify");
+    let resolved = match resolve_static_property(
+        eg,
+        frame,
+        class_id,
+        raw_class,
+        property,
+        write_action,
+    ) {
         Ok(resolved) => resolved,
         Err(VmError::Fatal(message)) => {
             if silent
@@ -2788,6 +2823,7 @@ fn resolve_static_property_read_cache_miss<'a>(
         }
         Err(error) => return Err(error),
     };
+    let definition = unsafe { &*resolved.definition };
     let stored = eg
         .static_property_value(resolved.storage_slot)
         .ok_or_else(|| VmError::Fatal("Invalid static property storage slot".into()))?;
@@ -2798,7 +2834,6 @@ fn resolve_static_property_read_cache_miss<'a>(
             unsafe { frame_tmp_set(frame, result_ptr, Value::null()) };
             return Ok(ColdResult::Done);
         }
-        let definition = unsafe { &*resolved.definition };
         return Ok(static_property_throw(
             eg,
             frame,
@@ -2810,7 +2845,13 @@ fn resolve_static_property_read_cache_miss<'a>(
         ));
     }
     let value = clone_static_property_value(stored);
-    cache.set_property(class_id, resolved.storage_slot, 1);
+    if !indirect
+        || definition
+            .set_visibility
+            .is_none_or(|visibility| visibility == Visibility::Public)
+    {
+        cache.set_property(class_id, resolved.storage_slot, 1);
+    }
     unsafe { frame_tmp_set(frame, result_ptr, value) };
     Ok(ColdResult::Done)
 }
@@ -2832,7 +2873,14 @@ fn resolve_static_property_reference_fetch<'a>(
     // storage, and result_ptr is the compiler-owned CV output slot in the live
     // frame. Both stay valid for the duration of this cold dispatch.
     unsafe {
-    let resolved = match resolve_static_property(eg, frame, class_id, raw_class, property, true) {
+    let resolved = match resolve_static_property(
+        eg,
+        frame,
+        class_id,
+        raw_class,
+        property,
+        Some("indirectly modify"),
+    ) {
         Ok(resolved) => resolved,
         Err(VmError::Fatal(message)) => {
             return Ok(static_property_throw(eg, frame, "Error", message));
@@ -2894,7 +2942,12 @@ fn resolve_static_property_reference_fetch<'a>(
             type_hint: definition.type_hint.clone(),
         });
     }
-    cache.set_property(class_id, resolved.storage_slot, 1);
+    if definition
+        .set_visibility
+        .is_none_or(|visibility| visibility == Visibility::Public)
+    {
+        cache.set_property(class_id, resolved.storage_slot, 1);
+    }
     frame_slot_set(frame, result_ptr, binding);
     Ok(ColdResult::Done)
     }
@@ -2913,7 +2966,7 @@ fn resolve_static_property(
     class_id: u32,
     raw_class: &str,
     property: &str,
-    for_write: bool,
+    write_action: Option<&str>,
 ) -> Result<ResolvedStaticProperty, VmError> {
     if class_id == 0
         && matches!(
@@ -2940,26 +2993,40 @@ fn resolve_static_property(
             class.name, property
         )));
     };
-    if for_write && class.is_enum {
+    if write_action.is_some() && class.is_enum {
         return Err(VmError::Fatal(format!(
             "Cannot modify readonly property {}::${}",
             class.name, property
         )));
     }
     let caller = get_caller_class(frame, eg);
+    let visibility = write_action
+        .and_then(|_| definition.set_visibility)
+        .unwrap_or(definition.visibility);
     if !eg.check_visibility(
         caller.as_deref(),
         &definition.declaring_class,
-        definition.visibility,
+        visibility,
     ) {
-        let visibility = match definition.visibility {
+        let visibility_name = match visibility {
             Visibility::Private => "private",
             Visibility::Protected => "protected",
             Visibility::Public => unreachable!(),
         };
+        if definition.set_visibility.is_some()
+            && let Some(action) = write_action
+        {
+            return Err(VmError::Fatal(format!(
+                "Cannot {action} {visibility_name}(set) property {}::${property} from {}",
+                definition.declaring_class,
+                caller
+                    .as_deref()
+                    .map_or_else(|| "global scope".to_string(), |scope| format!("scope {scope}")),
+            )));
+        }
         return Err(VmError::Fatal(format!(
             "Cannot access {} property {}::${}",
-            visibility, definition.declaring_class, property
+            visibility_name, definition.declaring_class, property
         )));
     }
     let storage_slot = eg

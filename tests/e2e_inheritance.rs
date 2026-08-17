@@ -7,6 +7,36 @@ use rphp::parser::Parser;
 use rphp::vm::opcode::OpCode;
 
 #[test]
+fn static_asymmetric_visibility_guards_all_write_forms_but_not_nested_objects() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class StaticBox {
+    public private(set) static int $value = 1;
+    public private(set) static array $values = [];
+    public private(set) static object $node;
+    public private(set) static object $unset;
+    public static function initialize(): void {
+        self::$value = 2;
+        self::$node = new stdClass();
+    }
+}
+StaticBox::initialize();
+var_dump(StaticBox::$value);
+try { StaticBox::$value = 3; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { ++StaticBox::$value; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { StaticBox::$values[] = 4; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { $value = &StaticBox::$value; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+StaticBox::$node->answer = 42;
+var_dump(StaticBox::$node->answer);
+unset(StaticBox::$unset->answer);
+"#,
+        ),
+        "int(2)\nCannot modify private(set) property StaticBox::$value from global scope\nCannot indirectly modify private(set) property StaticBox::$value from global scope\nCannot indirectly modify private(set) property StaticBox::$values from global scope\nCannot indirectly modify private(set) property StaticBox::$value from global scope\nint(42)\n"
+    );
+}
+
+#[test]
 fn test_extends_basic() {
     assert_eq!(
         run_php(

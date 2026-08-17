@@ -107,6 +107,9 @@ pub const STATIC_PROP_REFERENCE_FETCH: u16 = 1 << 7;
 /// Rebind the resolved static-property storage slot to the reference supplied
 /// in the instruction result operand instead of writing through an old alias.
 pub const STATIC_PROP_REFERENCE_BIND: u16 = 1 << 8;
+/// Static-property writeback is a read-modify-write operation (increment,
+/// compound assignment, dimension mutation or reference access).
+pub const STATIC_PROP_INDIRECT_MODIFY: u16 = 1 << 9;
 
 /// CreateClosure flag: PHP's `static function`/`static fn` form cannot bind
 /// an object, even when created inside an instance method.

@@ -497,6 +497,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= STATIC_PROP_INDIRECT_MODIFY;
                 if silent_fetch {
                     fetch._pad |= STATIC_PROP_SILENT;
                 }
@@ -680,6 +681,7 @@ impl Compiler {
                 assign.op2_type = property_type;
                 assign.result = array;
                 assign.result_type = array_type;
+                assign._pad |= STATIC_PROP_INDIRECT_MODIFY;
                 if dynamic_owner {
                     assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
                 }
@@ -1183,6 +1185,7 @@ impl Compiler {
                 assign.op2_type = property_type;
                 assign.result = result;
                 assign.result_type = OpType::Tmp;
+                assign._pad |= STATIC_PROP_INDIRECT_MODIFY;
                 if dynamic_owner {
                     assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
                 }
@@ -1525,6 +1528,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = container;
                 fetch.result_type = OpType::Tmp;
+                fetch._pad |= STATIC_PROP_INDIRECT_MODIFY;
                 if silent_root_fetch {
                     fetch._pad |= STATIC_PROP_SILENT;
                 }
@@ -1688,6 +1692,7 @@ impl Compiler {
                 }
                 instruction.result = path.root.0;
                 instruction.result_type = path.root.1;
+                instruction._pad |= STATIC_PROP_INDIRECT_MODIFY;
                 self.push_instruction_at_line(instruction, line);
                 return;
             }
@@ -2790,7 +2795,22 @@ impl Compiler {
                             nullsafe: false,
                             ..
                         } => {
+                            let silent_static_receiver = matches!(
+                                object.as_ref(),
+                                Expr::StaticProperty { .. }
+                                    | Expr::DynamicNamedStaticProperty { .. }
+                                    | Expr::DynamicStaticProperty { .. }
+                            );
                             let (object, object_type) = self.compile_expr(object);
+                            if silent_static_receiver
+                                && let Some(fetch) = self.instructions.last_mut()
+                                && matches!(
+                                    fetch.opcode,
+                                    OpCode::FetchStaticProp | OpCode::FetchLateStaticProp
+                                )
+                            {
+                                fetch._pad |= STATIC_PROP_SILENT;
+                            }
                             let property = self.add_literal(Value::string(property.clone()));
                             let mut unset = Instruction::new(OpCode::UnsetObj);
                             unset.op1 = object;
@@ -2805,7 +2825,22 @@ impl Compiler {
                             nullsafe: false,
                             ..
                         } => {
+                            let silent_static_receiver = matches!(
+                                object.as_ref(),
+                                Expr::StaticProperty { .. }
+                                    | Expr::DynamicNamedStaticProperty { .. }
+                                    | Expr::DynamicStaticProperty { .. }
+                            );
                             let (object, object_type) = self.compile_expr(object);
+                            if silent_static_receiver
+                                && let Some(fetch) = self.instructions.last_mut()
+                                && matches!(
+                                    fetch.opcode,
+                                    OpCode::FetchStaticProp | OpCode::FetchLateStaticProp
+                                )
+                            {
+                                fetch._pad |= STATIC_PROP_SILENT;
+                            }
                             let (property, property_type) = self.compile_expr(property);
                             let mut unset = Instruction::new(OpCode::UnsetObj);
                             unset.op1 = object;
