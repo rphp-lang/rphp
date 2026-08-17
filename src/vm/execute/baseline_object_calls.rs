@@ -3330,6 +3330,17 @@ fn op_init_dynamic_call<'a>(
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 format!("Call to undefined method Closure::{method}()")
+            } else if let Some(method) = callable_array
+                .get_value_at(1)
+                .and_then(Value::as_str)
+                && let Some(class) = callable_array.get_value_at(0).and_then(|receiver| {
+                    receiver
+                        .as_object()
+                        .map(|object| object.class_name.to_string())
+                        .or_else(|| receiver.as_str().map(str::to_string))
+                })
+            {
+                format!("Call to undefined method {class}::{method}()")
             } else {
                 "Array is not callable".to_string()
             };

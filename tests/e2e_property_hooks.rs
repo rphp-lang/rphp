@@ -860,3 +860,37 @@ var_dump($object->backed, $object->virtual);
         )
     );
 }
+
+#[test]
+fn property_hook_method_names_are_hidden_from_direct_object_calls() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class HiddenHookMethods {
+    public $value {
+        get { echo "getter ran\n"; return 42; }
+        set { echo "setter ran\n"; }
+    }
+}
+$object = new HiddenHookMethods();
+foreach (['$value::get', '$value::set'] as $method) {
+    try { $object->{$method}(1); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+}
+
+class MagicHiddenHookMethods {
+    public $value { get => 42; }
+    public function __call($method, $arguments) {
+        echo "magic:$method:", count($arguments), "\n";
+    }
+}
+(new MagicHiddenHookMethods())->{'$value::get'}(1, 2);
+"#,
+        ),
+        concat!(
+            "Call to undefined method HiddenHookMethods::$value::get()\n",
+            "Call to undefined method HiddenHookMethods::$value::set()\n",
+            "magic:$value::get:2\n",
+        )
+    );
+}

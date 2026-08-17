@@ -10294,6 +10294,17 @@ pub(crate) fn closure_is_magic_call(closure: &PhpClosure, eg: &ExecutorGlobals) 
 /// array [object, "method"], and objects with __invoke.
 /// `caller_class` is the class scope of the call site — used to allow
 /// private/protected method callbacks when called from the declaring class.
+#[inline]
+pub(crate) fn is_property_hook_method_name(method: &str) -> bool {
+    method
+        .strip_prefix('$')
+        .and_then(|name| name.rsplit_once("::"))
+        .is_some_and(|(property, hook)| {
+            !property.is_empty()
+                && (hook.eq_ignore_ascii_case("get") || hook.eq_ignore_ascii_case("set"))
+        })
+}
+
 fn resolve_callback(
     val: &Value,
     eg: &ExecutorGlobals,
@@ -10405,6 +10416,15 @@ fn resolve_callback(
                 let class_name = obj.class_name.to_string();
                 let called_scope_class_id = obj.class_id;
                 drop(obj);
+                if is_property_hook_method_name(method_name) {
+                    return resolve_magic_callback(
+                        eg,
+                        &class_name,
+                        method_name,
+                        "__call",
+                        Some(obj_val),
+                    );
+                }
                 let Some((visibility, _, func_ptr, declaring)) =
                     find_method_in_class_hierarchy(eg, &class_name, method_name)
                 else {
@@ -10458,6 +10478,15 @@ fn resolve_callback(
                 })
             } else if let Some(class_str) = obj_val.as_str() {
                 // Static method: ["ClassName", "method"] — must be static; visibility depends on scope
+                if is_property_hook_method_name(method_name) {
+                    return resolve_magic_callback(
+                        eg,
+                        class_str,
+                        method_name,
+                        "__callStatic",
+                        None,
+                    );
+                }
                 let Some((visibility, is_static, func_ptr, declaring)) =
                     find_method_in_class_hierarchy(eg, class_str, method_name)
                 else {
