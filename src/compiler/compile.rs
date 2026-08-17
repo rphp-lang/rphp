@@ -3862,6 +3862,31 @@ impl Compiler {
     ) -> Result<(), String> {
         use crate::parser::TypeHint;
 
+        fn standalone_type_error(hint: &TypeHint) -> Option<&'static str> {
+            match hint {
+                TypeHint::Nullable(inner) => match inner.as_ref() {
+                    TypeHint::Mixed => Some(
+                        "Type mixed cannot be marked as nullable since mixed already includes null",
+                    ),
+                    TypeHint::Void => Some("Void can only be used as a standalone type"),
+                    TypeHint::Never => Some("never can only be used as a standalone type"),
+                    _ => None,
+                },
+                TypeHint::Union(parts) => {
+                    if parts.iter().any(|part| matches!(part, TypeHint::Mixed)) {
+                        Some("Type mixed can only be used as a standalone type")
+                    } else if parts.iter().any(|part| matches!(part, TypeHint::Void)) {
+                        Some("Void can only be used as a standalone type")
+                    } else if parts.iter().any(|part| matches!(part, TypeHint::Never)) {
+                        Some("never can only be used as a standalone type")
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+
         #[derive(Clone)]
         struct TypeAtom {
             identity: String,
@@ -4164,6 +4189,9 @@ impl Compiler {
             None
         }
 
+        if let Some(message) = hint.as_ref().and_then(standalone_type_error) {
+            return Err(self.goto_error(message, line));
+        }
         if let Some(invalid) = hint.as_ref().and_then(first_invalid_intersection_member) {
             return Err(self.goto_error(
                 &format!("Type {invalid} cannot be part of an intersection type"),
@@ -4196,6 +4224,57 @@ impl Compiler {
             if let Some(message) = union_redundancy(&branches) {
                 return Err(self.goto_error(&message, line));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_property_type_hint_in_scope(
+        &self,
+        hint: &Option<crate::parser::TypeHint>,
+        line: usize,
+        declaring_class: &str,
+        property_name: &str,
+        parent_class: Option<&str>,
+    ) -> Result<(), String> {
+        self.validate_property_function_only_type(hint, line, declaring_class, property_name)?;
+        self.validate_declared_type_hint_in_scope(hint, line, Some(declaring_class), parent_class)
+    }
+
+    fn validate_property_function_only_type(
+        &self,
+        hint: &Option<crate::parser::TypeHint>,
+        line: usize,
+        declaring_class: &str,
+        property_name: &str,
+    ) -> Result<(), String> {
+        use crate::parser::TypeHint;
+
+        fn contains_callable(hint: &TypeHint) -> bool {
+            match hint {
+                TypeHint::Callable => true,
+                TypeHint::Nullable(inner) => contains_callable(inner),
+                TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
+                    parts.iter().any(contains_callable)
+                }
+                _ => false,
+            }
+        }
+
+        let forbidden = match hint {
+            Some(TypeHint::Void) => Some("void".to_string()),
+            Some(TypeHint::Never) => Some("never".to_string()),
+            Some(hint) if contains_callable(hint) => {
+                Some(self.convert_type_hint(&Some(hint.clone())).display_name())
+            }
+            _ => None,
+        };
+        if let Some(type_name) = forbidden {
+            return Err(self.goto_error(
+                &format!(
+                    "Property {declaring_class}::${property_name} cannot have type {type_name}"
+                ),
+                line,
+            ));
         }
         Ok(())
     }

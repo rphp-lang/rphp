@@ -99,3 +99,63 @@ fn inherited_property_errors_use_the_class_line_and_canonical_parent_type() {
         "Fatal error: Type of ChildBox::$value must be omitted to match the parent definition in class ParentBox in Standard input code on line 3\n"
     );
 }
+
+#[test]
+fn composite_mixed_void_and_never_types_are_rejected_at_declaration_time() {
+    for (declaration, message) in [
+        (
+            "function test(mixed|int $value) {}",
+            "Type mixed can only be used as a standalone type",
+        ),
+        (
+            "function test(?mixed $value) {}",
+            "Type mixed cannot be marked as nullable since mixed already includes null",
+        ),
+        (
+            "function test(): ?void {}",
+            "Void can only be used as a standalone type",
+        ),
+        (
+            "function test(): object|never {}",
+            "never can only be used as a standalone type",
+        ),
+    ] {
+        let (status, stderr) = run_stdin(&format!("<?php\n{declaration}\n"));
+        assert_eq!(status, 255);
+        assert_eq!(
+            stderr,
+            format!("Fatal error: {message} in Standard input code on line 2\n")
+        );
+    }
+}
+
+#[test]
+fn properties_reject_function_only_types_with_property_diagnostics() {
+    for (type_name, class_name) in [
+        ("void", "Box"),
+        ("never", "LowerBox"),
+        ("callable", "CallbackBox"),
+        ("?callable", "NullableCallbackBox"),
+        ("callable|string", "UnionCallbackBox"),
+    ] {
+        let (status, stderr) = run_stdin(&format!(
+            "<?php\nclass {class_name} {{ public {type_name} $value; }}\n"
+        ));
+        assert_eq!(status, 255);
+        assert_eq!(
+            stderr,
+            format!(
+                "Fatal error: Property {class_name}::$value cannot have type {type_name} in Standard input code on line 2\n"
+            )
+        );
+    }
+
+    let (status, stderr) = run_stdin(
+        "<?php\nclass PromotedBox { public function __construct(public callable $value) {} }\n",
+    );
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Fatal error: Property PromotedBox::$value cannot have type callable in Standard input code on line 2\n"
+    );
+}

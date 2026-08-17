@@ -3332,6 +3332,17 @@ impl Compiler {
                     crate::generics::GenericInheritanceKind::Uses,
                     uses,
                 );
+                // Ordinary properties get synthetic accessors below. Reject
+                // function-only types first so those internal methods cannot
+                // replace PHP's property-qualified declaration diagnostic.
+                for property in properties {
+                    self.validate_property_function_only_type(
+                        &property.type_hint,
+                        property.line,
+                        &resolved_class,
+                        &property.name,
+                    )?;
+                }
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
@@ -3528,6 +3539,16 @@ impl Compiler {
                     // $this is always CV 0 in methods
                     let this_cv = func_compiler.resolve_cv("this");
                     func_compiler.definitely_defined_cvs.insert(this_cv);
+                    for parameter in &method.params {
+                        if parameter.promoted_property.is_some() {
+                            self.validate_property_function_only_type(
+                                &parameter.type_hint,
+                                parameter.line,
+                                &resolved_class,
+                                &parameter.name,
+                            )?;
+                        }
+                    }
                     let context = format!("method {}::{}", name, method.name);
                     let mut cp =
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
@@ -3789,10 +3810,11 @@ impl Compiler {
                             prop.line,
                         ));
                     }
-                    self.validate_declared_type_hint_in_scope(
+                    self.validate_property_type_hint_in_scope(
                         &prop.type_hint,
                         prop.line,
-                        Some(&resolved_class),
+                        &resolved_class,
+                        &prop.name,
                         resolved_parent.as_deref(),
                     )?;
                     let type_hint = self.resolve_declared_property_type_hint(
@@ -4171,10 +4193,11 @@ impl Compiler {
                             property.line,
                         ));
                     }
-                    self.validate_declared_type_hint_in_scope(
+                    self.validate_property_type_hint_in_scope(
                         &property.type_hint,
                         property.line,
-                        Some(&resolved_iface),
+                        &resolved_iface,
+                        &property.name,
                         None,
                     )?;
                     let type_hint = self.resolve_declared_property_type_hint(
@@ -4429,10 +4452,11 @@ impl Compiler {
                             name, prop.name
                         ));
                     }
-                    self.validate_declared_type_hint_in_scope(
+                    self.validate_property_type_hint_in_scope(
                         &prop.type_hint,
                         prop.line,
-                        Some(&resolved_trait),
+                        &resolved_trait,
+                        &prop.name,
                         None,
                     )?;
                     let type_hint = self.convert_type_hint(&prop.type_hint);
