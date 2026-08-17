@@ -1,6 +1,34 @@
 /// Tests for classes and objects (basic)
 mod common;
-use common::{run_php, run_php_with_source_context};
+use common::{run_php, run_php_expect_error, run_php_with_source_context};
+
+#[test]
+fn allow_dynamic_properties_rejects_non_dynamic_class_targets() {
+    for (source, expected) in [
+        (
+            "<?php #[AllowDynamicProperties] interface Contract {}",
+            "Cannot apply #[\\AllowDynamicProperties] to interface Contract",
+        ),
+        (
+            "<?php #[AllowDynamicProperties] trait SharedBehavior {}",
+            "Cannot apply #[\\AllowDynamicProperties] to trait SharedBehavior",
+        ),
+        (
+            "<?php #[AllowDynamicProperties] enum Choice {}",
+            "Cannot apply #[\\AllowDynamicProperties] to enum Choice",
+        ),
+        (
+            "<?php #[\\AllowDynamicProperties] readonly class Immutable {}",
+            "Cannot apply #[\\AllowDynamicProperties] to readonly class Immutable",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error for {source}: {error}"
+        );
+    }
+}
 
 #[test]
 fn dynamic_property_deprecation_matches_php_85_creation_exceptions() {

@@ -959,18 +959,35 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Throw { expr, line })
             }
-            Token::AllowDynamicPropertiesAttribute(_) => {
+            Token::AllowDynamicPropertiesAttribute(line) => {
                 self.advance();
                 let mut declaration = self.parse_stmt()?;
-                let Stmt::Class {
-                    allow_dynamic_properties,
-                    ..
-                } = &mut declaration
-                else {
-                    return Err("Attribute \"AllowDynamicProperties\" cannot target this declaration".into());
+                let invalid_target = match &mut declaration {
+                    Stmt::Class {
+                        name,
+                        is_readonly: true,
+                        ..
+                    } => Some(format!("readonly class {name}")),
+                    Stmt::Class {
+                        allow_dynamic_properties,
+                        ..
+                    } => {
+                        *allow_dynamic_properties = true;
+                        None
+                    }
+                    Stmt::Interface { name, .. } => Some(format!("interface {name}")),
+                    Stmt::Trait { name, .. } => Some(format!("trait {name}")),
+                    Stmt::Enum { name, .. } => Some(format!("enum {name}")),
+                    _ => None,
                 };
-                *allow_dynamic_properties = true;
-                Ok(declaration)
+                Ok(invalid_target.map_or(declaration, |target| {
+                    Stmt::ExprStmt(Expr::CompileError {
+                        message: format!(
+                            "Cannot apply #[\\AllowDynamicProperties] to {target}"
+                        ),
+                        line,
+                    })
+                }))
             }
             Token::Class | Token::Abstract | Token::Final => self.parse_class(),
             Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("class") => {

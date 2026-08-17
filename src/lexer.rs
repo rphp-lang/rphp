@@ -784,7 +784,7 @@ impl<'a> Lexer<'a> {
                     if bracket_depth == 0 {
                         let attribute = &self.src[start..self.pos];
                         let body = &attribute[2..attribute.len() - 1];
-                        if self.next_declaration_is_class()
+                        if self.next_declaration_accepts_allow_dynamic_properties()
                             && body.split(|byte| *byte == b',').any(|name| {
                                 name.trim_ascii()
                                     .strip_prefix(b"\\")
@@ -813,7 +813,7 @@ impl<'a> Lexer<'a> {
         ))
     }
 
-    fn next_declaration_is_class(&self) -> bool {
+    fn next_declaration_accepts_allow_dynamic_properties(&self) -> bool {
         let mut rest = &self.src[self.pos..];
         loop {
             rest = rest.trim_ascii_start();
@@ -835,12 +835,20 @@ impl<'a> Lexer<'a> {
         }
 
         rest = rest.trim_ascii_start();
-        if let Some(after_readonly) = rest.strip_prefix(b"readonly") {
-            rest = after_readonly.trim_ascii_start();
-        }
-        rest.starts_with(b"class")
-            && rest
-                .get(5)
+        [b"class".as_slice(), b"interface", b"trait", b"enum"]
+            .into_iter()
+            .any(|keyword| Self::starts_with_keyword(rest, keyword))
+            || rest
+                .strip_prefix(b"readonly")
+                .is_some_and(|after_readonly| {
+                    Self::starts_with_keyword(after_readonly.trim_ascii_start(), b"class")
+                })
+    }
+
+    fn starts_with_keyword(source: &[u8], keyword: &[u8]) -> bool {
+        source.starts_with(keyword)
+            && source
+                .get(keyword.len())
                 .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
     }
 
