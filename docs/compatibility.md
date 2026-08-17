@@ -8,14 +8,26 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `0fc54e9`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,068 pass, 3,140 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `2b1df95`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,088 pass, 3,120 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-39.708%; 83.871% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +253/-0. The first four gains are
+40.092%; 85.253% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +273/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Block-form property `set` hooks now accept PHP's implicit `$value` or one
+explicit, independently typed parameter and execute before ordinary backing
+storage writes. Access to the same property from either hook bypasses both
+hooks through one reentrance guard; this supplies implicit reads for backed
+setters while virtual set-only properties raise the canonical write-only error
+for reads and `isset()`. Assignment expressions retain their original input
+value even when the hook transforms backing storage. This adds 20 exact passes
+without losing a prior pass. The ordinary property A/B workload is -1.824%;
+typed/untyped read, write, method and constructor lanes are -0.020%, +0.548%,
++2.074% and +0.366%, all within their five-percent ceiling. Arrow, abstract,
+final, by-reference, parent-hook and Reflection forms remain follow-up work.
 
 Explicit block-form property `get` hooks now compile through the ordinary user
 method engine and execute on the cold declared-property path. Reentrant

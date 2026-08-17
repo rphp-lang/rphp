@@ -374,6 +374,16 @@ all-target and unsafe gates pass. The final ordinary property A/B result is
 five-percent ceiling. Setter, arrow, abstract/final, by-reference and Reflection
 forms remain the next property-hook slices.
 
+The `2b1df95` property-setter-hook checkpoint reaches 2,088 passes with 3,120
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Block-form setters accept implicit or explicit value parameters,
+preserve assignment-expression input, distinguish backed implicit reads from
+virtual write-only properties and share a backing guard with getters. The exact
+PHP 8.5.6 delta is +20/-0. All feature configurations, all-target and unsafe
+gates pass. The ordinary property A/B workload is -1.824%; specialized lanes
+range from -0.020% to +2.074%, within their five-percent ceiling. Arrow,
+abstract/final, by-reference, parent-hook and Reflection forms remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
