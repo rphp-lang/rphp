@@ -8,14 +8,25 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `8d43a0b`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,111 pass, 3,097 fail, 110 skip, one is an upstream XFAIL,
+`fcc29c8` and RPHP `c92122f`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,118 pass, 3,090 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
-40.534%; 86.406% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +296/-0. The first four gains are
+40.668%; 86.502% of attempted cases reach runtime. Relative to the initial
+`298e4c7` baseline, the exact pass-set delta is +303/-0. The first four gains are
 `Zend/tests/bug63882.phpt`, `gh18572.phpt` and
 `recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
 corpus now has no process hazard.
+
+Final properties and final property hooks now retain their declaration contract
+through parsing, compilation and inheritance linking. Child redeclarations fail
+with PHP 8.5's property- or hook-specific diagnostic, while invalid private and
+body-less final forms fail during declaration compilation. Finality occupies a
+cold flag in existing property source metadata, preserving the established hot
+metadata size and layout. This adds seven exact passes without losing a prior
+pass. The 40-pair ordinary property A/B workload is -2.109%; typed/untyped read,
+write, method and constructor lanes are +0.392%, -1.409%, +1.636% and +0.136%,
+within their five-percent ceiling. Abstract properties, by-reference hooks,
+parent-hook calls and Reflection remain follow-up work.
 
 Property `get` and `set` hooks now accept PHP 8.5's arrow form. Getter
 expressions return through the existing hook method contract; setter
@@ -25,8 +36,7 @@ reentrance guard and method lowering rather than adding a runtime fast path.
 This adds 23 exact passes without losing a prior pass. The ordinary property A/B
 workload is -1.565%; typed/untyped read, write, method and constructor lanes are
 -1.066%, -0.572%, +2.190% and -0.143%, within their five-percent ceiling.
-Abstract/final, by-reference, parent-hook and Reflection forms remain follow-up
-work.
+Abstract, by-reference, parent-hook and Reflection forms remain follow-up work.
 
 Block-form property `set` hooks now accept PHP's implicit `$value` or one
 explicit, independently typed parameter and execute before ordinary backing

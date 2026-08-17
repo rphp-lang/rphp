@@ -394,6 +394,18 @@ property A/B workload is -1.565%; specialized lanes range from -1.066% to
 +2.190%, within their five-percent ceiling. Abstract/final, by-reference,
 parent-hook and Reflection forms remain next.
 
+The `c92122f` final-property-hook checkpoint reaches 2,118 passes with 3,090
+failures, 110 skips, one XFAIL, 280 unsupported cases, zero timeouts and zero
+crashes. Final properties and hooks retain cold declaration metadata through
+inheritance linking and report property-specific override and invalid-modifier
+diagnostics. The exact PHP 8.5.6 delta is +7/-0. All five feature
+configurations, all-target and unsafe gates pass. A cold flag reuses the source-
+line metadata word so the hot property-definition size and layout remain
+unchanged; the 40-pair ordinary property A/B workload is -2.109%, and
+specialized lanes range from -1.409% to +1.636%, within their five-percent
+ceiling. Abstract properties, by-reference hooks, parent-hook calls and
+Reflection remain next.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
 not complete because RPHP remained in the initial cold gate execution for more
