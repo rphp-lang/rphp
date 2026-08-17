@@ -5766,6 +5766,103 @@ pub fn finalize_user_method(
     function
 }
 
+/// Clone a static-bearing trait method for one concrete composed method name.
+/// Ordinary trait methods keep sharing their original function pointer; this
+/// cold path exists because PHP gives every trait alias/consumer independent
+/// function-static storage.
+pub fn clone_trait_method_with_static_storage(
+    source: &UserFunction,
+    class_name: &str,
+    method_name: &str,
+    is_static: bool,
+) -> UserFunction {
+    let source_op = &source.op_array;
+    let mut op_array = OpArray {
+        num_cvs: source_op.num_cvs,
+        num_temps: source_op.num_temps,
+        instructions: source_op.instructions.clone(),
+        source_lines: source_op.source_lines.clone(),
+        literals: source_op.literals.clone(),
+        try_entries: source_op.try_entries.clone(),
+        strict_types: source_op.strict_types,
+        is_generator: source_op.is_generator,
+        global_vars: source_op.global_vars.clone(),
+        static_vars: source_op.static_vars.clone(),
+        name: format!("{class_name}::{method_name}"),
+        source_file: source_op.source_file.clone(),
+        main_scope_vars: source_op.main_scope_vars.clone(),
+        all_cvs: source_op.all_cvs.clone(),
+        cache: (0..source_op.instructions.len())
+            .map(|_| InlineCache::empty())
+            .collect(),
+        may_access_globals: source_op.may_access_globals,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
+    };
+    let storage_name = op_array.name.clone();
+    for instruction in &op_array.instructions {
+        if matches!(instruction.opcode, OpCode::CheckStatic | OpCode::BindStatic) {
+            op_array.literals[instruction.extended_value as usize] =
+                Value::string(storage_name.clone());
+        }
+    }
+    op_array.compute_blocks();
+    let signature = &source.common.sig;
+    let mut plan = CallPlan::without_flags(
+        source.common.plan.call,
+        source.common.plan.ret,
+        source.common.plan.cleanup,
+    );
+    plan.set_borrow_this(source.common.plan.borrow_this());
+    plan.set_needs_late_static_scope(source.common.plan.needs_late_static_scope());
+    plan.set_has_embedded_late_static_scope(source.common.plan.has_embedded_late_static_scope());
+    let function = UserFunction {
+        common: FunctionCommon {
+            fn_type: FunctionType::User,
+            sig: SignatureInfo {
+                num_args: signature.num_args,
+                required_num_args: signature.required_num_args,
+                is_variadic: signature.is_variadic,
+                variadic_cv_index: signature.variadic_cv_index,
+                ref_args: signature.ref_args,
+                prefer_ref_args: signature.prefer_ref_args,
+                returns_reference: signature.returns_reference,
+                this_offset: signature.this_offset,
+                param_type_hints: signature.param_type_hints.clone(),
+                param_names: signature.param_names.clone(),
+                return_type_hint: signature.return_type_hint.clone(),
+            },
+            frame: FrameLayout {
+                num_cvs: source.common.frame.num_cvs,
+                num_temps: source.common.frame.num_temps,
+                total_slots: source.common.frame.total_slots,
+            },
+            plan,
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
+        },
+        op_array,
+        reference_cvs: source.reference_cvs.clone(),
+        long_property_plan: None,
+        property_getter_plan: None,
+        property_init_plan: None,
+        binary_long_recursion_plan: None,
+        scalar_long_plan: None,
+        scalar_double_plan: None,
+        composed_scalar_double_plan: None,
+        object_long_plan: None,
+        object_array_plan: None,
+        scalar_string_plan: None,
+        composed_scalar_long_plan: None,
+        composed_typed_long_plan: None,
+        compact_class_guard: Cell::new(0),
+        borrowable_heap_args: 0,
+    };
+    finalize_user_method(function, method_name, is_static)
+}
+
 /// Create an InternalFunction for a method (with $this in CV 0).
 /// `num_args` includes the hidden $this slot; `this_offset` is set to 1.
 pub fn make_internal_method(

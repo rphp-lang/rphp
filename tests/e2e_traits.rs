@@ -314,6 +314,7 @@ trait Counter {
         }
     }
 }
+
 class App {
     use Counter;
 }
@@ -321,6 +322,34 @@ App::count_to(3);
 "#,
     );
     assert_eq!(out, "123");
+}
+
+#[test]
+fn trait_method_statics_are_isolated_per_alias_and_consumer() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait CounterTrait {
+    public static function counter() {
+        static $count = 0;
+        echo ++$count;
+    }
+}
+class FirstCounter {
+    use CounterTrait {
+        CounterTrait::counter as firstAlias;
+        CounterTrait::counter as secondAlias;
+    }
+}
+class SecondCounter { use CounterTrait; }
+FirstCounter::counter(); FirstCounter::firstAlias();
+FirstCounter::secondAlias(); SecondCounter::counter();
+FirstCounter::counter(); FirstCounter::firstAlias();
+FirstCounter::secondAlias(); SecondCounter::counter();
+"#
+        ),
+        "11112222"
+    );
 }
 
 #[test]

@@ -353,6 +353,9 @@ pub struct ExecutorGlobals {
     included_file_order: Vec<String>,
     /// Owned storage for functions/data from included files (prevents dangling pointers)
     pub included_functions: Vec<Box<crate::vm::function::UserFunction>>,
+    /// Static-bearing trait methods are cloned per consumer/alias because
+    /// each composed method owns independent function-static storage in PHP.
+    trait_static_functions: Vec<Box<crate::vm::function::UserFunction>>,
     /// Lazily allocated SPL autoload stack and recursion guard.
     pub(crate) autoload: Option<Box<AutoloadState>>,
     /// Monotonically increasing counter for class IDs
@@ -586,6 +589,7 @@ impl ExecutorGlobals {
             included_files: std::collections::HashSet::new(),
             included_file_order: Vec::new(),
             included_functions: Vec::new(),
+            trait_static_functions: Vec::new(),
             autoload: None,
             next_class_id: 1,
             internal_class_id_limit: 0,
@@ -673,6 +677,7 @@ impl ExecutorGlobals {
             included_files: std::collections::HashSet::new(),
             included_file_order: Vec::new(),
             included_functions: Vec::new(),
+            trait_static_functions: Vec::new(),
             autoload: None,
             next_class_id: 1,
             internal_class_id_limit: 0,
@@ -1566,6 +1571,35 @@ impl ExecutorGlobals {
         }
     }
 
+    fn compose_trait_method_pointer(
+        &mut self,
+        source: *const FunctionCommon,
+        class_name: &str,
+        method_name: &str,
+        is_static: bool,
+    ) -> *const FunctionCommon {
+        // SAFETY: function-table pointers remain live for the ExecutorGlobals
+        // lifetime and FunctionCommon is the first field of UserFunction. The
+        // discriminant is checked before the enclosing cast is dereferenced.
+        let source = unsafe {
+            if (*source).fn_type != crate::vm::function::FunctionType::User {
+                return source;
+            }
+            &*(source as *const crate::vm::function::UserFunction)
+        };
+        if source.op_array.static_vars.is_empty() {
+            return &source.common;
+        }
+        let function = crate::compiler::clone_trait_method_with_static_storage(
+            source,
+            class_name,
+            method_name,
+            is_static,
+        );
+        self.trait_static_functions.push(Box::new(function));
+        &self.trait_static_functions.last().unwrap().common
+    }
+
     /// Register an ordinary compiled class immediately, or retain an
     /// anonymous declaration until its expression executes.
     pub fn register_compiled_class(&mut self, class_def: ClassDef) -> Result<(), String> {
@@ -1854,17 +1888,27 @@ impl ExecutorGlobals {
                     .map(|(n, _, _, _, _)| n.to_lowercase())
                     .collect();
                 let trait_prefix = format!("{}::", trait_name).to_lowercase();
-                let trait_methods: Vec<(String, *const FunctionCommon)> = self
+                let trait_methods: Vec<(String, *const FunctionCommon, bool)> = self
                     .function_table
                     .iter()
                     .filter(|(k, _)| k.starts_with(&trait_prefix))
                     .map(|(k, v)| {
                         let method_name = &k[trait_prefix.len()..];
-                        (method_name.to_string(), *v)
+                        let is_static =
+                            trait_def.methods.iter().any(|(name, _, is_static, _, _)| {
+                                *is_static && name.eq_ignore_ascii_case(method_name)
+                            });
+                        (method_name.to_string(), *v, is_static)
                     })
                     .collect();
-                for (method_name, func_ptr) in trait_methods {
+                for (method_name, func_ptr, is_static) in trait_methods {
                     if !child_method_names.contains(&method_name) {
+                        let func_ptr = self.compose_trait_method_pointer(
+                            func_ptr,
+                            &class_name,
+                            &method_name,
+                            is_static,
+                        );
                         let child_full = format!("{}::{}", class_name, method_name).to_lowercase();
                         self.function_table.insert(child_full, func_ptr);
                         // Keep the concrete body owner stable. A single trait
@@ -1918,6 +1962,20 @@ impl ExecutorGlobals {
                     "Enum {class_name} cannot include magic method {alias}{location}"
                 ));
             }
+            let is_static = self
+                .class_table
+                .get(source_trait.as_str())
+                .and_then(|trait_def| {
+                    trait_def
+                        .methods
+                        .iter()
+                        .find_map(|(name, _, is_static, _, _)| {
+                            name.eq_ignore_ascii_case(&adaptation.method)
+                                .then_some(*is_static)
+                        })
+                })
+                .unwrap_or(false);
+            let pointer = self.compose_trait_method_pointer(pointer, &class_name, alias, is_static);
             self.function_table
                 .insert(format!("{}::{}", class_name, alias).to_lowercase(), pointer);
             self.method_declaring_class

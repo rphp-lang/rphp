@@ -3378,6 +3378,20 @@ fn op_check_static(
             .as_str()
             .unwrap_or("")
             .to_string();
+        if let Some((_, global_name)) = op_array
+            .global_vars
+            .iter()
+            .find(|(cv, _)| *cv == u32::from(opline.op1))
+        {
+            let current = &*(*frame).cv_mut(u32::from(opline.op1));
+            let value = if current.is_owned_reference() {
+                current.clone_owned_reference_alias()
+            } else {
+                current.clone()
+            };
+            globals_set(&mut eg.globals, global_name, value);
+            eg.dirty_globals.insert(global_name.clone());
+        }
         let statics = eg.static_vars.entry(func_name).or_default();
         if let Some(stored) = statics.get(&var_name) {
             if stored.is_static_initializer_in_progress() {
@@ -3423,6 +3437,20 @@ fn op_bind_static(
             .as_str()
             .unwrap_or("")
             .to_string();
+        if let Some((_, global_name)) = op_array
+            .global_vars
+            .iter()
+            .find(|(cv, _)| *cv == u32::from(opline.op1))
+        {
+            let current = &*(*frame).cv_mut(u32::from(opline.op1));
+            let value = if current.is_owned_reference() {
+                current.clone_owned_reference_alias()
+            } else {
+                current.clone()
+            };
+            globals_set(&mut eg.globals, global_name, value);
+            eg.dirty_globals.insert(global_name.clone());
+        }
         let initial = if opline.result_type != OpType::Unused {
             (&*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)).clone()
         } else {

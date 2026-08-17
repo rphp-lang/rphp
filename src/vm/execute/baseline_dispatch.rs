@@ -5726,6 +5726,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // caller's "after return" handler when it actually consumes the dirty set.
                 if !op_array.global_vars.is_empty() {
                     for (cv_idx, var_name) in &op_array.global_vars {
+                        // A later `static` declaration for the same CV rebinds
+                        // the local slot away from the global reference. The
+                        // global was already updated while that reference was
+                        // active, so copying the rebound static cell back here
+                        // would incorrectly overwrite it at function return.
+                        if op_array
+                            .static_vars
+                            .iter()
+                            .any(|(static_cv, _, _)| static_cv == cv_idx)
+                        {
+                            continue;
+                        }
                         // SAFETY: global metadata stores validated CV indices for this frame.
                         let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
                         let val = unsafe {

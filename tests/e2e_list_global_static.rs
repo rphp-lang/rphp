@@ -4,6 +4,26 @@ use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 
+#[test]
+fn function_static_can_rebind_a_global_cv_without_overwriting_the_global() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function update() {
+    global $value;
+    $value = 42;
+    echo $value, ':';
+    static $value = 41;
+    echo $value, ':';
+}
+update(); echo $value, ':';
+update(); echo $value;
+"#
+        ),
+        "42:41:42:42:41:42"
+    );
+}
+
 // list() / destructuring tests
 
 #[test]
