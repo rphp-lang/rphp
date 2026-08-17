@@ -3,6 +3,35 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn asymmetric_property_visibility_separates_read_and_write_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Box {
+    public private(set) int $privateValue;
+    public protected(set) array $protectedValues = [];
+    public function __construct(int $value) { $this->privateValue = $value; }
+    public function replace(int $value) { $this->privateValue = $value; }
+}
+class ChildBox extends Box {
+    public function append(int $value) { $this->protectedValues[] = $value; }
+    public function replaceFromChild() { $this->privateValue = 99; }
+}
+$box = new ChildBox(1);
+var_dump($box->privateValue);
+try { $box->privateValue = 2; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+$box->replace(3);
+$box->append(4);
+var_dump($box->privateValue, $box->protectedValues);
+try { $box->replaceFromChild(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { $box->protectedValues[] = 5; } catch (Error $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        "int(1)\nCannot modify private(set) property Box::$privateValue from global scope\nint(3)\narray(1) {\n  [0]=>\n  int(4)\n}\nCannot modify private(set) property Box::$privateValue from scope ChildBox\nCannot indirectly modify protected(set) property Box::$protectedValues from global scope\n"
+    );
+}
+
+#[test]
 fn loose_object_equality_compares_class_and_nested_property_state() {
     assert_eq!(
         run_php(

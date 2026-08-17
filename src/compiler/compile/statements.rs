@@ -657,6 +657,7 @@ impl Compiler {
                 assign.op2_type = property_type;
                 assign.result = array;
                 assign.result_type = array_type;
+                assign._pad |= ASSIGN_OBJ_MODIFY;
                 self.push_instruction_at_line(assign, line);
             }
             ForeachArrayWriteback::StaticProperty {
@@ -3288,8 +3289,8 @@ impl Compiler {
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
                 // Collect promoted properties from constructor
-                let mut promoted_props: Vec<(String, Visibility, bool, ParamTypeHint, bool)> =
-                    Vec::new(); // (name, visibility, readonly, erased type, needs reification)
+                let mut promoted_props: Vec<(String, Visibility, Option<Visibility>, bool, ParamTypeHint, bool)> =
+                    Vec::new(); // (name, read visibility, set visibility, readonly, erased type, needs reification)
                 for method in methods {
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
@@ -3324,7 +3325,26 @@ impl Compiler {
                     // Constructor property promotion: generate $this->param = $param assignments
                     if method.name == "__construct" {
                         for param in &method.params {
-                            if let Some((vis, is_ro)) = &param.promotion {
+                            if let Some((vis, set_vis, is_ro)) = &param.promotion {
+                                if let Some(set_visibility) = set_vis {
+                                    let rank = |visibility| match visibility {
+                                        Visibility::Private => 0,
+                                        Visibility::Protected => 1,
+                                        Visibility::Public => 2,
+                                    };
+                                    if rank(*vis) < rank(*set_visibility) {
+                                        return Err(format!(
+                                            "Visibility of property {}::${} must not be weaker than set visibility",
+                                            name, param.name
+                                        ));
+                                    }
+                                    if param.type_hint.is_none() {
+                                        return Err(format!(
+                                            "Property with asymmetric visibility {}::${} must have type",
+                                            name, param.name
+                                        ));
+                                    }
+                                }
                                 let promoted_type_hint = self.resolve_declared_property_type_hint(
                                     self.convert_type_hint(&param.type_hint),
                                     &resolved_class,
@@ -3333,6 +3353,7 @@ impl Compiler {
                                 promoted_props.push((
                                     param.name.clone(),
                                     *vis,
+                                    *set_vis,
                                     *is_ro,
                                     promoted_type_hint,
                                     type_hint_requires_reified_check(&param.type_hint),
@@ -3466,6 +3487,25 @@ impl Compiler {
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
+                    if let Some(set_visibility) = prop.set_visibility {
+                        let rank = |visibility| match visibility {
+                            Visibility::Private => 0,
+                            Visibility::Protected => 1,
+                            Visibility::Public => 2,
+                        };
+                        if rank(prop.visibility) < rank(set_visibility) {
+                            return Err(format!(
+                                "Visibility of property {}::${} must not be weaker than set visibility",
+                                name, prop.name
+                            ));
+                        }
+                        if prop.type_hint.is_none() {
+                            return Err(format!(
+                                "Property with asymmetric visibility {}::${} must have type",
+                                name, prop.name
+                            ));
+                        }
+                    }
                     let property_is_readonly = *is_readonly || prop.is_readonly;
                     if prop.is_static && property_is_readonly {
                         return Err(format!(
@@ -3511,10 +3551,11 @@ impl Compiler {
                     if property_is_readonly && !prop.is_static {
                         readonly_props.push(prop.name.clone());
                     }
-                    let definition = PropertyDefinition::declared(
+                    let definition = PropertyDefinition::declared_with_set_visibility(
                         prop.name.clone(),
                         default,
                         prop.visibility,
+                        prop.set_visibility,
                         resolved_class.clone(),
                         type_hint,
                         property_is_readonly,
@@ -3528,12 +3569,13 @@ impl Compiler {
                 }
 
                 // Add promoted properties
-                for (pname, pvis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
+                for (pname, pvis, pset_vis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
                     let property_is_readonly = *is_readonly || *p_readonly;
-                    compiled_props.push(PropertyDefinition::declared(
+                    compiled_props.push(PropertyDefinition::declared_with_set_visibility(
                         pname.clone(),
                         None,
                         *pvis,
+                        *pset_vis,
                         resolved_class.clone(),
                         type_hint.clone(),
                         property_is_readonly,
@@ -3875,6 +3917,25 @@ impl Compiler {
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 for prop in properties {
+                    if let Some(set_visibility) = prop.set_visibility {
+                        let rank = |visibility| match visibility {
+                            Visibility::Private => 0,
+                            Visibility::Protected => 1,
+                            Visibility::Public => 2,
+                        };
+                        if rank(prop.visibility) < rank(set_visibility) {
+                            return Err(format!(
+                                "Visibility of property {}::${} must not be weaker than set visibility",
+                                name, prop.name
+                            ));
+                        }
+                        if prop.type_hint.is_none() {
+                            return Err(format!(
+                                "Property with asymmetric visibility {}::${} must have type",
+                                name, prop.name
+                            ));
+                        }
+                    }
                     if prop.is_static && prop.is_readonly {
                         return Err(format!(
                             "Static property {}::${} cannot be readonly",
@@ -3900,10 +3961,11 @@ impl Compiler {
                             })
                         })
                         .transpose()?;
-                    let definition = PropertyDefinition::declared(
+                    let definition = PropertyDefinition::declared_with_set_visibility(
                         prop.name.clone(),
                         default,
                         prop.visibility,
+                        prop.set_visibility,
                         resolved_trait.clone(),
                         type_hint,
                         prop.is_readonly,

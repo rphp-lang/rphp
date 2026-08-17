@@ -951,3 +951,20 @@ fn forbidden_assert_and_first_class_new_forms_are_deferred_compile_errors() {
         ));
     }
 }
+
+#[test]
+fn asymmetric_property_visibility_is_retained_separately_for_reads_and_writes() {
+    let tokens = Lexer::new(
+        "<?php class Box { public private(set) int $value; protected(set) string $label; }",
+    )
+    .tokenize()
+    .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let Stmt::Class { properties, .. } = &statements[0] else {
+        panic!("expected class declaration");
+    };
+    assert_eq!(properties[0].visibility, Visibility::Public);
+    assert_eq!(properties[0].set_visibility, Some(Visibility::Private));
+    assert_eq!(properties[1].visibility, Visibility::Public);
+    assert_eq!(properties[1].set_visibility, Some(Visibility::Protected));
+}

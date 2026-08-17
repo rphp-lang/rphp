@@ -762,24 +762,54 @@ impl Parser {
 
     fn parse_one_param(&mut self) -> Result<Param, String> {
         // Check for constructor property promotion: visibility keyword before type hint
-        let mut promotion: Option<(Visibility, bool)> = None;
+        let mut promotion: Option<(Visibility, Option<Visibility>, bool)> = None;
         let mut promo_readonly = false;
-        match self.peek() {
-            Token::Public | Token::Protected | Token::Private => {
-                let vis = match self.advance() {
-                    Token::Public => Visibility::Public,
-                    Token::Protected => Visibility::Protected,
-                    Token::Private => Visibility::Private,
-                    _ => unreachable!(),
-                };
-                // Check for 'readonly' after visibility
-                if matches!(self.peek(), Token::Identifier(ref s, _) if s == "readonly") {
+        let mut promo_visibility = None;
+        let mut promo_set_visibility = None;
+        loop {
+            match self.peek() {
+                Token::Public | Token::Protected | Token::Private => {
+                    let vis = match self.advance() {
+                        Token::Public => Visibility::Public,
+                        Token::Protected => Visibility::Protected,
+                        Token::Private => Visibility::Private,
+                        _ => unreachable!(),
+                    };
+                    if matches!(self.peek(), Token::LParen(_)) {
+                        self.advance();
+                        match self.advance() {
+                            Token::Identifier(name, _) if name.eq_ignore_ascii_case("set") => {}
+                            other => {
+                                return Err(format!(
+                                    "Expected set in asymmetric visibility, got {other:?}"
+                                ));
+                            }
+                        }
+                        self.expect(&Token::RParen)?;
+                        promo_set_visibility = Some(vis);
+                        continue;
+                    }
+                    promo_visibility = Some(vis);
+                    if matches!(self.peek(), Token::Identifier(ref s, _) if s == "readonly") {
+                        self.advance();
+                        promo_readonly = true;
+                    }
+                    continue;
+                }
+                Token::Identifier(ref s, _) if s == "readonly" && promo_visibility.is_some() => {
                     self.advance();
                     promo_readonly = true;
+                    continue;
                 }
-                promotion = Some((vis, promo_readonly));
+                _ => break,
             }
-            _ => {}
+        }
+        if promo_visibility.is_some() || promo_set_visibility.is_some() {
+            promotion = Some((
+                promo_visibility.unwrap_or(Visibility::Public),
+                promo_set_visibility,
+                promo_readonly,
+            ));
         }
         // Optional type hint before &, ..., $var
         let type_hint = self.try_parse_type_hint()?;

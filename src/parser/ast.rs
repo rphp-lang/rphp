@@ -686,8 +686,9 @@ pub struct Param {
     pub is_variadic: bool,
     pub is_ref: bool,
     pub type_hint: Option<TypeHint>,
-    /// Constructor property promotion: Some((visibility, is_readonly))
-    pub promotion: Option<(Visibility, bool)>,
+    /// Constructor property promotion: read visibility, optional narrower
+    /// write visibility, and readonly state.
+    pub promotion: Option<(Visibility, Option<Visibility>, bool)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1065,6 +1066,7 @@ pub enum Visibility {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassProperty {
     pub visibility: Visibility,
+    pub set_visibility: Option<Visibility>,
     pub name: String,
     /// Source-level property contract. The ordinary runtime currently uses
     /// the erased storage model; generics metadata preserves this form for

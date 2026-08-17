@@ -117,6 +117,7 @@ fn property_definitions_are_compatible(
     right: &PropertyDefinition,
 ) -> bool {
     left.visibility == right.visibility
+        && left.set_visibility == right.set_visibility
         && property_type_hints_are_equivalent(&left.type_hint, &right.type_hint)
         && left.is_readonly == right.is_readonly
         && match (&left.default, &right.default) {
@@ -147,6 +148,39 @@ fn validate_inherited_property_definition(
             "Access level to {}::${} must be {} (as in class {}) or weaker",
             child_class, child.name, required, parent.declaring_class
         ));
+    }
+    if parent.set_visibility == Some(Visibility::Private) {
+        return Err(format!(
+            "Cannot override final property {}::${}",
+            parent.declaring_class, parent.name
+        ));
+    }
+    let visibility_rank = |visibility| match visibility {
+        Visibility::Private => 0,
+        Visibility::Protected => 1,
+        Visibility::Public => 2,
+    };
+    match (parent.set_visibility, child.set_visibility) {
+        (None, Some(_)) => {
+            return Err(format!(
+                "Set access level of {}::${} must be omitted (as in class {})",
+                child_class, child.name, parent.declaring_class
+            ));
+        }
+        (Some(parent_set), Some(child_set))
+            if visibility_rank(child_set) < visibility_rank(parent_set) =>
+        {
+            let required = match parent_set {
+                Visibility::Public => "public(set)",
+                Visibility::Protected => "protected(set)",
+                Visibility::Private => unreachable!(),
+            };
+            return Err(format!(
+                "Set access level of {}::${} must be {} (as in class {}) or weaker",
+                child_class, child.name, required, parent.declaring_class
+            ));
+        }
+        _ => {}
     }
     if child.is_readonly != parent.is_readonly {
         return Err(format!(

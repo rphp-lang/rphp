@@ -1295,6 +1295,8 @@ pub struct PropertyDefinition {
     pub name: String,
     pub default: Option<Value>,
     pub visibility: Visibility,
+    /// Write visibility when it is narrower than the read visibility.
+    pub set_visibility: Option<Visibility>,
     pub declaring_class: String,
     /// Lexical class scope used by `self`/`parent` property contracts. This is
     /// normally the declaring class; trait composition rewrites it to the
@@ -1328,6 +1330,7 @@ impl PropertyDefinition {
             name,
             default,
             visibility,
+            set_visibility: None,
             declaring_class,
             type_scope,
             type_hint: ParamTypeHint::None,
@@ -1351,6 +1354,7 @@ impl PropertyDefinition {
             name,
             default,
             visibility,
+            set_visibility: None,
             declaring_class,
             type_scope,
             type_hint,
@@ -1358,6 +1362,29 @@ impl PropertyDefinition {
             requires_reified_check,
             generic_declaration: None,
         }
+    }
+
+    pub fn declared_with_set_visibility(
+        name: String,
+        default: Option<Value>,
+        visibility: Visibility,
+        set_visibility: Option<Visibility>,
+        declaring_class: String,
+        type_hint: ParamTypeHint,
+        is_readonly: bool,
+        requires_reified_check: bool,
+    ) -> Self {
+        let mut property = Self::declared(
+            name,
+            default,
+            visibility,
+            declaring_class,
+            type_hint,
+            is_readonly,
+            requires_reified_check,
+        );
+        property.set_visibility = set_visibility;
+        property
     }
 
     #[inline]
@@ -2075,7 +2102,7 @@ impl Compiler {
             }
             if method.name.eq_ignore_ascii_case("__construct") {
                 variance_uses.extend(method.params.iter().filter_map(|parameter| {
-                    let (_, is_readonly) = parameter.promotion?;
+                    let (_, _, is_readonly) = parameter.promotion?;
                     parameter.type_hint.clone().map(|hint| {
                         (
                             hint,

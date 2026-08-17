@@ -1,6 +1,8 @@
 #[derive(Debug, Clone, Copy)]
 struct MemberModifiers {
     visibility: Visibility,
+    set_visibility: Option<Visibility>,
+    has_duplicate_set_visibility: bool,
     is_static: bool,
     is_final: bool,
     is_readonly: bool,
@@ -11,6 +13,8 @@ impl Default for MemberModifiers {
     fn default() -> Self {
         Self {
             visibility: Visibility::Public,
+            set_visibility: None,
+            has_duplicate_set_visibility: false,
             is_static: false,
             is_final: false,
             is_readonly: false,
@@ -27,6 +31,9 @@ impl Parser {
         if modifiers.is_abstract {
             return Err("Properties cannot be declared abstract".into());
         }
+        if modifiers.has_duplicate_set_visibility {
+            return Err("Multiple access type modifiers are not allowed".into());
+        }
         let type_hint = self.try_parse_type_hint()?;
         let mut properties = Vec::new();
         loop {
@@ -42,6 +49,7 @@ impl Parser {
             };
             properties.push(ClassProperty {
                 visibility: modifiers.visibility,
+                set_visibility: modifiers.set_visibility,
                 name,
                 type_hint: type_hint.clone(),
                 default,
@@ -801,15 +809,48 @@ impl Parser {
             match self.peek() {
                 Token::Public => {
                     self.advance();
-                    modifiers.visibility = Visibility::Public;
+                    if matches!(self.peek(), Token::LParen(_))
+                        && matches!(self.peek_at(1), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("set"))
+                        && self.peek_at(2) == Token::RParen
+                    {
+                        self.advance();
+                        self.advance();
+                        self.advance();
+                        modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
+                        modifiers.set_visibility = Some(Visibility::Public);
+                    } else {
+                        modifiers.visibility = Visibility::Public;
+                    }
                 }
                 Token::Protected => {
                     self.advance();
-                    modifiers.visibility = Visibility::Protected;
+                    if matches!(self.peek(), Token::LParen(_))
+                        && matches!(self.peek_at(1), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("set"))
+                        && self.peek_at(2) == Token::RParen
+                    {
+                        self.advance();
+                        self.advance();
+                        self.advance();
+                        modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
+                        modifiers.set_visibility = Some(Visibility::Protected);
+                    } else {
+                        modifiers.visibility = Visibility::Protected;
+                    }
                 }
                 Token::Private => {
                     self.advance();
-                    modifiers.visibility = Visibility::Private;
+                    if matches!(self.peek(), Token::LParen(_))
+                        && matches!(self.peek_at(1), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("set"))
+                        && self.peek_at(2) == Token::RParen
+                    {
+                        self.advance();
+                        self.advance();
+                        self.advance();
+                        modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
+                        modifiers.set_visibility = Some(Visibility::Private);
+                    } else {
+                        modifiers.visibility = Visibility::Private;
+                    }
                 }
                 Token::Static => {
                     self.advance();

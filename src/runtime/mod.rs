@@ -2671,6 +2671,50 @@ impl ExecutorGlobals {
         None
     }
 
+    /// Look up the visibility governing writes, unsets and reference access.
+    /// Ordinary properties use their read visibility; asymmetric properties
+    /// retain a narrower source-level set visibility.
+    pub fn find_property_set_visibility(
+        &self,
+        class_name: &str,
+        prop_name: &str,
+    ) -> Option<(Visibility, String)> {
+        if let Some(class_def) = self.class_table.get(class_name) {
+            for property in &class_def.properties {
+                if property.name == prop_name {
+                    return Some((
+                        property.set_visibility.unwrap_or(property.visibility),
+                        property.declaring_class.clone(),
+                    ));
+                }
+            }
+            if let Some(parent) = &class_def.parent {
+                return self.find_property_set_visibility(parent, prop_name);
+            }
+        }
+        None
+    }
+
+    pub fn property_has_asymmetric_set_visibility(
+        &self,
+        class_name: &str,
+        prop_name: &str,
+    ) -> bool {
+        self.class_table.get(class_name).is_some_and(|class_def| {
+            if let Some(property) = class_def
+                .properties
+                .iter()
+                .find(|property| property.name == prop_name)
+            {
+                property.set_visibility.is_some()
+            } else {
+                class_def.parent.as_deref().is_some_and(|parent| {
+                    self.property_has_asymmetric_set_visibility(parent, prop_name)
+                })
+            }
+        })
+    }
+
     /// Check if `caller_class` can access a member with `visibility` defined in `target_class`.
     pub fn check_visibility(
         &self,

@@ -933,7 +933,11 @@ fn op_fetch_obj_r_slow<'a>(
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let mut flags: u32 = 1; // read-safe
                 let writable = eg.class_table.get(obj.class_name.as_ref()).is_none_or(|cd| {
-                    !cd.is_enum && !cd.readonly_props.iter().any(|prop| prop == &name)
+                    !cd.is_enum
+                        && !cd.readonly_props.iter().any(|prop| prop == &name)
+                        && eg
+                            .find_property_set_visibility(&obj.class_name, &name)
+                            .is_none_or(|(visibility, _)| visibility == Visibility::Public)
                 });
                 if writable {
                     flags |= 2;
@@ -1183,7 +1187,7 @@ fn op_unset_obj<'a>(
         .then_some(caller_class.as_deref())
         .flatten();
     let accessible = eg
-        .find_property_visibility(&object_ref.class_name, name)
+        .find_property_set_visibility(&object_ref.class_name, name)
         .is_none_or(|(visibility, defining_class)| {
             visibility == Visibility::Public
                 || eg.check_visibility(effective_caller, &defining_class, visibility)
@@ -1205,6 +1209,29 @@ fn op_unset_obj<'a>(
             effective_caller,
         )
     };
+    if !accessible
+        && eg.property_has_asymmetric_set_visibility(&object_ref.class_name, name)
+        && object_ref
+            .get_property(&key)
+            .is_some_and(|value| !value.is_undef())
+    {
+        let (visibility, defining_class) = eg
+            .find_property_set_visibility(&object_ref.class_name, name)
+            .expect("asymmetric property has write visibility");
+        let visibility = match visibility {
+            Visibility::Private => "private",
+            Visibility::Protected => "protected",
+            Visibility::Public => "public",
+        };
+        let message = format!(
+            "Cannot unset {visibility}(set) property {defining_class}::${name} from {}",
+            caller_class
+                .as_deref()
+                .map_or_else(|| "global scope".to_string(), |scope| format!("scope {scope}")),
+        );
+        drop(object_ref);
+        return Ok(object_property_throw(eg, frame, "Error", message));
+    }
     let removed = if hidden_parent_private {
         object_ref.get_dynamic_property_with_position(&key).is_some()
     } else {
@@ -1283,11 +1310,12 @@ fn op_bind_obj_prop_ref<'a>(
             .flatten();
         let mut force_dynamic = false;
         if let Some((visibility, defining_class)) =
-            eg.find_property_visibility(&class_name, &name)
+            eg.find_property_set_visibility(&class_name, &name)
             && visibility != Visibility::Public
             && !eg.check_visibility(effective_caller, &defining_class, visibility)
         {
             if visibility == Visibility::Private
+                && !eg.property_has_asymmetric_set_visibility(&class_name, &name)
                 && !defining_class.eq_ignore_ascii_case(&class_name)
             {
                 force_dynamic = true;
@@ -1297,13 +1325,23 @@ fn op_bind_obj_prop_ref<'a>(
                     Visibility::Private => "private",
                     Visibility::Public => "public",
                 };
+                let message = if eg.property_has_asymmetric_set_visibility(&class_name, &name) {
+                    format!(
+                        "Cannot indirectly modify {visibility}(set) property {defining_class}::${name} from {}",
+                        caller_class
+                            .as_deref()
+                            .map_or_else(|| "global scope".to_string(), |scope| format!("scope {scope}")),
+                    )
+                } else {
+                    format!("Cannot access {visibility} property {defining_class}::${name}")
+                };
                 return Ok(object_property_throw_at(
                     eg,
                     frame,
                     op_array,
                     instruction_index,
                     "Error",
-                    format!("Cannot access {visibility} property {defining_class}::${name}"),
+                    message,
                 ));
             }
         }
@@ -1691,7 +1729,7 @@ fn op_assign_obj_prop<'a>(
         let mut prop_is_public = true;
         let mut property_accessible = true;
         let mut force_dynamic = false;
-        if let Some((vis, defining_class)) = eg.find_property_visibility(&php_obj.class_name, &name) {
+        if let Some((vis, defining_class)) = eg.find_property_set_visibility(&php_obj.class_name, &name) {
             if vis != Visibility::Public {
                 prop_is_public = false;
                 let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
@@ -1705,6 +1743,7 @@ fn op_assign_obj_prop<'a>(
                     }
                 });
                 let hidden_parent_private = vis == Visibility::Private
+                    && !eg.property_has_asymmetric_set_visibility(&php_obj.class_name, &name)
                     && !defining_class.eq_ignore_ascii_case(&php_obj.class_name)
                     && !own_private;
                 if hidden_parent_private {
@@ -1727,10 +1766,27 @@ fn op_assign_obj_prop<'a>(
                                 Visibility::Private => "private",
                                 _ => "public",
                             };
-                            let message = format!(
-                                "Cannot access {} property {}::${}",
-                                vis_str, defining_class, name
-                            );
+                            let message = if eg.property_has_asymmetric_set_visibility(
+                                &php_obj.class_name,
+                                &name,
+                            ) {
+                                let action = if opline._pad & ASSIGN_OBJ_MODIFY != 0
+                                    && assigned.value_type() == ValueType::Array
+                                {
+                                    "indirectly modify"
+                                } else {
+                                    "modify"
+                                };
+                                format!(
+                                    "Cannot {action} {vis_str}(set) property {defining_class}::${name} from {}",
+                                    caller_class.as_deref().map_or_else(
+                                        || "global scope".to_string(),
+                                        |scope| format!("scope {scope}"),
+                                    ),
+                                )
+                            } else {
+                                format!("Cannot access {vis_str} property {defining_class}::${name}")
+                            };
                             drop(php_obj);
                             return Ok(object_property_throw(eg, frame, "Error", message));
                         }
