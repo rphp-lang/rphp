@@ -8,7 +8,7 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `a82bfd2`. Across all 5,599 unmodified `Zend/tests` and
+`fcc29c8` and RPHP `63f65ee`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 2,446 pass, 2,762 fail, 110 skip, one is an upstream XFAIL,
 280 are unsupported, and none time out or crash. The headline pass rate is
 46.966%; 87.154% of attempted cases reach runtime. Relative to the initial
