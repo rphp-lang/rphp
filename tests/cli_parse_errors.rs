@@ -55,3 +55,22 @@ fn source_unit_parse_errors_use_php_failure_status() {
         "Parse error: syntax error, unexpected heredoc start \"<<<DOC\" in Standard input code on line 2\n"
     );
 }
+
+#[test]
+fn unicode_escape_parse_errors_report_the_escape_line() {
+    let (status, stderr) = run_stdin("<?php\n$value = \"first\n\\u{}\nlast\";\n");
+
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Parse error: Invalid UTF-8 codepoint escape sequence in Standard input code on line 3\n"
+    );
+
+    let (status, stderr) = run_stdin("<?php\n$value = <<<TEXT\nfirst\n\\u{110000}\nTEXT;\n");
+
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Parse error: Invalid UTF-8 codepoint escape sequence: Codepoint too large in Standard input code on line 4\n"
+    );
+}

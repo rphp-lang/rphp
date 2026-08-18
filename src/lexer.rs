@@ -483,20 +483,17 @@ impl<'a> Lexer<'a> {
                     let s = self.read_string(b'\'')?;
                     tokens.push(Token::StringLiteral(s));
                 }
-                b'"' => {
-                    let line = self.source_line_at(self.pos);
-                    match self.read_double_quoted_string() {
-                        Ok(interpolated) => {
-                            self.deferred_compile_diagnostics
-                                .extend(interpolated.diagnostics);
-                            Self::emit_string_parts(&mut tokens, &interpolated.parts);
-                        }
-                        Err(message) => {
-                            tokens.push(Token::ParseError(message, line));
-                            self.pos = self.src.len();
-                        }
+                b'"' => match self.read_double_quoted_string() {
+                    Ok(interpolated) => {
+                        self.deferred_compile_diagnostics
+                            .extend(interpolated.diagnostics);
+                        Self::emit_string_parts(&mut tokens, &interpolated.parts);
                     }
-                }
+                    Err(error) => {
+                        tokens.push(Token::ParseError(error.message, error.line));
+                        self.pos = self.src.len();
+                    }
+                },
                 b'-' => {
                     if self.peek_next() == Some(b'>') {
                         tokens.push(Token::Arrow);
@@ -1691,6 +1688,45 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn unicode_codepoint_escapes_preserve_valid_and_legacy_boundaries() {
+        let tokens = Lexer::new(r#"<?php echo "\u{10FFFF}|\u1234";"#)
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.contains(&Token::StringLiteral(format!(
+            "{}|\\u1234",
+            char::from_u32(0x10ffff).unwrap()
+        ))));
+    }
+
+    #[test]
+    fn invalid_unicode_codepoint_escapes_use_php_diagnostics_and_source_lines() {
+        let generic = "Invalid UTF-8 codepoint escape sequence";
+        let too_large = "Invalid UTF-8 codepoint escape sequence: Codepoint too large";
+        let cases = [
+            (r#"<?php echo "\u{}";"#, generic, 1),
+            (r#"<?php echo "\u{+41}";"#, generic, 1),
+            (r#"<?php echo "\u{41 }";"#, generic, 1),
+            (r#"<?php echo "\u{110000}";"#, too_large, 1),
+            (r#"<?php echo "\u{FFFFFFFFFFFFFFFF}";"#, too_large, 1),
+            ("<?php\necho \"prefix\n\\u{-41}\";", generic, 3),
+            (
+                "<?php\n$value = <<<TEXT\nprefix\n\\u{110000}\nTEXT;",
+                too_large,
+                4,
+            ),
+        ];
+
+        for (source, message, line) in cases {
+            let tokens = Lexer::new(source).tokenize().unwrap();
+            assert!(
+                tokens.contains(&Token::ParseError(message.into(), line)),
+                "missing {message:?} on line {line} in {tokens:?}"
+            );
+        }
     }
 
     #[test]

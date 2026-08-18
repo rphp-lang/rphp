@@ -1259,6 +1259,27 @@ unchanged, and the new work is confined to lexing, parsing, compile diagnostics
 and CLI parse termination. The four unsupported focused cases still require
 the named highlighting, multibyte and encoding INI capabilities.
 
+Malformed `\\u{...}` escapes in double-quoted strings and heredocs now use
+PHP 8.5's `Invalid UTF-8 codepoint escape sequence` parse diagnostic, with the
+separate `Codepoint too large` form for values above `U+10FFFF` and arithmetic
+overflow. The diagnostic retains the escape's source line across multiline
+double-quoted strings and document strings, while valid codepoints through
+`U+10FFFF` and legacy unbraced `\\u` text keep their existing behavior.
+
+The nine-case `tests/lang/string` Unicode-escape slice now has eight passes and
+one ordinary failure. A final release rerun of all 5,599 pinned PHP 8.5.6 cases
+reaches 2,817 passes, 2,431 ordinary failures, 110 skips, one XFAIL and 240
+unsupported cases, with zero timeouts and zero crashes. The exact pass-set
+delta is +6/-0 with no remaining-failure stage movement: the empty, incomplete,
+too-large, positive-sign, negative-sign and whitespace Unicode-escape cases.
+Runtime is reached by 4,563 of 5,248 attempted cases (86.947%). All five Cargo
+feature configurations, formatting, unsafe-policy, all-feature/all-target,
+Composer S0, all four Symfony S1 and warmed-kernel S2 gates pass on AMD64. No
+runtime performance gate applies because valid string tokens, bytecode and VM
+dispatch are unchanged. Surrogate-half escapes remain an explicit failure
+until RPHP can preserve their non-well-formed CESU-8 bytes rather than forcing
+them through Rust's UTF-8 `String` representation.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

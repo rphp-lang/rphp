@@ -10,7 +10,7 @@ pub(super) struct InterpolatedString {
     pub(super) diagnostics: Vec<DeferredCompileDiagnostic>,
 }
 
-pub(super) struct DocumentStringError {
+pub(super) struct StringLexError {
     pub(super) message: String,
     pub(super) line: usize,
 }
@@ -20,7 +20,7 @@ struct DocumentStringEnd {
     marker_start: usize,
 }
 
-impl DocumentStringError {
+impl StringLexError {
     fn new(message: impl Into<String>, line: usize) -> Self {
         Self {
             message: message.into(),
@@ -63,8 +63,11 @@ impl<'a> Lexer<'a> {
         Ok(result)
     }
 
-    pub(super) fn read_double_quoted_string(&mut self) -> Result<InterpolatedString, String> {
+    pub(super) fn read_double_quoted_string(
+        &mut self,
+    ) -> Result<InterpolatedString, StringLexError> {
         let opener = self.pos;
+        let opener_line = self.source_line_at(opener);
         self.pos += 1;
         let start = self.pos;
         while self.pos < self.src.len() {
@@ -75,18 +78,18 @@ impl<'a> Lexer<'a> {
             }
         }
         if self.pos >= self.src.len() {
-            return Err("Unterminated string literal".into());
+            return Err(StringLexError::new(
+                "Unterminated string literal",
+                opener_line,
+            ));
         }
         let content = &self.src[start..self.pos];
-        let source_line = self.source_line_at(opener);
-        let parts = Self::interpolate_string_content(content, source_line, 0)?;
+        let parts = Self::interpolate_string_content(content, opener_line, 0)?;
         self.pos += 1;
         Ok(parts)
     }
 
-    pub(super) fn read_document_string(
-        &mut self,
-    ) -> Result<InterpolatedString, DocumentStringError> {
+    pub(super) fn read_document_string(&mut self) -> Result<InterpolatedString, StringLexError> {
         let opener = self.pos;
         let opener_line = self.source_line_at(opener);
         self.pos += 3;
@@ -107,7 +110,7 @@ impl<'a> Lexer<'a> {
             .copied()
             .is_some_and(Self::is_identifier_start)
         {
-            return Err(DocumentStringError::new(
+            return Err(StringLexError::new(
                 format!("Expected heredoc identifier at position {opener}"),
                 opener_line,
             ));
@@ -125,7 +128,7 @@ impl<'a> Lexer<'a> {
 
         if let Some(quote) = quote {
             if self.src.get(self.pos) != Some(&quote) {
-                return Err(DocumentStringError::new(
+                return Err(StringLexError::new(
                     "syntax error, unexpected token \"<<\"",
                     opener_line,
                 ));
@@ -136,7 +139,7 @@ impl<'a> Lexer<'a> {
             Some(rest) if rest.starts_with(b"\r\n") => self.pos += 2,
             Some(rest) if rest.starts_with(b"\n") || rest.starts_with(b"\r") => self.pos += 1,
             _ => {
-                return Err(DocumentStringError::new(
+                return Err(StringLexError::new(
                     "Heredoc identifier must be followed by a line break",
                     opener_line,
                 ));
@@ -153,7 +156,7 @@ impl<'a> Lexer<'a> {
             } else {
                 "syntax error, unexpected end of file, expecting variable or heredoc end or \"${\" or \"{$\""
             };
-            return Err(DocumentStringError::new(
+            return Err(StringLexError::new(
                 message,
                 self.source_line_at(self.src.len()),
             ));
@@ -161,7 +164,7 @@ impl<'a> Lexer<'a> {
 
         let indentation = &self.src[document_end.line_start..document_end.marker_start];
         if indentation.contains(&b' ') && indentation.contains(&b'\t') {
-            return Err(DocumentStringError::new(
+            return Err(StringLexError::new(
                 "Invalid indentation - tabs and spaces cannot be mixed",
                 self.source_line_at(document_end.line_start),
             ));
@@ -185,7 +188,7 @@ impl<'a> Lexer<'a> {
 
         if nowdoc {
             let literal = String::from_utf8(content).map_err(|_| {
-                DocumentStringError::new("Nowdoc content is not valid UTF-8", content_start_line)
+                StringLexError::new("Nowdoc content is not valid UTF-8", content_start_line)
             })?;
             return Ok(InterpolatedString {
                 parts: vec![StringPart::Literal(literal)],
@@ -193,7 +196,6 @@ impl<'a> Lexer<'a> {
             });
         }
         Self::interpolate_string_content(&content, content_start_line, 1)
-            .map_err(|message| DocumentStringError::new(message, content_start_line))
     }
 
     fn find_document_string_end(
@@ -376,7 +378,7 @@ impl<'a> Lexer<'a> {
         content: &[u8],
         indentation: &[u8],
         content_start_line: usize,
-    ) -> Result<Vec<u8>, DocumentStringError> {
+    ) -> Result<Vec<u8>, StringLexError> {
         if indentation.is_empty() || content.is_empty() {
             return Ok(content.to_vec());
         }
@@ -404,7 +406,7 @@ impl<'a> Lexer<'a> {
                 .iter()
                 .any(|byte| *byte != expected)
             {
-                return Err(DocumentStringError::new(
+                return Err(StringLexError::new(
                     "Invalid indentation - tabs and spaces cannot be mixed",
                     line_number,
                 ));
@@ -412,13 +414,13 @@ impl<'a> Lexer<'a> {
 
             if whitespace_only {
                 if line.get(removable).is_some_and(|byte| *byte != expected) {
-                    return Err(DocumentStringError::new(
+                    return Err(StringLexError::new(
                         "Invalid indentation - tabs and spaces cannot be mixed",
                         line_number,
                     ));
                 }
             } else if removable != width {
-                return Err(DocumentStringError::new(
+                return Err(StringLexError::new(
                     format!(
                         "Invalid body indentation level (expecting an indentation level of at least {width})"
                     ),
@@ -484,7 +486,7 @@ impl<'a> Lexer<'a> {
         content: &[u8],
         source_line: usize,
         heredoc_line_adjustment: usize,
-    ) -> Result<InterpolatedString, String> {
+    ) -> Result<InterpolatedString, StringLexError> {
         let mut parts = Vec::new();
         let mut diagnostics = Vec::new();
         let mut current = String::new();
@@ -551,21 +553,49 @@ impl<'a> Lexer<'a> {
                         let mut value = 0_u32;
                         while let Some(digit) = content.get(pos).copied().and_then(Self::hex_value)
                         {
-                            value = value
+                            let Some(next_value) = value
                                 .checked_mul(16)
                                 .and_then(|value| value.checked_add(u32::from(digit)))
-                                .ok_or_else(|| {
-                                    "Invalid Unicode codepoint escape sequence".to_string()
-                                })?;
+                            else {
+                                return Err(Self::string_lex_error_at(
+                                    content,
+                                    escape_start,
+                                    source_line,
+                                    "Invalid UTF-8 codepoint escape sequence: Codepoint too large",
+                                ));
+                            };
+                            value = next_value;
                             pos += 1;
                         }
                         if pos == digits_start || content.get(pos) != Some(&b'}') {
-                            return Err("Invalid Unicode codepoint escape sequence".into());
+                            return Err(Self::string_lex_error_at(
+                                content,
+                                escape_start,
+                                source_line,
+                                "Invalid UTF-8 codepoint escape sequence",
+                            ));
                         }
                         pos += 1;
-                        let character = char::from_u32(value).ok_or_else(|| {
-                            "Invalid Unicode codepoint escape sequence".to_string()
-                        })?;
+                        if value > 0x10ffff {
+                            return Err(Self::string_lex_error_at(
+                                content,
+                                escape_start,
+                                source_line,
+                                "Invalid UTF-8 codepoint escape sequence: Codepoint too large",
+                            ));
+                        }
+                        let Some(character) = char::from_u32(value) else {
+                            // PHP strings can carry CESU-8 surrogate-half bytes. RPHP's
+                            // current UTF-8 String representation cannot yet preserve
+                            // those bytes, so keep the unsupported case visible instead
+                            // of manufacturing a different byte sequence.
+                            return Err(Self::string_lex_error_at(
+                                content,
+                                escape_start,
+                                source_line,
+                                "Invalid UTF-8 codepoint escape sequence",
+                            ));
+                        };
                         current.push(character);
                     }
                     b'n' => {
@@ -594,7 +624,17 @@ impl<'a> Lexer<'a> {
                     }
                     _ => {
                         current.push('\\');
-                        Self::push_utf8_char(content, &mut pos, &mut current)?;
+                        let escaped_offset = pos;
+                        Self::push_utf8_char(content, &mut pos, &mut current).map_err(
+                            |message| {
+                                Self::string_lex_error_at(
+                                    content,
+                                    escaped_offset,
+                                    source_line,
+                                    message,
+                                )
+                            },
+                        )?;
                     }
                 }
             } else if content[pos] == b'$' {
@@ -608,8 +648,8 @@ impl<'a> Lexer<'a> {
                         source_line + Self::count_logical_line_breaks(&content[..variable_offset]);
                     let deprecation_line = expression_line.saturating_sub(heredoc_line_adjustment);
                     let expression_start = pos + 2;
-                    let expression_end =
-                        Self::complex_interpolation_end(content, expression_start)?;
+                    let expression_end = Self::complex_interpolation_end(content, expression_start)
+                        .map_err(|message| StringLexError::new(message, expression_line))?;
                     let expression = &content[expression_start..expression_end];
                     let trimmed = expression.trim_ascii();
                     if trimmed.len() == expression.len()
@@ -621,7 +661,10 @@ impl<'a> Lexer<'a> {
                     {
                         let name = std::str::from_utf8(trimmed)
                             .map_err(|_| {
-                                "Interpolated variable name is not valid UTF-8".to_string()
+                                StringLexError::new(
+                                    "Interpolated variable name is not valid UTF-8",
+                                    expression_line,
+                                )
                             })?
                             .to_string();
                         parts.push(StringPart::Variable(name));
@@ -633,7 +676,8 @@ impl<'a> Lexer<'a> {
                         });
                     } else {
                         let (tokens, nested_diagnostics) =
-                            Self::tokenize_interpolation_expression(expression, expression_line)?;
+                            Self::tokenize_interpolation_expression(expression, expression_line)
+                                .map_err(|message| StringLexError::new(message, expression_line))?;
                         parts.push(StringPart::DynamicVariable(tokens, expression_line));
                         diagnostics.extend(nested_diagnostics);
                         diagnostics.push(DeferredCompileDiagnostic {
@@ -649,9 +693,10 @@ impl<'a> Lexer<'a> {
                         parts.push(StringPart::Literal(std::mem::take(&mut current)));
                     }
                     pos += 1;
-                    let name = Self::read_content_identifier(content, &mut pos)?;
                     let interpolation_line =
                         source_line + Self::count_logical_line_breaks(&content[..variable_offset]);
+                    let name = Self::read_content_identifier(content, &mut pos)
+                        .map_err(|message| StringLexError::new(message, interpolation_line))?;
                     if content.get(pos) == Some(&b'[') {
                         pos += 1;
                         let index = match content.get(pos).copied() {
@@ -667,7 +712,10 @@ impl<'a> Lexer<'a> {
                                     pos += 1;
                                 }
                                 if pos == digits_start || !content[digits_start].is_ascii_digit() {
-                                    return Err(Self::simple_offset_parse_error());
+                                    return Err(StringLexError::new(
+                                        Self::simple_offset_parse_error(),
+                                        interpolation_line,
+                                    ));
                                 }
                                 (false, decode_php_source(&content[index_start..pos]))
                             }
@@ -689,15 +737,31 @@ impl<'a> Lexer<'a> {
                                     .is_some_and(Self::is_identifier_start) =>
                             {
                                 pos += 1;
-                                (true, Self::read_content_identifier(content, &mut pos)?)
+                                (
+                                    true,
+                                    Self::read_content_identifier(content, &mut pos).map_err(
+                                        |message| StringLexError::new(message, interpolation_line),
+                                    )?,
+                                )
                             }
-                            Some(byte) if Self::is_identifier_start(byte) => {
-                                (false, Self::read_content_identifier(content, &mut pos)?)
+                            Some(byte) if Self::is_identifier_start(byte) => (
+                                false,
+                                Self::read_content_identifier(content, &mut pos).map_err(
+                                    |message| StringLexError::new(message, interpolation_line),
+                                )?,
+                            ),
+                            _ => {
+                                return Err(StringLexError::new(
+                                    Self::simple_offset_parse_error(),
+                                    interpolation_line,
+                                ));
                             }
-                            _ => return Err(Self::simple_offset_parse_error()),
                         };
                         if content.get(pos) != Some(&b']') {
-                            return Err(Self::simple_offset_parse_error());
+                            return Err(StringLexError::new(
+                                Self::simple_offset_parse_error(),
+                                interpolation_line,
+                            ));
                         }
                         pos += 1;
                         if index.0 {
@@ -724,7 +788,8 @@ impl<'a> Lexer<'a> {
                             .is_some_and(|byte| Self::is_identifier_start(*byte))
                     {
                         pos += operator_len;
-                        let property = Self::read_content_identifier(content, &mut pos)?;
+                        let property = Self::read_content_identifier(content, &mut pos)
+                            .map_err(|message| StringLexError::new(message, interpolation_line))?;
                         parts.push(StringPart::PropertyAccess(
                             name,
                             property,
@@ -743,8 +808,11 @@ impl<'a> Lexer<'a> {
                     parts.push(StringPart::Literal(std::mem::take(&mut current)));
                 }
                 let expression_start = pos + 1;
+                let expression_line =
+                    source_line + Self::count_logical_line_breaks(&content[..expression_start]);
                 pos += 2;
-                let name = Self::read_content_identifier(content, &mut pos)?;
+                let name = Self::read_content_identifier(content, &mut pos)
+                    .map_err(|message| StringLexError::new(message, expression_line))?;
                 if content.get(pos) == Some(&b'[') {
                     pos += 1;
                     let index_start = pos;
@@ -752,7 +820,12 @@ impl<'a> Lexer<'a> {
                         pos += 1;
                     }
                     let index = std::str::from_utf8(&content[index_start..pos])
-                        .map_err(|_| "Interpolated array index is not valid UTF-8".to_string())?
+                        .map_err(|_| {
+                            StringLexError::new(
+                                "Interpolated array index is not valid UTF-8",
+                                expression_line,
+                            )
+                        })?
                         .to_string();
                     if content.get(pos) == Some(&b']') {
                         pos += 1;
@@ -765,19 +838,22 @@ impl<'a> Lexer<'a> {
                     pos += 1;
                     parts.push(StringPart::Variable(name));
                 } else {
-                    let expression_end = Self::complex_interpolation_end(content, pos)?;
-                    let expression_line =
-                        source_line + Self::count_logical_line_breaks(&content[..expression_start]);
+                    let expression_end = Self::complex_interpolation_end(content, pos)
+                        .map_err(|message| StringLexError::new(message, expression_line))?;
                     let (tokens, nested_diagnostics) = Self::tokenize_interpolation_expression(
                         &content[expression_start..expression_end],
                         expression_line,
-                    )?;
+                    )
+                    .map_err(|message| StringLexError::new(message, expression_line))?;
                     diagnostics.extend(nested_diagnostics);
                     pos = expression_end + 1;
                     parts.push(StringPart::Expression(tokens));
                 }
             } else {
-                Self::push_utf8_char(content, &mut pos, &mut current)?;
+                let character_offset = pos;
+                Self::push_utf8_char(content, &mut pos, &mut current).map_err(|message| {
+                    Self::string_lex_error_at(content, character_offset, source_line, message)
+                })?;
             }
         }
 
@@ -785,6 +861,18 @@ impl<'a> Lexer<'a> {
             parts.push(StringPart::Literal(current));
         }
         Ok(InterpolatedString { parts, diagnostics })
+    }
+
+    fn string_lex_error_at(
+        content: &[u8],
+        offset: usize,
+        source_line: usize,
+        message: impl Into<String>,
+    ) -> StringLexError {
+        StringLexError::new(
+            message,
+            source_line + Self::count_logical_line_breaks(&content[..offset]),
+        )
     }
 
     fn simple_offset_parse_error() -> String {
