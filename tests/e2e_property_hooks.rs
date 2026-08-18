@@ -687,6 +687,109 @@ readonly class InvalidReadonlyPromotion {
 }
 
 #[test]
+fn readonly_and_virtual_default_property_hooks_are_rejected() {
+    let readonly = run_php_expect_error(
+        r#"<?php
+class ReadonlyHook {
+    public readonly int $value { get; set; }
+}
+"#,
+    );
+    assert!(format!("{readonly:?}").contains("Hooked properties cannot be readonly"));
+
+    let virtual_default = run_php_expect_error(
+        r#"<?php
+class VirtualDefault {
+    public $value = 42 { get {} set {} }
+}
+"#,
+    );
+    assert!(format!("{virtual_default:?}").contains(
+        "Cannot specify default value for virtual hooked property VirtualDefault::$value"
+    ));
+
+    let delayed_virtual_default = run_php_expect_error(
+        r#"<?php
+class NoInheritedStorage {}
+class DelayedVirtualDefault extends NoInheritedStorage {
+    public $value = 42 { get => 1; }
+}
+"#,
+    );
+    assert!(format!("{delayed_virtual_default:?}").contains(
+        "Cannot specify default value for virtual hooked property DelayedVirtualDefault::$value"
+    ));
+
+    let static_parent = run_php_expect_error(
+        r#"<?php
+class StaticParentStorage { public static $value; }
+class InvalidStorageKind extends StaticParentStorage {
+    public $value = 42 { get => 1; }
+}
+"#,
+    );
+    assert!(format!("{static_parent:?}").contains(
+        "Cannot redeclare static StaticParentStorage::$value as non static InvalidStorageKind::$value"
+    ));
+}
+
+#[test]
+fn inherited_storage_backs_a_child_property_hook_default() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentStorage { public $value; }
+class InheritedStorageHook extends ParentStorage {
+    public $value = 42 { get => 7; }
+}
+$property = new ReflectionProperty(InheritedStorageHook::class, 'value');
+var_dump($property->isVirtual(), $property->hasDefaultValue(), $property->getDefaultValue());
+"#,
+        ),
+        "bool(false)\nbool(true)\nint(42)\n"
+    );
+}
+
+#[test]
+fn class_and_trait_hooked_property_conflicts_are_rejected() {
+    let error = run_php_expect_error(
+        r#"<?php
+trait HookSource {
+    public $value { get => 1; }
+}
+class HookConsumer {
+    use HookSource;
+    public $value;
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        concat!(
+            "Fatal(\"HookConsumer and HookSource define the same hooked property ",
+            "($value) in the composition of HookConsumer. Conflict resolution between ",
+            "hooked properties is currently not supported. Class was composed\")"
+        )
+    );
+
+    let traits = run_php_expect_error(
+        r#"<?php
+trait FirstHookSource { public $value { get => 1; } }
+trait SecondHookSource { public $value; }
+class TwoHookSources { use FirstHookSource, SecondHookSource; }
+"#,
+    );
+    assert_eq!(
+        format!("{traits:?}"),
+        concat!(
+            "Fatal(\"FirstHookSource and SecondHookSource define the same hooked property ",
+            "($value) in the composition of TwoHookSources. Conflict resolution between ",
+            "hooked properties is currently not supported. Class was composed\")"
+        )
+    );
+}
+
+#[test]
 fn explicit_parent_property_hooks_dispatch_to_the_parent_declaration() {
     assert_eq!(
         run_php(

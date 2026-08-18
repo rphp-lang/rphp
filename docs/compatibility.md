@@ -9,31 +9,61 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,007 pass, 2,290 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,017 pass, 2,280 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-56.768%; 4,620 of 5,297 attempted cases reach runtime (87.219%). Relative to
-the preceding 3,003-pass checkpoint, the exact pass-set delta is +4/-0. The
+56.957%; 4,616 of 5,297 attempted cases reach runtime (87.144%). Relative to
+the preceding 3,007-pass checkpoint, the exact pass-set delta is +10/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
 
-PHP 8.5's `__PROPERTY__` magic constant now resolves to the declared property
-name in property defaults and attributes, property-hook bodies and attributes,
-and hook-parameter attributes. The same scope is preserved for interfaces and
+Hooked properties are now rejected with PHP's declaration diagnostics when
+they are readonly, when a virtual hook declaration specifies a default, or
+when a class and trait (or two traits) compose the same hooked property. A
+child hook declaration correctly retains backing storage inherited from a
+visible, non-virtual parent property; its default presence, Reflection
+`isVirtual()` result, implicit plain-property accessor and enumeration behavior
+therefore match PHP. Default validation is delayed until parent linking only
+when inherited storage can affect the answer, while unrelated static/private
+parent declarations retain PHP's error ordering.
+
+The complete `Zend/tests/property_hooks` directory now has 161 of 211 exact
+passes, up from 151. Five declaration-diagnostic cases and five inherited-
+storage cases move from failures to exact passes; the whole-corpus delta is
++10/-0 with no lost pass, timeout or crash. All five Cargo configurations,
+all-feature/all-target, formatting and the exact unsafe ratchet pass. Composer
+S0, all four Symfony S1 gates, warmed-kernel S2 and cold-build S3 also pass on
+AMD64 against PHP 8.5.
+
+The exact base `3e3056e9` and release candidate were compared without removing
+outliers. A 63-pair ABBA/BAAB confirmation over 150 empty-output file requests
+per executable measured baseline p10/median/p90
+0.205682/0.209401/0.215790 seconds and candidate
+0.203926/0.207960/0.216166 seconds: -0.688% by independent medians and -0.407%
+by the paired-ratio median, whose p10/p90 is -2.797%/+2.325%. A separate
+31-pair `bench_calls.php` control retained checksum `37500007500000` and
+measured baseline 0.361197/0.367835/0.371338 seconds versus candidate
+0.357374/0.362714/0.381348 seconds: -1.392% independently and -1.148% paired,
+with paired p10/p90 -3.266%/+2.773%. The added declaration and cold-link work
+remains below the five-percent median regression ceiling.
+
+The preceding checkpoint added PHP 8.5's `__PROPERTY__` magic constant in
+property defaults and attributes, property-hook bodies and attributes, and
+hook-parameter attributes. The same scope is preserved for interfaces and
 traits, while ordinary functions and methods, promoted-parameter contexts and
 nested functions or closures correctly observe the empty string. Deferred
 attribute expressions retain this property scope until Reflection evaluates
 their arguments.
 
-All four PHP 8.5.6 corpus cases containing `__PROPERTY__` now pass exactly:
+All four PHP 8.5.6 corpus cases containing `__PROPERTY__` pass exactly:
 `constants/gh17222.phpt` advances from a compile failure and the three
-`property_hooks` cases advance from runtime failures. The full-corpus delta is
-+4/-0 with no category regressions, timeout or crash. All five Cargo
+`property_hooks` cases advance from runtime failures. That full-corpus delta is
++4/-0 with no category regression, timeout or crash. All five Cargo
 configurations, all-feature/all-target, formatting and the exact unsafe
 ratchet pass. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and
 cold-build S3 also pass on AMD64.
 
-The exact base `013b66ef` and release candidate were compared without removing
-outliers. A 63-pair ABBA/BAAB confirmation over 150 empty-output file requests
-per executable measured baseline p10/median/p90
+The exact base `013b66ef` and that release candidate were compared without
+removing outliers. A 63-pair ABBA/BAAB confirmation over 150 empty-output file
+requests per executable measured baseline p10/median/p90
 0.201749/0.205205/0.209230 seconds and candidate
 0.201326/0.204412/0.209375 seconds: -0.386% by independent medians and +0.063%
 by the paired-ratio median, whose p10/p90 is -2.731%/+2.159%. A separate

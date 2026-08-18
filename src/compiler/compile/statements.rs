@@ -3900,6 +3900,12 @@ impl Compiler {
                         }
                     }
                     let property_is_readonly = *is_readonly || prop.is_readonly;
+                    if property_is_readonly && (prop.has_get_hook || prop.has_set_hook) {
+                        return Err(self.goto_error(
+                            "Hooked properties cannot be readonly",
+                            prop.line,
+                        ));
+                    }
                     if prop.is_static && property_is_readonly {
                         return Err(self.goto_error(
                             &format!(
@@ -4019,7 +4025,18 @@ impl Compiler {
                                 })
                         });
                     if definition.is_virtual_hook_property() {
-                        definition.set_has_default(false);
+                        if prop.default.is_some() && resolved_parent.is_none() {
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Cannot specify default value for virtual hooked property {}::${}",
+                                    name, prop.name
+                                ),
+                                prop.line,
+                            ));
+                        }
+                        if prop.default.is_none() {
+                            definition.set_has_default(false);
+                        }
                     }
                     if prop.is_static {
                         compiled_static_props.push(definition);
@@ -4690,6 +4707,12 @@ impl Compiler {
                             name, prop.name
                         ));
                     }
+                    if prop.is_readonly && (prop.has_get_hook || prop.has_set_hook) {
+                        return Err(self.goto_error(
+                            "Hooked properties cannot be readonly",
+                            prop.line,
+                        ));
+                    }
                     self.validate_property_type_hint_in_scope(
                         &prop.type_hint,
                         prop.line,
@@ -4775,6 +4798,15 @@ impl Compiler {
                                 })
                         });
                     if definition.is_virtual_hook_property() {
+                        if prop.default.is_some() {
+                            return Err(self.goto_error(
+                                &format!(
+                                    "Cannot specify default value for virtual hooked property {}::${}",
+                                    name, prop.name
+                                ),
+                                prop.line,
+                            ));
+                        }
                         definition.set_has_default(false);
                     }
                     if prop.is_static {

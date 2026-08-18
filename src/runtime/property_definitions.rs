@@ -20,6 +20,16 @@ fn inherit_property_definitions(
         }) else {
             continue;
         };
+        // Redeclaring an inherited backed property keeps storage even when
+        // the child hook body itself does not access `$this->$property`.
+        if !parent_property.is_virtual_hook_property() {
+            if child_property.has_get_hook {
+                child_property.get_hook_is_backed = true;
+            }
+            if child_property.has_set_hook {
+                child_property.set_hook_is_backed = true;
+            }
+        }
         if !child_property.has_get_hook
             && parent_property.has_get_hook
             && !parent_property.abstract_get_hook()
@@ -393,6 +403,22 @@ fn validate_property_inheritance(
                 parent.declaring_class, parent.name, child_class, child.name
             ));
         }
+        if child.is_virtual_hook_property() && child.default.is_some() {
+            let inherits_backing_storage = parent_instance.iter().any(|parent| {
+                parent.name == child.name
+                    && parent.visibility != Visibility::Private
+                    && !parent.is_virtual_hook_property()
+            });
+            if !inherits_backing_storage {
+                let location = child.source_file.as_ref().map_or_else(String::new, |file| {
+                    format!(" in {file} on line {}", child.declaration_line())
+                });
+                return Err(format!(
+                    "Cannot specify default value for virtual hooked property {child_class}::${}{location}",
+                    child.name
+                ));
+            }
+        }
         if let Some(parent) = parent_instance
             .iter()
             .find(|parent| parent.name == child.name && parent.visibility != Visibility::Private)
@@ -481,26 +507,57 @@ fn merge_trait_property_definitions(
     class_name: &str,
     trait_name: &str,
     own_names: &std::collections::HashSet<String>,
-    composed_names: &mut std::collections::HashSet<String>,
+    composed_names: &mut std::collections::HashMap<String, String>,
+    source_file: Option<&str>,
+    declaration_line: usize,
 ) -> Result<(), String> {
     for property in source {
         let existing = target
             .iter()
             .position(|candidate| candidate.name == property.name);
         if own_names.contains(&property.name) {
+            let existing_property = &target[existing.expect("own property definition")];
+            if existing_property.has_get_hook
+                || existing_property.has_set_hook
+                || property.has_get_hook
+                || property.has_set_hook
+            {
+                let location = source_file.map_or_else(String::new, |file| {
+                    format!(" in {file} on line {declaration_line}")
+                });
+                return Err(format!(
+                    "{class_name} and {trait_name} define the same hooked property (${}) in the composition of {class_name}. \
+                     Conflict resolution between hooked properties is currently not supported. Class was composed{location}",
+                    property.name
+                ));
+            }
             // Preserve the existing class-over-trait behavior. Compatibility
             // of an explicit class declaration is handled by the declaration
             // validation path.
             continue;
         }
-        if composed_names.contains(&property.name) {
+        if let Some(first_trait) = composed_names.get(&property.name) {
             let existing_property = &target[existing.expect("composed trait property")];
+            if existing_property.has_get_hook
+                || existing_property.has_set_hook
+                || property.has_get_hook
+                || property.has_set_hook
+            {
+                let location = source_file.map_or_else(String::new, |file| {
+                    format!(" in {file} on line {declaration_line}")
+                });
+                return Err(format!(
+                    "{first_trait} and {trait_name} define the same hooked property (${}) in the composition of {class_name}. \
+                     Conflict resolution between hooked properties is currently not supported. Class was composed{location}",
+                    property.name
+                ));
+            }
             let compatible = property_definitions_are_compatible(existing_property, property);
             if !compatible {
                 return Err(format!(
                     "{} and {} define the same property (${}) in the composition of {}. \
                      However, the definition differs and is considered incompatible",
-                    existing_property.declaring_class, trait_name, property.name, class_name
+                    first_trait, trait_name, property.name, class_name
                 ));
             }
             continue;
@@ -516,7 +573,7 @@ fn merge_trait_property_definitions(
         } else {
             target.push(addition);
         }
-        composed_names.insert(property.name.clone());
+        composed_names.insert(property.name.clone(), trait_name.to_string());
     }
     Ok(())
 }

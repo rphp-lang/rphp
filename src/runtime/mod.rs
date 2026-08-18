@@ -2445,7 +2445,7 @@ impl ExecutorGlobals {
         // Must happen after parent inheritance so trait methods override inherited ones
         // (matching PHP semantics: trait > parent, class > trait).
         let trait_names = class_def.uses.clone();
-        let mut composed_trait_property_names = std::collections::HashSet::new();
+        let mut composed_trait_property_names = std::collections::HashMap::new();
         let mut composed_static_trait_names = std::collections::HashSet::new();
         for trait_name in &trait_names {
             let trait_definition =
@@ -2494,6 +2494,8 @@ impl ExecutorGlobals {
                     trait_name,
                     &own_property_names,
                     &mut composed_trait_property_names,
+                    class_def.source_file.as_deref(),
+                    class_def.declaration_line,
                 )?;
                 merge_trait_static_property_definitions(
                     &mut class_def.static_properties,
