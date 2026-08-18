@@ -19,7 +19,10 @@ use crate::compiler::compile::PropertyDefinition;
 use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities};
 use crate::parser::Visibility;
 use crate::runtime::{ExecutorGlobals, LazyObjectStrategy};
-use crate::value::{PhpArray, PhpClosure, PhpObject, Value, ValueType, make_error_value};
+use crate::value::{
+    DynamicPropertyMap, PhpArray, PhpClosure, PhpObject, ReferencePropertyConstraint, Value,
+    ValueType, make_error_value,
+};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{FunctionCommon, ParamTypeHint};
@@ -1934,6 +1937,79 @@ fn restore_lazy_property_defaults(eg: &ExecutorGlobals, object: &Value, lazy_slo
     }
 }
 
+type LazyPropertySnapshot = (Vec<Value>, Option<Box<DynamicPropertyMap>>);
+
+fn snapshot_lazy_property_storage(object: &Value) -> Option<LazyPropertySnapshot> {
+    object.as_object().map(|object| {
+        let properties = object
+            .property_values
+            .iter()
+            .map(|value| {
+                if value.is_owned_reference() {
+                    let mut alias = value.clone_owned_reference_alias();
+                    alias.mark_internal_reference_alias();
+                    alias
+                } else {
+                    value.clone()
+                }
+            })
+            .collect();
+        let dynamic = object
+            .dynamic_properties
+            .as_ref()
+            .map(|properties| Box::new(properties.clone_for_storage_snapshot()));
+        (properties, dynamic)
+    })
+}
+
+fn restore_lazy_ghost_property_storage(
+    eg: &ExecutorGlobals,
+    object: &Value,
+    snapshot: LazyPropertySnapshot,
+) {
+    let (mut properties, mut dynamic) = snapshot;
+    for value in &mut properties {
+        value.unmark_internal_reference_alias();
+    }
+    if let Some(dynamic) = dynamic.as_mut() {
+        dynamic.activate_storage_snapshot_aliases();
+    }
+    let Some(mut object) = object.as_object_mut() else {
+        return;
+    };
+    for (slot, value) in object.property_values.iter().enumerate() {
+        value.remove_reference_property_constraint(object.instance_property_reference_owner(slot));
+    }
+    object.property_values = properties;
+    object.dynamic_properties = dynamic;
+
+    for (slot, value) in object.property_values.iter().enumerate() {
+        let Some(definition) = eg.instance_property_definition(object.class_id, slot) else {
+            continue;
+        };
+        if !definition.is_typed() || !value.is_owned_reference() {
+            continue;
+        }
+        value.add_reference_property_constraint(ReferencePropertyConstraint {
+            owner: object.instance_property_reference_owner(slot),
+            declaring_class: definition.declaring_class.clone(),
+            property: definition.name.clone(),
+            type_scope: definition.type_scope.clone(),
+            called_class: object.class_name.to_string(),
+            type_hint: definition.type_hint.clone(),
+        });
+    }
+}
+
+fn detach_lazy_proxy_shell_reference_constraints(object: &Value) {
+    let Some(object) = object.as_object() else {
+        return;
+    };
+    for (slot, value) in object.property_values.iter().enumerate() {
+        value.remove_reference_property_constraint(object.instance_property_reference_owner(slot));
+    }
+}
+
 /// Initialize one Reflection lazy object at the property-access boundary.
 /// Ghosts return their original identity; proxies return their real instance.
 pub(crate) fn initialize_lazy_object(
@@ -1950,12 +2026,7 @@ pub(crate) fn initialize_lazy_object(
     } else {
         return Ok(object.clone());
     }
-    let property_snapshot = object.as_object().map(|object| {
-        (
-            object.property_values.clone(),
-            object.dynamic_properties.clone(),
-        )
-    });
+    let property_snapshot = snapshot_lazy_property_storage(object);
     let Some((strategy, initializer, lazy_slots_before)) =
         eg.lazy_object_state_mut(object).map(|state| {
             state.initializing = true;
@@ -1990,12 +2061,9 @@ pub(crate) fn initialize_lazy_object(
     };
     if eg.exception.is_some() {
         if strategy == LazyObjectStrategy::Ghost
-            && let Some((properties, dynamic)) = property_snapshot
+            && let Some(snapshot) = property_snapshot
         {
-            if let Some(mut object) = object.as_object_mut() {
-                object.property_values = properties;
-                object.dynamic_properties = dynamic;
-            }
+            restore_lazy_ghost_property_storage(eg, object, snapshot);
         }
         if let Some(state) = eg.lazy_object_state_mut(object) {
             state.initializing = false;
@@ -2008,12 +2076,9 @@ pub(crate) fn initialize_lazy_object(
         LazyObjectStrategy::Ghost => {
             if result.value_type() != ValueType::Null {
                 if strategy == LazyObjectStrategy::Ghost
-                    && let Some((properties, dynamic)) = property_snapshot
+                    && let Some(snapshot) = property_snapshot
                 {
-                    if let Some(mut object) = object.as_object_mut() {
-                        object.property_values = properties;
-                        object.dynamic_properties = dynamic;
-                    }
+                    restore_lazy_ghost_property_storage(eg, object, snapshot);
                 }
                 if let Some(state) = eg.lazy_object_state_mut(object) {
                     state.initializing = false;
@@ -2054,6 +2119,7 @@ pub(crate) fn initialize_lazy_object(
                 return Ok(object.clone());
             }
             if let Some(state) = eg.lazy_object_state_mut(object) {
+                detach_lazy_proxy_shell_reference_constraints(object);
                 state.initializing = false;
                 state.initializer_value = Value::null();
                 state.lazy_slots.clear();

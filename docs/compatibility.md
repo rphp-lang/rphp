@@ -903,6 +903,25 @@ Cargo feature configurations, the all-feature/all-target check, formatting,
 unsafe self-test and ratchet, Composer S0, all four Symfony S1 gates and
 warmed-kernel S2 pass on AMD64.
 
+Lazy-initializer transaction snapshots now retain owned reference cells as
+engine-internal aliases, so taking a snapshot does not change PHP-visible
+alias cardinality. A failed ghost initializer restores declared and dynamic
+storage, removes type owners introduced by partial writes, and reattaches the
+original typed-property owners. A successful proxy initialization instead
+detaches the shell's type owners, leaving external aliases to pre-initialized
+shell properties unconstrained as required. The exact 223-case lazy-object
+pass set moves from 198 to 200, a +2/-0 delta consisting only of
+`init_handles_ref_source_types.phpt` and
+`init_handles_ref_source_types_exception.phpt`.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting, unsafe self-test and ratchet, Composer S0, all four Symfony S1
+gates and warmed-kernel S2 pass on AMD64. Twenty alternating release pairs of
+the established five-million-operation property control measured baseline
+p10/median/p90 of 1.285298/1.288852/1.331500 seconds versus
+1.263447/1.280755/1.311348 seconds for the candidate; the balanced
+order-specific median ratio was -0.886 percent, inside the one-percent gate.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

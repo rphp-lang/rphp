@@ -1145,6 +1145,93 @@ echo (int) $reflection->isUninitializedLazyObject($partial), ':', $partial->labe
 }
 
 #[test]
+fn lazy_initialization_transacts_typed_reference_sources() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LazyReferenceTransaction {
+    public ?self $kept;
+    public ?self $replaced;
+    public $trigger;
+
+    public function initialize(bool $throws): void {
+        $this->kept = null;
+        unset($this->replaced);
+        if ($throws) {
+            throw new Exception('rollback');
+        }
+        $this->replaced = null;
+    }
+}
+
+$reflection = new ReflectionClass(LazyReferenceTransaction::class);
+$ghost = $reflection->newLazyGhost(fn ($object) => $object->initialize(false));
+$reflection->getProperty('kept')->setRawValueWithoutLazyInitialization($ghost, null);
+$ghostKept = &$ghost->kept;
+$reflection->getProperty('replaced')->setRawValueWithoutLazyInitialization($ghost, null);
+$ghostReplaced = &$ghost->replaced;
+var_dump($ghost->trigger);
+try {
+    $ghostKept = 1;
+} catch (TypeError) {
+    echo "kept constrained\n";
+}
+unset($ghost->kept);
+$ghostKept = 1;
+$ghostReplaced = 2;
+echo 'freed:', $ghostKept, ':', $ghostReplaced, "\n";
+
+$failed = $reflection->newLazyGhost(fn ($object) => $object->initialize(true));
+$reflection->getProperty('kept')->setRawValueWithoutLazyInitialization($failed, null);
+$failedKept = &$failed->kept;
+$reflection->getProperty('replaced')->setRawValueWithoutLazyInitialization($failed, null);
+$failedReplaced = &$failed->replaced;
+try {
+    var_dump($failed->trigger);
+} catch (Exception $exception) {
+    echo $exception->getMessage(), "\n";
+}
+ob_start();
+var_dump($failed);
+$dump = ob_get_clean();
+echo 'aliases:', substr_count($dump, '&NULL'), "\n";
+try {
+    $failedKept = 1;
+} catch (TypeError) {
+    echo "rollback kept\n";
+}
+try {
+    $failedReplaced = 1;
+} catch (TypeError) {
+    echo "rollback replaced\n";
+}
+
+$proxy = $reflection->newLazyProxy(fn () => new LazyReferenceTransaction());
+$reflection->getProperty('kept')->setRawValueWithoutLazyInitialization($proxy, null);
+$proxyKept = &$proxy->kept;
+$reflection->getProperty('replaced')->setRawValueWithoutLazyInitialization($proxy, null);
+$proxyReplaced = &$proxy->replaced;
+var_dump($proxy->trigger);
+$proxyKept = 3;
+$proxyReplaced = 4;
+echo 'proxy:', $proxyKept, ':', $proxyReplaced, "\n";
+"#,
+        ),
+        concat!(
+            "NULL\n",
+            "kept constrained\n",
+            "freed:1:2\n",
+            "rollback\n",
+            "aliases:2\n",
+            "rollback kept\n",
+            "rollback replaced\n",
+            "NULL\n",
+            "proxy:3:4\n",
+        )
+    );
+}
+
+#[test]
 fn reflection_lazy_raw_write_reaches_terminal_nested_proxy_instance() {
     assert_eq!(
         run_php(

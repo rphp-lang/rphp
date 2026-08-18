@@ -417,6 +417,44 @@ impl DynamicPropertyMap {
         clone
     }
 
+    /// Snapshot object storage for a transaction that may need to restore the
+    /// exact PHP reference cells. Ordinary `Value::clone()` reads through a
+    /// reference, while rollback must retain the alias itself.
+    pub(crate) fn clone_for_storage_snapshot(&self) -> Self {
+        let mut clone = Self::with_capacity(self.len());
+        self.for_each(|name, value| {
+            let value = if value.is_owned_reference() {
+                let mut alias = value.clone_owned_reference_alias();
+                alias.mark_internal_reference_alias();
+                alias
+            } else {
+                value.clone()
+            };
+            clone.insert_owned(name.to_string(), value);
+        });
+        clone
+    }
+
+    pub(crate) fn activate_storage_snapshot_aliases(&mut self) {
+        match &mut self.storage {
+            DynamicPropertyStorage::Small(small) => {
+                for (_, value) in small.entries.iter_mut().flatten() {
+                    value.unmark_internal_reference_alias();
+                }
+            }
+            DynamicPropertyStorage::Linear(linear) => {
+                for (_, value) in &mut linear.entries {
+                    value.unmark_internal_reference_alias();
+                }
+            }
+            DynamicPropertyStorage::Indexed(indexed) => {
+                for (_, value) in &mut indexed.entries {
+                    value.unmark_internal_reference_alias();
+                }
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn get(&self, key: &str) -> Option<&Value> {
         match &self.storage {
@@ -5098,7 +5136,7 @@ impl Value {
             .retain(|constraint| constraint.owner != owner);
     }
 
-    /// Exclude one compiler-owned CV from PHP-visible reference cardinality.
+    /// Exclude one engine-owned handle from PHP-visible reference cardinality.
     #[inline]
     pub(crate) fn mark_internal_reference_alias(&mut self) {
         debug_assert!(self.is_owned_reference());
@@ -5110,6 +5148,20 @@ impl Value {
         debug_assert!(internal_aliases < usize::MAX);
         reference.internal_aliases.set(internal_aliases + 1);
         self.type_info |= Self::INTERNAL_REFERENCE_ALIAS_FLAG;
+    }
+
+    #[inline]
+    pub(crate) fn unmark_internal_reference_alias(&mut self) {
+        if !self.is_owned_reference() || self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG == 0 {
+            return;
+        }
+        let reference = self.owned_reference_rc();
+        let internal_aliases = reference.internal_aliases.get();
+        debug_assert!(internal_aliases > 0);
+        if internal_aliases > 0 {
+            reference.internal_aliases.set(internal_aliases - 1);
+        }
+        self.type_info &= !Self::INTERNAL_REFERENCE_ALIAS_FLAG;
     }
 
     /// Whether this request-owned reference cell is still reachable through
