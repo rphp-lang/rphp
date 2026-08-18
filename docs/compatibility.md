@@ -978,6 +978,34 @@ warmed-kernel S2 pass on AMD64. No runtime benchmark is required because all
 new rendering and ordering work is confined to explicit cold Reflection calls;
 ordinary property storage and dispatch are unchanged.
 
+Runtime object-member operations now share one PHP 8.5 property-name
+conversion rule across reads, writes, reference binding, `isset()` and
+`unset()`. A stringable object is converted exactly once, an unconvertible
+object or closure raises the canonical catchable `Error`, and a Throwable from
+`__toString()` propagates without redirecting the operation when conversion
+rebinds the receiver variable. The ordinary string-name path retains its prior
+ownership behavior; only object, closure and array conversions preserve an
+owned receiver across re-entry.
+
+A direct parent/candidate rerun of all 5,599 pinned PHP 8.5.6 cases moves from
+2,691 to 2,693 passes, an exact +2/-0 delta consisting of
+`Zend/tests/lazy_objects/typed_properties_001.phpt` and
+`Zend/tests/type_declarations/typed_properties_093.phpt`. The remaining
+`Zend/tests/class_properties_const.phpt` failure advances from output mismatch
+to its correct runtime `Closure` conversion error but still exposes an earlier
+warning ordering gap. The candidate distribution is 2,693 passes, 2,514 ordinary
+failures, 110 skips, one XFAIL and 280 unsupported cases, with zero timeouts
+and one pre-existing `Zend/tests/generators/yield_from_deep_recursion.phpt`
+stack-overflow crash that reproduces identically on the parent. The focused
+lazy-object pass set moves from 206 to 207 out of 223, an exact +1/-0 delta.
+
+All five Cargo feature configurations, formatting, unsafe-policy and
+all-feature/all-target checks, Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. Twenty alternating release A/B pairs of the
+five-million-iteration property read/write workload measure a balanced
+candidate/parent delta of -3.365%, within the +1% regression ceiling and with
+identical output.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

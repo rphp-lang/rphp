@@ -205,6 +205,106 @@ $magic->value = 1;
 }
 
 #[test]
+fn object_property_names_share_string_conversion_across_member_operations() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class MemberName {
+    public function __construct(private string $name) {}
+    public function __toString() { echo "convert:$this->name\n"; return $this->name; }
+}
+class InvalidMemberName {}
+class ThrowingMemberName {
+    public function __toString() { throw new Exception('key failed'); }
+}
+#[AllowDynamicProperties]
+class DynamicNameBox { public $slot = 1; }
+
+$box = new DynamicNameBox;
+$name = new MemberName('slot');
+var_dump($box->$name);
+$box->$name = 2;
+var_dump($box->slot);
+$source = 3;
+$box->$name =& $source;
+var_dump($box->slot);
+$source = 4;
+var_dump($box->slot);
+var_dump(isset($box->$name));
+unset($box->$name);
+var_dump(isset($box->slot));
+
+foreach (['read', 'write', 'reference', 'isset', 'unset'] as $operation) {
+    $box = new DynamicNameBox;
+    $invalid = new InvalidMemberName;
+    try {
+        if ($operation === 'read') $box->$invalid;
+        elseif ($operation === 'write') $box->$invalid = 1;
+        elseif ($operation === 'reference') { $source = 1; $box->$invalid =& $source; }
+        elseif ($operation === 'isset') isset($box->$invalid);
+        else unset($box->$invalid);
+    } catch (Error $error) {
+        echo "$operation:", $error->getMessage(), "\n";
+    }
+}
+
+$box = new DynamicNameBox;
+try { $box->{new ThrowingMemberName} = 5; }
+catch (Exception $exception) { echo 'throw:', $exception->getMessage(), "\n"; }
+var_dump($box->slot);
+
+class RebindingMemberName {
+    public function __toString() { global $box; $box = null; return 'slot'; }
+}
+$selected = $box = new DynamicNameBox;
+$box->{new RebindingMemberName} = 9;
+var_dump($selected->slot, $box);
+"#,
+        ),
+        concat!(
+            "convert:slot\nint(1)\n",
+            "convert:slot\nint(2)\n",
+            "convert:slot\nint(3)\nint(4)\n",
+            "convert:slot\nbool(true)\n",
+            "convert:slot\nbool(false)\n",
+            "read:Object of class InvalidMemberName could not be converted to string\n",
+            "write:Object of class InvalidMemberName could not be converted to string\n",
+            "reference:Object of class InvalidMemberName could not be converted to string\n",
+            "isset:Object of class InvalidMemberName could not be converted to string\n",
+            "unset:Object of class InvalidMemberName could not be converted to string\n",
+            "throw:key failed\nint(1)\nint(9)\nNULL\n",
+        )
+    );
+}
+
+#[test]
+fn lazy_typed_reference_binding_converts_the_property_name_before_validation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class TypedMemberName {
+    public function __construct(private string $name) {}
+    public function __toString() { echo "name:$this->name\n"; return $this->name; }
+}
+class LazyTypedNameBox { public int $number; }
+$reflection = new ReflectionClass(LazyTypedNameBox::class);
+$box = $reflection->newLazyProxy(fn() => new LazyTypedNameBox);
+$source = 'bad';
+try { $box->{new TypedMemberName('number')} =& $source; }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+var_dump($reflection->isUninitializedLazyObject($box));
+echo count(get_object_vars($box)), "\n";
+"#,
+        ),
+        concat!(
+            "name:number\n",
+            "Cannot assign string to property LazyTypedNameBox::$number of type int\n",
+            "bool(false)\n0\n",
+        )
+    );
+}
+
+#[test]
 fn asymmetric_property_visibility_separates_read_and_write_scope() {
     assert_eq!(
         run_php(

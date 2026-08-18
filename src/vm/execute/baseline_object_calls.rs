@@ -612,6 +612,103 @@ fn take_magic_exception<'a>(
     })
 }
 
+enum ConvertedPropertyName<'a> {
+    Name(String),
+    Control(ColdResult<'a>),
+}
+
+#[inline(always)]
+fn property_name_conversion_may_reenter(property: &Value) -> bool {
+    matches!(
+        property.dereferenced().value_type(),
+        ValueType::Object | ValueType::Closure | ValueType::Array
+    )
+}
+
+/// Convert a runtime property name through PHP's common object-member rule.
+///
+/// Dynamic property-name expressions may invoke `__toString()` or an error
+/// handler for an array warning. Callers must therefore own the receiver and
+/// any source value before entering this helper.
+#[inline]
+fn convert_object_property_name<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    property: &Value,
+    suppress_warning: bool,
+) -> Result<ConvertedPropertyName<'a>, VmError> {
+    let property = property.dereferenced();
+    if let Some(property) = property.as_str() {
+        return Ok(ConvertedPropertyName::Name(property.to_string()));
+    }
+    let property = property.clone();
+    if matches!(property.value_type(), ValueType::Object | ValueType::Closure) {
+        let class_name = if property.value_type() == ValueType::Closure {
+            "Closure".to_string()
+        } else {
+            property
+                .as_object()
+                .map(|object| {
+                    object
+                        .class_name
+                        .strip_prefix("class@anonymous#")
+                        .map_or_else(
+                            || object.class_name.to_string(),
+                            |_| "class@anonymous".to_string(),
+                        )
+                })
+                .unwrap_or_else(|| "object".to_string())
+        };
+        let rendered = if property.value_type() == ValueType::Closure {
+            None
+        } else {
+            call_magic_method(eg, &property, "__tostring", &[])?
+        };
+        if let Some(result) = take_magic_exception(eg, frame) {
+            return Ok(ConvertedPropertyName::Control(result));
+        }
+        let Some(rendered) = rendered else {
+            return Ok(ConvertedPropertyName::Control(object_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Object of class {class_name} could not be converted to string"),
+            )));
+        };
+        let Some(rendered) = rendered.as_str() else {
+            return Ok(ConvertedPropertyName::Control(object_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                format!("{class_name}::__toString(): Return value must be of type string"),
+            )));
+        };
+        return Ok(ConvertedPropertyName::Name(rendered.to_string()));
+    }
+
+    if property.value_type() == ValueType::Array {
+        report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            "Array to string conversion",
+            suppress_warning,
+        )?;
+        if let Some(result) = take_magic_exception(eg, frame) {
+            return Ok(ConvertedPropertyName::Control(result));
+        }
+    }
+    Ok(ConvertedPropertyName::Name(
+        property
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| property.echo_to_string()),
+    ))
+}
+
 #[inline(always)]
 fn finish_cached_fetch_obj_r(
     frame: *mut ExecuteData,
@@ -804,57 +901,16 @@ fn op_fetch_obj_r_slow<'a>(
     // re-entrant call so later phases still address the original values.
     let receiver = obj_val.clone();
     let obj_val = &receiver;
-    let property_name_owner = prop_name.dereferenced().clone();
-
-    let name = if property_name_owner.value_type() == ValueType::Object {
-        let class_name = property_name_owner
-            .as_object()
-            .map(|object| object.class_name.to_string())
-            .unwrap_or_else(|| "object".to_string());
-        let rendered = call_magic_method(eg, &property_name_owner, "__tostring", &[])?;
-        if let Some(exception) = eg.exception.take() {
-            return Ok(match throw_in_frame(eg, frame, exception) {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    ColdResult::NewFrame(new_frame, new_op_array)
-                }
-                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
-            });
-        }
-        let Some(rendered) = rendered else {
-            return Ok(object_property_throw(
-                eg,
-                frame,
-                "Error",
-                format!("Object of class {class_name} could not be converted to string"),
-            ));
-        };
-        let Some(rendered) = rendered.as_str() else {
-            return Ok(object_property_throw(
-                eg,
-                frame,
-                "TypeError",
-                format!("{class_name}::__toString(): Return value must be of type string"),
-            ));
-        };
-        rendered.to_string()
-    } else {
-        if property_name_owner.value_type() == ValueType::Array {
-            report_php_warning(
-                eg,
-                frame,
-                op_array,
-                opline,
-                "Array to string conversion",
-                opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
-            )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
-                return Ok(result);
-            }
-        }
-        property_name_owner
-            .as_str()
-            .map(str::to_string)
-            .unwrap_or_else(|| property_name_owner.echo_to_string())
+    let name = match convert_object_property_name(
+        eg,
+        frame,
+        op_array,
+        opline,
+        prop_name,
+        opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
+    )? {
+        ConvertedPropertyName::Name(name) => name,
+        ConvertedPropertyName::Control(result) => return Ok(result),
     };
     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
 
@@ -1284,9 +1340,17 @@ fn op_isset_obj<'a>(
         set_result(false);
         return Ok(ColdResult::Done);
     }
+    let receiver_owner =
+        property_name_conversion_may_reenter(property).then(|| object.clone());
+    let object = receiver_owner.as_ref().unwrap_or(object);
+    let name = match convert_object_property_name(
+        eg, frame, op_array, opline, property, false,
+    )? {
+        ConvertedPropertyName::Name(name) => name,
+        ConvertedPropertyName::Control(result) => return Ok(result),
+    };
     let lazy_receiver_owner = eg.lazy_object_state(object).map(|_| object.clone());
     let object = lazy_receiver_owner.as_ref().unwrap_or(object);
-    let name = property.as_str().unwrap_or("");
     let caller_class = get_caller_class(frame, eg);
     let object_ref = object.as_object().expect("object tag must expose object storage");
     let receiver_in_scope = caller_class
@@ -1296,13 +1360,13 @@ fn op_isset_obj<'a>(
         .then_some(caller_class.as_deref())
         .flatten();
     let accessible = eg
-        .find_property_visibility(&object_ref.class_name, name)
+        .find_property_visibility(&object_ref.class_name, &name)
         .is_none_or(|(visibility, defining_class)| {
             visibility == Visibility::Public
                 || eg.check_visibility(effective_caller, &defining_class, visibility)
         });
     let hidden_parent_private = eg
-        .find_property_visibility(&object_ref.class_name, name)
+        .find_property_visibility(&object_ref.class_name, &name)
         .is_some_and(|(visibility, defining_class)| {
             visibility == Visibility::Private
                 && !defining_class.eq_ignore_ascii_case(&object_ref.class_name)
@@ -1312,7 +1376,7 @@ fn op_isset_obj<'a>(
         let key = crate::runtime::resolve_property_key(
             eg,
             &object_ref.class_name,
-            name,
+            &name,
             effective_caller,
         );
         object_ref
@@ -1328,12 +1392,12 @@ fn op_isset_obj<'a>(
     };
     let object_class_name = object_ref.class_name.clone();
     let key = if hidden_parent_private {
-        name.to_string()
+        name.clone()
     } else {
         crate::runtime::resolve_property_key(
             eg,
             &object_ref.class_name,
-            name,
+            &name,
             effective_caller,
         )
     };
@@ -1362,14 +1426,14 @@ fn op_isset_obj<'a>(
     let magic_receiver = object;
     let object = initialized_target.as_ref().unwrap_or(object);
     if has_get_hook
-        && !property_guard_active(eg, magic_receiver, name, PROPERTY_GUARD_GET)
-        && !property_guard_active(eg, magic_receiver, name, PROPERTY_GUARD_SET)
+        && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_GET)
+        && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
     {
         let hook_name = format!("${name}::get");
         let value = call_guarded_property_magic_method(
             eg,
             magic_receiver,
-            name,
+            &name,
             PROPERTY_GUARD_GET,
             &hook_name,
             &[],
@@ -1387,7 +1451,7 @@ fn op_isset_obj<'a>(
         .expect("lazy initialization must preserve an object receiver");
     let property_state = if hidden_parent_private {
         object_ref
-            .get_dynamic_property_with_position(name)
+            .get_dynamic_property_with_position(&name)
             .map(|(value, _)| !value.is_undef() && value.value_type() != ValueType::Null)
     } else if accessible {
         object_ref
@@ -1399,7 +1463,7 @@ fn op_isset_obj<'a>(
     drop(object_ref);
 
     if write_only_property
-        && !property_guard_active(eg, magic_receiver, name, PROPERTY_GUARD_SET)
+        && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
     {
         return Ok(object_property_throw(
             eg,
@@ -1414,10 +1478,10 @@ fn op_isset_obj<'a>(
         None => call_guarded_property_magic_method(
             eg,
             magic_receiver,
-            name,
+            &name,
             PROPERTY_GUARD_ISSET,
             "__isset",
-            &[Value::string(name)],
+            &[Value::string(&name)],
         )?
         .is_some_and(|value| value.is_truthy()),
     };
@@ -1446,12 +1510,17 @@ fn op_unset_obj<'a>(
     if object.value_type() != ValueType::Object {
         return Ok(ColdResult::Done);
     }
+    let receiver_owner =
+        property_name_conversion_may_reenter(property).then(|| object.clone());
+    let object = receiver_owner.as_ref().unwrap_or(object);
+    let name = match convert_object_property_name(
+        eg, frame, op_array, opline, property, false,
+    )? {
+        ConvertedPropertyName::Name(name) => name,
+        ConvertedPropertyName::Control(result) => return Ok(result),
+    };
     let lazy_receiver_owner = eg.lazy_object_state(object).map(|_| object.clone());
     let object = lazy_receiver_owner.as_ref().unwrap_or(object);
-    let name = property
-        .as_str()
-        .ok_or_else(|| VmError::Fatal("Property name must be a string".into()))?
-        .to_string();
     let caller_class = get_caller_class(frame, eg);
     let object_ref = object.as_object().unwrap();
     let receiver_in_scope = caller_class
@@ -1621,7 +1690,17 @@ fn op_bind_obj_prop_ref<'a>(
             opline.op2_type,
             op_array,
         );
-        let name = name_value.echo_to_string();
+        let name = match convert_object_property_name(
+            eg,
+            frame,
+            op_array,
+            opline,
+            name_value,
+            false,
+        )? {
+            ConvertedPropertyName::Name(name) => name,
+            ConvertedPropertyName::Control(result) => return Ok(result),
+        };
         let Some(object) = receiver.as_object() else {
             return Ok(object_property_throw(
                 eg,
@@ -2286,7 +2365,14 @@ fn op_assign_obj_prop<'a>(
     } else {
         val.clone()
     };
-    let name = prop_name.echo_to_string();
+    let receiver_owner = property_name_conversion_may_reenter(prop_name).then(|| obj.clone());
+    let obj = receiver_owner.as_ref().unwrap_or(obj);
+    let name = match convert_object_property_name(
+        eg, frame, op_array, opline, prop_name, false,
+    )? {
+        ConvertedPropertyName::Name(name) => name,
+        ConvertedPropertyName::Control(result) => return Ok(result),
+    };
     let lazy_receiver_owner = eg.lazy_object_state(obj).map(|_| obj.clone());
     let obj = lazy_receiver_owner.as_ref().unwrap_or(obj);
 
