@@ -1782,15 +1782,28 @@ impl ExecutorGlobals {
                 }
             }
 
-            let required_return = &required_signature.return_type_hint;
-            if !matches!(required_return, ParamTypeHint::None) {
+            let setter_hook = |name: &str| name.starts_with('$') && name.ends_with("::set");
+            let required_return = if setter_hook(required.name) {
+                ParamTypeHint::Void
+            } else {
+                required_signature.return_type_hint.clone()
+            };
+            if !matches!(&required_return, ParamTypeHint::None) {
+                let implementation_return = if setter_hook(implementation.name) {
+                    ParamTypeHint::Void
+                } else {
+                    implementation_signature.return_type_hint.clone()
+                };
                 let implementation_return = self.resolve_variance_type_hint(
-                    &implementation_signature.return_type_hint,
+                    &implementation_return,
                     implementation.owner,
                     linking_class,
                 );
-                let required_return =
-                    self.resolve_variance_type_hint(required_return, required.owner, linking_class);
+                let required_return = self.resolve_variance_type_hint(
+                    &required_return,
+                    required.owner,
+                    linking_class,
+                );
                 if !self.is_return_type_compatible(
                     &implementation_return,
                     &required_return,
@@ -1987,15 +2000,19 @@ impl ExecutorGlobals {
         if signature.returns_reference {
             rendered.insert_str(0, "& ");
         }
-        if !matches!(signature.return_type_hint, ParamTypeHint::None) {
+        let return_type =
+            if declaration.name.starts_with('$') && declaration.name.ends_with("::set") {
+                Some(ParamTypeHint::Void)
+            } else if !matches!(signature.return_type_hint, ParamTypeHint::None) {
+                Some(signature.return_type_hint.clone())
+            } else {
+                None
+            };
+        if let Some(return_type) = return_type {
             rendered.push_str(": ");
             rendered.push_str(
                 &self
-                    .resolve_variance_type_hint(
-                        &signature.return_type_hint,
-                        declaration.owner,
-                        linking_class,
-                    )
+                    .resolve_variance_type_hint(&return_type, declaration.owner, linking_class)
                     .display_name(),
             );
         }
@@ -2242,13 +2259,14 @@ impl ExecutorGlobals {
     }
 
     fn class_definition_requires_delayed_linking(&self, class_def: &ClassDef) -> bool {
-        class_def
-            .parent
-            .as_deref()
-            .and_then(|parent| self.find_class(parent))
-            .is_some_and(|parent| {
-                property_inheritance_requires_delayed_linking(self, class_def, parent)
-            })
+        property_hook_setter_variance_requires_delayed_linking(self, class_def)
+            || class_def
+                .parent
+                .as_deref()
+                .and_then(|parent| self.find_class(parent))
+                .is_some_and(|parent| {
+                    property_inheritance_requires_delayed_linking(self, class_def, parent)
+                })
     }
 
     fn retry_pending_named_classes(&mut self) -> Result<(), String> {
@@ -2312,6 +2330,7 @@ impl ExecutorGlobals {
             .validate_parametric_lsp(&class_name, |actual, bound| {
                 class_is_a_in_table(class_table, actual, bound)
             })?;
+        validate_property_hook_setter_variance(self, &class_def)?;
         // Assign stable class ID
         let id = self.next_class_id;
         self.next_class_id += 1;
@@ -4179,6 +4198,72 @@ impl ExecutorGlobals {
         iface_owner: &str,
         linking_class: Option<&ClassDef>,
     ) -> bool {
+        self.is_param_type_compatible_mode(
+            impl_hint,
+            iface_hint,
+            impl_owner,
+            iface_owner,
+            linking_class,
+            true,
+            false,
+        )
+    }
+
+    /// Property setter declarations need a conclusive relation: unlike an
+    /// ordinary method contract that may be revisited after an alias appears,
+    /// two distinct unresolved class names do not establish contravariance.
+    fn is_param_type_compatible_strict(
+        &self,
+        impl_hint: &crate::vm::function::ParamTypeHint,
+        iface_hint: &crate::vm::function::ParamTypeHint,
+        impl_owner: &str,
+        iface_owner: &str,
+        linking_class: Option<&ClassDef>,
+    ) -> bool {
+        self.is_param_type_compatible_mode(
+            impl_hint,
+            iface_hint,
+            impl_owner,
+            iface_owner,
+            linking_class,
+            false,
+            false,
+        )
+    }
+
+    /// Determine whether publishing currently unknown class-like declarations
+    /// could make a setter relation valid. This is intentionally broader than
+    /// ordinary method linking, because either side may be declared later in
+    /// the same source unit or supplied independently by an autoloader.
+    fn is_param_type_potentially_compatible(
+        &self,
+        impl_hint: &crate::vm::function::ParamTypeHint,
+        iface_hint: &crate::vm::function::ParamTypeHint,
+        impl_owner: &str,
+        iface_owner: &str,
+        linking_class: Option<&ClassDef>,
+    ) -> bool {
+        self.is_param_type_compatible_mode(
+            impl_hint,
+            iface_hint,
+            impl_owner,
+            iface_owner,
+            linking_class,
+            true,
+            true,
+        )
+    }
+
+    fn is_param_type_compatible_mode(
+        &self,
+        impl_hint: &crate::vm::function::ParamTypeHint,
+        iface_hint: &crate::vm::function::ParamTypeHint,
+        impl_owner: &str,
+        iface_owner: &str,
+        linking_class: Option<&ClassDef>,
+        allow_unresolved_relation: bool,
+        allow_any_unresolved_relation: bool,
+    ) -> bool {
         use crate::vm::function::ParamTypeHint;
 
         // Mixed accepts anything — always compatible
@@ -4198,12 +4283,14 @@ impl ExecutorGlobals {
         match (impl_hint, iface_hint) {
             (ParamTypeHint::Nullable(inner_impl), _) => {
                 // ?T in impl vs T in iface — impl accepts more, check inner
-                return self.is_param_type_compatible(
+                return self.is_param_type_compatible_mode(
                     inner_impl,
                     iface_hint,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
+                    allow_any_unresolved_relation,
                 );
             }
             (_, ParamTypeHint::Nullable(_)) => {
@@ -4216,35 +4303,43 @@ impl ExecutorGlobals {
         if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
             let traversable = ParamTypeHint::ClassName("Traversable".to_string());
-            return self.is_param_type_compatible(
+            return self.is_param_type_compatible_mode(
                 &ParamTypeHint::Array,
                 iface_hint,
                 impl_owner,
                 iface_owner,
                 linking_class,
-            ) || self.is_param_type_compatible(
+                allow_unresolved_relation,
+                allow_any_unresolved_relation,
+            ) || self.is_param_type_compatible_mode(
                 &traversable,
                 iface_hint,
                 impl_owner,
                 iface_owner,
                 linking_class,
+                allow_unresolved_relation,
+                allow_any_unresolved_relation,
             );
         }
         if matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
             let traversable = ParamTypeHint::ClassName("Traversable".to_string());
-            return self.is_param_type_compatible(
+            return self.is_param_type_compatible_mode(
                 impl_hint,
                 &ParamTypeHint::Array,
                 impl_owner,
                 iface_owner,
                 linking_class,
-            ) && self.is_param_type_compatible(
+                allow_unresolved_relation,
+                allow_any_unresolved_relation,
+            ) && self.is_param_type_compatible_mode(
                 impl_hint,
                 &traversable,
                 impl_owner,
                 iface_owner,
                 linking_class,
+                allow_unresolved_relation,
+                allow_any_unresolved_relation,
             );
         }
 
@@ -4252,45 +4347,53 @@ impl ExecutorGlobals {
         // implementation must accept every value admitted by the interface.
         if let ParamTypeHint::Intersection(impl_parts) = impl_hint {
             return impl_parts.iter().all(|part| {
-                self.is_param_type_compatible(
+                self.is_param_type_compatible_mode(
                     part,
                     iface_hint,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
+                    allow_any_unresolved_relation,
                 )
             });
         }
         if let ParamTypeHint::Union(iface_parts) = iface_hint {
             return iface_parts.iter().all(|part| {
-                self.is_param_type_compatible(
+                self.is_param_type_compatible_mode(
                     impl_hint,
                     part,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
+                    allow_any_unresolved_relation,
                 )
             });
         }
         if let ParamTypeHint::Union(impl_parts) = impl_hint {
             return impl_parts.iter().any(|part| {
-                self.is_param_type_compatible(
+                self.is_param_type_compatible_mode(
                     part,
                     iface_hint,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
+                    allow_any_unresolved_relation,
                 )
             });
         }
         if let ParamTypeHint::Intersection(iface_parts) = iface_hint {
             return iface_parts.iter().any(|part| {
-                self.is_param_type_compatible(
+                self.is_param_type_compatible_mode(
                     impl_hint,
                     part,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
+                    allow_any_unresolved_relation,
                 )
             });
         }
@@ -4306,9 +4409,19 @@ impl ExecutorGlobals {
         match (impl_hint, iface_hint) {
             (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
                 if impl_class.eq_ignore_ascii_case("object") {
-                    return true;
+                    return allow_unresolved_relation
+                        || self.variance_class_is_known(iface_class, linking_class);
                 }
-                return self.variance_class_is_a(iface_class, impl_class, linking_class);
+                return if allow_any_unresolved_relation
+                    && (!self.variance_class_is_known(iface_class, linking_class)
+                        || !self.variance_class_is_known(impl_class, linking_class))
+                {
+                    true
+                } else if allow_unresolved_relation {
+                    self.variance_class_is_a(iface_class, impl_class, linking_class)
+                } else {
+                    self.class_is_a_while_linking(iface_class, impl_class, linking_class)
+                };
             }
             _ => {}
         }

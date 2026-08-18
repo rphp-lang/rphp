@@ -3437,6 +3437,13 @@ impl Compiler {
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
+                let explicit_set_hooks = methods
+                    .iter()
+                    .filter(|method| {
+                        method.name.starts_with('$') && method.name.ends_with("::set")
+                    })
+                    .map(|method| method.name.to_ascii_lowercase())
+                    .collect::<std::collections::HashSet<_>>();
                 let mut effective_methods = methods.clone();
                 for property in properties.iter().filter(|property| {
                     !property.is_static && !property.has_get_hook && !property.has_set_hook
@@ -3650,6 +3657,13 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    if explicit_set_hooks.contains(&method.name.to_ascii_lowercase()) {
+                        // Explicit set hooks have PHP's public void contract.
+                        // A synthetic plain-property setter remains an internal
+                        // value-producing accessor and is projected as void by
+                        // link diagnostics instead of runtime return checking.
+                        cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
+                    }
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_class),
@@ -4270,6 +4284,9 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    if method.name.starts_with('$') && method.name.ends_with("::set") {
+                        cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
+                    }
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_iface),
@@ -4543,6 +4560,9 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    if method.name.starts_with('$') && method.name.ends_with("::set") {
+                        cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
+                    }
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_trait),

@@ -725,6 +725,22 @@ places the candidate at -0.688% independently and -0.407% paired; a 31-pair
 ordinary-call control is -1.392% independently and -1.148% paired. Both retain
 exact observable results and remain below the five-percent median ceiling.
 
+The `property-hook-setter-variance` checkpoint reaches 3,024 passes with 2,273
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Explicit set-hook parameters now preserve typedness and are checked
+contravariantly against their property type; relation-dependent class names
+use delayed linking or runtime-include autoload without loading exact
+unresolved types. Set-hook inheritance diagnostics expose the implicit `void`
+contract while synthetic plain-property setters retain their parent-call
+value. The `property_hooks` directory rises from 161 to 168 exact passes; the
+exact full-corpus delta is +7/-0 with no category regression. All five feature
+configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. A 63-pair empty-request confirmation
+places the candidate at +0.850% independently and +1.239% paired; a 31-pair
+ordinary-call control is +0.031% independently and -0.151% paired. Both retain
+exact observable results and remain below the five-percent median ceiling;
+the fixed startup cost remains visible for the planned controlled refactoring.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

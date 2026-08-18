@@ -148,6 +148,53 @@ fn included_class_autoloads_implemented_interface_before_constant_composition() 
 }
 
 #[test]
+fn included_property_setter_skips_autoload_for_an_exact_unresolved_type() {
+    let dir = TempPhpDir::new();
+    let declaration = dir.write(
+        "ExactHookType.php",
+        r#"<?php
+class ExactHookType {
+    public MissingHookType $value { set(MissingHookType $incoming) {} }
+    public self $same { set(self $incoming) {} }
+}
+"#,
+    );
+    let source = format!(
+        "<?php spl_autoload_register(function($class) {{ echo 'autoload:', $class, \"\\n\"; }}); require '{declaration}'; echo 'done';"
+    );
+    assert_eq!(run_php(&source), "done");
+}
+
+#[test]
+fn included_property_setter_autoloads_the_missing_side_of_a_type_relation() {
+    let dir = TempPhpDir::new();
+    let child = dir.write(
+        "LoadedHookChild.php",
+        "<?php interface LoadedHookChild extends LoadedHookBase {}",
+    );
+    let declaration = dir.write(
+        "RelatedHookType.php",
+        r#"<?php
+class RelatedHookType {
+    public LoadedHookChild $value { set(LoadedHookBase $incoming) {} }
+}
+"#,
+    );
+    let source = format!(
+        r#"<?php
+interface LoadedHookBase {{}}
+spl_autoload_register(function($class) {{
+    echo "autoload:$class|";
+    if ($class === 'LoadedHookChild') {{ require '{child}'; }}
+}});
+require '{declaration}';
+echo 'done';
+"#,
+    );
+    assert_eq!(run_php(&source), "autoload:LoadedHookChild|done");
+}
+
+#[test]
 fn new_expression_invokes_registered_autoloaders_before_class_resolution() {
     let dir = TempPhpDir::new();
     std::fs::write(

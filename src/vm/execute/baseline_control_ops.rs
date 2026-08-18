@@ -279,6 +279,24 @@ fn execute_source_unit(
                 )));
             }
         }
+        for dependency in
+            crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)
+        {
+            if eg.find_class(&dependency).is_some() {
+                continue;
+            }
+            // Signature dependencies are soft: PHP invokes autoload to learn
+            // their relation, but a loader that leaves them undefined still
+            // reaches the declaration-variance diagnostic.
+            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            if let Some(exception) = eg.exception.take() {
+                if caller.is_some() {
+                    return Ok(IncludeFileOutcome::Thrown(exception));
+                }
+                eg.exception = Some(exception);
+                return Ok(IncludeFileOutcome::Executed(Value::null()));
+            }
+        }
         eg.register_class(class_def).map_err(|e| VmError::Fatal(e))?;
     }
 

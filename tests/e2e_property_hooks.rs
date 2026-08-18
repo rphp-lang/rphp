@@ -123,6 +123,99 @@ class ChildReading extends ParentReading { public int|float $value { get { retur
 }
 
 #[test]
+fn setter_hook_parameter_type_is_contravariant_with_the_property_type() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface SetterBase {}
+interface SetterChild extends SetterBase {}
+class ContravariantSetter {
+    public SetterChild $value { set(SetterBase $incoming) {} }
+}
+class LateObjectSetter {
+    public LaterObjectContract $value { set(object $incoming) {} }
+}
+interface LaterObjectContract {}
+interface AlreadyKnownSetterBase {}
+class OneKnownLateSetter {
+    public OneKnownLateChild $value { set(AlreadyKnownSetterBase $incoming) {} }
+}
+interface OneKnownLateChild extends AlreadyKnownSetterBase {}
+echo "compatible";
+"#,
+        ),
+        "compatible"
+    );
+
+    for (source, expected) in [
+        (
+            r#"<?php class UntypedProperty { public $value { set(string $incoming) {} } }"#,
+            "Type of parameter $incoming of hook UntypedProperty::$value::set must be compatible with property type",
+        ),
+        (
+            r#"<?php class UntypedSetter { public string $value { set($incoming) {} } }"#,
+            "Type of parameter $incoming of hook UntypedSetter::$value::set must be compatible with property type",
+        ),
+        (
+            r#"<?php class NarrowSetter { public string|array $value { set(string $incoming) {} } }"#,
+            "Type of parameter $incoming of hook NarrowSetter::$value::set must be compatible with property type",
+        ),
+        (
+            r#"<?php
+class LateTypes { public SetterContract $value { set(OtherContract $incoming) {} } }
+interface SetterContract {}
+interface OtherContract {}
+"#,
+            "Type of parameter $incoming of hook LateTypes::$value::set must be compatible with property type",
+        ),
+    ] {
+        assert!(format!("{:?}", run_php_expect_error(source)).contains(expected));
+    }
+}
+
+#[test]
+fn setter_hook_inheritance_diagnostics_include_the_implicit_void_contract() {
+    let error = run_php_expect_error(
+        r#"<?php
+interface SetterParentType {}
+interface SetterChildType extends SetterParentType {}
+class ParentSetter {
+    public SetterChildType $value { set(SetterParentType $incoming) {} }
+}
+class ChildSetter extends ParentSetter {
+    public SetterChildType $value { set(SetterChildType $incoming) {} }
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of ChildSetter::$value::set(SetterChildType $incoming): void must be compatible with ParentSetter::$value::set(SetterParentType $incoming): void\")"
+    );
+}
+
+#[test]
+fn synthetic_plain_property_setter_keeps_its_parent_call_value_and_void_contract() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class AbstractProperty {
+    abstract public $value { get; set; }
+}
+class PlainProperty extends AbstractProperty { public $value; }
+
+class ParentStorage { public $value; }
+class ChildHook extends ParentStorage {
+    public $value { set { var_dump(parent::$value::set($value)); } }
+}
+(new ChildHook())->value = 42;
+echo get_class(new PlainProperty());
+"#,
+        ),
+        "int(42)\nPlainProperty"
+    );
+}
+
+#[test]
 fn getter_hook_is_not_exposed_as_an_ordinary_method() {
     assert_eq!(
         run_php(

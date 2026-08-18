@@ -191,7 +191,9 @@ fn property_type_has_unknown_class(
     match hint {
         ParamTypeHint::ClassName(name)
             if name.eq_ignore_ascii_case("object")
-                || name.eq_ignore_ascii_case("iterable") =>
+                || name.eq_ignore_ascii_case("iterable")
+                || name.eq_ignore_ascii_case("false")
+                || name.eq_ignore_ascii_case("true") =>
         {
             false
         }
@@ -206,6 +208,233 @@ fn property_type_has_unknown_class(
             .any(|part| property_type_has_unknown_class(eg, part, linking_class)),
         _ => false,
     }
+}
+
+fn property_setter_method<'a>(
+    class_def: &'a ClassDef,
+    property: &PropertyDefinition,
+) -> Option<&'a crate::vm::function::UserFunction> {
+    let method_name = format!("${}::set", property.name);
+    class_def
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(&method_name))
+        .map(|(_, _, _, _, function)| function)
+}
+
+fn resolved_property_setter_hints(
+    eg: &ExecutorGlobals,
+    class_def: &ClassDef,
+    property: &PropertyDefinition,
+) -> Option<(
+    crate::vm::function::ParamTypeHint,
+    crate::vm::function::ParamTypeHint,
+)> {
+    let setter = property_setter_method(class_def, property)?;
+    let setter_hint = setter.common.sig.param_type_hints.first()?;
+    Some((
+        eg.resolve_variance_type_hint(setter_hint, &class_def.name, Some(class_def)),
+        eg.resolve_variance_type_hint(&property.type_hint, &property.type_scope, Some(class_def)),
+    ))
+}
+
+/// A named declaration may precede the class-like types used to establish a
+/// setter's contravariant relation. Keep it out of the class table only while
+/// a later declaration in the same source unit can make that relation known.
+fn property_hook_setter_variance_requires_delayed_linking(
+    eg: &ExecutorGlobals,
+    class_def: &ClassDef,
+) -> bool {
+    use crate::vm::function::ParamTypeHint;
+
+    class_def.properties.iter().any(|property| {
+        if !property.has_set_hook {
+            return false;
+        }
+        let Some((setter_hint, property_hint)) =
+            resolved_property_setter_hints(eg, class_def, property)
+        else {
+            return false;
+        };
+        if matches!(setter_hint, ParamTypeHint::None)
+            || matches!(property_hint, ParamTypeHint::None)
+        {
+            return false;
+        }
+        let proven_compatible = eg.is_param_type_compatible_strict(
+            &setter_hint,
+            &property_hint,
+            &class_def.name,
+            &property.type_scope,
+            Some(class_def),
+        );
+        if proven_compatible
+            || !eg.is_param_type_potentially_compatible(
+                &setter_hint,
+                &property_hint,
+                &class_def.name,
+                &property.type_scope,
+                Some(class_def),
+            )
+        {
+            return false;
+        }
+        property_type_has_unknown_class(eg, &setter_hint, class_def)
+            || property_type_has_unknown_class(eg, &property_hint, class_def)
+    })
+}
+
+fn validate_property_hook_setter_variance(
+    eg: &ExecutorGlobals,
+    class_def: &ClassDef,
+) -> Result<(), String> {
+    use crate::vm::function::ParamTypeHint;
+
+    for property in class_def
+        .properties
+        .iter()
+        .filter(|property| property.has_set_hook)
+    {
+        let Some(setter) = property_setter_method(class_def, property) else {
+            continue;
+        };
+        let Some(setter_hint) = setter.common.sig.param_type_hints.first() else {
+            continue;
+        };
+        let compatible = match (setter_hint, &property.type_hint) {
+            (ParamTypeHint::None, ParamTypeHint::None) => true,
+            (ParamTypeHint::None, _) | (_, ParamTypeHint::None) => false,
+            _ => {
+                let setter_hint = eg.resolve_variance_type_hint(
+                    setter_hint,
+                    &class_def.name,
+                    Some(class_def),
+                );
+                let property_hint = eg.resolve_variance_type_hint(
+                    &property.type_hint,
+                    &property.type_scope,
+                    Some(class_def),
+                );
+                eg.is_param_type_compatible_strict(
+                    &setter_hint,
+                    &property_hint,
+                    &class_def.name,
+                    &property.type_scope,
+                    Some(class_def),
+                )
+            }
+        };
+        if compatible {
+            continue;
+        }
+
+        let parameter = setter
+            .common
+            .sig
+            .param_names
+            .first()
+            .map(String::as_str)
+            .unwrap_or("value");
+        let location = if setter.op_array.source_file.is_empty() {
+            String::new()
+        } else {
+            setter.op_array.declaration_line().map_or_else(String::new, |line| {
+                format!(" in {} on line {line}", setter.op_array.source_file)
+            })
+        };
+        return Err(format!(
+            "Type of parameter ${parameter} of hook {}::${}::set must be compatible with property type{location}",
+            class_def.name, property.name
+        ));
+    }
+    Ok(())
+}
+
+fn collect_property_hook_variance_class_names(
+    hint: &crate::vm::function::ParamTypeHint,
+    dependencies: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    use crate::vm::function::ParamTypeHint;
+
+    match hint {
+        ParamTypeHint::ClassName(name)
+            if ![
+                "self", "parent", "static", "object", "iterable", "false", "true", "null",
+            ]
+            .iter()
+            .any(|builtin| name.eq_ignore_ascii_case(builtin)) =>
+        {
+            let key = name.to_ascii_lowercase();
+            if seen.insert(key) {
+                dependencies.push(name.clone());
+            }
+        }
+        ParamTypeHint::Nullable(inner) => {
+            collect_property_hook_variance_class_names(inner, dependencies, seen);
+        }
+        ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
+            for part in parts {
+                collect_property_hook_variance_class_names(part, dependencies, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Runtime includes execute after user autoloaders may have been installed.
+/// Return setter/property type dependencies in PHP's property-then-parameter
+/// order so the include path can request them before link validation.
+pub(crate) fn property_hook_setter_variance_dependencies(
+    eg: &ExecutorGlobals,
+    class_def: &ClassDef,
+) -> Vec<String> {
+    use crate::vm::function::ParamTypeHint;
+
+    let mut dependencies = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for property in class_def
+        .properties
+        .iter()
+        .filter(|property| property.has_set_hook)
+    {
+        let Some((setter_hint, property_hint)) =
+            resolved_property_setter_hints(eg, class_def, property)
+        else {
+            continue;
+        };
+        if matches!(setter_hint, ParamTypeHint::None)
+            || matches!(property_hint, ParamTypeHint::None)
+            || eg.is_param_type_compatible_strict(
+                &setter_hint,
+                &property_hint,
+                &class_def.name,
+                &property.type_scope,
+                Some(class_def),
+            )
+            || !eg.is_param_type_potentially_compatible(
+                &setter_hint,
+                &property_hint,
+                &class_def.name,
+                &property.type_scope,
+                Some(class_def),
+            )
+        {
+            continue;
+        }
+        collect_property_hook_variance_class_names(
+            &property_hint,
+            &mut dependencies,
+            &mut seen,
+        );
+        collect_property_hook_variance_class_names(
+            &setter_hint,
+            &mut dependencies,
+            &mut seen,
+        );
+    }
+    dependencies.retain(|dependency| !dependency.eq_ignore_ascii_case(&class_def.name));
+    dependencies
 }
 
 fn property_inheritance_requires_delayed_linking(
