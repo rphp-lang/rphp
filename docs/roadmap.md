@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,748/5,599 with zero timeouts and zero crashes after repeated CLI `-d` transport and compile/runtime `zend.assertions` semantics added 22 exact passes without a lost pass. The focused assertion directory is 24/29; the remaining cases expose `disable_functions`, parser, AST-source and array-mutation gaps. Unknown INI directives remain explicitly unsupported. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,757/5,599 with zero timeouts and zero crashes after broader canonical assertion-source rendering added nine exact passes without a lost pass. The selected 42-case assertion-source slice is 33/42; the remaining cases expose discarded attribute/interpolation source metadata, parser, array-mutation and unrelated diagnostic gaps. Unknown INI directives and `disable_functions` remain explicitly unsupported. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

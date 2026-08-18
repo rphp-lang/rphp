@@ -1134,6 +1134,30 @@ with the identical `37500007500000` checksum. Unknown CLI INI directives,
 interpolated-string parsing, array-target `??=`, and the startup deprecation
 contract for `assert.exception=0` remain explicit non-claims.
 
+Assertion descriptions now render the PHP 8.5 canonical source forms retained
+by the RPHP AST for floating-point literals, strings, unary and binary
+operators, compound assignments, calls, `new`, closures, arrow functions,
+`match`, `exit`/`die`, anonymous classes and asymmetric property visibility.
+The renderer preserves multiline indentation and the parentheses required when
+a closure is immediately invoked or used as a pipe operand. Two direct
+regressions are built from the original PHP 8.5 assertion specimens and compare
+their complete warning output.
+
+A focused 42-case assertion-source slice moves from 24 passes, 17 failures and
+one unsupported case to 33 passes, eight failures and one unsupported case. A
+final release rerun of all 5,599 pinned PHP 8.5.6 cases reaches 2,757 passes,
+2,491 ordinary failures, 110 skips, one XFAIL and 240 unsupported cases, with
+zero timeouts and zero crashes. The exact pass-set delta is +9/-0; runtime is
+still reached by 4,576 of 5,248 attempted cases (87.195%). All five Cargo
+feature configurations, formatting, unsafe-policy, all-feature/all-target,
+Composer S0, all four Symfony S1 and warmed-kernel S2 gates pass on AMD64. No
+runtime performance gate applies because this checkpoint only changes cold
+assertion-description synthesis and leaves ordinary generated code and runtime
+execution unchanged. Attribute metadata discarded by the lexer, interpolated
+strings lowered before source rendering, backtick parsing, array-target `??=`,
+and unrelated arrow-function and implicit-nullability diagnostics remain
+explicit non-claims.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

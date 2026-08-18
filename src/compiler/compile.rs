@@ -17,8 +17,8 @@ use crate::generics::{
     PendingGenericUseSite,
 };
 use crate::parser::{
-    BinOp, CallArg, CastType, ClassConstant, Expr, ForeachTarget, GenericAncestor, GlobalTarget,
-    ListTarget, Param, Stmt, TypeHint, UseKind, Visibility,
+    BinOp, CallArg, CastType, ClassConstant, ClassProperty, Expr, ForeachTarget, GenericAncestor,
+    GlobalTarget, ListTarget, Param, Stmt, TypeHint, UseKind, Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -46,92 +46,315 @@ use crate::vm::instruction::{
 use crate::vm::opcode::OpCode;
 
 fn assertion_expression_source(expr: &Expr) -> Option<String> {
+    fn quote_string(value: &str) -> String {
+        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+    }
+
+    fn render_float(value: f64) -> String {
+        let rendered = value.to_string();
+        if value.is_finite()
+            && !rendered.contains('.')
+            && !rendered.contains('e')
+            && !rendered.contains('E')
+        {
+            format!("{rendered}.0")
+        } else {
+            rendered
+        }
+    }
+
+    fn render_type_hint(hint: &TypeHint) -> Option<String> {
+        Some(match hint {
+            TypeHint::Int => "int".to_string(),
+            TypeHint::Float => "float".to_string(),
+            TypeHint::String => "string".to_string(),
+            TypeHint::Bool => "bool".to_string(),
+            TypeHint::Array => "array".to_string(),
+            TypeHint::Callable => "callable".to_string(),
+            TypeHint::Null => "null".to_string(),
+            TypeHint::Void => "void".to_string(),
+            TypeHint::Mixed => "mixed".to_string(),
+            TypeHint::Never => "never".to_string(),
+            TypeHint::ClassName(name) => name.clone(),
+            TypeHint::Nullable(inner) => format!("?{}", render_type_hint(inner)?),
+            TypeHint::Union(members) => members
+                .iter()
+                .map(render_type_hint)
+                .collect::<Option<Vec<_>>>()?
+                .join("|"),
+            TypeHint::Intersection(members) => members
+                .iter()
+                .map(render_type_hint)
+                .collect::<Option<Vec<_>>>()?
+                .join("&"),
+            TypeHint::GenericParameter { .. } | TypeHint::GenericApplication { .. } => return None,
+        })
+    }
+
+    fn render_arguments(arguments: &[CallArg]) -> Option<String> {
+        arguments
+            .iter()
+            .map(|argument| match argument {
+                CallArg::Positional(value) => render(value, 0, false),
+                CallArg::Named { name, value } => {
+                    render(value, 0, false).map(|value| format!("{name}: {value}"))
+                }
+                CallArg::Unpack(value) => {
+                    render(value, 0, false).map(|value| format!("...{value}"))
+                }
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|arguments| arguments.join(", "))
+    }
+
+    fn render_parameter(parameter: &Param) -> Option<String> {
+        let mut output = String::new();
+        if let Some(hint) = &parameter.type_hint {
+            output.push_str(&render_type_hint(hint)?);
+            output.push(' ');
+        }
+        if parameter.is_ref {
+            output.push('&');
+        }
+        if parameter.is_variadic {
+            output.push_str("...");
+        }
+        output.push('$');
+        output.push_str(&parameter.name);
+        if let Some(default) = &parameter.default {
+            output.push_str(" = ");
+            output.push_str(&render(default, 0, false)?);
+        }
+        Some(output)
+    }
+
+    fn visibility_source(visibility: Visibility) -> &'static str {
+        match visibility {
+            Visibility::Public => "public",
+            Visibility::Protected => "protected",
+            Visibility::Private => "private",
+        }
+    }
+
+    fn render_property(property: &ClassProperty) -> Option<String> {
+        if property.is_abstract
+            || property.has_get_hook
+            || property.has_abstract_get_hook
+            || property.has_set_hook
+            || property.has_abstract_set_hook
+        {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if property.is_final {
+            parts.push("final".to_string());
+        }
+        parts.push(visibility_source(property.visibility).to_string());
+        if let Some(set_visibility) = property.set_visibility {
+            parts.push(format!("{}(set)", visibility_source(set_visibility)));
+        }
+        if property.is_static {
+            parts.push("static".to_string());
+        }
+        if property.is_readonly {
+            parts.push("readonly".to_string());
+        }
+        if let Some(hint) = &property.type_hint {
+            parts.push(render_type_hint(hint)?);
+        }
+        let mut declaration = format!("{} ${}", parts.join(" "), property.name);
+        if let Some(default) = &property.default {
+            declaration.push_str(" = ");
+            declaration.push_str(&render(default, 0, false)?);
+        }
+        declaration.push(';');
+        Some(declaration)
+    }
+
+    fn indent_source(source: &str, spaces: usize) -> String {
+        let indent = " ".repeat(spaces);
+        source
+            .split_inclusive('\n')
+            .map(|line| {
+                if line == "\n" {
+                    line.to_string()
+                } else {
+                    format!("{indent}{line}")
+                }
+            })
+            .collect()
+    }
+
+    fn render_statement(statement: &Stmt) -> Option<String> {
+        match statement {
+            Stmt::Noop => Some(String::new()),
+            Stmt::Return { expr, .. } => Some(match expr {
+                Some(expr) => format!("return {};", render(expr, 0, false)?),
+                None => "return;".to_string(),
+            }),
+            Stmt::ExprStmt(expr) => Some(format!("{};", render(expr, 0, false)?)),
+            Stmt::Assign { var, expr } => Some(format!("${var} = {};", render(expr, 0, false)?)),
+            Stmt::Class {
+                name,
+                parent,
+                implements,
+                is_abstract,
+                is_final,
+                is_readonly,
+                allow_dynamic_properties,
+                properties,
+                constants,
+                methods,
+                uses,
+                trait_aliases,
+                generic_params,
+                ..
+            } if parent.is_none()
+                && implements.is_empty()
+                && !*is_abstract
+                && !*is_final
+                && !*is_readonly
+                && !*allow_dynamic_properties
+                && constants.is_empty()
+                && methods.is_empty()
+                && uses.is_empty()
+                && trait_aliases.is_empty()
+                && generic_params.is_empty() =>
+            {
+                let properties = properties
+                    .iter()
+                    .map(render_property)
+                    .collect::<Option<Vec<_>>>()?;
+                let body = properties
+                    .iter()
+                    .map(|property| indent_source(property, 4))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let body = if body.is_empty() {
+                    "{\n}".to_string()
+                } else {
+                    format!("{{\n{body}\n}}")
+                };
+                Some(format!("class {name} {body}"))
+            }
+            _ => None,
+        }
+    }
+
+    fn render_block(statements: &[Stmt]) -> Option<String> {
+        let mut output = String::new();
+        for statement in statements {
+            let rendered = render_statement(statement)?;
+            if rendered.is_empty() {
+                continue;
+            }
+            output.push_str(&indent_source(&rendered, 4));
+            output.push('\n');
+            if matches!(statement, Stmt::Class { .. }) {
+                output.push('\n');
+            }
+        }
+        Some(output)
+    }
+
     fn render(expr: &Expr, parent_precedence: u8, right_child: bool) -> Option<String> {
         let (text, precedence) = match expr {
             Expr::Integer(value) => (value.to_string(), 100),
-            Expr::Float(value) => (value.to_string(), 100),
-            Expr::StringLiteral(value) => (
-                format!("\"{}\"", value.replace('\\', "\\\\").replace('\"', "\\\"")),
-                100,
-            ),
+            Expr::Float(value) => (render_float(*value), 100),
+            Expr::StringLiteral(value) => (quote_string(value), 100),
             Expr::Bool(value) => (value.to_string(), 100),
             Expr::Null => ("null".to_string(), 100),
             Expr::Variable { name, .. } => (format!("${name}"), 100),
+            Expr::Constant(name)
+                if name.eq_ignore_ascii_case("exit") || name.eq_ignore_ascii_case("die") =>
+            {
+                ("\\exit()".to_string(), 100)
+            }
             Expr::Constant(name) => (name.clone(), 100),
+            Expr::Not(value) => (format!("!{}", render(value, 80, false)?), 80),
             Expr::FirstClassCallable(callable) => {
                 let callable = render(callable, 100, false)?;
                 (format!("{callable}(...)"), 100)
             }
             Expr::FirstClassFunctionCallable(name) => (format!("{name}(...)"), 100),
             Expr::FunctionCall { name, args, .. } => {
-                let args = args
-                    .iter()
-                    .map(|argument| match argument {
-                        CallArg::Positional(value) => render(value, 0, false),
-                        CallArg::Named { name, value } => {
-                            render(value, 0, false).map(|value| format!("{name}: {value}"))
-                        }
-                        CallArg::Unpack(value) => {
-                            render(value, 0, false).map(|value| format!("...{value}"))
-                        }
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                (format!("{name}({})", args.join(", ")), 100)
+                let name = if name.eq_ignore_ascii_case("exit") || name.eq_ignore_ascii_case("die")
+                {
+                    "\\exit"
+                } else {
+                    name
+                };
+                (format!("{name}({})", render_arguments(args)?), 100)
             }
             Expr::New {
                 class_name, args, ..
-            } => {
-                let args = args
-                    .iter()
-                    .map(|argument| match argument {
-                        CallArg::Positional(value) => render(value, 0, false),
-                        CallArg::Named { name, value } => {
-                            render(value, 0, false).map(|value| format!("{name}: {value}"))
-                        }
-                        CallArg::Unpack(value) => {
-                            render(value, 0, false).map(|value| format!("...{value}"))
-                        }
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                (format!("new {class_name}({})", args.join(", ")), 100)
-            }
+            } => (
+                format!("new {class_name}({})", render_arguments(args)?),
+                100,
+            ),
             Expr::AnonymousNew {
                 args,
+                is_readonly,
+                allow_dynamic_properties,
                 parent,
                 implements,
                 properties,
                 constants,
                 methods,
                 uses,
+                trait_aliases,
                 ..
-            } if implements.is_empty()
-                && properties.is_empty()
+            } if !*allow_dynamic_properties
                 && constants.is_empty()
                 && methods.is_empty()
-                && uses.is_empty() =>
-            {
-                let args = args
+                && uses.is_empty()
+                && trait_aliases.is_empty()
+                && parent
+                    .as_ref()
+                    .is_none_or(|ancestor| ancestor.arguments.is_empty())
+                && implements
                     .iter()
-                    .map(|argument| match argument {
-                        CallArg::Positional(value) => render(value, 0, false),
-                        CallArg::Named { name, value } => {
-                            render(value, 0, false).map(|value| format!("{name}: {value}"))
-                        }
-                        CallArg::Unpack(value) => {
-                            render(value, 0, false).map(|value| format!("...{value}"))
-                        }
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                let arguments = (!args.is_empty()).then(|| format!("({})", args.join(", ")));
+                    .all(|ancestor| ancestor.arguments.is_empty()) =>
+            {
+                let arguments = render_arguments(args)?;
+                let arguments = (!args.is_empty()).then(|| format!("({arguments})"));
                 let parent = parent
                     .as_ref()
                     .map(|parent| format!(" extends {}", parent.name))
                     .unwrap_or_default();
+                let implements = if implements.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " implements {}",
+                        implements
+                            .iter()
+                            .map(|ancestor| ancestor.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let properties = properties
+                    .iter()
+                    .map(render_property)
+                    .collect::<Option<Vec<_>>>()?;
+                let body = properties
+                    .iter()
+                    .map(|property| indent_source(property, 4))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let readonly = if *is_readonly { "readonly " } else { "" };
+                let body = if body.is_empty() {
+                    "{\n}".to_string()
+                } else {
+                    format!("{{\n{body}\n}}")
+                };
                 (
                     format!(
-                        "new class{}{} {{\n}}",
+                        "new {readonly}class{}{}{} {body}",
                         arguments.as_deref().unwrap_or_default(),
-                        parent
+                        parent,
+                        implements,
                     ),
                     100,
                 )
@@ -145,37 +368,127 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 let class = render(class, 30, true)?;
                 (format!("{expr} instanceof {class}"), 30)
             }
+            Expr::ArrayAccess { array, index, .. } => {
+                let array = render(array, 100, false)?;
+                let index = render(index, 0, false)?;
+                (format!("{array}[{index}]"), 100)
+            }
+            Expr::DynamicCall { callable, args, .. } => {
+                let callable = if matches!(callable.as_ref(), Expr::Closure { .. }) {
+                    format!("({})", render(callable, 0, false)?)
+                } else {
+                    render(callable, 100, false)?
+                };
+                (format!("{callable}({})", render_arguments(args)?), 100)
+            }
             Expr::Closure {
                 is_static,
                 returns_by_ref,
                 params,
+                use_vars,
                 body,
+                return_type,
+                generic_params,
                 ..
-            } if params.is_empty()
-                && body.len() == 1
-                && matches!(
-                    body[0],
-                    Stmt::Return {
-                        line: 0,
-                        expr: Some(_)
-                    }
-                ) =>
-            {
-                let Stmt::Return {
-                    expr: Some(value), ..
-                } = &body[0]
-                else {
-                    unreachable!()
+            } if generic_params.is_empty() => {
+                let params = params
+                    .iter()
+                    .map(render_parameter)
+                    .collect::<Option<Vec<_>>>()?
+                    .join(", ");
+                let return_type = match return_type {
+                    Some(hint) => format!(": {}", render_type_hint(hint)?),
+                    None => String::new(),
                 };
-                let value = render(value, 0, false)?;
-                let static_prefix = if *is_static { "static " } else { "" };
-                let reference = if *returns_by_ref { "&" } else { "" };
-                (format!("{static_prefix}fn{reference}() => {value}"), 5)
+                if body.len() == 1
+                    && let Stmt::Return {
+                        expr: Some(value),
+                        line: 0,
+                    } = &body[0]
+                {
+                    let static_prefix = if *is_static { "static " } else { "" };
+                    let reference = if *returns_by_ref { "&" } else { "" };
+                    (
+                        format!(
+                            "{static_prefix}fn{reference}({params}){return_type} => {}",
+                            render(value, 0, false)?
+                        ),
+                        100,
+                    )
+                } else {
+                    let static_prefix = if *is_static { "static " } else { "" };
+                    let reference = if *returns_by_ref { " &" } else { "" };
+                    let captures = if use_vars.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " use ({})",
+                            use_vars
+                                .iter()
+                                .map(|(name, by_reference, _)| format!(
+                                    "{}${name}",
+                                    if *by_reference { "&" } else { "" }
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
+                    (
+                        format!(
+                            "{static_prefix}function{reference} ({params}){captures}{return_type} {{\n{}}}",
+                            render_block(body)?
+                        ),
+                        100,
+                    )
+                }
+            }
+            Expr::Assign { var, expr } => (format!("${var} = {}", render(expr, 5, true)?), 5),
+            Expr::CompoundAssignExpression { target, op, expr } => {
+                let operator = match op {
+                    BinOp::Add => "+=",
+                    BinOp::Sub => "-=",
+                    BinOp::Mul => "*=",
+                    BinOp::Div => "/=",
+                    BinOp::Mod => "%=",
+                    BinOp::Concat => ".=",
+                    BinOp::Pow => "**=",
+                    BinOp::BitwiseAnd => "&=",
+                    BinOp::BitwiseOr => "|=",
+                    BinOp::BitwiseXor => "^=",
+                    BinOp::ShiftLeft => "<<=",
+                    BinOp::ShiftRight => ">>=",
+                    _ => return None,
+                };
+                let target = render(target, 5, false)?;
+                let expr = render(expr, 5, true)?;
+                (format!("{target} {operator} {expr}"), 5)
+            }
+            Expr::Match { expr, arms, .. } => {
+                let mut output = format!("match ({}) {{\n", render(expr, 0, false)?);
+                for arm in arms {
+                    let conditions = match &arm.conditions {
+                        Some(conditions) => conditions
+                            .iter()
+                            .map(|condition| render(condition, 0, false))
+                            .collect::<Option<Vec<_>>>()?
+                            .join(", "),
+                        None => "default".to_string(),
+                    };
+                    output.push_str(&format!(
+                        "    {conditions} => {},\n",
+                        render(&arm.body, 0, false)?
+                    ));
+                }
+                output.push('}');
+                (output, 100)
             }
             Expr::BinaryOp { op, left, right } => {
                 let (operator, precedence) = match op {
                     BinOp::Or => ("||", 10),
                     BinOp::And => ("&&", 20),
+                    BinOp::BitwiseOr => ("|", 25),
+                    BinOp::BitwiseXor => ("^", 26),
+                    BinOp::BitwiseAnd => ("&", 27),
                     BinOp::Equal => ("==", 30),
                     BinOp::NotEqual => ("!=", 30),
                     BinOp::Identical => ("===", 30),
@@ -185,15 +498,19 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                     BinOp::Greater => (">", 30),
                     BinOp::GreaterEqual => (">=", 30),
                     BinOp::Concat => (".", 50),
+                    BinOp::ShiftLeft => ("<<", 55),
+                    BinOp::ShiftRight => (">>", 55),
                     BinOp::Add => ("+", 60),
                     BinOp::Sub => ("-", 60),
                     BinOp::Mul => ("*", 70),
                     BinOp::Div => ("/", 70),
                     BinOp::Mod => ("%", 70),
+                    BinOp::Pow => ("**", 80),
                     _ => return None,
                 };
-                let left = render(left, precedence, false)?;
-                let right = render(right, precedence, true)?;
+                let right_associative = matches!(op, BinOp::Pow);
+                let left = render(left, precedence, right_associative)?;
+                let right = render(right, precedence, !right_associative)?;
                 (format!("{left} {operator} {right}"), precedence)
             }
             Expr::Pipe {
@@ -201,7 +518,11 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
             } => {
                 let precedence = 40;
                 let input = render(input, precedence, false)?;
-                let callable = render(callable, precedence, true)?;
+                let callable = if matches!(callable.as_ref(), Expr::Closure { .. }) {
+                    format!("({})", render(callable, 0, false)?)
+                } else {
+                    render(callable, precedence, true)?
+                };
                 (format!("{input} |> {callable}"), precedence)
             }
             _ => return None,

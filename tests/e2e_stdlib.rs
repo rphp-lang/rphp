@@ -91,6 +91,53 @@ foreach ([1, 2] as $value) {
 }
 
 #[test]
+fn assert_source_preserves_float_compound_assignment_and_exit_canonicalization() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function printAssertion(Throwable $error) { echo $error->getMessage(), "\n--\n"; }
+try { assert(!is_float(2.0)); }
+catch (Throwable $error) { printAssertion($error); }
+try { $number = 3; assert(false && ($number **= 4)); }
+catch (Throwable $error) { printAssertion($error); }
+try { assert(false && exit("unreached")); }
+catch (Throwable $error) { printAssertion($error); }
+"#,
+        ),
+        "assert(!is_float(2.0))\n--\nassert(false && ($number **= 4))\n--\nassert(false && \\exit('unreached'))\n--\n"
+    );
+}
+
+#[test]
+fn assert_source_formats_multiline_closures_match_and_property_visibility() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function printAssertion(Throwable $error) { echo $error->getMessage(), "\n--\n"; }
+try { assert((function () { return false; })()); }
+catch (Throwable $error) { printAssertion($error); }
+try {
+    assert((function () {
+        match ('other') {
+            'chosen' => true,
+            default => false,
+        };
+    })());
+} catch (Throwable $error) { printAssertion($error); }
+try {
+    assert(function () {
+        class LocalContract {
+            public private(set) int $value;
+        }
+    } && false);
+} catch (Throwable $error) { printAssertion($error); }
+"#,
+        ),
+        "assert((function () {\n    return false;\n})())\n--\nassert((function () {\n    match ('other') {\n        'chosen' => true,\n        default => false,\n    };\n})())\n--\nassert(function () {\n    class LocalContract {\n        public private(set) int $value;\n    }\n\n} && false)\n--\n"
+    );
+}
+
+#[test]
 fn assert_options_preserve_request_local_state_and_callback_contract() {
     assert_eq!(
         run_php(
