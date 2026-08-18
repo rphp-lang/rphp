@@ -96,6 +96,30 @@ pub(super) enum ForeachArrayWriteback {
     Array(MutableArrayPath),
 }
 
+fn compiled_hook_uses_backing_property(
+    methods: &[(String, Visibility, bool, bool, UserFunction)],
+    property_name: &str,
+    hook: &str,
+) -> bool {
+    methods.iter().any(|(method, _, _, _, function)| {
+        method.eq_ignore_ascii_case(&format!("${property_name}::{hook}"))
+            && function.op_array.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction.opcode,
+                    OpCode::FetchObjR | OpCode::AssignObjProp | OpCode::BindObjPropRef
+                ) && instruction.op1_type == OpType::Cv
+                    && instruction.op1 == 0
+                    && instruction.op2_type == OpType::Const
+                    && function
+                        .op_array
+                        .literals
+                        .get(instruction.op2 as usize)
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| name == property_name)
+            })
+    })
+}
+
 impl Compiler {
     pub(super) fn compile_list_assignment_source(
         &mut self,
@@ -4006,38 +4030,18 @@ impl Compiler {
                     );
                     definition.has_get_hook = prop.has_get_hook;
                     definition.get_hook_is_backed = prop.has_get_hook
-                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
-                            method.eq_ignore_ascii_case(&format!("${}::get", prop.name))
-                                && function.op_array.instructions.iter().any(|instruction| {
-                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
-                                        && instruction.op1_type == OpType::Cv
-                                        && instruction.op1 == 0
-                                        && instruction.op2_type == OpType::Const
-                                        && function
-                                            .op_array
-                                            .literals
-                                            .get(instruction.op2 as usize)
-                                            .and_then(Value::as_str)
-                                            .is_some_and(|name| name == prop.name)
-                                })
-                        });
+                        && compiled_hook_uses_backing_property(
+                            &compiled_methods,
+                            &prop.name,
+                            "get",
+                        );
                     definition.has_set_hook = prop.has_set_hook;
                     definition.set_hook_is_backed = prop.has_set_hook
-                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
-                            method.eq_ignore_ascii_case(&format!("${}::set", prop.name))
-                                && function.op_array.instructions.iter().any(|instruction| {
-                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
-                                        && instruction.op1_type == OpType::Cv
-                                        && instruction.op1 == 0
-                                        && instruction.op2_type == OpType::Const
-                                        && function
-                                            .op_array
-                                            .literals
-                                            .get(instruction.op2 as usize)
-                                            .and_then(Value::as_str)
-                                            .is_some_and(|name| name == prop.name)
-                                })
-                        });
+                        && compiled_hook_uses_backing_property(
+                            &compiled_methods,
+                            &prop.name,
+                            "set",
+                        );
                     if definition.is_virtual_hook_property() {
                         if prop.default.is_some() && resolved_parent.is_none() {
                             return Err(self.goto_error(
@@ -4098,32 +4102,18 @@ impl Compiler {
                     definition.set_has_default(false);
                     definition.has_get_hook = promoted.has_get_hook;
                     definition.get_hook_is_backed = promoted.has_get_hook
-                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
-                            method.eq_ignore_ascii_case(&format!("${}::get", promoted.name))
-                                && function.op_array.instructions.iter().any(|instruction| {
-                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
-                                        && instruction.op1_type == OpType::Cv
-                                        && instruction.op1 == 0
-                                        && instruction.op2_type == OpType::Const
-                                        && function.op_array.literals.get(instruction.op2 as usize)
-                                            .and_then(Value::as_str)
-                                            .is_some_and(|name| name == promoted.name)
-                                })
-                        });
+                        && compiled_hook_uses_backing_property(
+                            &compiled_methods,
+                            &promoted.name,
+                            "get",
+                        );
                     definition.has_set_hook = promoted.has_set_hook;
                     definition.set_hook_is_backed = promoted.has_set_hook
-                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
-                            method.eq_ignore_ascii_case(&format!("${}::set", promoted.name))
-                                && function.op_array.instructions.iter().any(|instruction| {
-                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
-                                        && instruction.op1_type == OpType::Cv
-                                        && instruction.op1 == 0
-                                        && instruction.op2_type == OpType::Const
-                                        && function.op_array.literals.get(instruction.op2 as usize)
-                                            .and_then(Value::as_str)
-                                            .is_some_and(|name| name == promoted.name)
-                                })
-                        });
+                        && compiled_hook_uses_backing_property(
+                            &compiled_methods,
+                            &promoted.name,
+                            "set",
+                        );
                     compiled_props.push(definition);
                     if property_is_readonly {
                         readonly_props.push(promoted.name.clone());
@@ -4785,38 +4775,18 @@ impl Compiler {
                     );
                     definition.has_get_hook = prop.has_get_hook;
                     definition.get_hook_is_backed = prop.has_get_hook
-                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
-                            method.eq_ignore_ascii_case(&format!("${}::get", prop.name))
-                                && function.op_array.instructions.iter().any(|instruction| {
-                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
-                                        && instruction.op1_type == OpType::Cv
-                                        && instruction.op1 == 0
-                                        && instruction.op2_type == OpType::Const
-                                        && function
-                                            .op_array
-                                            .literals
-                                            .get(instruction.op2 as usize)
-                                            .and_then(Value::as_str)
-                                            .is_some_and(|name| name == prop.name)
-                                })
-                        });
+                        && compiled_hook_uses_backing_property(
+                            &compiled_methods,
+                            &prop.name,
+                            "get",
+                        );
                     definition.has_set_hook = prop.has_set_hook;
                     definition.set_hook_is_backed = prop.has_set_hook
-                        && compiled_methods.iter().any(|(method, _, _, _, function)| {
-                            method.eq_ignore_ascii_case(&format!("${}::set", prop.name))
-                                && function.op_array.instructions.iter().any(|instruction| {
-                                    matches!(instruction.opcode, OpCode::FetchObjR | OpCode::AssignObjProp)
-                                        && instruction.op1_type == OpType::Cv
-                                        && instruction.op1 == 0
-                                        && instruction.op2_type == OpType::Const
-                                        && function
-                                            .op_array
-                                            .literals
-                                            .get(instruction.op2 as usize)
-                                            .and_then(Value::as_str)
-                                            .is_some_and(|name| name == prop.name)
-                                })
-                        });
+                        && compiled_hook_uses_backing_property(
+                            &compiled_methods,
+                            &prop.name,
+                            "set",
+                        );
                     if definition.is_virtual_hook_property() {
                         if prop.default.is_some() {
                             return Err(self.goto_error(

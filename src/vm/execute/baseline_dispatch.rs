@@ -4221,7 +4221,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
                     val.clone()
                 };
-                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
+                // SAFETY: op1 names a compiler-owned mutable slot in this
+                // live frame. A Reference operand keeps its target alive for
+                // this non-reentrant dimension mutation.
+                let arr_ptr = unsafe {
+                    let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    if (&*ptr).is_reference() {
+                        (&mut *ptr).as_ref_ptr()
+                    } else {
+                        ptr
+                    }
+                };
                 let arr = unsafe { &mut *arr_ptr };
                 if opline._pad & ASSIGN_DIM_UNSET_REBUILD != 0
                     && !matches!(
@@ -4377,7 +4387,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                     val.clone()
                 };
-                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
+                // SAFETY: op1 names a compiler-owned mutable slot in this
+                // live frame. A Reference operand keeps its target alive for
+                // this non-reentrant append operation.
+                let arr_ptr = unsafe {
+                    let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    if (&*ptr).is_reference() {
+                        (&mut *ptr).as_ref_ptr()
+                    } else {
+                        ptr
+                    }
+                };
                 let arr = unsafe { &mut *arr_ptr };
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr.clone();
@@ -4445,8 +4465,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // so array reallocations and frame teardown cannot invalidate
                 // either alias.
                 unsafe {
-                    let array_ptr =
+                    let mut array_ptr =
                         (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    if (&*array_ptr).is_reference() {
+                        array_ptr = (&mut *array_ptr).as_ref_ptr();
+                    }
                     let array_value = &mut *array_ptr;
                     if matches!(array_value.value_type(), ValueType::Null | ValueType::Undef) {
                         slot_set(array_ptr, Value::array(PhpArray::new()));

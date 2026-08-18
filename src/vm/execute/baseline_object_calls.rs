@@ -1158,7 +1158,7 @@ fn op_fetch_obj_r_slow<'a>(
             if let Some(result) = take_magic_exception(eg, frame) {
                 return Ok(result);
             }
-            if let Some(value) = hook_value {
+            if let Some(mut value) = hook_value {
                 if opline._pad & FETCH_OBJ_MODIFY != 0
                     && !value.is_reference()
                     && value.dereferenced().value_type() != ValueType::Object
@@ -1173,6 +1173,9 @@ fn op_fetch_obj_r_slow<'a>(
                         "Error",
                         format!("Indirect modification of {class_name}::${name} is not allowed"),
                     ));
+                }
+                if opline._pad & FETCH_OBJ_MODIFY != 0 && value.is_reference() {
+                    value.mark_indirect_property_modification_reference();
                 }
                 set_result(value);
                 return Ok(ColdResult::Done);
@@ -1262,7 +1265,10 @@ fn op_fetch_obj_r_slow<'a>(
             if let Some(result) = take_magic_exception(eg, frame) {
                 return Ok(result);
             }
-            if let Some(result) = magic_value {
+            if let Some(mut result) = magic_value {
+                if opline._pad & FETCH_OBJ_MODIFY != 0 && result.is_reference() {
+                    result.mark_indirect_property_modification_reference();
+                }
                 set_result(result);
             } else if name.starts_with('\0') {
                 return Ok(object_property_throw(
@@ -1875,16 +1881,6 @@ fn op_bind_obj_prop_ref<'a>(
             && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_GET)
             && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_SET)
         {
-            if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
-                return Ok(object_property_throw_at(
-                    eg,
-                    frame,
-                    op_array,
-                    instruction_index,
-                    "Error",
-                    "Cannot assign by reference to overloaded object".to_string(),
-                ));
-            }
             let hook_name = format!("${name}::get");
             let returned = call_guarded_property_magic_method(
                 eg,
@@ -1896,6 +1892,16 @@ fn op_bind_obj_prop_ref<'a>(
             )?;
             if let Some(result) = take_magic_exception(eg, frame) {
                 return Ok(result);
+            }
+            if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
+                return Ok(object_property_throw_at(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    "Error",
+                    "Cannot assign by reference to overloaded object".to_string(),
+                ));
             }
             if let Some(returned) = returned {
                 let mut binding = if returned.is_owned_reference() {
@@ -2376,15 +2382,29 @@ fn op_assign_obj_prop<'a>(
     let (prop_name, val, obj) = unsafe {
         let prop_name =
             &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array);
-        let val = &*(*frame).get_op_ptr(
+        let source = &*(*frame).get_op_ptr(
             opline.result as u32,
             opline.result_type,
             op_array,
         );
-        let val = if val.is_reference() {
-            &*val.as_ref_ptr()
+        // A by-reference property or magic getter already exposed the storage
+        // mutated by the preceding read-modify operation. Its synthetic
+        // property writeback must not invoke a setter or re-check write
+        // visibility. Consume a compiler temporary now so it does not remain
+        // observable as an additional PHP reference alias until frame exit.
+        if opline._pad & ASSIGN_OBJ_MODIFY != 0
+            && source.is_indirect_property_modification_reference()
+        {
+            if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                let source = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                frame_slot_set(frame, source, Value::undef());
+            }
+            return Ok(ColdResult::Done);
+        }
+        let val = if source.is_reference() {
+            &*source.as_ref_ptr()
         } else {
-            val
+            source
         };
         let obj = (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
             .dereferenced();

@@ -972,6 +972,27 @@ echo $shared, ':', $globalAlias, ':', $holder->value, ':', $propertyAlias, "\n";
 }
 
 #[test]
+fn reference_returned_array_dimensions_write_through_once_per_coalesce_target() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$calls = 0;
+$values = [];
+function &bucket(): array {
+    global $calls, $values;
+    $calls++;
+    return $values;
+}
+bucket()['fixed'] ??= 'first';
+bucket()['fixed'] ??= 'second';
+echo $calls, '|', $values['fixed'], "\n";
+"#,
+        ),
+        "2|first\n"
+    );
+}
+
+#[test]
 fn invalid_reference_call_and_return_diagnostics_use_the_operator_source_line() {
     let file = "/virtual/reference-return-diagnostics.php";
     let source = r#"<?php

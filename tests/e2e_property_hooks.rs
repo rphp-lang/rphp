@@ -291,6 +291,96 @@ var_dump($hooks->value);
 }
 
 #[test]
+fn reference_getter_marks_only_its_own_property_access_as_backing_storage() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BackedItems {
+    public array $items = [] {
+        &get { echo "backed-get\n"; return $this->items; }
+    }
+}
+$backed = new BackedItems;
+$backed->items[] = 'x';
+var_dump($backed->items);
+
+class BackedScalar {
+    public $value = 0 {
+        &get { echo "scalar-get\n"; return $this->value; }
+    }
+}
+$scalar = new BackedScalar;
+try {
+    $scalar->value = &$replacement;
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+
+class VirtualItems {
+    private array $storage = [];
+    public array $items {
+        &get { echo "virtual-get\n"; return $this->storage; }
+    }
+}
+$virtual = new VirtualItems;
+$virtual->items[] = 'y';
+var_dump($virtual->items);
+$bound =& $virtual->items[];
+$bound = 'bound';
+var_dump($virtual->items);
+
+class VirtualItemsWithSet {
+    private array $storage = [];
+    public private(set) array $items {
+        &get { echo "virtual-set-get\n"; return $this->storage; }
+        set { echo "virtual-set-set\n"; $this->storage = $value; }
+    }
+}
+$virtualWithSet = new VirtualItemsWithSet;
+$virtualWithSet->items[] = 'z';
+var_dump($virtualWithSet->items);
+
+class OrdinaryPrivateSetReference {
+    public private(set) array $items = [];
+    public function bind(array &$items): void { $this->items =& $items; }
+}
+$ordinary = new OrdinaryPrivateSetReference;
+$external = [];
+$ordinary->bind($external);
+try {
+    $ordinary->items[] = 'blocked';
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump($external, $ordinary->items);
+"#,
+        ),
+        concat!(
+            "backed-get\n",
+            "backed-get\n",
+            "array(1) {\n  [0]=>\n  string(1) \"x\"\n}\n",
+            "scalar-get\n",
+            "Cannot assign by reference to overloaded object\n",
+            "virtual-get\n",
+            "virtual-get\n",
+            "array(1) {\n  [0]=>\n  string(1) \"y\"\n}\n",
+            "virtual-get\n",
+            "virtual-get\n",
+            "array(2) {\n",
+            "  [0]=>\n  string(1) \"y\"\n",
+            "  [1]=>\n  &string(5) \"bound\"\n}\n",
+            "virtual-set-get\n",
+            "virtual-set-get\n",
+            "array(1) {\n  [0]=>\n  string(1) \"z\"\n}\n",
+            "Cannot indirectly modify private(set) property ",
+            "OrdinaryPrivateSetReference::$items from global scope\n",
+            "array(0) {\n}\n",
+            "array(0) {\n}\n",
+        )
+    );
+}
+
+#[test]
 fn setter_hook_inheritance_diagnostics_include_the_implicit_void_contract() {
     let error = run_php_expect_error(
         r#"<?php

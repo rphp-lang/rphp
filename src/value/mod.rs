@@ -4265,6 +4265,10 @@ impl Value {
     /// `var_dump()` display a reference wrapper after the last source alias is
     /// unset.
     const INTERNAL_REFERENCE_ALIAS_FLAG: u32 = 1 << 10;
+    /// Marks an alias returned by a property or magic getter for an indirect
+    /// modification. Mutating that alias updates its exposed storage directly,
+    /// so the compiler's later synthetic property writeback is redundant.
+    const INDIRECT_PROPERTY_MODIFICATION_REFERENCE_FLAG: u32 = 1 << 11;
 
     #[inline]
     pub fn undef() -> Self {
@@ -5306,6 +5310,18 @@ impl Value {
             reference.internal_aliases.set(internal_aliases - 1);
         }
         self.type_info &= !Self::INTERNAL_REFERENCE_ALIAS_FLAG;
+    }
+
+    #[inline]
+    pub(crate) fn mark_indirect_property_modification_reference(&mut self) {
+        debug_assert!(self.is_reference());
+        self.type_info |= Self::INDIRECT_PROPERTY_MODIFICATION_REFERENCE_FLAG;
+    }
+
+    #[inline]
+    pub(crate) fn is_indirect_property_modification_reference(&self) -> bool {
+        self.is_reference()
+            && self.type_info & Self::INDIRECT_PROPERTY_MODIFICATION_REFERENCE_FLAG != 0
     }
 
     /// Whether this request-owned reference cell is still reachable through

@@ -771,6 +771,24 @@ put empty-request startup at +0.837%, ordinary calls at -0.645%, instance-
 property reads at +0.351% and writes at -0.297% by independent medians, with
 exact observable results and every lane below the five-percent ceiling.
 
+The `property-hook-reference-backing` checkpoint reaches 3,040 passes with
+2,257 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Reference-returning property and magic getters now expose aliases
+that indirect dimension writes mutate in place without a synthetic setter,
+while access-local provenance preserves ordinary by-reference property
+writebacks and asymmetric visibility. Backing-property detection includes the
+reference-bind opcode, and direct reference assignment invokes the getter
+before reporting PHP's overloaded-object error. The `property_hooks` directory
+rises from 179 to 181 exact passes; two property-hook cases and one general
+coalesce case make the exact PHP 8.5.6 corpus delta +3/-0 with no other status
+movement. All five feature configurations, all-target, unsafe, Composer S0,
+four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass. CPU-pinned
+32-pair release A/B medians put empty-request startup at -1.229%, indexed array
+append at -0.322%, irregular integer-dimension assignment at +0.425%, ordinary
+calls at -0.040% and append-by-reference at +0.113% independently; all paired
+and independent medians remain below the five-percent ceiling, with outliers
+retained.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

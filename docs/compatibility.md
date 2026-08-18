@@ -9,43 +9,56 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,037 pass, 2,260 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,040 pass, 2,257 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-57.334%; 4,616 of 5,297 attempted cases reach runtime (87.144%). Relative to
-the preceding 3,027-pass checkpoint, the exact pass-set delta is +10/-0. The
-initial PHP 8.5 corpus continues to have no process hazard.
+57.391% and the whole-corpus rate is 54.295%; 4,618 of 5,297 attempted cases
+reach runtime (87.181%). Relative to the preceding 3,037-pass checkpoint, the
+exact pass-set delta is +3/-0. The initial PHP 8.5 corpus continues to have no
+process hazard.
 
-PHP now scopes a protected instance property through the oldest non-private
-declaration in its prototype family. Sibling implementations of one common
-prototype can therefore read or write each other where that prototype admits
-the operation, while unrelated same-name declarations and private boundaries
-remain inaccessible. A virtual get-only prototype does not impose a write
-capability, so a child may add a narrower setter; ordinary and backed
-prototypes continue to constrain write visibility. A plain child redeclaration
-supplies new backing storage but inherits every concrete parent get or set hook
-that it does not replace.
+Reference-returning get hooks now recognize a return of their own property as
+backing-storage access, including the reference-binding opcode used by PHP 8.5.
+Indirect dimension assignment, append, append-by-reference and coalesce writes
+dereference temporary and variable results before mutating the exposed cell.
+An alias obtained from a property hook or magic getter carries access-local
+provenance, so the mutation writes through that alias without a synthetic
+setter call or asymmetric-visibility check, while ordinary reference-valued
+properties retain their write visibility. Direct reference assignment to a
+hooked property invokes its getter first and then raises PHP's overloaded-
+object error.
 
-The complete `Zend/tests/property_hooks` directory now has 179 of 211 exact
-passes, up from 171. Seven hooked GH-19044 variants, the ordinary and
-asymmetric-visibility GH-19044 cases, and `override_by_plain_prop.phpt` move to
-exact passes. The complete 5,599-case delta is +10/-0 with no lost pass, other
-status or failure-stage movement, timeout or crash. All five Cargo
+The complete `Zend/tests/property_hooks` directory now has 181 of 211 exact
+passes, up from 179. `property_hooks/bug007.phpt`,
+`property_hooks/bug009.phpt` and the general
+`coalesce/assign_coalesce_008.phpt` case move to exact passes. The complete
+5,599-case delta is +3/-0 with no lost pass, other status or failure-stage
+movement, timeout or crash. All five Cargo
 configurations, all-feature/all-target, formatting and the exact unsafe ratchet
 pass. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and cold-build S3
 also pass on AMD64; S3 used the available PHP 8.5.9 Phar-capable oracle, while
 the language corpus remained pinned to PHP 8.5.6.
 
-The exact base `0a636f0f` and release candidate were compared on one pinned
-AMD64 CPU without removing outliers. A 63-pair balanced confirmation over 150
-empty-output requests measured baseline p10/median/p90
-0.204528/0.205838/0.207635 seconds and candidate
-0.205996/0.207560/0.209697 seconds: +0.837% independently and +0.802% paired.
-Three 31-pair controls retained exact checksums. `bench_calls.php` measured
--0.645% independently and -0.301% paired; instance-property reads measured
-+0.351% and +0.407%; instance-property writes measured -0.297% and -0.240%.
-Their paired p10/p90 ranges were respectively -4.677%/+2.224%,
--0.755%/+3.855% and -3.786%/+1.944%. All medians remain below the five-percent
-regression ceiling; the samples do not establish an optimization claim.
+The exact base `664cd430` and release candidate were compared in 32 balanced
+pairs on one pinned Ryzen 9 7950X CPU without removing outliers. Batches of 150
+empty-output requests measured -1.229% independently and -1.185% paired.
+Checksum-preserving controls measured -0.322%/-0.513% for indexed array append,
++0.425%/-0.233% for irregular integer-dimension assignment, -0.040%/-0.048%
+for ordinary calls and +0.113%/+0.261% for append-by-reference, with each pair
+reported as independent/paired median delta. Their paired p10/p90 ranges were
+respectively -5.831%/+3.981%, -3.481%/+14.167%, -2.611%/+4.721%,
+-1.948%/+2.077% and -4.378%/+4.585%; the noisy indexed-append upper tail is
+retained rather than removed. Every independent and paired median remains
+below the five-percent regression ceiling; the samples do not establish an
+optimization claim.
+
+The preceding checkpoint scoped a protected instance property through the
+oldest non-private declaration in its prototype family, used that prototype's
+actual set capability for asymmetric visibility, and made plain child storage
+inherit concrete parent hooks that it does not replace. It raised
+`Zend/tests/property_hooks` from 171 to 179 exact passes and the complete
+corpus by +10/-0. Its CPU-pinned release controls placed empty-request startup
+at +0.837%, ordinary calls at -0.645%, instance-property reads at +0.351% and
+writes at -0.297% by independent medians.
 
 The preceding checkpoint made virtual get-only property types covariant and
 virtual set-only property types contravariant, including children that add the
