@@ -1054,16 +1054,19 @@ fn attach_throwable_origin(
     op_array: &crate::compiler::OpArray,
     instruction_index: usize,
 ) {
-    if throwable.as_object().is_some_and(|object| {
-        object
+    let (has_origin, has_trace) = throwable.as_object().map_or((false, false), |object| {
+        let has_origin = object
             .get_property("file")
             .and_then(Value::as_str)
             .is_some_and(|file| !file.is_empty())
             && object
                 .get_property("line")
                 .and_then(Value::as_long)
-                .is_some_and(|line| line > 0)
-    }) {
+                .is_some();
+        let has_trace = object.contains_property("trace");
+        (has_origin, has_trace)
+    });
+    if has_origin && has_trace {
         return;
     }
     let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
@@ -1114,22 +1117,24 @@ fn attach_throwable_origin(
     let Some(mut object) = throwable.as_object_mut() else {
         return;
     };
-    if object
-        .get_property("file")
-        .and_then(Value::as_str)
-        .is_none_or(str::is_empty)
-    {
-        object.set_property(
-            "file",
-            Value::shared_string(origin_op_array.source_file.clone()),
-        );
-    }
-    if object
-        .get_property("line")
-        .and_then(Value::as_long)
-        .is_none_or(|line| line <= 0)
-    {
-        object.set_property("line", Value::long(line as i64));
+    if !has_origin {
+        if object
+            .get_property("file")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            object.set_property(
+                "file",
+                Value::shared_string(origin_op_array.source_file.clone()),
+            );
+        }
+        if object
+            .get_property("line")
+            .and_then(Value::as_long)
+            .is_none_or(|line| line <= 0)
+        {
+            object.set_property("line", Value::long(line as i64));
+        }
     }
     if !object.contains_property("trace") {
         object.set_property("trace", Value::array(trace));

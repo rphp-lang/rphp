@@ -1613,6 +1613,38 @@ fn error_and_exception_handler_stacks_restore_previous_callbacks() {
     );
 }
 
+#[test]
+fn error_and_exception_handlers_reject_invalid_callbacks_before_mutation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach (['set_error_handler', 'set_exception_handler'] as $setter) {
+    try {
+        $setter('missing_handler');
+    } catch (TypeError $error) {
+        echo $error->getMessage(), '|';
+    }
+}
+try {
+    set_exception_handler(['', '']);
+} catch (TypeError $error) {
+    echo $error->getMessage(), '|';
+}
+echo get_error_handler() === null ? 'error-null:' : 'error-set:';
+echo get_exception_handler() === null ? 'exception-null' : 'exception-set';
+"#,
+        ),
+        concat!(
+            "set_error_handler(): Argument #1 ($callback) must be a valid callback or null, ",
+            "function \"missing_handler\" not found or invalid function name|",
+            "set_exception_handler(): Argument #1 ($callback) must be a valid callback or null, ",
+            "function \"missing_handler\" not found or invalid function name|",
+            "set_exception_handler(): Argument #1 ($callback) must be a valid callback or null, ",
+            "class \"\" not found|error-null:exception-null",
+        )
+    );
+}
+
 // ========== isset() ==========
 
 #[test]

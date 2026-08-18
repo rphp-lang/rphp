@@ -33,11 +33,11 @@ use super::{
     function_get_number_of_parameters, function_get_number_of_required_parameters,
     function_get_parameters, function_get_return_type, function_get_tentative_return_type,
     function_has_return_type, function_has_tentative_return_type, function_is_anonymous,
-    function_is_closure, function_returns_reference, generic_arguments, generic_runtime_modes,
-    method_construct, method_file_name, method_get_closure, method_get_modifiers,
-    method_get_prototype, method_has_prototype, method_invoke, method_is_abstract,
-    method_is_constructor, method_is_destructor, method_is_final, method_is_private,
-    method_is_protected, method_is_public, method_is_static, object_construct,
+    function_is_closure, function_is_deprecated, function_returns_reference, generic_arguments,
+    generic_runtime_modes, method_construct, method_file_name, method_get_closure,
+    method_get_modifiers, method_get_prototype, method_has_prototype, method_invoke,
+    method_is_abstract, method_is_constructor, method_is_destructor, method_is_final,
+    method_is_private, method_is_protected, method_is_public, method_is_static, object_construct,
     parameter_allows_null, parameter_get_attributes, parameter_get_declaring_class,
     parameter_get_default_value, parameter_get_name, parameter_get_type, parameter_has_type,
     parameter_is_default_available, parameter_is_optional, parameter_is_passed_by_reference,
@@ -698,6 +698,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             []
         );
         register_method!(class, "isclosure", function_is_closure, 1, 0, []);
+        register_method!(class, "isdeprecated", function_is_deprecated, 1, 0, []);
         register_method!(class, "hasreturntype", function_has_return_type, 1, 0, []);
         register_method!(class, "getreturntype", function_get_return_type, 1, 0, []);
         register_method!(

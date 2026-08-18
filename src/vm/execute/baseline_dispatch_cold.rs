@@ -187,6 +187,7 @@ fn report_deprecated_user_call(
     caller: *mut ExecuteData,
     function: *const FunctionCommon,
     call_key: Option<usize>,
+    source_override: Option<(&str, usize)>,
 ) -> Result<(), VmError> {
     if function.is_null() {
         return Ok(());
@@ -263,41 +264,43 @@ fn report_deprecated_user_call(
         diagnostic.push_str(&message);
     }
 
-    // Detached callbacks may suspend an internal handler. Walk to the nearest
-    // user frame so ordinary array/callback calls retain their PHP call site.
-    let mut source_frame = caller;
-    // SAFETY: `caller` and every predecessor are live synchronous frames.
-    // Registered function metadata outlives them, and a non-null opline is
-    // dereferenced only after its index is proven inside that user op-array.
-    unsafe {
-        while !source_frame.is_null() {
-            let source_function = (*source_frame).func;
-            if !source_function.is_null() && (*source_function).fn_type == FunctionType::User {
-                let source_user = &*(source_function as *const UserFunction);
-                let source_op_array = &source_user.op_array;
-                let source_opline = (*source_frame).opline;
-                if !source_opline.is_null() {
-                    let index = source_opline.offset_from(source_op_array.instructions.as_ptr());
-                    if index >= 0 && (index as usize) < source_op_array.instructions.len() {
-                        return report_php_diagnostic(
-                            eg,
-                            source_frame,
-                            source_op_array,
-                            &*source_opline,
-                            &diagnostic,
-                            16_384,
-                            "Deprecated",
-                            false,
-                        );
+    if source_override.is_none() {
+        // Detached callbacks may suspend an internal handler. Walk to the
+        // nearest user frame so ordinary array/callback calls retain their PHP
+        // call site unless the caller supplied a synthetic internal origin.
+        let mut source_frame = caller;
+        // SAFETY: `caller` and every predecessor are live synchronous frames.
+        // Registered function metadata outlives them, and a non-null opline is
+        // dereferenced only after its index is proven inside that user op-array.
+        unsafe {
+            while !source_frame.is_null() {
+                let source_function = (*source_frame).func;
+                if !source_function.is_null() && (*source_function).fn_type == FunctionType::User {
+                    let source_user = &*(source_function as *const UserFunction);
+                    let source_op_array = &source_user.op_array;
+                    let source_opline = (*source_frame).opline;
+                    if !source_opline.is_null() {
+                        let index = source_opline.offset_from(source_op_array.instructions.as_ptr());
+                        if index >= 0 && (index as usize) < source_op_array.instructions.len() {
+                            return report_php_diagnostic(
+                                eg,
+                                source_frame,
+                                source_op_array,
+                                &*source_opline,
+                                &diagnostic,
+                                16_384,
+                                "Deprecated",
+                                false,
+                            );
+                        }
                     }
                 }
+                source_frame = (*source_frame).prev_execute_data;
             }
-            source_frame = (*source_frame).prev_execute_data;
         }
     }
 
-    let file = "Unknown";
-    let line = 0;
+    let (file, line) = source_override.unwrap_or(("Unknown", 0));
     let handled = crate::stdlib::dispatch_php_error(
         eg,
         caller,

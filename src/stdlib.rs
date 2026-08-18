@@ -8402,17 +8402,62 @@ fn fn_unset_func(
     ret!(rv, Value::null());
 }
 
+fn invalid_handler_callback_detail(callback: &Value, eg: &ExecutorGlobals) -> String {
+    if let Some(name) = callback.as_str() {
+        if let Some((class, _)) = name.rsplit_once("::")
+            && find_class_case_insensitive(eg, class.trim_start_matches('\\')).is_none()
+        {
+            return format!("class \"{}\" not found", class.trim_start_matches('\\'));
+        }
+        return format!("function \"{name}\" not found or invalid function name");
+    }
+    if let Some(array) = callback.as_array() {
+        if let Some(class) = array.get_value_at(0).and_then(Value::as_str)
+            && find_class_case_insensitive(eg, class.trim_start_matches('\\')).is_none()
+        {
+            return format!("class \"{}\" not found", class.trim_start_matches('\\'));
+        }
+        return "first array member is not a valid class name or object".to_string();
+    }
+    format!("{} given", callback.diagnostic_type_name())
+}
+
+fn validated_handler_callback(
+    function: &str,
+    callback: Option<&Value>,
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Option<Option<Value>> {
+    let callback = callback.map(Value::dereferenced);
+    let Some(callback) = callback.filter(|value| value.value_type() != ValueType::Null) else {
+        return Some(None);
+    };
+    if resolve_callback_at_callsite(callback, eg, ed).is_none() {
+        let detail = invalid_handler_callback_detail(callback, eg);
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "{function}(): Argument #1 ($callback) must be a valid callback or null, {detail}"
+            ),
+        ));
+        return None;
+    }
+    Some(Some(callback.clone()))
+}
+
 fn fn_set_error_handler(
     ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let Some(handler) = validated_handler_callback("set_error_handler", arg_opt!(ed, 0), ed, eg)
+    else {
+        return Ok(());
+    };
     let previous = eg.error_handler.clone().unwrap_or_else(Value::null);
     eg.error_handler_stack
         .push((eg.error_handler.take(), eg.error_handler_levels));
-    eg.error_handler = arg_opt!(ed, 0)
-        .filter(|handler| handler.value_type() != ValueType::Null)
-        .cloned();
+    eg.error_handler = handler;
     eg.error_handler_levels = arg_opt!(ed, 1).map_or(32767, Value::to_long_val);
     ret!(rv, previous);
 }
@@ -8493,7 +8538,7 @@ pub(crate) fn dispatch_php_error(
     };
 
     eg.handling_error = true;
-    let result = call_resolved_with_values(
+    let result = call_resolved_with_values_from(
         eg,
         &resolved,
         &[
@@ -8502,6 +8547,9 @@ pub(crate) fn dispatch_php_error(
             Value::string(file.to_string()),
             Value::long(line as i64),
         ],
+        ed,
+        file,
+        line,
     );
     eg.handling_error = false;
     // SAFETY: `ed` is the suspended active call frame supplied to this
@@ -8510,6 +8558,32 @@ pub(crate) fn dispatch_php_error(
     crate::vm::execute::sync_dirty_globals_to_frame(eg, frame);
     let result = result?;
     Ok(eg.exception.is_some() || result.value_type() != ValueType::False)
+}
+
+/// Enter the request's uncaught-exception callback through PHP's synthetic
+/// internal call boundary. The active handler is removed before invocation so
+/// `get_exception_handler()` returns null inside it and a replacement
+/// exception cannot recursively re-enter the same callback.
+pub(crate) fn dispatch_uncaught_exception_handler(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+    exception: &Value,
+) -> Result<bool, VmError> {
+    let Some(callback) = eg.exception_handler.take() else {
+        return Ok(false);
+    };
+    let Some(resolved) = resolve_callback_with_cache(&callback, eg, None, None) else {
+        return Ok(false);
+    };
+    call_resolved_with_values_from(
+        eg,
+        &resolved,
+        std::slice::from_ref(exception),
+        caller,
+        "Unknown",
+        0,
+    )?;
+    Ok(eg.exception.is_none())
 }
 
 fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
@@ -8649,11 +8723,14 @@ fn fn_set_exception_handler(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let Some(handler) =
+        validated_handler_callback("set_exception_handler", arg_opt!(ed, 0), ed, eg)
+    else {
+        return Ok(());
+    };
     let previous = eg.exception_handler.clone().unwrap_or_else(Value::null);
     eg.exception_handler_stack.push(eg.exception_handler.take());
-    eg.exception_handler = arg_opt!(ed, 0)
-        .filter(|handler| handler.value_type() != ValueType::Null)
-        .cloned();
+    eg.exception_handler = handler;
     ret!(rv, previous);
 }
 
@@ -9244,8 +9321,12 @@ pub(crate) unsafe fn collect_debug_backtrace(
         let common = &*(*frame).func;
         let mut entry = PhpArray::new();
         if let Some((file, line)) = eg.detached_trace_origin(frame as usize) {
-            entry.set_str("file", Value::string(file.to_string()));
-            entry.set_str("line", Value::long(line as i64));
+            // PHP's engine-dispatched callbacks use Unknown:0 for diagnostics
+            // but appear as `[internal function]` in Throwable traces.
+            if file != "Unknown" || line != 0 {
+                entry.set_str("file", Value::string(file.to_string()));
+                entry.set_str("line", Value::long(line as i64));
+            }
         } else if !caller.is_null() && !(*caller).func.is_null() {
             let caller_function = Function::from_common_ptr((*caller).func);
             if caller_function.fn_type() == FunctionType::User {
@@ -12137,6 +12218,65 @@ pub(crate) fn call_resolved_with_values(
             .iter()
             .chain(args.iter())
             .chain(resolved.use_vars.iter()),
+    )
+}
+
+/// Invoke a resolved callback from a synthetic PHP call site while retaining
+/// the live logical caller for traces and global-scope synchronization. This is
+/// reserved for cold engine callbacks such as error and exception handlers;
+/// ordinary PHP calls keep their opcode-owned fast paths.
+fn call_resolved_with_values_from(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    args: &[Value],
+    logical_caller: *mut ExecuteData,
+    file: &str,
+    line: usize,
+) -> Result<Value, VmError> {
+    if resolved.is_magic_call {
+        let method = resolved
+            .use_vars
+            .first()
+            .cloned()
+            .unwrap_or_else(Value::null);
+        let mut arguments = PhpArray::with_packed_capacity(args.len());
+        for argument in args {
+            arguments.push(argument.clone());
+        }
+        let mut target = resolved.clone();
+        target.is_magic_call = false;
+        target.use_vars.clear();
+        return call_resolved_with_values_from(
+            eg,
+            &target,
+            &[method, Value::array(arguments)],
+            logical_caller,
+            file,
+            line,
+        );
+    }
+    if reject_scope_introspection_callback(eg, resolved) {
+        return Ok(Value::null());
+    }
+
+    let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
+    crate::vm::execute::call_function_owned_iter_with_context_and_named_from(
+        eg,
+        logical_caller,
+        resolved.func_ptr,
+        num_args,
+        resolved
+            .prepend_args
+            .iter()
+            .cloned()
+            .chain(args.iter().cloned())
+            .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+        resolved.called_scope_class_id,
+        resolved.bound_this.clone(),
+        resolved.use_vars.len(),
+        resolved.closure_static_vars.clone(),
+        Vec::new(),
+        (file.to_string(), line),
     )
 }
 

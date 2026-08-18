@@ -18,7 +18,30 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     }
     eg.current_execute_data.set(frame);
 
-    let execution = execute_ex(eg, frame);
+    let mut execution = execute_ex(eg, frame);
+    if execution.is_ok()
+        && main_func.op_array.source_file.as_ref() != "Command line code"
+        && eg.exception.is_some()
+        && eg.exception_handler.is_some()
+    {
+        let exception = eg
+            .exception
+            .take()
+            .expect("uncaught exception handler requires a pending exception");
+        // The root frame stays live until the engine callback returns: PHP
+        // runs the handler before main-scope destructors, and detached callback
+        // traces still terminate at the synthetic `{main}` frame.
+        eg.current_execute_data.set(frame);
+        match crate::stdlib::dispatch_uncaught_exception_handler(eg, frame, &exception) {
+            Ok(true) => {}
+            Ok(false) => {
+                if eg.exception.is_none() {
+                    eg.exception = Some(exception);
+                }
+            }
+            Err(error) => execution = Err(error),
+        }
+    }
     crate::value::end_object_handle_request();
     execution?;
 
@@ -95,7 +118,6 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             .and_then(Value::as_str)
             .filter(|file| !file.is_empty())
             .zip(object.get_property("line").and_then(Value::as_long))
-            .filter(|(_, line)| *line > 0)
             .zip(
                 object
                     .get_property("trace")
@@ -653,7 +675,16 @@ where
         )
     };
     if user_callee.is_some_and(|user| user.common.plan.has_deprecated_attribute()) {
-        report_deprecated_user_call(eg, saved_execute_data, func_ptr, None)?;
+        let source_override = trace_origin
+            .as_ref()
+            .map(|(file, line, _)| (file.as_str(), *line));
+        report_deprecated_user_call(
+            eg,
+            saved_execute_data,
+            func_ptr,
+            None,
+            source_override,
+        )?;
         if eg.exception.is_some() {
             return Ok((Value::null(), None));
         }

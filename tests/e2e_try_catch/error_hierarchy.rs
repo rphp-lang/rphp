@@ -176,15 +176,19 @@ $previous = new Exception('previous');
 $default = new ErrorException('default');
 $lineOnly = new ErrorException('line', 2, 8, null, 123);
 $fileOnly = new ErrorException('file', 3, 4, 'source.php', null, $previous);
+$zero = new ErrorException('zero', 4, 2, 'unknown.php', 0);
 echo $default->getMessage(), ':', $default->getSeverity(), ':', $default->getLine(), '|';
 echo $lineOnly->getFile() === __FILE__ ? 'same' : 'different', ':', $lineOnly->getLine(), '|';
 echo $fileOnly->getFile(), ':', $fileOnly->getLine(), ':', $fileOnly->getCode(), ':';
-echo $fileOnly->getPrevious() === $previous ? 'same' : 'different';
+echo $fileOnly->getPrevious() === $previous ? 'same' : 'different', '|';
+try { throw $zero; } catch (ErrorException $caught) {
+    echo $caught->getFile(), ':', $caught->getLine();
+}
 "#,
             "/virtual/error-exception.php",
             "/virtual",
         ),
-        "default:1:3|same:123|source.php:0:3:same"
+        "default:1:3|same:123|source.php:0:3:same|unknown.php:0"
     );
 }
 

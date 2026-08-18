@@ -3045,6 +3045,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         frame,
                         func_common_fast as *const FunctionCommon,
                         Some(call as usize),
+                        None,
                     );
                     if let Err(error) = reported {
                         if suppressed_call {

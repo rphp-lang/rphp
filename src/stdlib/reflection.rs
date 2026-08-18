@@ -298,6 +298,16 @@ fn rebind_attribute_evaluation_scope(
     }
 }
 
+fn reflected_function_attribute_scope(ed: *mut ExecuteData) -> Option<String> {
+    if parameter_property_bool(ed, "__reflection_closure_method") {
+        return reflected_property(ed, "__reflection_closure_called_class")
+            .and_then(|value| value.as_str().map(str::to_owned));
+    }
+    reflected_property(ed, "__reflection_closure_called_class")
+        .or_else(|| reflected_property(ed, "__reflection_method_class"))
+        .and_then(|value| value.as_str().map(str::to_owned))
+}
+
 fn reflected_attribute_definitions(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
@@ -316,8 +326,7 @@ fn reflected_attribute_definitions(
             let mut definitions = reflected_user_function(ed)
                 .map(|function| function.attributes.clone())
                 .unwrap_or_default();
-            let called_class = reflected_property(ed, "__reflection_method_class")
-                .and_then(|value| value.as_str().map(str::to_owned));
+            let called_class = reflected_function_attribute_scope(ed);
             rebind_attribute_evaluation_scope(&mut definitions, called_class.as_deref(), eg);
             definitions
         }
@@ -1847,9 +1856,7 @@ fn function_get_parameters(
     let declaring_class = eg
         .declaring_class_of(function as *const FunctionCommon)
         .map(str::to_owned);
-    let attribute_scope_class = reflected_property(ed, "__reflection_closure_called_class")
-        .or_else(|| reflected_property(ed, "__reflection_method_class"))
-        .and_then(|value| value.as_str().map(str::to_owned));
+    let attribute_scope_class = reflected_function_attribute_scope(ed);
     let mut parameters = PhpArray::with_packed_capacity(count as usize);
     for index in 0..count {
         let name = function
@@ -1942,6 +1949,20 @@ fn function_is_closure(
         .and_then(|value| value.as_str().map(|kind| kind == "closure"))
         .unwrap_or(false);
     return_value(rv, Value::bool(is_closure))
+}
+
+fn function_is_deprecated(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let deprecated = reflected_user_function(ed).is_some_and(|function| {
+        function
+            .attributes
+            .iter()
+            .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"))
+    });
+    return_value(rv, Value::bool(deprecated))
 }
 
 fn function_has_return_type(
@@ -5283,13 +5304,45 @@ fn method_construct(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let class_name = with_argument(ed, 1, |value| {
-        value
-            .as_object()
-            .map(|object| object.class_name.to_string())
-            .unwrap_or_else(|| argument_string(ed, 1))
-    });
+    let target = with_argument(ed, 1, Clone::clone);
     let method_name = argument_string(ed, 2);
+    if method_name.eq_ignore_ascii_case("__invoke")
+        && let Some(closure) = target.as_closure()
+        && !closure.func.is_null()
+    {
+        let function = closure.func;
+        let called_class = (closure.called_scope_class_id != 0)
+            .then(|| eg.class_by_id(closure.called_scope_class_id))
+            .flatten()
+            .map(|class| class.name.clone())
+            .or_else(|| eg.declaring_class_of(function).map(str::to_owned));
+        set_target(ed, "method", "Closure::__invoke".to_string());
+        with_argument(ed, 0, |value| {
+            if let Some(mut object) = value.as_object_mut() {
+                object.set_property(
+                    "__reflection_function_pointer",
+                    Value::long(function as usize as i64),
+                );
+                object.set_property("__reflection_method_static", Value::bool(false));
+                object.set_property("__reflection_method_final", Value::bool(false));
+                object.set_property("__reflection_method_visibility", Value::long(1));
+                object.set_property("__reflection_method_class", Value::string("Closure"));
+                object.set_property("__reflection_declaring_class", Value::string("Closure"));
+                object.set_property("__reflection_closure_method", Value::bool(true));
+                object.set_property(
+                    "__reflection_closure_called_class",
+                    called_class.map_or_else(Value::null, Value::string),
+                );
+                object.set_property("name", Value::string("__invoke"));
+            }
+        });
+        return Ok(());
+    }
+
+    let class_name = target
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_else(|| argument_string(ed, 1));
     if eg.find_class(&class_name).is_none()
         && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?
     {

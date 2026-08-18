@@ -624,6 +624,23 @@ and warmed-kernel S2 pass. Twenty alternating disabled-JIT/quick-loop AMD64
 release pairs put ordinary global-constant reads at +1.680% and class-constant
 reads at +1.852%, below their five-percent ceiling with identical checksums.
 
+The `deprecated-callable-flow` checkpoint reaches 2,973 passes with 2,324
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Uncaught exception handlers now use PHP 8.5's engine-dispatched
+lifecycle, including execution before main-scope destructors, temporary
+unregistration, synthetic diagnostic/trace origins and replacement-exception
+propagation. Handler setters reject invalid callbacks before mutating their
+stacks, while `ReflectionMethod` over callable-derived closures exposes source
+attributes and deprecation metadata without losing its public `Closure`
+identity. The exact full-corpus delta is +18/-0, the complete Deprecated
+directory is 46/47 and the standard exception-handler directory is 10/10; the
+remaining Deprecated failure depends on Random enum argument validation. All
+five feature configurations, all-target, unsafe, Composer S0, four Symfony S1
+gates and warmed-kernel S2 pass. Thirty-one balanced ABBA/BAAB AMD64 release
+pairs put an ordinary file request at +1.837% by independent medians and
++1.863% by the paired-ratio median, with paired p10/p90 of -1.174%/+4.257% and
+identical output, below the five-percent ceiling.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

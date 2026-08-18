@@ -234,6 +234,71 @@ $probe->missing();
 }
 
 #[test]
+fn deprecated_exception_handler_uses_internal_origin_before_main_destructors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class HandlerOrderProbe {
+    public function __destruct() { echo '|destruct'; }
+}
+
+$probe = new HandlerOrderProbe();
+set_error_handler(function ($level, $message, $file, $line) {
+    echo $level, ':', $message, ':', $file, ':', $line, '|';
+    return true;
+});
+
+#[Deprecated('use current')]
+function legacy_exception_handler($exception) {
+    echo get_exception_handler() === null ? 'null:' : 'registered:';
+    echo $exception->getMessage();
+}
+
+set_exception_handler('legacy_exception_handler');
+throw new Exception('handled');
+"#,
+        ),
+        concat!(
+            "16384:Function legacy_exception_handler() is deprecated, use current:Unknown:0|",
+            "null:handled|destruct",
+        )
+    );
+}
+
+#[test]
+fn reflection_method_on_callable_closure_preserves_source_deprecation_metadata() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[Deprecated('retire function')]
+function reflected_legacy_function() {}
+
+class ReflectedLegacyCallable {
+    #[Deprecated('retire method')]
+    public function __invoke() {}
+}
+
+$anonymous = function () {};
+$function = Closure::fromCallable('reflected_legacy_function');
+$method = Closure::fromCallable(new ReflectedLegacyCallable());
+$method = $method->__invoke(...);
+
+foreach ([$anonymous, $function, $method] as $closure) {
+    $reflection = new ReflectionMethod($closure, '__invoke');
+    echo $reflection->getName(), ':',
+        $reflection->getDeclaringClass()->getName(), ':',
+        (int) $reflection->isStatic(),
+        (int) $reflection->isFinal(), ':',
+        (int) $reflection->isDeprecated(), ':',
+        count($reflection->getAttributes()), '|';
+}
+"#,
+        ),
+        "__invoke:Closure:00:0:0|__invoke:Closure:00:1:1|__invoke:Closure:00:1:1|"
+    );
+}
+
+#[test]
 fn deprecated_attribute_validates_at_call_time_and_thrown_handlers_abort_the_body() {
     assert_eq!(
         run_php(
