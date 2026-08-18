@@ -22,9 +22,6 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     crate::value::end_object_handle_request();
     execution?;
 
-    #[cfg(debug_assertions)]
-    super::hot::dump_bail_stats();
-
     eg.current_execute_data.set(unsafe { (*frame).prev_execute_data });
     run_frame_destructors(eg, frame)?;
     unsafe { cleanup_frame_slots(frame) };

@@ -25,8 +25,8 @@ use super::{
     class_is_subclass_of, class_is_trait, class_is_uninitialized_lazy_object,
     class_is_user_defined, class_mark_lazy_object_as_initialized,
     class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
-    class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, function_construct, function_get_closure,
-    function_get_closure_called_class, function_get_closure_this,
+    class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_to_string, function_construct,
+    function_get_closure, function_get_closure_called_class, function_get_closure_this,
     function_get_number_of_parameters, function_get_number_of_required_parameters,
     function_get_parameters, function_get_return_type, function_get_tentative_return_type,
     function_has_return_type, function_has_tentative_return_type, function_is_anonymous,
@@ -44,8 +44,8 @@ use super::{
     property_is_private, property_is_protected, property_is_public, property_is_readonly,
     property_is_static, property_is_virtual, property_set_raw_value,
     property_set_raw_value_without_lazy_initialization, property_set_value,
-    property_skip_lazy_initialization, reflection_compound_types, reflection_get_doc_comment,
-    reflection_type_allows_null, reflection_type_generic_arguments,
+    property_skip_lazy_initialization, property_to_string, reflection_compound_types,
+    reflection_get_doc_comment, reflection_type_allows_null, reflection_type_generic_arguments,
     reflection_type_has_generic_arguments, reflection_type_is_builtin, reflection_type_name,
     reflection_type_to_string,
 };
@@ -598,6 +598,9 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         ["object"]
     );
     register_method!("ReflectionClass", "getname", class_get_name, 1, 0, []);
+    for class in ["ReflectionClass", "ReflectionObject"] {
+        register_method!(class, "__tostring", class_to_string, 1, 0, []);
+    }
     register_method!(
         "ReflectionClass",
         "getdoccomment",
@@ -964,6 +967,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         "ReflectionProperty",
         "getname",
         parameter_get_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
+        "__tostring",
+        property_to_string,
         1,
         0,
         []

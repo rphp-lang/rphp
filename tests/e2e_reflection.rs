@@ -218,7 +218,7 @@ echo count((new ReflectionClass(ReflectedPropertyParent::class))->getProperties(
     );
     assert_eq!(
         out,
-        "locked:ReflectedPropertyChild:130:-r|shared:ReflectedPropertyChild:17:s-|1"
+        "shared:ReflectedPropertyChild:17:s-|locked:ReflectedPropertyChild:130:-r|1"
     );
 }
 
@@ -306,6 +306,91 @@ foreach ((new ReflectionClass(ReflectedHookFlags::class))->getProperties() as $p
 "#,
         ),
         "abstract:011:577|backed:100:33|virtual:001:513|"
+    );
+}
+
+#[test]
+fn reflection_property_stringifies_php_85_declaration_metadata() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class ReflectedPropertyStrings {
+    abstract protected $abstract { get; }
+    final public $backed { get => $this->backed; set => $value; }
+    public protected(set) readonly int $locked;
+    public static string $shared = 'x';
+    public $implicit;
+    public int $uninitialized;
+    public $virtual { get => 42; set {} }
+}
+foreach (['abstract', 'backed', 'locked', 'shared', 'implicit', 'uninitialized', 'virtual'] as $name) {
+    echo new ReflectionProperty(ReflectedPropertyStrings::class, $name);
+}
+"#,
+        ),
+        concat!(
+            "Property [ abstract protected virtual $abstract { get; } ]\n",
+            "Property [ final public $backed = NULL { get; set; } ]\n",
+            "Property [ public protected(set) readonly int $locked ]\n",
+            "Property [ public static string $shared = 'x' ]\n",
+            "Property [ public $implicit = NULL ]\n",
+            "Property [ public int $uninitialized ]\n",
+            "Property [ public virtual $virtual { get; set; } ]\n",
+        )
+    );
+}
+
+#[test]
+fn reflection_object_stringification_preserves_uninitialized_lazy_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReflectedLazyString {
+    public int $value;
+    public function initialize(): void { $this->value = 1; }
+}
+$reflection = new ReflectionClass(ReflectedLazyString::class);
+$objects = [
+    $reflection->newLazyGhost(function ($object) { echo "ghost initialized\n"; }),
+    $reflection->newLazyProxy(function ($object) { echo "proxy initialized\n"; return new ReflectedLazyString(); }),
+];
+foreach ($objects as $object) {
+    $rendered = (new ReflectionObject($object))->__toString();
+    echo (int) str_contains($rendered, 'Object of class [ <user> class ReflectedLazyString ]'), ':';
+    echo (int) str_contains($rendered, 'Property [ public int $value ]'), ':';
+    echo (int) $reflection->isUninitializedLazyObject($object), "\n";
+}
+"#,
+        ),
+        "1:1:1\n1:1:1\n"
+    );
+}
+
+#[test]
+fn reflection_properties_keep_child_first_source_declaration_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReflectedOrderedParent {
+    public $first;
+    public static $shared;
+    protected $last;
+}
+class ReflectedOrderedChild extends ReflectedOrderedParent {
+    public $child;
+}
+foreach ((new ReflectionClass(ReflectedOrderedChild::class))->getProperties() as $property) {
+    echo $property->getName(), ':';
+}
+try {
+    $object = new ReflectedOrderedChild();
+    echo $object->last;
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "child:first:shared:last:Cannot access protected property ReflectedOrderedChild::$last"
     );
 }
 
@@ -403,7 +488,7 @@ foreach ($reflection->getProperties() as $property) {
     );
     assert_eq!(
         out,
-        "PUBLIC_VALUE:0|label=ready,count=2,|count:1100,uninitialized:1100,label:1011,"
+        "PUBLIC_VALUE:0|label=ready,count=2,|label:1011,count:1100,uninitialized:1100,"
     );
 }
 

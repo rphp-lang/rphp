@@ -955,6 +955,29 @@ this checkpoint: scalar formatting retains its prior branch and allocation
 behavior, and VM re-entry exists only for compound values that previously
 bypassed their required conversion contract.
 
+`ReflectionClass`, `ReflectionObject` and `ReflectionProperty` now expose
+metadata-backed string conversion. Property rendering preserves PHP 8.5
+modifier, asymmetric visibility, type, default-value and hook syntax, while
+`getProperties()` restores child-first source declaration order across the
+separate instance/static metadata tables. Purely virtual properties no longer
+claim an implicit null default. `ReflectionObject::__toString()` inspects class
+metadata and dynamic-property names without observing the reflected object's
+lazy slots, so ghosts and proxies remain uninitialized. Complete byte-for-byte
+class/method/parameter rendering outside the admitted cases remains separate
+Reflection work.
+
+Normal debug CLI execution also no longer appends hot-executor coverage
+statistics to stderr; those diagnostics had become observable PHPT output once
+a previously failing test reached normal shutdown. The exact 223-case PHP 8.5.6
+lazy-object pass set moves from 204 to 206, an exact +2/-0 delta consisting of
+`init_trigger_reflection_object_toString.phpt` and
+`skipLazyInitialization.phpt`, with 17 visible failures and no crash or timeout.
+All five Cargo feature configurations, formatting, unsafe-policy and
+all-feature/all-target checks, Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. No runtime benchmark is required because all
+new rendering and ordering work is confined to explicit cold Reflection calls;
+ordinary property storage and dispatch are unchanged.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

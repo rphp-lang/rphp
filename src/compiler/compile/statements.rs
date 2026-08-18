@@ -3884,7 +3884,8 @@ impl Compiler {
                         property_is_readonly,
                         type_hint_requires_reified_check(&prop.type_hint),
                     )
-                    .with_source_location(&self.source_file, *class_line);
+                    .with_source_location(&self.source_file, *class_line)
+                    .with_reflection_order(prop.line);
                     definition.set_final(prop.is_final);
                     definition.set_abstract_hooks(
                         prop.has_abstract_get_hook,
@@ -3924,6 +3925,9 @@ impl Compiler {
                                             .is_some_and(|name| name == prop.name)
                                 })
                         });
+                    if definition.is_virtual_hook_property() {
+                        definition.set_has_default(false);
+                    }
                     if prop.is_static {
                         compiled_static_props.push(definition);
                     } else {
@@ -3956,7 +3960,8 @@ impl Compiler {
                         type_hint,
                         property_is_readonly,
                         type_hint_requires_reified_check(&promoted.type_hint),
-                    ).with_source_location(&self.source_file, *class_line);
+                    ).with_source_location(&self.source_file, *class_line)
+                    .with_reflection_order(promoted.line);
                     definition.set_final(promoted.is_final);
                     // A constructor parameter default belongs to the parameter,
                     // not to the promoted property declaration.
@@ -4246,13 +4251,15 @@ impl Compiler {
                         property.is_readonly,
                         type_hint_requires_reified_check(&property.type_hint),
                     )
-                    .with_source_location(&self.source_file, property.line);
+                    .with_source_location(&self.source_file, property.line)
+                    .with_reflection_order(property.line);
                     definition.has_get_hook = property.has_get_hook;
                     definition.has_set_hook = property.has_set_hook;
                     definition.set_abstract_hooks(
                         property.has_get_hook,
                         property.has_set_hook,
                     );
+                    definition.set_has_default(false);
                     compiled_properties.push(definition);
                 }
                 self.class_defs.push(ClassDef {
@@ -4519,7 +4526,8 @@ impl Compiler {
                         prop.is_readonly,
                         type_hint_requires_reified_check(&prop.type_hint),
                     )
-                    .with_source_location(&self.source_file, prop.line);
+                    .with_source_location(&self.source_file, prop.line)
+                    .with_reflection_order(prop.line);
                     definition.set_final(prop.is_final);
                     definition.set_abstract_hooks(
                         prop.has_abstract_get_hook,
@@ -4559,6 +4567,9 @@ impl Compiler {
                                             .is_some_and(|name| name == prop.name)
                                 })
                         });
+                    if definition.is_virtual_hook_property() {
+                        definition.set_has_default(false);
+                    }
                     if prop.is_static {
                         compiled_static_props.push(definition);
                     } else {

@@ -1359,6 +1359,10 @@ pub struct PropertyDefinition {
     /// stable.
     pub source_file: Option<String>,
     pub source_line: usize,
+    /// Source property line used only to restore declaration order after
+    /// instance and static definitions have been stored separately. Link-time
+    /// diagnostics intentionally keep `source_line` at the owning class line.
+    pub reflection_order: usize,
 }
 
 impl PropertyDefinition {
@@ -1384,6 +1388,7 @@ impl PropertyDefinition {
             generic_declaration: None,
             source_file: None,
             source_line: 0,
+            reflection_order: 0,
             has_get_hook: false,
             get_hook_is_backed: false,
             has_set_hook: false,
@@ -1416,6 +1421,7 @@ impl PropertyDefinition {
             generic_declaration: None,
             source_file: None,
             source_line: 0,
+            reflection_order: 0,
             has_get_hook: false,
             get_hook_is_backed: false,
             has_set_hook: false,
@@ -1453,6 +1459,11 @@ impl PropertyDefinition {
         }
         self.source_line =
             (source_line & !Self::DECLARATION_FLAGS) | (self.source_line & Self::DECLARATION_FLAGS);
+        self
+    }
+
+    pub fn with_reflection_order(mut self, source_line: usize) -> Self {
+        self.reflection_order = source_line;
         self
     }
 

@@ -918,9 +918,14 @@ fn op_fetch_obj_r_slow<'a>(
                             .is_some();
                         if opline._pad & FETCH_OBJ_SILENT == 0 && !has_getter {
                             let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                            let reported_class = if vis == Visibility::Protected {
+                                obj.class_name.as_ref()
+                            } else {
+                                defining_class.as_str()
+                            };
                             let message = format!(
                                 "Cannot access {} property {}::${}",
-                                vis_str, defining_class, name
+                                vis_str, reported_class, name
                             );
                             drop(obj);
                             return Ok(object_property_throw(eg, frame, "Error", message));

@@ -20,8 +20,8 @@ use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities};
 use crate::parser::Visibility;
 use crate::runtime::{ExecutorGlobals, LazyObjectStrategy};
 use crate::value::{
-    DynamicPropertyMap, PhpArray, PhpClosure, PhpObject, ReferencePropertyConstraint, Value,
-    ValueType, make_error_value,
+    ArrayKey, DynamicPropertyMap, PhpArray, PhpClosure, PhpObject, ReferencePropertyConstraint,
+    Value, ValueType, make_error_value,
 };
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
@@ -713,6 +713,363 @@ fn class_construct(
         }
     });
     Ok(())
+}
+
+fn reflection_quoted_string(value: &str) -> String {
+    let mut rendered = String::with_capacity(value.len() + 2);
+    rendered.push('\'');
+    for character in value.chars() {
+        match character {
+            '\\' => rendered.push_str("\\\\"),
+            '\n' => rendered.push_str("\\n"),
+            '\r' => rendered.push_str("\\r"),
+            '\t' => rendered.push_str("\\t"),
+            '\u{000b}' => rendered.push_str("\\v"),
+            '\u{000c}' => rendered.push_str("\\f"),
+            '\0' => rendered.push_str("\\0"),
+            _ => rendered.push(character),
+        }
+    }
+    rendered.push('\'');
+    rendered
+}
+
+fn reflection_value_name(value: &Value, eg: &ExecutorGlobals) -> String {
+    match value.value_type() {
+        ValueType::Undef | ValueType::Null => "NULL".to_string(),
+        ValueType::True => "true".to_string(),
+        ValueType::False => "false".to_string(),
+        ValueType::Long => value.as_long().unwrap().to_string(),
+        ValueType::Double => value.echo_to_string(),
+        ValueType::String => reflection_quoted_string(value.as_str().unwrap()),
+        ValueType::Array => {
+            let array = value.as_array().unwrap();
+            let is_list = array
+                .iter()
+                .enumerate()
+                .all(|(index, (key, _))| key == ArrayKey::Int(index as i64));
+            let entries = array
+                .iter()
+                .map(|(key, value)| {
+                    let value = reflection_value_name(value, eg);
+                    if is_list {
+                        value
+                    } else {
+                        let key = match key {
+                            ArrayKey::Int(key) => key.to_string(),
+                            ArrayKey::String(key) => reflection_quoted_string(&key),
+                        };
+                        format!("{key} => {value}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{entries}]")
+        }
+        ValueType::Object => super::enum_case_export(value, eg).unwrap_or_else(|| {
+            value.as_object().map_or_else(
+                || "NULL".to_string(),
+                |object| object.class_name.to_string(),
+            )
+        }),
+        _ => "NULL".to_string(),
+    }
+}
+
+fn reflection_visibility(visibility: Visibility) -> &'static str {
+    match visibility {
+        Visibility::Public => "public",
+        Visibility::Protected => "protected",
+        Visibility::Private => "private",
+    }
+}
+
+fn render_reflection_property(
+    property: &PropertyDefinition,
+    is_static: bool,
+    eg: &ExecutorGlobals,
+) -> String {
+    let mut declaration = String::new();
+    if property.is_final() {
+        declaration.push_str("final ");
+    }
+    if property.abstract_get_hook() || property.abstract_set_hook() {
+        declaration.push_str("abstract ");
+    }
+    declaration.push_str(reflection_visibility(property.visibility));
+    declaration.push(' ');
+    if let Some(set_visibility) = property.set_visibility {
+        declaration.push_str(reflection_visibility(set_visibility));
+        declaration.push_str("(set) ");
+    }
+    if is_static {
+        declaration.push_str("static ");
+    }
+    if property.is_readonly {
+        declaration.push_str("readonly ");
+    }
+    if property.is_virtual_hook_property() {
+        declaration.push_str("virtual ");
+    }
+    if !matches!(property.type_hint, ParamTypeHint::None) {
+        declaration.push_str(&property.type_hint.display_name());
+        declaration.push(' ');
+    }
+    declaration.push('$');
+    declaration.push_str(&property.name);
+    if property.has_default() {
+        declaration.push_str(" = ");
+        declaration.push_str(&property.default.as_ref().map_or_else(
+            || "NULL".to_string(),
+            |value| reflection_value_name(value, eg),
+        ));
+    }
+    if property.has_get_hook || property.has_set_hook {
+        declaration.push_str(" {");
+        if property.has_get_hook {
+            declaration.push_str(" get;");
+        }
+        if property.has_set_hook {
+            declaration.push_str(" set;");
+        }
+        declaration.push_str(" }");
+    }
+    format!("Property [ {declaration} ]")
+}
+
+fn reflection_property_definition<'a>(
+    ed: *mut ExecuteData,
+    eg: &'a ExecutorGlobals,
+) -> Option<(&'a PropertyDefinition, bool)> {
+    let class_name = reflected_property(ed, "__reflection_target")
+        .and_then(|target| {
+            target
+                .as_object()
+                .map(|object| object.class_name.to_string())
+                .or_else(|| target.as_str().map(str::to_owned))
+        })
+        .or_else(|| {
+            reflected_property(ed, "class").and_then(|class| class.as_str().map(str::to_owned))
+        })?;
+    let name = reflected_property(ed, "__reflection_property")
+        .or_else(|| reflected_property(ed, "name"))?
+        .as_str()?
+        .to_string();
+    let class = eg.find_class(&class_name)?;
+    class
+        .properties
+        .iter()
+        .find(|property| property.name == name)
+        .map(|property| (property, false))
+        .or_else(|| {
+            class
+                .static_properties
+                .iter()
+                .find(|property| property.name == name)
+                .map(|property| (property, true))
+        })
+}
+
+fn property_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let name = reflected_property(ed, "__reflection_property")
+        .or_else(|| reflected_property(ed, "name"))
+        .and_then(|name| name.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let rendered = reflection_property_definition(ed, eg).map_or_else(
+        || format!("Property [ <dynamic> public ${name} ]\n"),
+        |(property, is_static)| {
+            format!("{}\n", render_reflection_property(property, is_static, eg))
+        },
+    );
+    return_value(rv, Value::string(rendered))
+}
+
+fn render_reflection_method(
+    name: &str,
+    visibility: Visibility,
+    is_static: bool,
+    is_final: bool,
+    is_abstract: bool,
+) -> String {
+    let mut declaration = String::new();
+    if is_final {
+        declaration.push_str("final ");
+    }
+    if is_abstract {
+        declaration.push_str("abstract ");
+    }
+    declaration.push_str(reflection_visibility(visibility));
+    declaration.push(' ');
+    if is_static {
+        declaration.push_str("static ");
+    }
+    declaration.push_str("method ");
+    declaration.push_str(name);
+    format!("Method [ <user> {declaration} ] {{\n    }}")
+}
+
+fn class_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::string(""));
+    };
+    let Some(class) = eg.find_class(&owner) else {
+        return return_value(rv, Value::string(""));
+    };
+    let is_object = with_argument(ed, 0, |value| {
+        value
+            .as_object()
+            .is_some_and(|object| object.class_name.eq_ignore_ascii_case("ReflectionObject"))
+    });
+    let mut modifiers = String::new();
+    if class.is_final {
+        modifiers.push_str("final ");
+    }
+    if class.is_abstract && !class.is_interface {
+        modifiers.push_str("abstract ");
+    }
+    if class.is_readonly {
+        modifiers.push_str("readonly ");
+    }
+    let kind = if class.is_interface {
+        "interface"
+    } else if class.is_trait {
+        "trait"
+    } else if class.is_enum {
+        "enum"
+    } else {
+        "class"
+    };
+    let provenance = if eg.class_is_internal(&owner) {
+        "internal"
+    } else {
+        "user"
+    };
+    let title = if is_object {
+        "Object of class"
+    } else if class.is_interface {
+        "Interface"
+    } else if class.is_trait {
+        "Trait"
+    } else if class.is_enum {
+        "Enum"
+    } else {
+        "Class"
+    };
+    let mut rendered = format!(
+        "{title} [ <{provenance}> {modifiers}{kind} {} ] {{\n",
+        class.name
+    );
+    if let Some(source_file) = &class.source_file {
+        rendered.push_str(&format!(
+            "  @@ {source_file} {}-{}\n\n",
+            class.declaration_line, class.declaration_line
+        ));
+    }
+
+    rendered.push_str(&format!("  - Constants [{}] {{\n", class.constants.len()));
+    for constant in &class.constants {
+        let final_modifier = if constant.is_final { "final " } else { "" };
+        let type_name = if matches!(constant.type_hint, ParamTypeHint::None) {
+            String::new()
+        } else {
+            format!("{} ", constant.type_hint.display_name())
+        };
+        rendered.push_str(&format!(
+            "    Constant [ {final_modifier}{} {type_name}{} ] {{ {} }}\n",
+            reflection_visibility(constant.visibility),
+            constant.name,
+            reflection_value_name(&constant.value, eg)
+        ));
+    }
+    rendered.push_str("  }\n\n");
+
+    rendered.push_str(&format!(
+        "  - Static properties [{}] {{\n",
+        class.static_properties.len()
+    ));
+    for property in &class.static_properties {
+        rendered.push_str("    ");
+        rendered.push_str(&render_reflection_property(property, true, eg));
+        rendered.push('\n');
+    }
+    rendered.push_str("  }\n\n");
+
+    let mut methods = Vec::new();
+    collect_reflected_methods(eg, &owner, &mut methods, &mut HashSet::new());
+    let static_method_count = methods
+        .iter()
+        .filter(|(_, _, is_static, ..)| *is_static)
+        .count();
+    rendered.push_str(&format!("  - Static methods [{static_method_count}] {{\n"));
+    for (name, visibility, is_static, is_final, _, declaring_class) in &methods {
+        if !is_static {
+            continue;
+        }
+        rendered.push_str("    ");
+        rendered.push_str(&render_reflection_method(
+            name,
+            *visibility,
+            true,
+            *is_final,
+            eg.find_class(declaring_class)
+                .is_some_and(|class| class.method_is_abstract(name)),
+        ));
+        rendered.push('\n');
+    }
+    rendered.push_str("  }\n\n");
+
+    rendered.push_str(&format!("  - Properties [{}] {{\n", class.properties.len()));
+    for property in &class.properties {
+        rendered.push_str("    ");
+        rendered.push_str(&render_reflection_property(property, false, eg));
+        rendered.push('\n');
+    }
+    rendered.push_str("  }\n\n");
+
+    if is_object {
+        let mut dynamic_names = Vec::new();
+        if let Some(target) = reflected_property(ed, "__generic_object")
+            && let Some(object) = target.as_object()
+        {
+            object.for_each_dynamic_property(|name, _| dynamic_names.push(name.to_string()));
+        }
+        rendered.push_str(&format!(
+            "  - Dynamic properties [{}] {{\n",
+            dynamic_names.len()
+        ));
+        for name in dynamic_names {
+            rendered.push_str(&format!("    Property [ <dynamic> public ${name} ]\n"));
+        }
+        rendered.push_str("  }\n\n");
+    }
+
+    let instance_method_count = methods.len() - static_method_count;
+    rendered.push_str(&format!("  - Methods [{instance_method_count}] {{\n"));
+    for (name, visibility, is_static, is_final, _, declaring_class) in &methods {
+        if *is_static {
+            continue;
+        }
+        rendered.push_str("    ");
+        rendered.push_str(&render_reflection_method(
+            name,
+            *visibility,
+            false,
+            *is_final,
+            eg.find_class(declaring_class)
+                .is_some_and(|class| class.method_is_abstract(name)),
+        ));
+        rendered.push('\n');
+    }
+    rendered.push_str("  }\n}\n");
+    return_value(rv, Value::string(rendered))
 }
 
 fn class_get_name(
@@ -1724,9 +2081,7 @@ fn class_get_properties(
         return return_value(rv, Value::array(PhpArray::new()));
     };
     let filter = with_argument(ed, 1, |value| value.as_long());
-    let mut properties =
-        PhpArray::with_packed_capacity(class.properties.len() + class.static_properties.len());
-    for (property, is_static) in class
+    let mut declarations = class
         .properties
         .iter()
         .map(|property| (property, false))
@@ -1737,7 +2092,23 @@ fn class_get_properties(
                 .filter(|_| !class.is_enum)
                 .map(|property| (property, true)),
         )
-    {
+        .collect::<Vec<_>>();
+    declarations.sort_by_key(|(property, _)| {
+        let mut rank = 0usize;
+        let mut current = Some(class.name.as_str());
+        while let Some(owner) = current {
+            if property.declaring_class.eq_ignore_ascii_case(owner) {
+                break;
+            }
+            rank += 1;
+            current = eg
+                .find_class(owner)
+                .and_then(|class| class.parent.as_deref());
+        }
+        (rank, property.reflection_order)
+    });
+    let mut properties = PhpArray::with_packed_capacity(declarations.len());
+    for (property, is_static) in declarations {
         if property.visibility == Visibility::Private
             && !property.declaring_class.eq_ignore_ascii_case(&class.name)
         {
