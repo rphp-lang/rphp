@@ -1030,7 +1030,7 @@ impl Parser {
             | Token::Empty
             | Token::Match(_)
             | Token::New(_)
-            | Token::Yield
+            | Token::Yield(_)
             | Token::Clone(_)
             | Token::Print
             | Token::LParen(_)

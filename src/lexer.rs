@@ -58,7 +58,7 @@ pub enum Token {
     Enum,            // enum
     Namespace,       // namespace
     Backslash,       // \ (namespace separator)
-    Yield,           // yield
+    Yield(usize),    // yield, source line
     From,            // from (used after yield)
     Print,           // print
     Global,          // global
@@ -651,7 +651,7 @@ impl<'a> Lexer<'a> {
                         "enum" => tokens.push(Token::Enum),
                         "declare" => tokens.push(Token::Declare),
                         "namespace" => tokens.push(Token::Namespace),
-                        "yield" => tokens.push(Token::Yield),
+                        "yield" => tokens.push(Token::Yield(line)),
                         "from" => tokens.push(Token::From),
                         "fn" => tokens.push(Token::Fn(line)),
                         "use" => tokens.push(Token::Use),

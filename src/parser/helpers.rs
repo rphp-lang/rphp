@@ -122,7 +122,7 @@ impl Parser {
             Token::Final => Some("final".to_string()),
             Token::Enum => Some("enum".to_string()),
             Token::Namespace => Some("namespace".to_string()),
-            Token::Yield => Some("yield".to_string()),
+            Token::Yield(_) => Some("yield".to_string()),
             Token::From => Some("from".to_string()),
             Token::Global => Some("global".to_string()),
             Token::Print => Some("print".to_string()),

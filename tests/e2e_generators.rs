@@ -1157,6 +1157,104 @@ try {
     );
 }
 
+#[test]
+fn shared_yield_from_parents_observe_the_live_delegate() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function sharedSource() {
+    yield 10 => 'one';
+    yield 20 => 'two';
+    yield 30 => 'three';
+    return 'done';
+}
+function sharedRelay($name, $source) {
+    $result = yield from $source;
+    echo $name, ':', $result, "\n";
+}
+$source = sharedSource();
+$left = sharedRelay('left', $source);
+$right = sharedRelay('right', $source);
+echo $left->key(), ':', $left->current(), "\n";
+$left->next();
+echo $right->key(), ':', $right->current(), "\n";
+$right->next();
+echo $left->key(), ':', $left->current(), "\n";
+$left->next();
+echo $right->key(), ':', $right->current(), "\n";
+$right->next();
+"#
+        ),
+        "10:one\n20:two\n30:three\nleft:done\n:three\nright:done\n"
+    );
+}
+
+#[test]
+fn aborted_shared_yield_from_distinguishes_attached_and_new_parents() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function failingSource() {
+    yield 'ready';
+    throw new RuntimeException('boom');
+}
+function guardedRelay($name, $source) {
+    try {
+        yield from $source;
+    } catch (Throwable $error) {
+        echo $name, ':', $error::class, ':', $error->getMessage(), "\n";
+    }
+}
+function plainRelay($source) {
+    yield from $source;
+}
+$source = failingSource();
+$left = guardedRelay('left', $source);
+$right = guardedRelay('right', $source);
+echo $left->current(), "\n";
+echo $right->current(), "\n";
+$left->next();
+var_dump($right->current());
+$late = plainRelay($source);
+try {
+    $late->next();
+} catch (Throwable $error) {
+    echo 'late:', $error::class, ':', $error->getMessage(), "\n";
+}
+"#
+        ),
+        "ready\nready\nleft:RuntimeException:boom\nright:ClosedGeneratorException:Generator yielded from aborted, no return value available\nNULL\nlate:Error:Generator passed to yield from was aborted without proper return and is unable to continue\n"
+    );
+}
+
+#[test]
+fn delegated_exception_trace_keeps_each_generator_frame_and_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+ini_set('zend.exception_ignore_args', '0');
+function traceLeaf($value) {
+    yield 'ready';
+    throw new RuntimeException('boom');
+}
+function traceRelay($source, $tag) {
+    yield from $source;
+}
+$generator = traceRelay(traceRelay(traceLeaf(7), 'inner'), 'outer');
+echo $generator->current(), "\n";
+try {
+    $generator->next();
+} catch (Throwable $error) {
+    foreach ($error->getTrace() as $frame) {
+        echo $frame['function'], ':', count($frame['args'] ?? []), "\n";
+    }
+}
+"#
+        ),
+        "ready\ntraceLeaf:1\ntraceRelay:2\ntraceRelay:2\nnext:0\n"
+    );
+}
+
 // ── send() on fresh generator (P1 fix) ──
 
 #[test]

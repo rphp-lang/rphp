@@ -2728,6 +2728,7 @@ fn execute_full_call<'a>(
                     user.op_array.num_cvs,
                     user.op_array.num_temps,
                 );
+                generator.trace_num_args = Value::long(i64::from(num_args));
                 generator.called_scope_class_id = late_static_call_class_id(eg, call);
                 generator.closure_static_vars = eg.closure_static_vars(call as usize);
                 #[cfg(feature = "php-generics-reified")]

@@ -48,8 +48,9 @@ pub struct Generator {
     pub value: Value,
     /// Last yielded key (available via key())
     pub key: Value,
-    /// Value to send into generator on next resume
-    pub send_value: Value,
+    /// Number of public arguments supplied at creation, retained in the
+    /// existing Value-sized cold metadata slot for exception traces.
+    pub trace_num_args: Value,
     /// Return value (set when generator returns)
     pub return_value: Value,
     /// True only after the generator reaches a normal explicit or implicit
@@ -116,7 +117,7 @@ impl Generator {
             state: GeneratorState::Created,
             value: Value::null(),
             key: Value::long(-1), // will become 0 on first yield
-            send_value: Value::null(),
+            trace_num_args: Value::long(i64::try_from(args.len()).unwrap_or(i64::MAX)),
             return_value: Value::null(),
             has_returned: false,
             rewindable: true,

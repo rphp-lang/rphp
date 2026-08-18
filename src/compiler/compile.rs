@@ -8271,7 +8271,10 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
-            Expr::YieldFrom(sub_expr) => {
+            Expr::YieldFrom {
+                expr: sub_expr,
+                line,
+            } => {
                 self.contains_yield = true;
                 let (sub_op, sub_type) = self.compile_expr(sub_expr);
                 let tmp = self.alloc_tmp();
@@ -8280,7 +8283,7 @@ impl Compiler {
                 instr.op1_type = sub_type;
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::Clone {

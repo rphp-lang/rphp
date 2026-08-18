@@ -291,13 +291,19 @@ impl Parser {
     }
 
     fn parse_yield_expr(&mut self) -> Result<Expr, String> {
-        self.advance(); // consume 'yield'
+        let line = match self.advance() {
+            Token::Yield(line) => line,
+            token => return Err(format!("Expected yield, got {token:?}")),
+        };
 
         // yield from <expr>
         if self.peek() == Token::From {
             self.advance(); // consume 'from'
             let expr = self.parse_expr()?;
-            return Ok(Expr::YieldFrom(Box::new(expr)));
+            return Ok(Expr::YieldFrom {
+                expr: Box::new(expr),
+                line,
+            });
         }
 
         // yield; or yield at end of expression context (no value)
@@ -910,7 +916,7 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Bool(false))
             }
-            Token::Yield => self.parse_yield_expr(),
+            Token::Yield(_) => self.parse_yield_expr(),
             Token::Variable(_, _) => {
                 let (name, line) = match self.advance() {
                     Token::Variable(n, line) => (n, line),

@@ -427,7 +427,10 @@ pub enum Expr {
         value: Option<Box<Expr>>,
         key: Option<Box<Expr>>,
     },
-    YieldFrom(Box<Expr>),  // yield from $expr
+    YieldFrom {
+        expr: Box<Expr>,
+        line: usize,
+    }, // yield from $expr
     Print(Box<Expr>),      // print expr (returns 1)
     BitwiseNot(Box<Expr>), // ~expr
     Clone {
@@ -440,7 +443,7 @@ pub enum Expr {
 impl Expr {
     pub(crate) fn contains_yield(&self) -> bool {
         match self {
-            Expr::Yield { .. } | Expr::YieldFrom(_) => true,
+            Expr::Yield { .. } | Expr::YieldFrom { .. } => true,
             Expr::BinaryOp { left, right, .. }
             | Expr::NullCoalesce { left, right }
             | Expr::CoalesceAssign {

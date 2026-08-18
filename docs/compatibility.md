@@ -1033,6 +1033,29 @@ not an optimization claim: an exploratory one-level `yield from` control
 remains slower and is reserved for general performance work after semantic
 compatibility.
 
+Shared generator delegation now observes the live leaf value and key across
+every attached `yield from` parent instead of exposing a stale per-parent
+snapshot. A normally completed shared leaf retains the parent's last visible
+value while its key becomes `null`. Exceptional completion distinguishes a
+parent that was already attached, which receives `ClosedGeneratorException`,
+from a new delegation attempt, which receives PHP's catchable `Error`.
+Delegated exception traces retain supplied-Throwable creation history, add
+each traversed generator frame once, include the supplied argument list, and
+use the source line of the corresponding `yield from` expression.
+
+The final release rerun of all 5,599 pinned PHP 8.5.6 cases moves from 2,694
+to 2,704 passes, an exact +10/-0 delta. The candidate distribution is 2,704
+passes, 2,504 ordinary failures, 110 skips, one XFAIL and 280 unsupported
+cases, with zero timeouts and zero crashes. The complete 184-case generator
+cluster moves from 100 to 110 passes with no lost pass.
+
+All five Cargo feature configurations, formatting, unsafe-policy and
+all-feature/all-target checks, Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The unsafe inventory is 1,622 production
+blocks against a ceiling of 1,623. The 200-pair order-balanced direct generator
+resume control measures a candidate/parent delta of -2.158%, within the +1%
+regression ceiling; no speedup is claimed.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

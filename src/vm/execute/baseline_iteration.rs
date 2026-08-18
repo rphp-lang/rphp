@@ -1606,8 +1606,6 @@ fn op_yield<'a>(
         gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize + 1 };
         gen_data.state = GeneratorState::Suspended;
 
-        gen_data.send_value = Value::null();
-
         drop(gen_data);
         eg.active_generator = Some(gen_ref);
     }
@@ -1659,6 +1657,33 @@ fn op_yield_from<'a>(
                     }
                     let inner_state: GeneratorState = inner_gen_ref.borrow().state;
                     if inner_state == GeneratorState::Completed {
+                        if !inner_gen_ref.borrow().has_returned {
+                            eg.active_generator = Some(gen_ref);
+                            let error = crate::value::make_error_value(
+                                "Error",
+                                "Generator passed to yield from was aborted without proper return and is unable to continue",
+                            );
+                            let instruction_index = unsafe {
+                                (opline as *const Instruction)
+                                    .offset_from(op_array.instructions.as_ptr())
+                                    as usize
+                            };
+                            attach_throwable_origin(
+                                &error,
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                            );
+                            return Ok(match throw_in_frame(eg, frame, error) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    ColdResult::NewFrame(new_frame, new_op_array)
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    ColdResult::Unhandled(exception)
+                                }
+                            });
+                        }
                         // Sub-generator already done, write return value to result
                         let ret_val = inner_gen_ref.borrow().return_value.clone();
                         eg.active_generator = Some(gen_ref);

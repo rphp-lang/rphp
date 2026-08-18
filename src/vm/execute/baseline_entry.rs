@@ -724,6 +724,7 @@ where
                 user.op_array.num_cvs,
                 user.op_array.num_temps,
             );
+            generator.trace_num_args = Value::long(public_num_args as i64);
             generator.called_scope_class_id = called_scope_class_id;
             generator.closure_static_vars = closure_static_vars.clone();
             let generator_ref = new_generator_ref(generator);
@@ -915,13 +916,20 @@ pub(crate) enum GeneratorResumeOutcome {
 enum GeneratorFrameInput {
     Send(Value),
     Throw(Value),
+    SyntheticThrow(Value),
+    Propagate(Value),
     YieldFromReturn(Value),
 }
 
 enum GeneratorPropagation {
     Yielded,
     Completed,
-    Threw(Value),
+    Threw(Value, bool),
+}
+
+enum GeneratorFrameOutcome {
+    Advanced,
+    Threw(Value, bool),
 }
 
 struct ActiveGeneratorChain {
@@ -1036,6 +1044,8 @@ fn resume_generator_with_input(
         frame,
         saved_execute_data,
         injected_exception,
+        false,
+        false,
         true,
     )
 }
@@ -1079,26 +1089,47 @@ fn resume_generator_delegation(
                     let Some(parent) = parents.pop() else {
                         return Ok(GeneratorResumeOutcome::Advanced);
                     };
-                    let return_value = current.borrow().return_value.clone();
+                    let (has_returned, return_value) = {
+                        let current = current.borrow();
+                        (current.has_returned, current.return_value.clone())
+                    };
                     active_delegates.record_ascent(&current);
                     {
                         let mut parent_data = parent.borrow_mut();
                         parent_data.delegate = None;
-                        parent_data.ip_offset += 1;
+                        if has_returned {
+                            parent_data.ip_offset += 1;
+                        }
                     }
                     current = parent;
-                    input = GeneratorFrameInput::YieldFromReturn(return_value);
+                    input = if has_returned {
+                        GeneratorFrameInput::YieldFromReturn(return_value)
+                    } else if fresh_execution {
+                        GeneratorFrameInput::SyntheticThrow(make_error_value(
+                            "Error",
+                            "Generator passed to yield from was aborted without proper return and is unable to continue",
+                        ))
+                    } else {
+                        GeneratorFrameInput::SyntheticThrow(make_error_value(
+                            "ClosedGeneratorException",
+                            "Generator yielded from aborted, no return value available",
+                        ))
+                    };
                     fresh_execution = false;
                     continue;
                 }
-                GeneratorPropagation::Threw(exception) => {
+                GeneratorPropagation::Threw(exception, extend_trace) => {
                     let Some(parent) = parents.pop() else {
                         return Ok(GeneratorResumeOutcome::Threw(exception));
                     };
                     active_delegates.record_ascent(&current);
                     parent.borrow_mut().delegate = None;
                     current = parent;
-                    input = GeneratorFrameInput::Throw(exception);
+                    input = if extend_trace {
+                        GeneratorFrameInput::Propagate(exception)
+                    } else {
+                        GeneratorFrameInput::Throw(exception)
+                    };
                     fresh_execution = false;
                     continue;
                 }
@@ -1135,13 +1166,16 @@ fn resume_generator_delegation(
                         match execute_generator_frame_input(
                             eg,
                             &current,
-                            GeneratorFrameInput::Throw(error),
+                            GeneratorFrameInput::SyntheticThrow(error),
                         )? {
-                            GeneratorResumeOutcome::Advanced => {
+                            GeneratorFrameOutcome::Advanced => {
                                 fresh_execution = true;
                             }
-                            GeneratorResumeOutcome::Threw(exception) => {
-                                propagation = Some(GeneratorPropagation::Threw(exception));
+                            GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                                propagation = Some(GeneratorPropagation::Threw(
+                                    exception,
+                                    extend_trace,
+                                ));
                             }
                         }
                         continue;
@@ -1214,7 +1248,7 @@ fn resume_generator_delegation(
         if let Some(delegate) = generator_delegate {
             if active_delegates.contains(&current, &parents, &delegate) {
                 current.borrow_mut().delegate = None;
-                input = GeneratorFrameInput::Throw(make_error_value(
+                input = GeneratorFrameInput::SyntheticThrow(make_error_value(
                     "Error",
                     "Impossible to yield from the Generator being currently run",
                 ));
@@ -1247,16 +1281,17 @@ fn resume_generator_delegation(
                 &mut input,
                 GeneratorFrameInput::Send(Value::null()),
             ) {
-                GeneratorFrameInput::Throw(exception) => {
+                frame_input @ (GeneratorFrameInput::Throw(_)
+                | GeneratorFrameInput::SyntheticThrow(_)
+                | GeneratorFrameInput::Propagate(_)) => {
                     drop(entries);
-                    match execute_generator_frame_input(
-                        eg,
-                        &current,
-                        GeneratorFrameInput::Throw(exception),
-                    )? {
-                        GeneratorResumeOutcome::Advanced => fresh_execution = true,
-                        GeneratorResumeOutcome::Threw(exception) => {
-                            propagation = Some(GeneratorPropagation::Threw(exception));
+                    match execute_generator_frame_input(eg, &current, frame_input)? {
+                        GeneratorFrameOutcome::Advanced => fresh_execution = true,
+                        GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                            propagation = Some(GeneratorPropagation::Threw(
+                                exception,
+                                extend_trace,
+                            ));
                         }
                     }
                 }
@@ -1268,9 +1303,12 @@ fn resume_generator_delegation(
                             &current,
                             GeneratorFrameInput::YieldFromReturn(Value::null()),
                         )? {
-                            GeneratorResumeOutcome::Advanced => fresh_execution = true,
-                            GeneratorResumeOutcome::Threw(exception) => {
-                                propagation = Some(GeneratorPropagation::Threw(exception));
+                            GeneratorFrameOutcome::Advanced => fresh_execution = true,
+                            GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                                propagation = Some(GeneratorPropagation::Threw(
+                                    exception,
+                                    extend_trace,
+                                ));
                             }
                         }
                     } else {
@@ -1304,9 +1342,9 @@ fn resume_generator_delegation(
             GeneratorFrameInput::Send(Value::null()),
         );
         match execute_generator_frame_input(eg, &current, frame_input)? {
-            GeneratorResumeOutcome::Advanced => fresh_execution = true,
-            GeneratorResumeOutcome::Threw(exception) => {
-                propagation = Some(GeneratorPropagation::Threw(exception));
+            GeneratorFrameOutcome::Advanced => fresh_execution = true,
+            GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                propagation = Some(GeneratorPropagation::Threw(exception, extend_trace));
             }
         }
     }
@@ -1320,27 +1358,50 @@ fn execute_generator_frame_input(
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
     input: GeneratorFrameInput,
-) -> Result<GeneratorResumeOutcome, VmError> {
+) -> Result<GeneratorFrameOutcome, VmError> {
+    let escaped_same_input_extends = match &input {
+        GeneratorFrameInput::Throw(exception) => {
+            Some((exception.object_identity(), false))
+        }
+        GeneratorFrameInput::SyntheticThrow(exception)
+        | GeneratorFrameInput::Propagate(exception) => {
+            Some((exception.object_identity(), true))
+        }
+        GeneratorFrameInput::Send(_) | GeneratorFrameInput::YieldFromReturn(_) => None,
+    };
     let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
-    let injected_exception = match input {
+    let (injected_exception, seed_injected_trace, extend_injected_trace) = match input {
         GeneratorFrameInput::Send(value) => {
             restore_yield_send_value(frame, gen_ref, value);
-            None
+            (None, false, false)
         }
-        GeneratorFrameInput::Throw(exception) => Some(exception),
+        GeneratorFrameInput::Throw(exception) => (Some(exception), false, false),
+        GeneratorFrameInput::SyntheticThrow(exception) => (Some(exception), true, false),
+        GeneratorFrameInput::Propagate(exception) => (Some(exception), false, true),
         GeneratorFrameInput::YieldFromReturn(value) => {
             restore_yield_from_result(frame, gen_ref, value);
-            None
+            (None, false, false)
         }
     };
-    execute_resumed_generator_frame(
+    let outcome = execute_resumed_generator_frame(
         eg,
         gen_ref,
         frame,
         saved_execute_data,
         injected_exception,
+        seed_injected_trace,
+        extend_injected_trace,
         false,
-    )
+    )?;
+    Ok(match outcome {
+        GeneratorResumeOutcome::Advanced => GeneratorFrameOutcome::Advanced,
+        GeneratorResumeOutcome::Threw(exception) => {
+            let extend_trace = escaped_same_input_extends.map_or(true, |(identity, extends)| {
+                exception.object_identity() != identity || extends
+            });
+            GeneratorFrameOutcome::Threw(exception, extend_trace)
+        }
+    })
 }
 
 /// Materialize one detached frame from the generator snapshot. All resume
@@ -1423,6 +1484,197 @@ fn restore_yield_from_result(
     }
 }
 
+fn generator_resume_continuation_trace(
+    eg: &ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    frame: *mut ExecuteData,
+    saved_execute_data: *mut ExecuteData,
+) -> PhpArray {
+    let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+        .as_deref()
+        .is_some_and(crate::stdlib::ini_boolean);
+    // SAFETY: frame is the live detached generator root and
+    // saved_execute_data is the still-live internal caller retained by this
+    // synchronous resume. Its predecessor is likewise live while the call-site
+    // pointer is advanced for the trace snapshot and then restored.
+    unsafe {
+        let trace_num_args = gen_ref
+            .borrow()
+            .trace_num_args
+            .as_long()
+            .and_then(|count| u32::try_from(count).ok())
+            .unwrap_or(0);
+        let saved_num_args = (*frame).num_args;
+        (*frame).num_args = trace_num_args;
+        let internal_caller = (*saved_execute_data).prev_execute_data;
+        let (caller_opline, can_advance) = if internal_caller.is_null() {
+            (std::ptr::null(), false)
+        } else {
+            let caller_opline = (*internal_caller).opline;
+            let caller_op_array = (*internal_caller).op_array();
+            let caller_index = caller_opline.offset_from(caller_op_array.instructions.as_ptr());
+            let can_advance = usize::try_from(caller_index)
+                .ok()
+                .filter(|index| *index < caller_op_array.instructions.len())
+                .is_some();
+            (caller_opline, can_advance)
+        };
+        if can_advance {
+            (*internal_caller).opline = caller_opline.add(1);
+        }
+        (*frame).prev_execute_data = saved_execute_data;
+        let trace = crate::stdlib::collect_debug_backtrace(
+            frame,
+            if ignore_arguments { 2 } else { 0 },
+            0,
+            eg,
+            true,
+        );
+        (*frame).num_args = saved_num_args;
+        (*frame).prev_execute_data = std::ptr::null_mut();
+        if can_advance {
+            (*internal_caller).opline = caller_opline;
+        }
+        trace
+    }
+}
+
+fn extend_generator_delegation_trace(
+    mut existing: Vec<Value>,
+    continuation: &PhpArray,
+    origin: Option<&(std::rc::Rc<String>, usize)>,
+) -> PhpArray {
+    let boundary = existing
+        .iter()
+        .position(|value| {
+            value
+                .as_array()
+                .and_then(|entry| entry.get_str("class"))
+                .and_then(Value::as_str)
+                .is_some_and(|class| class.eq_ignore_ascii_case("Generator"))
+        })
+        .unwrap_or(existing.len());
+    if let Some((source_file, line)) = origin
+        && boundary > 0
+        && let Some(entry) = existing
+            .get_mut(boundary - 1)
+            .and_then(Value::as_array_mut)
+    {
+        if entry.get_str("file").is_none() {
+            entry.set_str("file", Value::shared_string(source_file.clone()));
+        }
+        if entry.get_str("line").is_none() {
+            entry.set_str("line", Value::long(*line as i64));
+        }
+    }
+    let parent_frame = continuation.values().next().cloned();
+    let mut complete = PhpArray::new();
+    for (index, value) in existing.into_iter().enumerate() {
+        if index == boundary
+            && let Some(parent_frame) = parent_frame.as_ref()
+        {
+            complete.push(parent_frame.clone());
+        }
+        complete.push(value);
+    }
+    if boundary == complete.len()
+        && let Some(parent_frame) = parent_frame
+    {
+        complete.push(parent_frame);
+    }
+    complete
+}
+
+#[cold]
+#[inline(never)]
+fn complete_escaped_generator_trace(
+    exception: &Value,
+    injected_exception_identity: Option<usize>,
+    eg: &ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    frame: *mut ExecuteData,
+    saved_execute_data: *mut ExecuteData,
+) {
+    if saved_execute_data.is_null()
+        || exception.object_identity() == injected_exception_identity
+    {
+        return;
+    }
+    let existing_trace = exception
+        .as_object()
+        .and_then(|object| {
+            object
+                .get_property("trace")
+                .and_then(Value::as_array)
+                .map(|trace| trace.values().cloned().collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
+    let continuation =
+        generator_resume_continuation_trace(eg, gen_ref, frame, saved_execute_data);
+    let trace = if existing_trace.is_empty() {
+        continuation
+    } else {
+        let mut complete = PhpArray::new();
+        for value in existing_trace {
+            complete.push(value);
+        }
+        for value in continuation.values() {
+            complete.push(value.clone());
+        }
+        complete
+    };
+    if let Some(mut object) = exception.as_object_mut() {
+        object.set_property("trace", Value::array(trace));
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn prepare_injected_generator_exception(
+    exception: &Value,
+    seed_trace: bool,
+    extend_trace: bool,
+    eg: &ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    frame: *mut ExecuteData,
+    saved_execute_data: *mut ExecuteData,
+) {
+    let (op_array, instruction_index) = unsafe {
+        let op_array = (*frame).op_array();
+        let instruction_index = (*frame)
+            .opline
+            .offset_from(op_array.instructions.as_ptr()) as usize;
+        (op_array, instruction_index)
+    };
+    attach_throwable_origin(exception, eg, frame, op_array, instruction_index);
+    let origin = op_array
+        .source_line(instruction_index)
+        .map(|line| (op_array.source_file.clone(), line));
+    let existing_trace = exception
+        .as_object()
+        .and_then(|object| {
+            object
+                .get_property("trace")
+                .and_then(Value::as_array)
+                .map(|trace| trace.values().cloned().collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
+    if saved_execute_data.is_null() || !((seed_trace && existing_trace.is_empty()) || extend_trace)
+    {
+        return;
+    }
+    let continuation =
+        generator_resume_continuation_trace(eg, gen_ref, frame, saved_execute_data);
+    let trace = if existing_trace.is_empty() {
+        continuation
+    } else {
+        extend_generator_delegation_trace(existing_trace, &continuation, origin.as_ref())
+    };
+    if let Some(mut object) = exception.as_object_mut() {
+        object.set_property("trace", Value::array(trace));
+    }
+}
+
 /// Execute one materialized generator frame and restore every executor
 /// sidecar, including feature-gated generic contracts, on yield or return.
 fn execute_resumed_generator_frame(
@@ -1431,6 +1683,8 @@ fn execute_resumed_generator_frame(
     frame: *mut ExecuteData,
     saved_execute_data: *mut ExecuteData,
     injected_exception: Option<Value>,
+    seed_injected_trace: bool,
+    extend_injected_trace: bool,
     follow_delegation: bool,
 ) -> Result<GeneratorResumeOutcome, VmError> {
     let saved_active = eg.active_generator.take();
@@ -1446,6 +1700,15 @@ fn execute_resumed_generator_frame(
         .as_ref()
         .and_then(Value::object_identity);
     let result = if let Some(exception) = injected_exception {
+        prepare_injected_generator_exception(
+            &exception,
+            seed_injected_trace,
+            extend_injected_trace,
+            eg,
+            gen_ref,
+            frame,
+            saved_execute_data,
+        );
         match throw_in_frame(eg, frame, exception) {
             ThrowResult::Handled(new_frame, _) => execute_ex(eg, new_frame),
             ThrowResult::Unhandled(exception) => {
@@ -1458,71 +1721,15 @@ fn execute_resumed_generator_frame(
     };
     let escaped_exception = eg.exception.take();
 
-    if let Some(exception) = escaped_exception.as_ref()
-        && !saved_execute_data.is_null()
-        && exception.object_identity() != injected_exception_identity
-    {
-        let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
-            .as_deref()
-            .is_some_and(crate::stdlib::ini_boolean);
-        // SAFETY: frame is the live detached generator root and
-        // saved_execute_data is the still-live internal caller retained by
-        // this synchronous resume. Its predecessor is likewise live while we
-        // temporarily advance and restore the call-site pointer.
-        let continuation = unsafe {
-            let internal_caller = (*saved_execute_data).prev_execute_data;
-            let (caller_opline, can_advance) = if internal_caller.is_null() {
-                (std::ptr::null(), false)
-            } else {
-                let caller_opline = (*internal_caller).opline;
-                let caller_op_array = (*internal_caller).op_array();
-                let caller_index =
-                    caller_opline.offset_from(caller_op_array.instructions.as_ptr());
-                let can_advance = usize::try_from(caller_index)
-                    .ok()
-                    .filter(|index| *index < caller_op_array.instructions.len())
-                    .is_some();
-                (caller_opline, can_advance)
-            };
-            if can_advance {
-                (*internal_caller).opline = caller_opline.add(1);
-            }
-            (*frame).prev_execute_data = saved_execute_data;
-            let trace = crate::stdlib::collect_debug_backtrace(
-                eg.current_execute_data.get(),
-                if ignore_arguments { 2 } else { 0 },
-                0,
-                eg,
-                true,
-            );
-            (*frame).prev_execute_data = std::ptr::null_mut();
-            if can_advance {
-                (*internal_caller).opline = caller_opline;
-            }
-            trace
-        };
-        let trace = exception
-            .as_object()
-            .and_then(|object| {
-                object
-                    .get_property("trace")
-                    .and_then(Value::as_array)
-                    .filter(|trace| !trace.is_empty())
-                    .map(|trace| trace.values().cloned().collect::<Vec<_>>())
-            })
-            .map_or(continuation.clone(), |prefix| {
-                let mut complete = PhpArray::new();
-                for value in prefix {
-                    complete.push(value);
-                }
-                for value in continuation.values() {
-                    complete.push(value.clone());
-                }
-                complete
-            });
-        if let Some(mut object) = exception.as_object_mut() {
-            object.set_property("trace", Value::array(trace));
-        }
+    if let Some(exception) = escaped_exception.as_ref() {
+        complete_escaped_generator_trace(
+            exception,
+            injected_exception_identity,
+            eg,
+            gen_ref,
+            frame,
+            saved_execute_data,
+        );
     }
 
     cleanup_detached_generator_frames(eg, frame);

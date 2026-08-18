@@ -44,6 +44,7 @@ mod serialization;
 mod tokenizer;
 
 const BUILTIN_EXCEPTION_SUBCLASSES: &[(&str, &str)] = &[
+    ("ClosedGeneratorException", "Exception"),
     ("LogicException", "Exception"),
     ("BadFunctionCallException", "LogicException"),
     ("BadMethodCallException", "BadFunctionCallException"),
@@ -10041,7 +10042,9 @@ fn fn_generator_current(
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         ensure_generator_started(ed, &gen_ref, eg)?;
-        let val = gen_ref.borrow().value.clone();
+        synchronize_aborted_generator_delegate(ed, &gen_ref, eg)?;
+        let visible = visible_generator_delegate(&gen_ref);
+        let val = visible.borrow().value.clone();
         ret!(rv, val);
     }
     ret!(rv, Value::null());
@@ -10054,7 +10057,12 @@ fn fn_generator_key(
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         ensure_generator_started(ed, &gen_ref, eg)?;
-        let gen_data = gen_ref.borrow();
+        synchronize_aborted_generator_delegate(ed, &gen_ref, eg)?;
+        if has_completed_generator_delegate(&gen_ref) {
+            ret!(rv, Value::null());
+        }
+        let visible = visible_generator_delegate(&gen_ref);
+        let gen_data = visible.borrow();
         let val = if gen_data.state == crate::vm::generator::GeneratorState::Completed {
             Value::null()
         } else {
@@ -10093,10 +10101,90 @@ fn fn_generator_valid(
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         ensure_generator_started(ed, &gen_ref, eg)?;
+        synchronize_aborted_generator_delegate(ed, &gen_ref, eg)?;
         let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
         ret!(rv, Value::bool(is_valid));
     }
     ret!(rv, Value::bool(false));
+}
+
+fn synchronize_aborted_generator_delegate(
+    ed: *mut ExecuteData,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    use crate::vm::generator::{GeneratorState, YieldFromDelegate};
+
+    let mut current = gen_ref.clone();
+    loop {
+        let delegate = {
+            let generator = current.borrow();
+            match generator.delegate.as_ref() {
+                Some(YieldFromDelegate::Generator(delegate)) => Some(delegate.clone()),
+                Some(YieldFromDelegate::Array(_, _)) | None => None,
+            }
+        };
+        let Some(delegate) = delegate else {
+            return Ok(());
+        };
+        let delegate_state = delegate.borrow().state;
+        if delegate_state == GeneratorState::Completed {
+            if !delegate.borrow().has_returned {
+                resume_generator_method(ed, eg, gen_ref, Value::null())?;
+            }
+            return Ok(());
+        }
+        current = delegate;
+    }
+}
+
+fn visible_generator_delegate(
+    gen_ref: &crate::vm::generator::GeneratorRef,
+) -> crate::vm::generator::GeneratorRef {
+    use crate::vm::generator::{GeneratorState, YieldFromDelegate};
+
+    let mut current = gen_ref.clone();
+    loop {
+        let delegate = {
+            let generator = current.borrow();
+            match generator.delegate.as_ref() {
+                Some(YieldFromDelegate::Generator(delegate))
+                    if delegate.borrow().state != GeneratorState::Completed =>
+                {
+                    Some(delegate.clone())
+                }
+                Some(YieldFromDelegate::Generator(_))
+                | Some(YieldFromDelegate::Array(_, _))
+                | None => None,
+            }
+        };
+        let Some(delegate) = delegate else {
+            return current;
+        };
+        current = delegate;
+    }
+}
+
+fn has_completed_generator_delegate(gen_ref: &crate::vm::generator::GeneratorRef) -> bool {
+    use crate::vm::generator::{GeneratorState, YieldFromDelegate};
+
+    let mut current = gen_ref.clone();
+    loop {
+        let delegate = {
+            let generator = current.borrow();
+            match generator.delegate.as_ref() {
+                Some(YieldFromDelegate::Generator(delegate)) => Some(delegate.clone()),
+                Some(YieldFromDelegate::Array(_, _)) | None => None,
+            }
+        };
+        let Some(delegate) = delegate else {
+            return false;
+        };
+        if delegate.borrow().state == GeneratorState::Completed {
+            return true;
+        }
+        current = delegate;
+    }
 }
 
 fn fn_generator_rewind(
