@@ -677,6 +677,24 @@ call control is -0.740% independently and -0.337% paired; both retain exact
 outputs/checksums and remain below the five-percent ceiling without removing
 outliers.
 
+The `reflection-property-hooks` checkpoint reaches 3,003 passes with 2,294
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. PHP 8.5's internal backed `PropertyHookType` enum and
+`ReflectionProperty::getHook()`, `getHooks()` and `hasHook()` expose canonical
+hook metadata without inventing accessors for ordinary properties. Reflected
+hooks retain attributes and implicit signatures, and ReflectionMethod string
+rendering closes the delayed `NoDiscard` validator case. The exact full-corpus
+delta is +1/-0; four inspected runtime failures advance to later output
+comparisons and no pass is lost. `__PROPERTY__`, exact internal-enum object
+handles and broader Reflection output remain separate work. All five feature
+configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. A 63-pair empty-request confirmation
+places the candidate at +0.100% independently and +0.266% paired; a 31-pair
+ordinary-call control is +0.859% independently and +0.665% paired. Both retain
+exact observable results and remain below the five-percent median ceiling;
+startup-cost recovery is deferred to the combined performance pass requested
+after the compatibility push.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

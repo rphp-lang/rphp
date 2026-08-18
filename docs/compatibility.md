@@ -9,11 +9,46 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,002 pass, 2,295 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,003 pass, 2,294 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-56.674%; 4,619 of 5,297 attempted cases reach runtime (87.200%). Relative to
-the preceding 2,975-pass checkpoint, the exact pass-set delta is +27/-0. The
+56.692%; 4,619 of 5,297 attempted cases reach runtime (87.200%). Relative to
+the preceding 3,002-pass checkpoint, the exact pass-set delta is +1/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
+
+PHP 8.5's internal string-backed `PropertyHookType` enum now exposes canonical
+`Get`/`Set` cases, readonly `name`/`value`, `BackedEnum`/`UnitEnum` identity and
+the `cases()`, `from()` and `tryFrom()` contracts. `ReflectionProperty` exposes
+only explicitly declared property hooks through `getHook()`, `getHooks()` and
+`hasHook()`; returned `ReflectionMethod` objects retain hook attributes,
+visibility, parameters, declaring class and the implicit getter/setter return
+signature. The shared method renderer also makes those reflected hooks
+stringable with PHP's source and signature layout.
+
+The exact PHP 8.5.6 delta is +1/-0:
+`attributes/delayed_target_validation/validator_NoDiscard.phpt` advances from
+an undefined-method runtime failure to an exact pass. Two directly related
+cases now reach their later output comparison, and two adjacent pre-existing
+ReflectionMethod string-conversion failures also advance from runtime to
+output; no pass is lost and no timeout or crash appears. Full
+`__PROPERTY__` constant-expression support, exact internal-enum object-handle
+numbering and broader Reflection string formatting remain explicit follow-up
+work. All five Cargo configurations, all-feature/all-target, formatting and
+the exact unsafe ratchet pass. Composer S0, all four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 also pass on AMD64.
+
+The exact base `68f190c5` and release candidate were compared without removing
+outliers. A 63-pair ABBA/BAAB confirmation over 150 empty-output file requests
+per executable measured baseline p10/median/p90
+0.200333/0.204751/0.208571 seconds and candidate
+0.201749/0.204956/0.209275 seconds: +0.100% by independent medians and +0.266%
+by the paired-ratio median, whose p10/p90 is -2.246%/+2.732%. A separate
+31-pair `bench_calls.php` control retained checksum `37500007500000` and
+measured baseline 0.357227/0.362015/0.370270 seconds versus candidate
+0.359827/0.365124/0.372064 seconds: +0.859% independently and +0.665% paired,
+with paired p10/p90 -1.907%/+2.650%. The compatibility-first registration and
+cold Reflection expansion remain below the five-percent median regression
+ceiling; recovery of the fixed startup cost is deferred to the later combined
+performance pass.
 
 PHP 8.5's final internal `NoDiscard` attribute now exposes its nullable
 `message` constructor contract and public protected(set) readonly property.
@@ -33,8 +68,9 @@ target-validation interactions and six void-cast cases. The NoDiscard
 directory is 20/25: its remaining ordinary failure needs the unimplemented
 `DateTimeImmutable` class, two `zend_test` execute-hook cases remain explicitly
 unsupported and two native-extension cases skip. The two broader delayed-
-validation failures still need `ReflectionProperty::getHook()`; arbitrary
-nested `(void)` parse diagnostics are not claimed by this slice. All five Cargo
+validation failures still needed `ReflectionProperty::getHook()` at that
+checkpoint; arbitrary nested `(void)` parse diagnostics are not claimed by
+this slice. All five Cargo
 configurations, all-feature/all-target, formatting and the exact unsafe ratchet
 pass. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and cold-build S3
 also pass against PHP 8.5 on AMD64.

@@ -2007,12 +2007,16 @@ fn function_has_return_type(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    let has_implicit_setter_return = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(|name| name.ends_with("::set")))
+        .unwrap_or(false);
     return_value(
         rv,
         Value::bool(
-            reflected_function(ed).is_some_and(|function| {
-                !matches!(function.sig.return_type_hint, ParamTypeHint::None)
-            }),
+            has_implicit_setter_return
+                || reflected_function(ed).is_some_and(|function| {
+                    !matches!(function.sig.return_type_hint, ParamTypeHint::None)
+                }),
         ),
     )
 }
@@ -2026,6 +2030,12 @@ fn function_get_return_type(
         return return_value(rv, Value::null());
     };
     if matches!(function.sig.return_type_hint, ParamTypeHint::None) {
+        if reflected_property(ed, "name")
+            .and_then(|value| value.as_str().map(|name| name.ends_with("::set")))
+            .unwrap_or(false)
+        {
+            return return_value(rv, reflected_signature_type(&ParamTypeHint::Void));
+        }
         return return_value(rv, Value::null());
     }
     return_value(rv, reflected_signature_type(&function.sig.return_type_hint))
@@ -2620,6 +2630,150 @@ fn reflection_property_definition<'a>(
         })
 }
 
+const PROPERTY_HOOK_TYPE: &str = "PropertyHookType";
+
+fn property_hook_type_case(eg: &ExecutorGlobals, backing_value: &str) -> Option<Value> {
+    let class = eg.find_class(PROPERTY_HOOK_TYPE)?;
+    let index = class.static_properties.iter().position(|case| {
+        case.default.as_ref().is_some_and(|value| {
+            value.as_object().is_some_and(|object| {
+                object
+                    .get_property("value")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == backing_value)
+            })
+        })
+    })?;
+    let storage = eg.static_property_storage_slot(class.class_id, index)?;
+    eg.static_property_value(storage).cloned()
+}
+
+fn property_hook_type_cases(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let mut cases = PhpArray::with_packed_capacity(2);
+    for value in ["get", "set"] {
+        if let Some(case) = property_hook_type_case(eg, value) {
+            cases.push(case);
+        }
+    }
+    return_value(rv, Value::array(cases))
+}
+
+fn property_hook_type_try_from(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = argument_string(ed, 1);
+    return_value(
+        rv,
+        property_hook_type_case(eg, &value).unwrap_or_else(Value::null),
+    )
+}
+
+fn property_hook_type_from(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = argument_string(ed, 1);
+    let Some(case) = property_hook_type_case(eg, &value) else {
+        eg.exception = Some(make_error_value(
+            "ValueError",
+            &format!("\"{value}\" is not a valid backing value for enum PropertyHookType"),
+        ));
+        return Ok(());
+    };
+    return_value(rv, case)
+}
+
+fn property_hook_kind(ed: *mut ExecuteData) -> Option<String> {
+    with_argument(ed, 1, |value| {
+        let object = value.as_object()?;
+        object
+            .get_property("value")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    })
+}
+
+fn reflected_property_hook(
+    ed: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+    hook: &str,
+) -> Option<Value> {
+    let (property, is_static) = reflection_property_definition(ed, eg)?;
+    if is_static
+        || match hook {
+            "get" => !property.has_get_hook,
+            "set" => !property.has_set_hook,
+            _ => true,
+        }
+    {
+        return None;
+    }
+    let owner = property.declaring_class.clone();
+    let method = format!("${}::{hook}", property.name);
+    let (name, visibility, is_static, is_final, function, declaring_class) =
+        find_reflected_method(eg, &owner, &method)?;
+    Some(reflected_method_value(
+        name,
+        visibility,
+        is_static,
+        is_final,
+        function,
+        declaring_class,
+    ))
+}
+
+fn property_get_hook(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = property_hook_kind(ed)
+        .as_deref()
+        .and_then(|hook| reflected_property_hook(ed, eg, hook))
+        .unwrap_or_else(Value::null);
+    return_value(rv, value)
+}
+
+fn property_has_hook(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let found = property_hook_kind(ed).as_deref().is_some_and(|hook| {
+        let Some((property, is_static)) = reflection_property_definition(ed, eg) else {
+            return false;
+        };
+        !is_static
+            && match hook {
+                "get" => property.has_get_hook,
+                "set" => property.has_set_hook,
+                _ => false,
+            }
+    });
+    return_value(rv, Value::bool(found))
+}
+
+fn property_get_hooks(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let mut hooks = PhpArray::with_hash_capacity(2);
+    for hook in ["get", "set"] {
+        if let Some(method) = reflected_property_hook(ed, eg, hook) {
+            hooks.set_str(hook, method);
+        }
+    }
+    return_value(rv, Value::array(hooks))
+}
+
 fn property_to_string(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -2660,6 +2814,144 @@ fn render_reflection_method(
     declaration.push_str("method ");
     declaration.push_str(name);
     format!("Method [ <user> {declaration} ] {{\n    }}")
+}
+
+fn render_reflection_signature_parameter(
+    function: &FunctionCommon,
+    index: u32,
+    variadic: bool,
+) -> String {
+    let name = function
+        .sig
+        .param_names
+        .get(index as usize)
+        .cloned()
+        .unwrap_or_else(|| format!("arg{}", index + 1));
+    let hint = function
+        .sig
+        .param_type_hints
+        .get(index as usize)
+        .unwrap_or(&ParamTypeHint::None);
+    let type_prefix = if matches!(hint, ParamTypeHint::None) {
+        String::new()
+    } else {
+        format!("{} ", hint.display_name())
+    };
+    let requirement = if variadic || index >= function.sig.required_num_args {
+        "optional"
+    } else {
+        "required"
+    };
+    let reference = if function.sig.is_param_by_ref(index) {
+        "&"
+    } else {
+        ""
+    };
+    let variadic_prefix = if variadic { "..." } else { "" };
+    let default = if !variadic && index >= function.sig.required_num_args {
+        " = <default>"
+    } else {
+        ""
+    };
+    format!(
+        "Parameter #{index} [ <{requirement}> {type_prefix}{reference}{variadic_prefix}${name}{default} ]"
+    )
+}
+
+fn method_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(function) = reflected_function(ed) else {
+        return return_value(rv, Value::string(""));
+    };
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let visibility = reflected_property(ed, "__reflection_method_visibility")
+        .and_then(|value| value.as_long())
+        .unwrap_or(1);
+    let mut modifiers = String::new();
+    if parameter_property_bool(ed, "__reflection_method_final") {
+        modifiers.push_str("final ");
+    }
+    if parameter_property_bool(ed, "__reflection_method_abstract") {
+        modifiers.push_str("abstract ");
+    }
+    modifiers.push_str(match visibility {
+        2 => "protected ",
+        4 => "private ",
+        _ => "public ",
+    });
+    if parameter_property_bool(ed, "__reflection_method_static") {
+        modifiers.push_str("static ");
+    }
+    let provenance = if function.fn_type == FunctionType::User {
+        "user"
+    } else {
+        "internal"
+    };
+    let callable_kind = if name.eq_ignore_ascii_case("__construct") {
+        format!("{provenance}, ctor")
+    } else {
+        provenance.to_string()
+    };
+    let mut rendered = format!("Method [ <{callable_kind}> {modifiers}method {name} ] {{\n");
+
+    if let Some(user) = reflected_user_function(ed) {
+        let start = user.op_array.declaration_line().or_else(|| {
+            user.op_array
+                .source_lines
+                .iter()
+                .find_map(|(index, line)| (*index != u32::MAX).then_some(*line as usize))
+        });
+        let end = user
+            .op_array
+            .source_lines
+            .iter()
+            .filter_map(|(index, line)| (*index != u32::MAX).then_some(*line as usize))
+            .max()
+            .or(start);
+        if !user.op_array.source_file.is_empty()
+            && let (Some(start), Some(end)) = (start, end)
+        {
+            rendered.push_str(&format!(
+                "  @@ {} {start} - {end}\n\n",
+                user.op_array.source_file
+            ));
+        }
+    }
+
+    let fixed = function.sig.public_arity();
+    let parameter_count = fixed + u32::from(function.sig.is_variadic);
+    let implicit_setter_return = name.ends_with("::set");
+    let has_return =
+        !matches!(function.sig.return_type_hint, ParamTypeHint::None) || implicit_setter_return;
+    if parameter_count != 0 || has_return {
+        rendered.push_str(&format!("  - Parameters [{parameter_count}] {{\n"));
+        for index in 0..parameter_count {
+            let variadic = function.sig.is_variadic && index == fixed;
+            rendered.push_str("    ");
+            rendered.push_str(&render_reflection_signature_parameter(
+                function, index, variadic,
+            ));
+            rendered.push('\n');
+        }
+        rendered.push_str("  }\n");
+    }
+    if !matches!(function.sig.return_type_hint, ParamTypeHint::None) {
+        rendered.push_str(&format!(
+            "  - Return [ {} ]\n",
+            function.sig.return_type_hint.display_name()
+        ));
+    } else if implicit_setter_return {
+        // Property setters have an implicit void reflection contract even
+        // though the execution signature does not need a return-type guard.
+        rendered.push_str("  - Return [ void ]\n");
+    }
+    rendered.push_str("}\n");
+    return_value(rv, Value::string(rendered))
 }
 
 fn class_to_string(
@@ -3408,10 +3700,22 @@ fn find_reflected_method(
         .or_else(|| {
             let function = eg.find_function(&format!("{owner}::{method_name}"))?;
             let declaring_class = eg.declaring_class_of(function).unwrap_or(owner).to_string();
+            let is_implicit_enum_static = eg.find_class(owner).is_some_and(|class| {
+                class.is_enum
+                    && matches!(
+                        method_name.to_ascii_lowercase().as_str(),
+                        "cases" | "from" | "tryfrom"
+                    )
+            });
             Some((
                 method_name.to_string(),
                 Visibility::Public,
-                unsafe { (*function).sig.this_offset == 0 },
+                is_implicit_enum_static || {
+                    // SAFETY: find_function() returns a registered
+                    // FunctionCommon owned by ExecutorGlobals for the full
+                    // request lifetime.
+                    unsafe { (*function).sig.this_offset == 0 }
+                },
                 false,
                 function,
                 declaring_class,

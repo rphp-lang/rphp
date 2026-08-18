@@ -37,17 +37,18 @@ use super::{
     generic_runtime_modes, method_construct, method_file_name, method_get_closure,
     method_get_modifiers, method_get_prototype, method_has_prototype, method_invoke,
     method_is_abstract, method_is_constructor, method_is_destructor, method_is_final,
-    method_is_private, method_is_protected, method_is_public, method_is_static,
+    method_is_private, method_is_protected, method_is_public, method_is_static, method_to_string,
     no_discard_construct, object_construct, parameter_allows_null, parameter_get_attributes,
     parameter_get_declaring_class, parameter_get_default_value, parameter_get_name,
     parameter_get_type, parameter_has_type, parameter_is_default_available, parameter_is_optional,
     parameter_is_passed_by_reference, parameter_is_variadic, parameter_to_string,
-    property_construct, property_get_default_value, property_get_modifiers, property_get_raw_value,
-    property_get_value, property_has_default_value, property_is_abstract, property_is_default,
-    property_is_final, property_is_initialized, property_is_lazy, property_is_private,
-    property_is_protected, property_is_public, property_is_readonly, property_is_static,
-    property_is_virtual, property_set_raw_value,
-    property_set_raw_value_without_lazy_initialization, property_set_value,
+    property_construct, property_get_default_value, property_get_hook, property_get_hooks,
+    property_get_modifiers, property_get_raw_value, property_get_value, property_has_default_value,
+    property_has_hook, property_hook_type_cases, property_hook_type_from,
+    property_hook_type_try_from, property_is_abstract, property_is_default, property_is_final,
+    property_is_initialized, property_is_lazy, property_is_private, property_is_protected,
+    property_is_public, property_is_readonly, property_is_static, property_is_virtual,
+    property_set_raw_value, property_set_raw_value_without_lazy_initialization, property_set_value,
     property_skip_lazy_initialization, property_to_string, reflection_compound_types,
     reflection_get_doc_comment, reflection_type_allows_null, reflection_type_generic_arguments,
     reflection_type_has_generic_arguments, reflection_type_is_builtin, reflection_type_name,
@@ -57,7 +58,7 @@ use crate::compiler::compile::{ClassConstantDefinition, ClassDef, PropertyDefini
 use crate::compiler::make_internal_method;
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
-use crate::value::Value;
+use crate::value::{PhpObject, Value};
 use crate::vm::function::{
     AttributeArgument, AttributeDefinition, AttributeEvaluationScope, ParamTypeHint,
 };
@@ -246,6 +247,80 @@ fn register_generic_variance(eg: &mut ExecutorGlobals) {
     .unwrap();
 }
 
+fn property_hook_type_case(name: &str, value: &str) -> PropertyDefinition {
+    let properties = [
+        ("name".to_string(), Value::string(name)),
+        ("value".to_string(), Value::string(value)),
+    ]
+    .into_iter()
+    .collect();
+    PropertyDefinition::new(
+        name.to_string(),
+        Some(Value::object(PhpObject::dynamic(
+            "PropertyHookType".to_string(),
+            0,
+            properties,
+        ))),
+        Visibility::Public,
+        "PropertyHookType".to_string(),
+    )
+}
+
+fn register_property_hook_type(eg: &mut ExecutorGlobals) {
+    eg.register_class(ClassDef {
+        attributes: Vec::new(),
+        name: "PropertyHookType".to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        // BackedEnum already extends UnitEnum. Keeping only the direct edge
+        // avoids presenting the inherited contract as a duplicate during
+        // later hierarchy validation; Reflection expands both interfaces.
+        implements: vec!["BackedEnum".to_string()],
+        is_interface: false,
+        is_abstract: false,
+        // PHP's internal enums do not publish ReflectionClass::isFinal().
+        // The enum-parent guard still prevents inheritance.
+        is_final: false,
+        is_trait: false,
+        is_enum: true,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        uses: Vec::new(),
+        trait_aliases: Vec::new(),
+        trait_precedences: Vec::new(),
+        properties: [
+            ("name", ParamTypeHint::String),
+            ("value", ParamTypeHint::String),
+        ]
+        .into_iter()
+        .map(|(name, hint)| {
+            PropertyDefinition::declared(
+                name.to_string(),
+                None,
+                Visibility::Public,
+                "PropertyHookType".to_string(),
+                hint,
+                true,
+                false,
+            )
+        })
+        .collect(),
+        static_properties: vec![
+            property_hook_type_case("Get", "get"),
+            property_hook_type_case("Set", "set"),
+        ],
+        constants: Vec::new(),
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec!["name".to_string(), "value".to_string()],
+        methods: Vec::new(),
+        abstract_methods: Vec::new(),
+        class_id: 0,
+    })
+    .expect("PropertyHookType registration is unique");
+}
+
 pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     let mut functions = Vec::new();
 
@@ -269,6 +344,83 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             functions.push(function);
         }};
     }
+
+    macro_rules! register_static_method {
+        ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, [$($name:expr),*]) => {{
+            // Static method calls reserve CV 0 for the called-class slot just
+            // like user methods do; public arguments therefore begin at CV 1.
+            let function = Box::new(make_internal_method(
+                $handler,
+                $num_args + 1,
+                $min_args,
+                vec![$($name.to_string()),*],
+            ));
+            let pointer = &function.common as *const FunctionCommon;
+            let registered_name = format!("{}::{}", $class, $method);
+            eg.function_table.insert(registered_name.to_ascii_lowercase(), pointer);
+            eg.register_internal_function_display_name(pointer, registered_name);
+            eg.method_declaring_class.insert(pointer, $class.to_string());
+            functions.push(function);
+        }};
+    }
+
+    register_property_hook_type(eg);
+    register_static_method!(
+        "PropertyHookType",
+        "cases",
+        property_hook_type_cases,
+        0,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("PropertyHookType::cases was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Array;
+    register_static_method!(
+        "PropertyHookType",
+        "from",
+        property_hook_type_from,
+        1,
+        1,
+        ["value"]
+    );
+    functions
+        .last_mut()
+        .expect("PropertyHookType::from was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::String];
+    functions
+        .last_mut()
+        .expect("PropertyHookType::from was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::ClassName("PropertyHookType".to_string());
+    register_static_method!(
+        "PropertyHookType",
+        "tryFrom",
+        property_hook_type_try_from,
+        1,
+        1,
+        ["value"]
+    );
+    functions
+        .last_mut()
+        .expect("PropertyHookType::tryFrom was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::String];
+    functions
+        .last_mut()
+        .expect("PropertyHookType::tryFrom was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+        "PropertyHookType".to_string(),
+    )));
 
     register_reflection_interface(eg, "Reflector");
     eg.register_class(ClassDef {
@@ -1216,6 +1368,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         0,
         []
     );
+    register_method!("ReflectionMethod", "__tostring", method_to_string, 1, 0, []);
     register_method!(
         "ReflectionMethod",
         "getmodifiers",
@@ -1381,6 +1534,62 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         0,
         []
     );
+    register_method!(
+        "ReflectionProperty",
+        "gethook",
+        property_get_hook,
+        2,
+        1,
+        ["type"]
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionProperty::getHook was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::ClassName("PropertyHookType".to_string())];
+    functions
+        .last_mut()
+        .expect("ReflectionProperty::getHook was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+        "ReflectionMethod".to_string(),
+    )));
+    register_method!(
+        "ReflectionProperty",
+        "gethooks",
+        property_get_hooks,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionProperty::getHooks was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Array;
+    register_method!(
+        "ReflectionProperty",
+        "hashook",
+        property_has_hook,
+        2,
+        1,
+        ["type"]
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionProperty::hasHook was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::ClassName("PropertyHookType".to_string())];
+    functions
+        .last_mut()
+        .expect("ReflectionProperty::hasHook was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Bool;
     register_method!(
         "ReflectionProperty",
         "isinitialized",

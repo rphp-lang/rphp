@@ -945,8 +945,8 @@ impl ExecutorGlobals {
         self.function_table.reserve(512);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
-        self.class_by_id.reserve(71);
-        self.static_property_slots_by_class.reserve(71);
+        self.class_by_id.reserve(72);
+        self.static_property_slots_by_class.reserve(72);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);

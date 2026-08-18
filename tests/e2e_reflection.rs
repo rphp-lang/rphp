@@ -496,6 +496,108 @@ fn no_discard_validation_rejects_unsupported_declarations_before_execution() {
 }
 
 #[test]
+fn property_hook_type_exposes_php_85_backed_enum_contract() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$class = new ReflectionClass(PropertyHookType::class);
+echo $class->getName(), ':', (int) enum_exists(PropertyHookType::class), (int) $class->isFinal(), (int) $class->isInternal(), ':';
+echo implode(',', $class->getInterfaceNames()), '|';
+foreach (PropertyHookType::cases() as $case) {
+    echo $case->name, ':', $case->value, ':';
+    echo (int) ($case === PropertyHookType::from($case->value)), '|';
+}
+var_dump(PropertyHookType::tryFrom('missing'));
+try {
+    PropertyHookType::from('missing');
+} catch (ValueError $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "PropertyHookType:101:BackedEnum,UnitEnum|",
+            "Get:get:1|Set:set:1|NULL\n",
+            "\"missing\" is not a valid backing value for enum PropertyHookType",
+        )
+    );
+}
+
+#[test]
+fn reflection_property_exposes_only_declared_property_hooks() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[Attribute]
+class HookMarker {
+    public function __construct(public string $name) {}
+}
+
+class Hooked {
+    public int $both {
+        #[HookMarker('getter')]
+        get => 1;
+        #[HookMarker('setter')]
+        set {}
+    }
+    public int $getter {
+        #[HookMarker('only')]
+        get => 2;
+    }
+    public int $plain;
+}
+
+foreach (['both', 'getter', 'plain'] as $name) {
+    $property = new ReflectionProperty(Hooked::class, $name);
+    echo $name, ':', (int) $property->hasHook(PropertyHookType::Get), (int) $property->hasHook(PropertyHookType::Set), ':';
+    foreach ($property->getHooks() as $kind => $method) {
+        $marker = $method->getAttributes()[0]->newInstance();
+        echo $kind, '=', $method->name, ':', $marker->name, ':';
+        echo count($method->getParameters()), '|';
+    }
+    $set = $property->getHook(PropertyHookType::Set);
+    echo $set?->name ?? 'NULL', "\n";
+}
+"#,
+        ),
+        concat!(
+            "both:11:get=$both::get:getter:0|set=$both::set:setter:1|",
+            "$both::set\n",
+            "getter:10:get=$getter::get:only:0|NULL\n",
+            "plain:00:NULL\n",
+        )
+    );
+}
+
+#[test]
+fn reflection_property_hook_methods_render_their_implicit_signatures() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RenderedHooks {
+    public string $value {
+        get => $this->value;
+        set => $value;
+    }
+}
+$property = new ReflectionProperty(RenderedHooks::class, 'value');
+$get = (string) $property->getHook(PropertyHookType::Get);
+$set = (string) $property->getHook(PropertyHookType::Set);
+echo (int) str_contains($get, 'public method $value::get'), ':';
+echo (int) str_contains($get, '- Parameters [0]'), ':';
+echo (int) str_contains($get, '- Return [ string ]'), '|';
+echo (int) str_contains($set, 'public method $value::set'), ':';
+echo (int) str_contains($set, 'Parameter #0 [ <required> string $value ]'), ':';
+echo (int) str_contains($set, '- Return [ void ]'), ':';
+$setMethod = $property->getHook(PropertyHookType::Set);
+echo (int) $setMethod->hasReturnType(), ':', $setMethod->getReturnType()->getName();
+"#,
+        ),
+        "1:1:1|1:1:1:1:void"
+    );
+}
+
+#[test]
 fn deprecated_attribute_resolves_deferred_constants_when_the_callable_is_invoked() {
     assert_eq!(
         run_php(
