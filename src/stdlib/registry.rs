@@ -4,6 +4,7 @@
 //! their deterministic request-startup registration order, signatures and
 //! reference metadata.
 
+use super::filesystem::*;
 use super::*;
 
 // ============================================================================
