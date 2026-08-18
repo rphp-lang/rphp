@@ -181,6 +181,56 @@ fn property_type_hints_are_invariant(
         ))
 }
 
+fn inherited_property_types_are_compatible(
+    eg: &ExecutorGlobals,
+    child: &PropertyDefinition,
+    parent: &PropertyDefinition,
+    child_class: &str,
+    linking_class: &ClassDef,
+) -> bool {
+    if property_type_hints_are_equivalent(&child.type_hint, &parent.type_hint) {
+        return true;
+    }
+
+    // Backed storage can be both read and written independently of the hooks
+    // declared on the surface, so PHP keeps its property type invariant. Only
+    // a virtual get-only or set-only contract can expose directional variance.
+    if !parent.is_virtual_hook_property() {
+        return property_type_hints_are_invariant(
+            eg,
+            child,
+            parent,
+            child_class,
+            linking_class,
+        );
+    }
+
+    let child_is_subtype = || {
+        eg.is_return_type_compatible(
+            &child.type_hint,
+            &parent.type_hint,
+            child_class,
+            &parent.declaring_class,
+            Some(linking_class),
+        )
+    };
+    let child_is_supertype = || {
+        eg.is_return_type_compatible(
+            &parent.type_hint,
+            &child.type_hint,
+            &parent.declaring_class,
+            child_class,
+            Some(linking_class),
+        )
+    };
+
+    match (parent.has_get_hook, parent.has_set_hook) {
+        (true, false) => child_is_subtype(),
+        (false, true) => child_is_supertype(),
+        _ => property_type_hints_are_invariant(eg, child, parent, child_class, linking_class),
+    }
+}
+
 fn property_type_has_unknown_class(
     eg: &ExecutorGlobals,
     hint: &crate::vm::function::ParamTypeHint,
@@ -449,7 +499,7 @@ fn property_inheritance_requires_delayed_linking(
                     candidate.name == child.name && candidate.visibility != Visibility::Private
                 });
                 parent_property.is_some_and(|parent_property| {
-                    !property_type_hints_are_invariant(
+                    !inherited_property_types_are_compatible(
                         eg,
                         child,
                         parent_property,
@@ -593,9 +643,9 @@ fn validate_inherited_property_definition(
             child.name
         )));
     }
-    let types_are_invariant =
-        property_type_hints_are_invariant(eg, child, parent, child_class, linking_class);
-    if !types_are_invariant {
+    let types_are_compatible =
+        inherited_property_types_are_compatible(eg, child, parent, child_class, linking_class);
+    if !types_are_compatible {
         if matches!(parent.type_hint, crate::vm::function::ParamTypeHint::None) {
             return Err(error(format!(
                 "Type of {}::${} must be omitted to match the parent definition in class {}",

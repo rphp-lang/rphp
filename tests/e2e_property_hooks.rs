@@ -174,6 +174,48 @@ interface OtherContract {}
 }
 
 #[test]
+fn property_hook_inheritance_uses_directional_type_variance() {
+    let output = run_php(
+        r#"<?php
+class GetterParent { public int|float $value { get => 42.0; } }
+class GetterChild extends GetterParent { public int $value { get => 42; set {} } }
+class SetterParent { public int $value { set {} } }
+class SetterChild extends SetterParent { public int|string $value { get => 42; set {} } }
+class NamedGetterParent {
+    public NamedGetterBase $value { get { throw new Exception; } }
+}
+class NamedGetterChild extends NamedGetterParent {
+    public NamedGetterLeaf $value { get { throw new Exception; } set {} }
+}
+interface NamedGetterBase {}
+interface NamedGetterLeaf extends NamedGetterBase {}
+class NamedSetterParent { public NamedSetterLeaf $value { set {} } }
+class NamedSetterChild extends NamedSetterParent {
+    public NamedSetterBase $value { get { throw new Exception; } set {} }
+}
+interface NamedSetterBase {}
+interface NamedSetterLeaf extends NamedSetterBase {}
+echo "ok\n";
+"#,
+    );
+    assert_eq!(output, "ok\n");
+}
+
+#[test]
+fn backed_property_hook_inheritance_keeps_its_type_invariant() {
+    let error = run_php_expect_error(
+        r#"<?php
+class BackedParent { public int|float $value { get => $this->value; } }
+class BackedChild extends BackedParent { public int $value { get => 42; } }
+"#,
+    );
+    assert!(
+        format!("{error:?}")
+            .contains("Type of BackedChild::$value must be int|float (as in class BackedParent)")
+    );
+}
+
+#[test]
 fn setter_hook_inheritance_diagnostics_include_the_implicit_void_contract() {
     let error = run_php_expect_error(
         r#"<?php

@@ -741,6 +741,21 @@ ordinary-call control is +0.031% independently and -0.151% paired. Both retain
 exact observable results and remain below the five-percent median ceiling;
 the fixed startup cost remains visible for the planned controlled refactoring.
 
+The `property-hook-inheritance-variance` checkpoint reaches 3,027 passes with
+2,270 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Virtual get-only parent properties accept covariant child types,
+and virtual set-only parents accept contravariant types, including children
+that add the opposite hook. Backed and ordinary storage remain invariant. The
+same directional rule governs delayed linking for unresolved class-like types.
+The `property_hooks` directory rises from 168 to 171 exact passes; the complete
+PHP 8.5.6 corpus delta is +3/-0 with no category regression. All five feature
+configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. A 63-pair empty-request confirmation
+places the candidate at -1.457% independently and -1.333% paired; a 31-pair
+ordinary-call control is -0.128% independently and -0.245% paired. Both retain
+exact output and remain below the five-percent median ceiling without making
+an optimization claim.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract
