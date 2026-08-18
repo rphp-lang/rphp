@@ -223,6 +223,40 @@ echo count((new ReflectionClass(ReflectedPropertyParent::class))->getProperties(
 }
 
 #[test]
+fn reflection_class_get_property_hides_inherited_private_properties() {
+    let out = run_php(
+        r#"<?php
+class ReflectedPropertyLookupParent {
+    private int $hidden;
+    private static int $hiddenStatic;
+    protected int $inherited;
+}
+class ReflectedPropertyLookupChild extends ReflectedPropertyLookupParent {}
+
+$child = new ReflectionClass(ReflectedPropertyLookupChild::class);
+foreach (['hidden', 'hiddenStatic', 'inherited'] as $name) {
+    try {
+        $property = $child->getProperty($name);
+        echo "$name:{$property->class}\n";
+    } catch (ReflectionException $exception) {
+        echo $exception->getMessage(), "\n";
+    }
+}
+echo (new ReflectionClass(ReflectedPropertyLookupParent::class))->getProperty('hidden')->class;
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "Property ReflectedPropertyLookupChild::$hidden does not exist\n",
+            "Property ReflectedPropertyLookupChild::$hiddenStatic does not exist\n",
+            "inherited:ReflectedPropertyLookupParent\n",
+            "ReflectedPropertyLookupParent",
+        )
+    );
+}
+
+#[test]
 fn reflection_property_distinguishes_declared_and_promoted_defaults() {
     let out = run_php(
         r#"<?php

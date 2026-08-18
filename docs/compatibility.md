@@ -882,6 +882,17 @@ p10/median/p90 of 1.272029/1.286560/1.318402 seconds versus
 1.268573/1.292946/1.313119 seconds for the candidate (overall median +0.50
 percent; balanced order-specific median ratio +0.266 percent).
 
+`ReflectionClass::getProperty()` now applies the same inherited-private
+visibility boundary as property enumeration. Instance and static private
+properties remain reflectable through their declaring class but are not
+reported as properties of a child class; inherited protected properties remain
+available. This lets lazy-property skipping distinguish a missing child
+property from a private parent slot. The exact 223-case lazy-object pass set
+moves from 196 to 197, a +1/-0 delta whose only changed status is
+`realize_skipped.phpt`. All five Cargo feature configurations, the
+all-feature/all-target check, formatting, unsafe self-test and ratchet,
+Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass on AMD64.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

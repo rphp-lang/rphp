@@ -1769,13 +1769,21 @@ fn class_get_property(
         class
             .properties
             .iter()
-            .find(|property| property.name == property_name)
+            .find(|property| {
+                property.name == property_name
+                    && (property.visibility != Visibility::Private
+                        || property.declaring_class.eq_ignore_ascii_case(&class.name))
+            })
             .map(|property| (property, false))
             .or_else(|| {
                 class
                     .static_properties
                     .iter()
-                    .find(|property| property.name == property_name)
+                    .find(|property| {
+                        property.name == property_name
+                            && (property.visibility != Visibility::Private
+                                || property.declaring_class.eq_ignore_ascii_case(&class.name))
+                    })
                     .map(|property| (property, true))
             })
     });
