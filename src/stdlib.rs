@@ -10531,17 +10531,15 @@ pub(crate) fn call_object_protocol_method(
     call_object_public_method(eg, receiver, method, args)
 }
 
-/// Invoke an ordinary public instance method without constructing a callback
-/// descriptor. Serialization hooks and VM protocols share this cold path.
-pub(crate) fn call_object_public_method(
-    eg: &mut ExecutorGlobals,
+/// Resolve an ordinary public instance method without manufacturing a PHP
+/// callback value. Cold protocol paths can retain this descriptor when they
+/// need to inspect hook availability before invoking it.
+pub(crate) fn resolve_object_public_method(
+    eg: &ExecutorGlobals,
     receiver: &Value,
     method: &str,
-    args: &[Value],
-) -> Result<Option<Value>, VmError> {
-    let Some(object) = receiver.as_object() else {
-        return Ok(None);
-    };
+) -> Option<ResolvedCallback> {
+    let object = receiver.as_object()?;
     let class_name = object.class_name.to_string();
     let class_id = object.class_id;
     drop(object);
@@ -10550,17 +10548,14 @@ pub(crate) fn call_object_public_method(
     let func_ptr = if let Some(function) = eg.find_function(&internal_name) {
         function
     } else {
-        let Some((visibility, is_static, function, _)) =
-            find_method_in_class_hierarchy(eg, &class_name, method)
-        else {
-            return Ok(None);
-        };
+        let (visibility, is_static, function, _) =
+            find_method_in_class_hierarchy(eg, &class_name, method)?;
         if visibility != Visibility::Public || is_static {
-            return Ok(None);
+            return None;
         }
         function
     };
-    let resolved = ResolvedCallback {
+    Some(ResolvedCallback {
         func_ptr,
         prepend_args: vec![receiver.clone()],
         use_vars: vec![],
@@ -10568,6 +10563,19 @@ pub(crate) fn call_object_public_method(
         bound_this: None,
         closure_static_vars: None,
         is_magic_call: false,
+    })
+}
+
+/// Invoke an ordinary public instance method without constructing a callback
+/// descriptor. Serialization hooks and VM protocols share this cold path.
+pub(crate) fn call_object_public_method(
+    eg: &mut ExecutorGlobals,
+    receiver: &Value,
+    method: &str,
+    args: &[Value],
+) -> Result<Option<Value>, VmError> {
+    let Some(resolved) = resolve_object_public_method(eg, receiver, method) else {
+        return Ok(None);
     };
     call_resolved_with_values(eg, &resolved, args).map(Some)
 }

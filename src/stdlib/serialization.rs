@@ -30,6 +30,60 @@ impl SerializeState {
     }
 }
 
+fn serialized_property_key(eg: &ExecutorGlobals, object: &PhpObject, storage_key: &str) -> String {
+    let Some(definition) = object
+        .property_slot(storage_key)
+        .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
+    else {
+        return storage_key.to_string();
+    };
+    match definition.visibility {
+        crate::parser::Visibility::Public => definition.name.clone(),
+        crate::parser::Visibility::Protected => format!("\0*\0{}", definition.name),
+        crate::parser::Visibility::Private => {
+            format!("\0{}\0{}", definition.declaring_class, definition.name)
+        }
+    }
+}
+
+fn ordinary_object_properties(value: &Value, eg: &ExecutorGlobals) -> PhpArray {
+    let mut properties = PhpArray::new();
+    if let Some(object) = value.as_object() {
+        object.for_each_property(|name, member| {
+            if member.value_type() != ValueType::Undef {
+                properties.set_str(&serialized_property_key(eg, &object, name), member.clone());
+            }
+        });
+    }
+    properties
+}
+
+fn sleeping_object_properties(
+    value: &Value,
+    names: &Value,
+    declaring_class: &str,
+    eg: &ExecutorGlobals,
+) -> PhpArray {
+    let mut properties = PhpArray::new();
+    let Some(names) = names.as_array() else {
+        return properties;
+    };
+    let Some(object) = value.as_object() else {
+        return properties;
+    };
+    let called_class = object.class_name.to_string();
+    for name in names.values().filter_map(Value::as_str) {
+        let key =
+            crate::runtime::resolve_property_key(eg, &called_class, name, Some(declaring_class));
+        if let Some(member) = object.get_property(&key)
+            && member.value_type() != ValueType::Undef
+        {
+            properties.set_str(&serialized_property_key(eg, &object, &key), member.clone());
+        }
+    }
+    properties
+}
+
 fn serialize_value(
     value: &Value,
     output: &mut String,
@@ -104,21 +158,34 @@ fn serialize_value(
             output.push('}');
         }
         ValueType::Object => {
-            let initialize = eg
-                .lazy_object_state(value)
-                .is_some_and(|state| state.proxy_instance.is_none() && state.options & 8 == 0);
+            let existing_lazy_target = eg.lazy_proxy_instance(value);
+            let initial_hook_receiver = existing_lazy_target.as_ref().unwrap_or(value);
+            let serialize_hook = crate::stdlib::resolve_object_public_method(
+                eg,
+                initial_hook_receiver,
+                "__serialize",
+            );
+            // __serialize() is allowed to inspect no object state at all. In
+            // that case Zend serializes its return value without realizing a
+            // lazy ghost or proxy. Ordinary serialization and __sleep() keep
+            // the traditional eager boundary unless the explicit skip flag
+            // asks the hook itself to decide by accessing a lazy property.
+            let initialize = serialize_hook.is_none()
+                && eg
+                    .lazy_object_state(value)
+                    .is_some_and(|state| state.proxy_instance.is_none() && state.options & 8 == 0);
             let lazy_target = if initialize {
                 Some(crate::stdlib::reflection::initialize_lazy_object(
                     eg, value,
                 )?)
             } else {
-                eg.lazy_proxy_instance(value)
+                existing_lazy_target
             };
             if eg.exception.is_some() {
                 return Ok(());
             }
-            let value = lazy_target.as_ref().unwrap_or(value);
-            let identity = value
+            let hook_receiver = lazy_target.as_ref().unwrap_or(value);
+            let identity = hook_receiver
                 .object_identity()
                 .expect("object value lost its identity");
             if let Some(reference) = state.objects.get(&identity) {
@@ -129,7 +196,9 @@ fn serialize_value(
             }
             state.objects.insert(identity, reference);
 
-            let object = value.as_object().expect("object value lost its payload");
+            let object = hook_receiver
+                .as_object()
+                .expect("object value lost its payload");
             let class_name = object.class_name.to_string();
             drop(object);
             if class_name.eq_ignore_ascii_case("Generator") {
@@ -139,33 +208,41 @@ fn serialize_value(
                 ));
                 return Ok(());
             }
-            let properties =
-                match crate::stdlib::call_object_public_method(eg, value, "__serialize", &[])? {
-                    Some(serialized) => {
-                        if eg.exception.is_some() {
-                            return Ok(());
-                        }
-                        let Some(properties) = serialized.as_array().cloned() else {
-                            eg.exception = Some(crate::value::make_error_value(
-                                "TypeError",
-                                &format!("{class_name}::__serialize() must return an array"),
-                            ));
-                            return Ok(());
-                        };
-                        properties
-                    }
-                    None => {
-                        let mut properties = PhpArray::new();
-                        if let Some(object) = value.as_object() {
-                            object.for_each_property(|name, member| {
-                                if member.value_type() != ValueType::Undef {
-                                    properties.set_str(name, member.clone());
-                                }
-                            });
-                        }
-                        properties
-                    }
+            let properties = if let Some(serialize_hook) = serialize_hook {
+                let serialized =
+                    crate::stdlib::call_resolved_with_values(eg, &serialize_hook, &[])?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                let Some(properties) = serialized.as_array().cloned() else {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        &format!("{class_name}::__serialize() must return an array"),
+                    ));
+                    return Ok(());
                 };
+                properties
+            } else if let Some(sleep_hook) =
+                crate::stdlib::resolve_object_public_method(eg, hook_receiver, "__sleep")
+            {
+                let sleep_declaring_class = hook_receiver
+                    .as_object()
+                    .and_then(|object| {
+                        eg.find_method_info(&object.class_name, "__sleep")
+                            .map(|(_, _, declaring_class)| declaring_class)
+                    })
+                    .unwrap_or_else(|| class_name.clone());
+                let names = crate::stdlib::call_resolved_with_values(eg, &sleep_hook, &[])?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                let property_target = eg
+                    .lazy_proxy_instance(value)
+                    .unwrap_or_else(|| hook_receiver.clone());
+                sleeping_object_properties(&property_target, &names, &sleep_declaring_class, eg)
+            } else {
+                ordinary_object_properties(hook_receiver, eg)
+            };
             if eg.exception.is_some() {
                 return Ok(());
             }

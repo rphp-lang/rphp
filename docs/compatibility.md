@@ -803,6 +803,24 @@ confirmation of `bench_property.php` measured baseline p10/median/p90 of
 1.268104/1.279233/1.295493 seconds (median -0.42 percent), with identical
 output.
 
+Lazy serialization now lets `__serialize()` inspect no object state without
+realizing a ghost or proxy, while `__sleep()` may trigger initialization by
+observing a lazy property even under `SKIP_INITIALIZATION_ON_SERIALIZE`.
+Property lists returned by `__sleep()` are resolved against the hook's
+declaring scope and serialized with canonical public, protected and private
+wire names from the terminal real instance. Public hook resolution is retained
+across the availability check and invocation, avoiding a duplicate method
+lookup. All 14 lazy serialization PHPTs pass, and the exact 223-case lazy
+object pass set moves from 187 to 190, a +3/-0 delta.
+
+The five Cargo feature configurations, all-feature/all-target check,
+formatting, unsafe inventory, Composer S0, all four Symfony S1 gates and the
+warmed-kernel S2 gate pass on the final AMD64 source. Thirty candidate-first
+pairs of a 300,000-iteration object-serialization benchmark produced the same
+`27600000` checksum. Baseline p10/median/p90 was
+0.684384/0.734046/0.762439 seconds and the candidate measured
+0.677617/0.708024/0.749808 seconds (median -3.55 percent).
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

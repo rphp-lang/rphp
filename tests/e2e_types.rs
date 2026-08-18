@@ -1198,6 +1198,55 @@ $object = null;
 }
 
 #[test]
+fn lazy_serialization_hooks_observe_state_only_when_they_access_it() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LazyWireValue {
+    public int $value;
+    private int $hidden = 7;
+    public function __serialize(): array { return []; }
+}
+$reflection = new ReflectionClass(LazyWireValue::class);
+$ghost = $reflection->newLazyGhost(function ($object) {
+    echo "unexpected ghost initialization\n";
+    $object->value = 1;
+});
+$proxy = $reflection->newLazyProxy(function () {
+    echo "unexpected proxy initialization\n";
+    return new LazyWireValue();
+});
+echo serialize($ghost), ':', (int) $reflection->isUninitializedLazyObject($ghost), "\n";
+echo serialize($proxy), ':', (int) $reflection->isUninitializedLazyObject($proxy), "\n";
+
+class SleepingLazyWireValue {
+    public int $value;
+    private int $hidden = 7;
+    public function __sleep(): array {
+        echo $this->value, "\n";
+        return ['value', 'hidden'];
+    }
+}
+$reflection = new ReflectionClass(SleepingLazyWireValue::class);
+$proxy = $reflection->newLazyProxy(function () {
+    $object = new SleepingLazyWireValue();
+    $object->value = 3;
+    return $object;
+}, ReflectionClass::SKIP_INITIALIZATION_ON_SERIALIZE);
+echo serialize($proxy), "\n";
+"#,
+        ),
+        concat!(
+            "O:13:\"LazyWireValue\":0:{}:1\n",
+            "O:13:\"LazyWireValue\":0:{}:1\n",
+            "3\n",
+            "O:21:\"SleepingLazyWireValue\":2:{s:5:\"value\";i:3;",
+            "s:29:\"\0SleepingLazyWireValue\0hidden\";i:7;}\n"
+        )
+    );
+}
+
+#[test]
 fn lazy_proxy_magic_guards_follow_shell_and_real_instance_recursion() {
     assert_eq!(
         run_php(
