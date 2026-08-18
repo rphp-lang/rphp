@@ -84,6 +84,137 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     }
 }
 
+/// Run the destructor tree rooted at one object that is known to be losing all
+/// of the `expected_references` handles named by its release boundary.
+///
+/// Zend releases an object's properties after its own destructor. Rust's
+/// `Drop` cannot invoke PHP, so retain the dying root while user code runs and
+/// recursively visit only property objects whose remaining owners all belong
+/// to that root. The equality guard deliberately leaves cycles to the cycle
+/// collector: a back-edge makes the child strong count larger than the
+/// forward property edges considered here.
+#[cold]
+fn run_final_object_destructor_tree(
+    eg: &mut ExecutorGlobals,
+    owner: Value,
+    expected_references: usize,
+    release_references: Option<&HashMap<usize, usize>>,
+    detach_lazy_state: bool,
+) -> Result<bool, VmError> {
+    if owner.object_strong_count() != Some(expected_references) {
+        return Ok(false);
+    }
+
+    // An initialized lazy proxy owns its real instance through the sparse
+    // sidecar. Retain a temporary view of that edge while deciding whether the
+    // real instance is itself final. Keeping the mapping through user code is
+    // important at request shutdown, where another destructor may still read
+    // a global that names the proxy shell.
+    let (skip_owner_destructor, proxy_instance) = eg
+        .lazy_object_state(&owner)
+        .map(|state| (true, state.proxy_instance.clone()))
+        .unwrap_or((false, None));
+    let mut ran_destructor = false;
+
+    if let Some(instance) = proxy_instance {
+        let released_elsewhere = instance
+            .object_identity()
+            .and_then(|identity| release_references.and_then(|counts| counts.get(&identity)))
+            .copied()
+            .unwrap_or(0);
+        // One owner remains in the lazy sidecar and this local Value retains a
+        // second handle while dispatch is in progress.
+        let expected = released_elsewhere + 2;
+        if instance.object_strong_count() == Some(expected) {
+            ran_destructor |= run_final_object_destructor_tree(
+                eg,
+                instance,
+                expected,
+                release_references,
+                detach_lazy_state,
+            )?;
+            if eg.exception.is_some() {
+                if detach_lazy_state {
+                    eg.take_lazy_object_state(&owner);
+                }
+                return Ok(ran_destructor);
+            }
+        }
+    } else if !skip_owner_destructor {
+        let class_name = owner
+            .as_object()
+            .expect("destructor tree requires an object owner")
+            .class_name
+            .to_string();
+        if eg.find_method_info(&class_name, "__destruct").is_some()
+            && owner.mark_object_destructed()
+        {
+            let _ = call_magic_method(eg, &owner, "__destruct", &[])?;
+            ran_destructor = true;
+            if eg.exception.is_some() {
+                if detach_lazy_state {
+                    eg.take_lazy_object_state(&owner);
+                }
+                return Ok(true);
+            }
+        }
+    }
+
+    // A destructor may resurrect its receiver. Its properties remain live in
+    // that case and must not be retired by the original release operation.
+    if owner.object_strong_count() != Some(expected_references) {
+        return Ok(ran_destructor);
+    }
+
+    // Preserve declared-slot and dynamic insertion order while grouping
+    // aliases to the same child. One retained representative is accounted for
+    // explicitly in the strong-count check; every other counted handle is a
+    // property edge that will disappear with `owner`.
+    let mut children = Vec::<(usize, usize, Value)>::new();
+    if let Some(object) = owner.as_object() {
+        object.for_each_property(|_, property| {
+            let property = property.dereferenced();
+            let Some(identity) = property.object_identity() else {
+                return;
+            };
+            if let Some((_, references, _)) = children
+                .iter_mut()
+                .find(|(candidate, _, _)| *candidate == identity)
+            {
+                *references += 1;
+            } else {
+                children.push((identity, 1, property.clone()));
+            }
+        });
+    }
+
+    for (_, property_references, child) in children {
+        let released_elsewhere = child
+            .object_identity()
+            .and_then(|identity| release_references.and_then(|counts| counts.get(&identity)))
+            .copied()
+            .unwrap_or(0);
+        let expected = property_references + released_elsewhere + 1;
+        if child.object_strong_count() != Some(expected) {
+            continue;
+        }
+        ran_destructor |= run_final_object_destructor_tree(
+            eg,
+            child,
+            expected,
+            release_references,
+            detach_lazy_state,
+        )?;
+        if eg.exception.is_some() {
+            break;
+        }
+    }
+    if detach_lazy_state {
+        eg.take_lazy_object_state(&owner);
+    }
+    Ok(ran_destructor)
+}
+
 /// Run user destructors for direct object handles whose remaining references
 /// all belong to the frame that is about to be released. The ordinary scalar
 /// path remains allocation-free; object counts are built only for frames that
@@ -167,23 +298,21 @@ fn run_frame_destructors(
                 let Some(representative) = representative else {
                     continue;
                 };
-                if eg.is_uninitialized_lazy_object(representative) {
-                    continue;
-                }
-                let class_name = representative.object_class_name_unchecked().to_string();
-                if eg.find_method_info(&class_name, "__destruct").is_none() {
-                    continue;
-                }
                 if representative.object_strong_count() != Some(frame_references) {
                     deferred.push(identity);
                     continue;
                 }
-                if !representative.mark_object_destructed() {
-                    continue;
-                }
                 let receiver = representative.clone();
-                let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
-                progressed = true;
+                progressed |= run_final_object_destructor_tree(
+                    eg,
+                    receiver,
+                    frame_references + 1,
+                    Some(&counts),
+                    false,
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
             }
             if !progressed {
                 break;
@@ -194,14 +323,21 @@ fn run_frame_destructors(
     Ok(())
 }
 
-/// Retain and mark an object whose final PHP handle is about to be replaced.
+pub(crate) struct PreparedValueDestructor {
+    owner: Value,
+    replaced_references: usize,
+}
+
+/// Retain an object whose final PHP handle is about to be replaced.
 /// The caller chooses the opcode-specific commit boundary before invoking the
-/// returned receiver, so re-entrant code observes PHP's assignment ordering.
+/// returned release plan, so re-entrant code observes PHP's assignment
+/// ordering. Objects without their own destructor still need a plan when a
+/// final nested property object may have one.
 #[cold]
 pub(crate) fn prepare_replaced_value_destructor(
     eg: &ExecutorGlobals,
     value: &Value,
-) -> Option<Value> {
+) -> Option<PreparedValueDestructor> {
     prepare_replaced_value_destructor_with_references(eg, value, 1)
 }
 
@@ -213,35 +349,45 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     eg: &ExecutorGlobals,
     value: &Value,
     replaced_references: usize,
-) -> Option<Value> {
+) -> Option<PreparedValueDestructor> {
     let value = value.dereferenced();
-    if eg.is_uninitialized_lazy_object(value) {
-        return None;
-    }
-    let Some(class_name) = value
-        .as_object()
-        .map(|object| object.class_name.to_string())
-    else {
+    let Some(object) = value.as_object() else {
         return None;
     };
-    if value.object_strong_count() != Some(replaced_references)
-        || eg.find_method_info(&class_name, "__destruct").is_none()
-        || !value.mark_object_destructed()
-    {
+    if value.object_strong_count() != Some(replaced_references) {
         return None;
     }
-    Some(value.clone())
+    let requires_vm_release = eg.lazy_object_state(value).is_some()
+        || eg.find_method_info(&object.class_name, "__destruct").is_some()
+        || {
+            let mut nested_object = false;
+            object.for_each_property(|_, property| {
+                nested_object |= property.dereferenced().value_type() == ValueType::Object;
+            });
+            nested_object
+        };
+    drop(object);
+    requires_vm_release.then(|| PreparedValueDestructor {
+        owner: value.clone(),
+        replaced_references,
+    })
 }
 
 #[cold]
 pub(crate) fn run_prepared_value_destructor(
     eg: &mut ExecutorGlobals,
-    receiver: Option<Value>,
+    release: Option<PreparedValueDestructor>,
 ) -> Result<(), VmError> {
-    let Some(receiver) = receiver else {
+    let Some(release) = release else {
         return Ok(());
     };
-    let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
+    let Some(references) = release.owner.object_strong_count() else {
+        return Ok(());
+    };
+    if references > release.replaced_references + 1 {
+        return Ok(());
+    }
+    let _ = run_final_object_destructor_tree(eg, release.owner, references, None, true)?;
     Ok(())
 }
 
@@ -301,23 +447,21 @@ fn release_statement_temps(
                 let Some(representative) = representative else {
                     continue;
                 };
-                if eg.is_uninitialized_lazy_object(representative) {
-                    continue;
-                }
-                let class_name = representative.object_class_name_unchecked().to_string();
-                if eg.find_method_info(&class_name, "__destruct").is_none() {
-                    continue;
-                }
                 if representative.object_strong_count() != Some(range_references) {
                     deferred.push(identity);
                     continue;
                 }
-                if !representative.mark_object_destructed() {
-                    continue;
-                }
                 let receiver = representative.clone();
-                let _ = call_magic_method(eg, &receiver, "__destruct", &[])?;
-                progressed = true;
+                progressed |= run_final_object_destructor_tree(
+                    eg,
+                    receiver,
+                    range_references + 1,
+                    Some(&object_counts),
+                    false,
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
             }
             if !progressed {
                 break;

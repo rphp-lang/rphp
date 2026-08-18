@@ -504,6 +504,71 @@ $rootLast = new OrderedDestructor('2');
 }
 
 #[test]
+fn final_owner_release_runs_nested_destructors_without_retiring_shared_children() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class NestedReleaseChild {
+    public function __construct(private string $name) {}
+    public function __destruct() { echo $this->name; }
+}
+class NestedReleaseOwner {
+    public function __construct(public object $child) {}
+}
+function releaseOwnedChild(): void {
+    $child = new NestedReleaseChild('owned');
+    $owner = new NestedReleaseOwner($child);
+    $child = null;
+    $owner = null;
+    echo '|';
+}
+releaseOwnedChild();
+
+$shared = new NestedReleaseChild('shared');
+$owner = new NestedReleaseOwner($shared);
+$owner = null;
+echo 'alive|';
+$shared = null;
+"#,
+        ),
+        "owned|alive|shared"
+    );
+}
+
+#[test]
+fn nested_release_stops_at_a_child_resurrected_by_its_destructor() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ResurrectedOwner {
+    public function __construct(public object $child) {}
+    public function __destruct() { $GLOBALS['survivor'] = $this; echo 'owner|'; }
+}
+class ResurrectedChild {
+    public function __destruct() { echo 'child|'; }
+}
+class ReleaseRoot {
+    public function __construct(public object $value) {}
+}
+function releaseTree(): void {
+    $child = new ResurrectedChild();
+    $owner = new ResurrectedOwner($child);
+    $child = null;
+    $root = new ReleaseRoot($owner);
+    $owner = null;
+    $root = null;
+    echo 'returned|';
+}
+releaseTree();
+echo isset($survivor) ? 'live|' : 'missing|';
+$survivor = null;
+"#,
+        ),
+        "owner|returned|live|child|"
+    );
+}
+
+#[test]
 fn reflection_object_exposes_the_declaring_source_file() {
     let file = "/tmp/rphp-reflection-object-source.php";
     assert_eq!(

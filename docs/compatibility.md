@@ -922,6 +922,24 @@ p10/median/p90 of 1.285298/1.288852/1.331500 seconds versus
 1.263447/1.280755/1.311348 seconds for the candidate; the balanced
 order-specific median ratio was -0.886 percent, inside the one-percent gate.
 
+Final object release now dispatches an initialized lazy proxy's destructor on
+the final real instance rather than its shell. After an object's own
+destructor, the cold release path also visits acyclic nested object properties
+whose remaining handles all belong to the dying owner; shared children remain
+live, aliases are grouped, and a receiver resurrected by user code keeps its
+property tree. Back-edges deliberately remain cycle-collector work. The exact
+223-case lazy-object pass set moves from 200 to 203, a +3/-0 delta consisting
+only of `dtor_called_if_init.phpt`, `gc_006.phpt` and
+`reset_as_lazy_resets_dynamic_props.phpt`, with zero crashes or timeouts.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting, unsafe self-test and ratchet, Composer S0, all four Symfony S1
+gates and warmed-kernel S2 pass on AMD64. Twenty alternating release pairs
+against the preceding checkpoint measured a balanced order-specific ratio of
+-1.166 percent for the declared-object lifecycle control and -0.077 percent
+for the established five-million-operation property control, both within the
+one-percent regression gate.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

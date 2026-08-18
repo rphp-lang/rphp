@@ -1318,6 +1318,42 @@ $object = null;
 }
 
 #[test]
+fn initialized_lazy_proxy_destruction_targets_only_the_final_real_instance() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ProxyLifecycleValue {
+    public string $label = 'shell';
+    public function __destruct() { echo 'destroy:', $this->label, '|'; }
+}
+$reflection = new ReflectionClass(ProxyLifecycleValue::class);
+
+function releaseFinalProxy(ReflectionClass $reflection): void {
+    $proxy = $reflection->newLazyProxy(function () {
+        $real = new ProxyLifecycleValue();
+        $real->label = 'final';
+        return $real;
+    });
+    echo $proxy->label, '|';
+}
+releaseFinalProxy($reflection);
+
+$proxy = $reflection->newLazyProxy(function () {
+    $real = new ProxyLifecycleValue();
+    $real->label = 'held';
+    return $real;
+});
+$real = $reflection->initializeLazyObject($proxy);
+$proxy = null;
+echo $real->label, '|';
+$real = null;
+"#,
+        ),
+        "final|destroy:final|held|destroy:held|"
+    );
+}
+
+#[test]
 fn lazy_serialization_hooks_observe_state_only_when_they_access_it() {
     assert_eq!(
         run_php(
