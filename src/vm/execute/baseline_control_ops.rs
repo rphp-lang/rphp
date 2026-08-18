@@ -225,6 +225,8 @@ fn execute_source_unit(
         eg.record_included_file(canonical.clone());
     }
     eg.emit_compile_deprecations(&compile_result.deprecations);
+    eg.constant_attributes
+        .extend(std::mem::take(&mut compile_result.constant_attributes));
 
     // Includes are separate compilation units, but both generic runtimes and
     // Reflection consume one executor-wide interned metadata graph. Merge the

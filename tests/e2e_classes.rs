@@ -725,7 +725,7 @@ fn reflection_property_reads_initialization_and_writes_private_storage() {
 fn reflection_class_exposes_name_parent_empty_attributes_and_interfaces() {
     assert_eq!(
         run_php(
-            "<?php interface ReflectedInterface {} class ReflectedParent implements ReflectedInterface {} class ReflectedChild extends ReflectedParent {} $class = new ReflectionClass(ReflectedChild::class); $interfaces = class_implements($class->name); echo $class->name . ':' . count($class->getAttributes(null, ReflectionAttribute::IS_INSTANCEOF)) . ':' . $class->getParentClass()->name . ':' . (isset($interfaces['ReflectedInterface']) ? 'yes' : 'no');"
+            "<?php interface ReflectedInterface {} class ReflectedParent implements ReflectedInterface {} class ReflectedChild extends ReflectedParent {} $class = new ReflectionClass(ReflectedChild::class); $interfaces = class_implements($class->name); echo $class->name . ':' . count($class->getAttributes()) . ':' . $class->getParentClass()->name . ':' . (isset($interfaces['ReflectedInterface']) ? 'yes' : 'no');"
         ),
         "ReflectedChild:0:ReflectedParent:yes"
     );

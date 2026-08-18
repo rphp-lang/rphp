@@ -1250,18 +1250,56 @@ impl Parser {
                 // Arrow function: fn($x) => expr
                 return self.parse_arrow_function(false);
             }
+            Token::AttributeStart(_) => {
+                let attributes = self.parse_attribute_groups()?;
+                let mut expression = match self.peek() {
+                    Token::Function(_) => self.parse_closure(false)?,
+                    Token::Fn(_) => self.parse_arrow_function(false)?,
+                    Token::Static
+                        if matches!(self.peek_at(1), Token::Function(_) | Token::Fn(_)) =>
+                    {
+                        self.advance();
+                        if matches!(self.peek(), Token::Function(_)) {
+                            self.parse_closure(true)?
+                        } else {
+                            self.parse_arrow_function(true)?
+                        }
+                    }
+                    other => {
+                        return Err(format!(
+                            "Attribute group must precede a declaration, got {other:?}"
+                        ));
+                    }
+                };
+                match &mut expression {
+                    Expr::Closure {
+                        attributes: target,
+                        ..
+                    } => *target = attributes,
+                    _ => unreachable!("attribute expression parser only accepts closures"),
+                }
+                return Ok(expression);
+            }
             Token::New(line) => {
                 let line = line as usize;
                 self.advance(); // consume 'new'
                 let mut anonymous_readonly = false;
                 let mut allow_dynamic_properties = false;
                 let mut allow_dynamic_properties_line = line;
+                let mut attributes = Vec::new();
                 loop {
                     match self.peek() {
-                        Token::AllowDynamicPropertiesAttribute(attribute_line) => {
-                            allow_dynamic_properties = true;
+                        Token::AttributeStart(attribute_line) => {
+                            let mut group = self.parse_attribute_groups()?;
+                            allow_dynamic_properties |= group.iter().any(|attribute| {
+                                attribute
+                                    .name
+                                    .strip_prefix('\\')
+                                    .unwrap_or(&attribute.name)
+                                    .eq_ignore_ascii_case("AllowDynamicProperties")
+                            });
                             allow_dynamic_properties_line = attribute_line;
-                            self.advance();
+                            attributes.append(&mut group);
                         }
                         Token::Identifier(ref name, _)
                             if name.eq_ignore_ascii_case("readonly")
@@ -1270,7 +1308,7 @@ impl Parser {
                                     Token::Class
                                         | Token::Abstract
                                         | Token::Final
-                                        | Token::AllowDynamicPropertiesAttribute(_)
+                                        | Token::AttributeStart(_)
                                 )
                                 || name.eq_ignore_ascii_case("readonly")
                                     && matches!(
@@ -1353,6 +1391,7 @@ impl Parser {
                     let (properties, constants, methods, uses, trait_aliases) =
                         self.parse_anonymous_class_body()?;
                     return Ok(Expr::AnonymousNew {
+                        attributes,
                         args,
                         is_readonly: anonymous_readonly,
                         allow_dynamic_properties,

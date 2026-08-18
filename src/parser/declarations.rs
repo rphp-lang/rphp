@@ -36,6 +36,7 @@ impl Parser {
             self.compile_error("Property hook list must not be empty", property.line);
         }
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let hook_attributes = self.parse_attribute_groups()?;
             let hook_is_final = if self.peek() == Token::Final {
                 self.advance();
                 true
@@ -80,6 +81,7 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 if params.is_empty() {
                     params.push(Param {
+                        attributes: Vec::new(),
                         name: "\0property_get_parameter_list".to_string(),
                         line: hook_line,
                         default: None,
@@ -100,6 +102,7 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 if params.is_empty() {
                     params.push(Param {
+                        attributes: Vec::new(),
                         name: "\0property_set_parameter_list".to_string(),
                         line: hook_line,
                         default: None,
@@ -114,6 +117,7 @@ impl Parser {
                 params
             } else {
                 vec![Param {
+                    attributes: Vec::new(),
                     name: "value".to_string(),
                     line: hook_line,
                     default: None,
@@ -164,6 +168,7 @@ impl Parser {
             property.has_abstract_set_hook |= is_set && hook_is_abstract;
             hook_methods.push(ClassMethod {
                 line: hook_line,
+                attributes: hook_attributes,
                 visibility: property.visibility,
                 name: format!("${}::{}", property.name, hook.to_ascii_lowercase()),
                 params,
@@ -183,6 +188,7 @@ impl Parser {
     fn parse_property_declaration(
         &mut self,
         modifiers: &MemberModifiers,
+        attributes: &[Attribute],
     ) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>), String> {
         if modifiers.has_duplicate_set_visibility {
             let line = modifiers.duplicate_set_visibility_line.unwrap_or(1);
@@ -206,6 +212,7 @@ impl Parser {
                 None
             };
             properties.push(ClassProperty {
+                attributes: attributes.to_vec(),
                 line,
                 visibility: modifiers.visibility,
                 set_visibility: modifiers.set_visibility,
@@ -239,6 +246,7 @@ impl Parser {
                 self.compile_error("Property hook list must not be empty", property.line);
             }
             while self.peek() != Token::RBrace && !self.at_eof() {
+                let hook_attributes = self.parse_attribute_groups()?;
                 let hook_is_final = if self.peek() == Token::Final {
                     self.advance();
                     true
@@ -285,6 +293,7 @@ impl Parser {
                         // Preserve the otherwise invisible presence of `()` so the class-aware
                         // compiler can emit PHP's property-qualified declaration diagnostic.
                         params.push(Param {
+                            attributes: Vec::new(),
                             name: "\0property_get_parameter_list".to_string(),
                             line: hook_line,
                             default: None,
@@ -307,6 +316,7 @@ impl Parser {
                         // As above, an internal sentinel carries the empty-list syntax only as
                         // far as the declaration validator; it can never enter executable code.
                         params.push(Param {
+                            attributes: Vec::new(),
                             name: "\0property_set_parameter_list".to_string(),
                             line: hook_line,
                             default: None,
@@ -321,6 +331,7 @@ impl Parser {
                     params
                 } else {
                     vec![Param {
+                        attributes: Vec::new(),
                         name: "value".to_string(),
                         line: hook_line,
                         default: None,
@@ -371,6 +382,7 @@ impl Parser {
                 property.has_abstract_set_hook |= is_set && hook_is_abstract;
                 hook_methods.push(ClassMethod {
                     line: hook_line,
+                    attributes: hook_attributes,
                     visibility: property.visibility,
                     name: format!("${}::{}", property.name, hook.to_ascii_lowercase()),
                     params,
@@ -413,6 +425,7 @@ impl Parser {
         self.class_scope_active = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let attributes = self.parse_attribute_groups()?;
             if self.peek() == Token::Use {
                 self.advance();
                 loop {
@@ -505,6 +518,7 @@ impl Parser {
                 self.pop_generic_scope();
                 methods.push(ClassMethod {
                     line,
+                    attributes: attributes.clone(),
                     visibility: modifiers.visibility,
                     name: method_name,
                     params,
@@ -518,9 +532,14 @@ impl Parser {
                 });
                 methods.extend(promoted_hooks);
             } else if self.peek() == Token::Const {
-                constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
+                constants.extend(self.parse_class_constant_declaration(
+                    &modifiers,
+                    false,
+                    &attributes,
+                )?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
-                let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
+                let (declared, hooks) =
+                    self.parse_property_declaration(&modifiers, &attributes)?;
                 properties.extend(declared);
                 methods.extend(hooks);
             } else {
@@ -672,6 +691,7 @@ impl Parser {
         self.in_class_body = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let attributes = self.parse_attribute_groups()?;
             // Trait `use` statements: use Foo, Bar;
             if self.peek() == Token::Use {
                 self.advance(); // consume 'use'
@@ -760,6 +780,7 @@ impl Parser {
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
                     line,
+                    attributes: attributes.clone(),
                     visibility: modifiers.visibility,
                     name: method_name,
                     params,
@@ -773,10 +794,15 @@ impl Parser {
                 });
                 methods.extend(promoted_hooks);
             } else if self.peek() == Token::Const {
-                constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
+                constants.extend(self.parse_class_constant_declaration(
+                    &modifiers,
+                    false,
+                    &attributes,
+                )?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
-                let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
+                let (declared, hooks) =
+                    self.parse_property_declaration(&modifiers, &attributes)?;
                 properties.extend(declared);
                 methods.extend(hooks);
             } else {
@@ -800,6 +826,7 @@ impl Parser {
 
         Ok(Stmt::Class {
             line,
+            attributes: Vec::new(),
             name,
             parent,
             implements,
@@ -834,6 +861,7 @@ impl Parser {
         let mut trait_aliases = Vec::new();
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let attributes = self.parse_attribute_groups()?;
             if self.peek() == Token::Use {
                 self.advance();
                 loop {
@@ -919,6 +947,7 @@ impl Parser {
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
                     line,
+                    attributes: attributes.clone(),
                     visibility: modifiers.visibility,
                     name: method_name,
                     params,
@@ -932,10 +961,15 @@ impl Parser {
                 });
                 methods.extend(promoted_hooks);
             } else if self.peek() == Token::Const {
-                constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
+                constants.extend(self.parse_class_constant_declaration(
+                    &modifiers,
+                    false,
+                    &attributes,
+                )?);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
-                let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
+                let (declared, hooks) =
+                    self.parse_property_declaration(&modifiers, &attributes)?;
                 properties.extend(declared);
                 methods.extend(hooks);
             } else {
@@ -946,6 +980,7 @@ impl Parser {
         self.pop_generic_scope();
 
         Ok(Stmt::Trait {
+            attributes: Vec::new(),
             name,
             properties,
             constants,
@@ -987,9 +1022,14 @@ impl Parser {
         let mut constants = Vec::new();
         let mut methods = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let attributes = self.parse_attribute_groups()?;
             let modifiers = self.parse_member_modifiers();
             if self.peek() == Token::Const {
-                constants.extend(self.parse_class_constant_declaration(&modifiers, true)?);
+                constants.extend(self.parse_class_constant_declaration(
+                    &modifiers,
+                    true,
+                    &attributes,
+                )?);
             } else if matches!(self.peek(), Token::Function(_)) {
                 let line = match self.advance() {
                     Token::Function(line) => line,
@@ -1029,6 +1069,7 @@ impl Parser {
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
                     line,
+                    attributes: attributes.clone(),
                     visibility: modifiers.visibility,
                     name: method_name,
                     params,
@@ -1042,7 +1083,8 @@ impl Parser {
                 });
                 methods.extend(promoted_hooks);
             } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
-                let (declared, hooks) = self.parse_property_declaration(&modifiers)?;
+                let (declared, hooks) =
+                    self.parse_property_declaration(&modifiers, &attributes)?;
                 properties.extend(declared);
                 methods.extend(hooks);
             } else {
@@ -1056,6 +1098,7 @@ impl Parser {
         self.pop_generic_scope();
 
         Ok(Stmt::Interface {
+            attributes: Vec::new(),
             name,
             extends,
             properties,
@@ -1105,6 +1148,7 @@ impl Parser {
         self.in_class_body = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            let attributes = self.parse_attribute_groups()?;
             if self.peek() == Token::Use {
                 self.advance();
                 loop {
@@ -1176,7 +1220,11 @@ impl Parser {
                 // Method in enum
                 let modifiers = self.parse_member_modifiers();
                 if self.peek() == Token::Const {
-                    constants.extend(self.parse_class_constant_declaration(&modifiers, false)?);
+                    constants.extend(self.parse_class_constant_declaration(
+                        &modifiers,
+                        false,
+                        &attributes,
+                    )?);
                 } else if matches!(self.peek(), Token::Function(_)) {
                     let line = match self.advance() {
                         Token::Function(line) => line,
@@ -1205,6 +1253,7 @@ impl Parser {
                     self.class_scope_active = previous_class_scope;
                     methods.push(ClassMethod {
                         line,
+                        attributes: attributes.clone(),
                         visibility: modifiers.visibility,
                         name: method_name,
                         params,
@@ -1226,6 +1275,7 @@ impl Parser {
 
         Ok(Stmt::Enum {
             line,
+            attributes: Vec::new(),
             name,
             backing_type,
             implements,
@@ -1331,6 +1381,7 @@ impl Parser {
         &mut self,
         modifiers: &MemberModifiers,
         in_interface: bool,
+        attributes: &[Attribute],
     ) -> Result<Vec<ClassConstant>, String> {
         if modifiers.is_static {
             return Err("Class constants cannot be declared static".into());
@@ -1360,6 +1411,7 @@ impl Parser {
             self.expect(&Token::Assign)?;
             let value = self.parse_expr()?;
             constants.push(ClassConstant {
+                attributes: attributes.to_vec(),
                 visibility: modifiers.visibility,
                 name,
                 value,
@@ -1549,6 +1601,7 @@ impl Parser {
         }];
         Ok(Expr::Closure {
             line,
+            attributes: Vec::new(),
             is_static,
             returns_by_ref,
             params,
@@ -1881,6 +1934,7 @@ impl Parser {
 
         Ok(Expr::Closure {
             line,
+            attributes: Vec::new(),
             is_static,
             returns_by_ref,
             params,

@@ -63,7 +63,8 @@ pub enum Token {
     Print,           // print
     Global,          // global
     Clone(usize),    // clone, source line
-    AllowDynamicPropertiesAttribute(usize),
+    /// Start of a PHP attribute group (`#[`) together with its source line.
+    AttributeStart(usize),
     Include,     // include
     IncludeOnce, // include_once
     Require,     // require
@@ -189,7 +190,6 @@ pub struct Lexer<'a> {
     pos: usize,
     deferred_compile_errors: Vec<(String, usize)>,
     deferred_compile_diagnostics: Vec<DeferredCompileDiagnostic>,
-    pending_attributes: Vec<Token>,
 }
 
 /// PHP source is byte-oriented and may legally contain non-UTF-8 bytes in
@@ -242,7 +242,6 @@ impl<'a> Lexer<'a> {
             pos: 0,
             deferred_compile_errors: Vec::new(),
             deferred_compile_diagnostics: Vec::new(),
-            pending_attributes: Vec::new(),
         }
     }
 
@@ -261,7 +260,6 @@ impl<'a> Lexer<'a> {
 
         loop {
             self.skip_whitespace()?;
-            tokens.append(&mut self.pending_attributes);
 
             if self.pos >= self.src.len() {
                 tokens.extend(
@@ -288,6 +286,14 @@ impl<'a> Lexer<'a> {
             let ch = self.src[self.pos];
 
             match ch {
+                b'#' if self.peek_next() == Some(b'[') => {
+                    let line = 1 + self.src[..self.pos]
+                        .iter()
+                        .filter(|byte| **byte == b'\n')
+                        .count();
+                    tokens.push(Token::AttributeStart(line));
+                    self.pos += 2;
+                }
                 b'=' => {
                     if self.peek_next() == Some(b'=') {
                         if self.src.get(self.pos + 2) == Some(&b'=') {
@@ -770,13 +776,10 @@ impl<'a> Lexer<'a> {
             if self.pos >= self.src.len() {
                 break;
             }
-            // Attributes remain a separate metadata milestone, but their
-            // balanced syntax must not be mistaken for a `#` line comment.
-            // Skip the group as one lexical unit so unobserved attributes do
-            // not prevent loading otherwise supported declarations.
+            // Attribute groups are ordinary syntax. Leave `#[` for the main
+            // token loop while retaining `#` as PHP's line-comment marker.
             if self.starts_with(b"#[") {
-                self.skip_attribute_group()?;
-                continue;
+                break;
             }
             // Skip // and # line comments
             if self.starts_with(b"//") || self.src[self.pos] == b'#' {
@@ -807,113 +810,6 @@ impl<'a> Lexer<'a> {
             break;
         }
         Ok(())
-    }
-
-    fn skip_attribute_group(&mut self) -> Result<(), String> {
-        let start = self.pos;
-        let line = 1 + self.src[..start]
-            .iter()
-            .filter(|byte| **byte == b'\n')
-            .count();
-        self.pos += 2;
-        let mut bracket_depth = 1usize;
-        let mut quote = None;
-
-        while self.pos < self.src.len() {
-            let byte = self.src[self.pos];
-            if let Some(active_quote) = quote {
-                if byte == b'\\' {
-                    self.pos = (self.pos + 2).min(self.src.len());
-                    continue;
-                }
-                self.pos += 1;
-                if byte == active_quote {
-                    quote = None;
-                }
-                continue;
-            }
-
-            match byte {
-                b'\'' | b'"' => {
-                    quote = Some(byte);
-                    self.pos += 1;
-                }
-                b'[' => {
-                    bracket_depth += 1;
-                    self.pos += 1;
-                }
-                b']' => {
-                    bracket_depth -= 1;
-                    self.pos += 1;
-                    if bracket_depth == 0 {
-                        let attribute = &self.src[start..self.pos];
-                        let body = &attribute[2..attribute.len() - 1];
-                        if self.next_declaration_accepts_allow_dynamic_properties()
-                            && body.split(|byte| *byte == b',').any(|name| {
-                                name.trim_ascii()
-                                    .strip_prefix(b"\\")
-                                    .unwrap_or(name.trim_ascii())
-                                    .eq_ignore_ascii_case(b"AllowDynamicProperties")
-                            })
-                        {
-                            self.pending_attributes
-                                .push(Token::AllowDynamicPropertiesAttribute(line));
-                        }
-                        if attribute.windows(3).any(|window| window == b"...") {
-                            self.deferred_compile_errors.push((
-                                "Cannot create Closure as attribute argument".to_string(),
-                                line,
-                            ));
-                        }
-                        return Ok(());
-                    }
-                }
-                _ => self.pos += 1,
-            }
-        }
-
-        Err(format!(
-            "Unterminated attribute starting at position {start}"
-        ))
-    }
-
-    fn next_declaration_accepts_allow_dynamic_properties(&self) -> bool {
-        let mut rest = &self.src[self.pos..];
-        loop {
-            rest = rest.trim_ascii_start();
-            if rest.starts_with(b"//") || (rest.starts_with(b"#") && !rest.starts_with(b"#[")) {
-                rest = rest
-                    .iter()
-                    .position(|byte| *byte == b'\n')
-                    .map_or(&[][..], |newline| &rest[newline + 1..]);
-                continue;
-            }
-            if rest.starts_with(b"/*") {
-                let Some(end) = rest.windows(2).position(|window| window == b"*/") else {
-                    return false;
-                };
-                rest = &rest[end + 2..];
-                continue;
-            }
-            break;
-        }
-
-        rest = rest.trim_ascii_start();
-        [b"class".as_slice(), b"interface", b"trait", b"enum"]
-            .into_iter()
-            .any(|keyword| Self::starts_with_keyword(rest, keyword))
-            || rest
-                .strip_prefix(b"readonly")
-                .is_some_and(|after_readonly| {
-                    Self::starts_with_keyword(after_readonly.trim_ascii_start(), b"class")
-                })
-    }
-
-    fn starts_with_keyword(source: &[u8], keyword: &[u8]) -> bool {
-        source.starts_with(keyword)
-            && source
-                .get(keyword.len())
-                .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
     }
 
     fn starts_with(&self, prefix: &[u8]) -> bool {
@@ -1787,9 +1683,11 @@ mod tests {
             .tokenize()
             .unwrap();
 
-        assert!(tokens.contains(&Token::CompileError(
-            "Cannot create Closure as attribute argument".into(),
-            2,
-        )));
+        assert!(tokens.contains(&Token::AttributeStart(2)));
+        assert!(
+            tokens
+                .iter()
+                .any(|token| matches!(token, Token::DotDotDot(2)))
+        );
     }
 }

@@ -594,6 +594,43 @@ fn test_parse_unobserved_attribute_groups_without_hash_comment_confusion() {
 }
 
 #[test]
+fn declaration_attributes_are_retained_on_members_and_parameters() {
+    let source = "<?php #[First(1), Second(name: 'class')] class Subject { #[Member('constant')] public const TOKEN = 1; #[Member('property')] public string $value; #[Member('method')] public function run(#[Member('parameter')] $input): void {} } #[Top('function')] function helper() {} #[Top('constant')] const GLOBAL_TOKEN = 1;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    let Stmt::Class {
+        attributes,
+        properties,
+        constants,
+        methods,
+        ..
+    } = &statements[0]
+    else {
+        panic!("expected attributed class");
+    };
+    assert_eq!(
+        attributes
+            .iter()
+            .map(|attribute| attribute.name.as_str())
+            .collect::<Vec<_>>(),
+        ["First", "Second"]
+    );
+    assert_eq!(properties[0].attributes[0].name, "Member");
+    assert_eq!(constants[0].attributes[0].name, "Member");
+    assert_eq!(methods[0].attributes[0].name, "Member");
+    assert_eq!(methods[0].params[0].attributes[0].name, "Member");
+    assert!(matches!(
+        &statements[1],
+        Stmt::Function { attributes, .. } if attributes[0].name == "Top"
+    ));
+    assert!(matches!(
+        &statements[2],
+        Stmt::Const { attributes, .. } if attributes[0].name == "Top"
+    ));
+}
+
+#[test]
 fn test_parse_coalesce_assignment_on_comparison_rhs() {
     let tokens = Lexer::new("<?php $result = 0 > $value ??= 1;")
         .tokenize()

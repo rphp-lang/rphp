@@ -208,6 +208,130 @@ impl Parser {
         Ok(args)
     }
 
+    fn parse_attribute_groups(&mut self) -> Result<Vec<Attribute>, String> {
+        let mut attributes = Vec::new();
+        while let Token::AttributeStart(line) = self.peek() {
+            self.advance();
+            loop {
+                let name = self.parse_qualified_name()?;
+                let args = if matches!(self.peek(), Token::LParen(_)) {
+                    self.advance();
+                    if matches!(self.peek(), Token::DotDotDot(_))
+                        && self.peek_at(1) == Token::RParen
+                    {
+                        self.advance();
+                        self.expect(&Token::RParen)?;
+                        self.compile_error("Cannot create Closure as attribute argument", line);
+                        Vec::new()
+                    } else {
+                        self.parse_call_args()?
+                    }
+                } else {
+                    Vec::new()
+                };
+                if args.iter().any(|arg| matches!(arg, CallArg::Unpack(_))) {
+                    self.compile_error(
+                        "Cannot use unpacking in attribute argument list",
+                        line,
+                    );
+                }
+                attributes.push(Attribute { name, args, line });
+                if self.peek() != Token::Comma {
+                    break;
+                }
+                self.advance();
+                if self.peek() == Token::RBracket {
+                    break;
+                }
+            }
+            self.expect(&Token::RBracket)?;
+        }
+        Ok(attributes)
+    }
+
+    fn attach_attributes(
+        &mut self,
+        mut statement: Stmt,
+        attributes: Vec<Attribute>,
+    ) -> Result<Stmt, String> {
+        let attribute_line = attributes.first().map_or(1, |attribute| attribute.line);
+        let allow_dynamic_properties = attributes.iter().any(|attribute| {
+            attribute
+                .name
+                .strip_prefix('\\')
+                .unwrap_or(&attribute.name)
+                .eq_ignore_ascii_case("AllowDynamicProperties")
+        });
+        match &mut statement {
+            Stmt::Function {
+                attributes: target,
+                ..
+            }
+            | Stmt::Class {
+                attributes: target,
+                ..
+            }
+            | Stmt::Interface {
+                attributes: target,
+                ..
+            }
+            | Stmt::Trait {
+                attributes: target,
+                ..
+            }
+            | Stmt::Enum {
+                attributes: target,
+                ..
+            }
+            | Stmt::Const {
+                attributes: target,
+                ..
+            } => *target = attributes,
+            Stmt::ExprStmt(Expr::Closure {
+                attributes: target,
+                ..
+            })
+            | Stmt::ExprStmt(Expr::AnonymousNew {
+                attributes: target,
+                ..
+            }) => *target = attributes,
+            _ => {
+                return Err(self.source_error(
+                    "syntax error, unexpected token \"#[\"",
+                    attribute_line,
+                ));
+            }
+        }
+
+        if allow_dynamic_properties {
+            let invalid_target = match &mut statement {
+                Stmt::Class {
+                    name,
+                    is_readonly: true,
+                    ..
+                } => Some(format!("readonly class {name}")),
+                Stmt::Class {
+                    allow_dynamic_properties,
+                    ..
+                } => {
+                    *allow_dynamic_properties = true;
+                    None
+                }
+                Stmt::Interface { name, .. } => Some(format!("interface {name}")),
+                Stmt::Trait { name, .. } => Some(format!("trait {name}")),
+                Stmt::Enum { name, .. } => Some(format!("enum {name}")),
+                _ => None,
+            };
+            if let Some(target) = invalid_target {
+                return Ok(Stmt::ExprStmt(Expr::CompileError {
+                    message: format!("Cannot apply #[\\AllowDynamicProperties] to {target}"),
+                    line: attribute_line,
+                }));
+            }
+        }
+        Ok(statement)
+    }
+
     fn advance(&mut self) -> Token {
         let tok = self.peek();
         self.pos += 1;
@@ -277,6 +401,7 @@ impl Parser {
                 | Token::Protected
                 | Token::Private
                 | Token::Final
+                | Token::AttributeStart(_)
         )
     }
 
@@ -777,6 +902,7 @@ impl Parser {
     }
 
     fn parse_one_param(&mut self) -> Result<Param, String> {
+        let attributes = self.parse_attribute_groups()?;
         // Check for constructor property promotion: visibility keyword before type hint
         let mut promotion: Option<(Visibility, Option<Visibility>, bool)> = None;
         let mut promo_readonly = false;
@@ -871,6 +997,7 @@ impl Parser {
         }
         let mut promoted_property = promotion.map(|(visibility, set_visibility, is_readonly)| {
             ClassProperty {
+                attributes: attributes.clone(),
                 line,
                 visibility,
                 set_visibility,
@@ -897,6 +1024,7 @@ impl Parser {
             Vec::new()
         };
         Ok(Param {
+            attributes,
             name,
             line,
             default,

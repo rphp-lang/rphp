@@ -2657,6 +2657,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
     use crate::compiler::compile::ClassDef;
 
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "ValueError".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -2738,6 +2739,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // Throwable — proper interface (PHP 8 compatible)
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "Throwable".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -2766,6 +2768,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // Exception implements Throwable
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "Exception".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -2828,6 +2831,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // materialize their layouts immediately.
     for &(name, parent) in BUILTIN_EXCEPTION_SUBCLASSES {
         eg.register_class(ClassDef {
+            attributes: Vec::new(),
             name: name.to_string(),
             source_file: None,
             declaration_line: 0,
@@ -2856,6 +2860,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     }
 
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "ErrorException".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -2889,6 +2894,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // Error implements Throwable
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "Error".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -2948,6 +2954,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     for &(name, parent) in BUILTIN_ERROR_SUBCLASSES {
         eg.register_class(ClassDef {
+            attributes: Vec::new(),
             name: name.to_string(),
             source_file: None,
             declaration_line: 0,
@@ -2977,6 +2984,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // TypeError extends Error
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "TypeError".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -3005,6 +3013,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // CompileError extends Error
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "CompileError".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -3033,6 +3042,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // ParseError extends CompileError
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "ParseError".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -3061,6 +3071,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // ArgumentCountError extends Error
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "ArgumentCountError".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -3089,6 +3100,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // UnhandledMatchError extends Error
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "UnhandledMatchError".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -3185,6 +3197,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     let empty_internal_type =
         |name: &str, implements: Vec<String>, is_interface: bool, is_final: bool| ClassDef {
+            attributes: Vec::new(),
             name: name.to_string(),
             source_file: None,
             declaration_line: 0,
@@ -3468,6 +3481,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     ]
     .into_iter()
     .map(|(name, value)| ClassConstantDefinition {
+        attributes: Vec::new(),
         name: name.to_string(),
         value: Value::long(value),
         evaluation_error: None,

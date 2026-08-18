@@ -298,3 +298,25 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         _ => None,
     }
 }
+
+/// Resolve constants exposed by built-in classes before the runtime class
+/// registry exists. Constant expressions in declarations (notably attribute
+/// flags) use the same values that stdlib publishes at request startup.
+pub fn builtin_class_constant(class: &str, constant: &str) -> Option<value::Value> {
+    if !class.eq_ignore_ascii_case("Attribute") {
+        return None;
+    }
+    let value = match constant {
+        "TARGET_CLASS" => 1,
+        "TARGET_FUNCTION" => 2,
+        "TARGET_METHOD" => 4,
+        "TARGET_PROPERTY" => 8,
+        "TARGET_CLASS_CONSTANT" => 16,
+        "TARGET_PARAMETER" => 32,
+        "TARGET_CONSTANT" => 64,
+        "TARGET_ALL" => 127,
+        "IS_REPEATABLE" => 128,
+        _ => return None,
+    };
+    Some(value::Value::long(value))
+}

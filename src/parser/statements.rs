@@ -385,7 +385,10 @@ impl Parser {
                     self.advance();
                 }
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Const { declarations })
+                Ok(Stmt::Const {
+                    attributes: Vec::new(),
+                    declarations,
+                })
             }
             Token::Echo { line } => {
                 self.advance();
@@ -928,6 +931,7 @@ impl Parser {
                 self.class_scope_active = previous_class_scope;
                 Ok(Stmt::Function {
                     line,
+                    attributes: Vec::new(),
                     name,
                     returns_by_ref,
                     params,
@@ -989,35 +993,10 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Throw { expr, line })
             }
-            Token::AllowDynamicPropertiesAttribute(line) => {
-                self.advance();
-                let mut declaration = self.parse_stmt()?;
-                let invalid_target = match &mut declaration {
-                    Stmt::Class {
-                        name,
-                        is_readonly: true,
-                        ..
-                    } => Some(format!("readonly class {name}")),
-                    Stmt::Class {
-                        allow_dynamic_properties,
-                        ..
-                    } => {
-                        *allow_dynamic_properties = true;
-                        None
-                    }
-                    Stmt::Interface { name, .. } => Some(format!("interface {name}")),
-                    Stmt::Trait { name, .. } => Some(format!("trait {name}")),
-                    Stmt::Enum { name, .. } => Some(format!("enum {name}")),
-                    _ => None,
-                };
-                Ok(invalid_target.map_or(declaration, |target| {
-                    Stmt::ExprStmt(Expr::CompileError {
-                        message: format!(
-                            "Cannot apply #[\\AllowDynamicProperties] to {target}"
-                        ),
-                        line,
-                    })
-                }))
+            Token::AttributeStart(_) => {
+                let attributes = self.parse_attribute_groups()?;
+                let declaration = self.parse_stmt()?;
+                self.attach_attributes(declaration, attributes)
             }
             Token::Class | Token::Abstract | Token::Final => self.parse_class(),
             Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("class") => {

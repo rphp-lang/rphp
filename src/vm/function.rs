@@ -1525,6 +1525,22 @@ impl FunctionCommon {
 }
 
 /// User-defined PHP function — contains compiled OpArray.
+#[derive(Debug, Clone)]
+pub struct AttributeArgument {
+    pub name: Option<String>,
+    pub value: Result<Value, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttributeDefinition {
+    pub name: String,
+    pub arguments: Vec<AttributeArgument>,
+    pub target: i64,
+    pub source_file: String,
+    pub source_line: usize,
+    pub strict_types: bool,
+}
+
 #[repr(C)]
 pub struct UserFunction {
     pub common: FunctionCommon,
@@ -1551,6 +1567,29 @@ pub struct UserFunction {
     /// Public by-value parameters that may borrow an immutable heap Value from
     /// their synchronous caller. Indexed by public parameter position.
     pub borrowable_heap_args: u64,
+    /// Reflection-only declaration metadata. Keeping it after every existing
+    /// execution field leaves the call header, frame ABI and hot-plan offsets
+    /// unchanged.
+    pub attributes: Vec<AttributeDefinition>,
+    pub parameter_attributes: Vec<Vec<AttributeDefinition>>,
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::UserFunction;
+
+    #[test]
+    fn reflection_metadata_follows_every_existing_execution_field() {
+        assert_eq!(std::mem::offset_of!(UserFunction, common), 0);
+        assert!(
+            std::mem::offset_of!(UserFunction, attributes)
+                > std::mem::offset_of!(UserFunction, borrowable_heap_args)
+        );
+        assert!(
+            std::mem::offset_of!(UserFunction, parameter_attributes)
+                > std::mem::offset_of!(UserFunction, attributes)
+        );
+    }
 }
 
 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]

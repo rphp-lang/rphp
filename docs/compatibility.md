@@ -7,15 +7,13 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The current AMD64 PHP 8.5 contract checkpoint is pinned to php-src 8.5.6 commit
-`fcc29c8` and RPHP `df00319`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,456 pass, 2,752 fail, 110 skip, one is an upstream XFAIL,
-280 are unsupported, and none time out or crash. The headline pass rate is
-47.158%; 87.154% of attempted cases reach runtime. Relative to the initial
-`298e4c7` baseline, the exact pass-set delta is +641/-0. The first four gains are
-`Zend/tests/bug63882.phpt`, `gh18572.phpt` and
-`recursive_array_comparison.phpt`, plus `gh13178_4.phpt`. The initial PHP 8.5
-corpus now has no process hazard.
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 2,841 pass, 2,407 fail, 110 skip, one is an upstream XFAIL,
+240 are unsupported, and none time out or crash. The headline pass rate is
+54.135%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
+the preceding `5b02307` checkpoint, the exact pass-set delta is +24/-0. The
+initial PHP 8.5 corpus continues to have no process hazard.
 
 Replacing the final CV handle to an object now commits the opcode-specific
 variable or reference state and invokes `__destruct()` at PHP's observable
@@ -1279,6 +1277,42 @@ runtime performance gate applies because valid string tokens, bytecode and VM
 dispatch are unchanged. Surrogate-half escapes remain an explicit failure
 until RPHP can preserve their non-well-formed CESU-8 bytes rather than forcing
 them through Rust's UTF-8 `String` representation.
+
+Source-level user attributes now survive lexing, parsing, namespace and alias
+resolution, constant-expression evaluation and compilation into ordinary
+Reflection metadata. This covers grouped attributes, positional and named
+arguments, classes, interfaces, traits, enums, functions, closures, methods,
+properties, parameters, class constants and source-level global constants.
+`ReflectionAttribute` exposes names, arguments, targets, repetition state,
+exact-name and `IS_INSTANCEOF` filtering, while `newInstance()` defers class,
+target, repeatability and constructor validation to the PHP 8.5 boundary.
+Reflection payloads remain in a sparse request-local side table so ordinary
+objects retain their established layout and only the public `name` projection
+is visible on a reflected attribute object.
+
+The 204-case `Zend/tests/attributes` slice now has 55 passes, 141 failures,
+five skips and three unsupported cases, with zero timeouts or crashes. Its
+exact pass-set delta is +22/-0; 51 of 80 attempted ordinary-profile cases pass.
+The full 5,599-case release rerun reaches 2,841 passes and adds two adjacent
+class-name/trait-constant cases for a total delta of +24/-0. Five negative
+attribute-expression cases now reject in the front end instead of executing
+after the old lexer discarded their groups; their still-inexact diagnostic
+text remains explicit work. Other remaining-stage movements advance within
+failing attribute semantics, and no prior pass is lost.
+
+All five Cargo feature configurations, formatting, unsafe-policy,
+all-feature/all-target, Composer S0, all four Symfony S1 and warmed-kernel S2
+gates pass on AMD64. Attribute fields follow every established execution field
+and a layout regression test protects those offsets, but the metadata widens
+the containing cold declaration records and the additional implementation
+changes release code placement. Twenty alternating call and Closure-storage
+pairs measured +0.549% and +0.264%. The general property control exceeded its
+one-percent gate at +2.295%; an independent 40-pair CPU-pinned rerun measured
++3.427%. This is retained as explicit temporary performance debt under the
+current compatibility-first priority, not as a performance-neutral claim.
+Dynamic trait/closure binding scopes, deferred runtime constant expressions,
+exact remaining diagnostics and full `ReflectionAttribute` immutability remain
+separate compatibility work.
 
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts

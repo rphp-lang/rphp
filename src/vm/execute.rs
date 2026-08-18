@@ -619,7 +619,7 @@ fn check_type_hint_in_scopes(
     }
 }
 
-enum CallArgumentPreparation {
+pub(crate) enum CallArgumentPreparation {
     Exact,
     Coerced(Value),
     Invalid,
@@ -628,7 +628,7 @@ enum CallArgumentPreparation {
 /// Apply the object-to-string argument conversion used by weak PHP call sites.
 /// Exact union members win before conversion and strict callers never invoke
 /// `__toString()` implicitly.
-fn prepare_call_argument(
+pub(crate) fn prepare_call_argument(
     value: &Value,
     hint: &ParamTypeHint,
     eg: &mut ExecutorGlobals,

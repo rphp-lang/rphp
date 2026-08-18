@@ -25,7 +25,9 @@ use crate::value::{
 };
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
-use crate::vm::function::{FunctionCommon, ParamTypeHint};
+use crate::vm::function::{
+    AttributeDefinition, FunctionCommon, FunctionType, ParamTypeHint, UserFunction,
+};
 
 pub(super) use registry::register;
 
@@ -260,6 +262,528 @@ fn reflected_function(ed: *mut ExecuteData) -> Option<&'static FunctionCommon> {
     (!pointer.is_null()).then(|| unsafe { &*pointer })
 }
 
+fn reflected_user_function(ed: *mut ExecuteData) -> Option<&'static UserFunction> {
+    let function = reflected_function(ed)?;
+    (function.fn_type == FunctionType::User).then(|| {
+        // SAFETY: FunctionCommon is the first field of every repr(C)
+        // UserFunction and the discriminant above proves this allocation kind.
+        unsafe { &*(function as *const FunctionCommon as *const UserFunction) }
+    })
+}
+
+fn receiver_class_name(ed: *mut ExecuteData) -> Option<String> {
+    with_argument(ed, 0, |value| {
+        value
+            .as_object()
+            .map(|object| object.class_name.to_string())
+    })
+}
+
+fn reflected_attribute_definitions(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Vec<AttributeDefinition> {
+    match receiver_class_name(ed).as_deref() {
+        Some("ReflectionFunction" | "ReflectionMethod") => reflected_user_function(ed)
+            .map(|function| function.attributes.clone())
+            .unwrap_or_default(),
+        Some("ReflectionClass" | "ReflectionObject") => {
+            let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+                return Vec::new();
+            };
+            eg.find_class(&owner)
+                .map(|class| class.attributes.clone())
+                .unwrap_or_default()
+        }
+        Some("ReflectionProperty") => {
+            let owner =
+                reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned));
+            let name =
+                reflected_property(ed, "name").and_then(|value| value.as_str().map(str::to_owned));
+            owner
+                .as_deref()
+                .zip(name.as_deref())
+                .and_then(|(owner, name)| {
+                    let class = eg.find_class(owner)?;
+                    class
+                        .properties
+                        .iter()
+                        .chain(class.static_properties.iter())
+                        .find(|property| property.name == name)
+                })
+                .map(|property| property.attributes.clone())
+                .unwrap_or_default()
+        }
+        Some("ReflectionClassConstant") => {
+            let owner =
+                reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned));
+            let name =
+                reflected_property(ed, "name").and_then(|value| value.as_str().map(str::to_owned));
+            owner
+                .as_deref()
+                .zip(name.as_deref())
+                .and_then(|(owner, name)| {
+                    eg.find_class(owner)?
+                        .constants
+                        .iter()
+                        .find(|constant| constant.name == name)
+                })
+                .map(|constant| constant.attributes.clone())
+                .unwrap_or_default()
+        }
+        Some("ReflectionConstant") => reflected_property(ed, "name")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .and_then(|name| eg.constant_attributes.get(&name).cloned())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn reflection_attribute_value(
+    definition: &AttributeDefinition,
+    repeated: bool,
+    eg: &mut ExecutorGlobals,
+) -> Value {
+    let mut arguments = PhpArray::with_packed_capacity(definition.arguments.len());
+    let mut evaluation_error = None;
+    for argument in &definition.arguments {
+        match &argument.value {
+            Ok(value) => {
+                if let Some(name) = &argument.name {
+                    arguments.set_str(name, value.clone());
+                } else {
+                    arguments.push(value.clone());
+                }
+            }
+            Err(error) => {
+                evaluation_error.get_or_insert_with(|| error.clone());
+            }
+        }
+    }
+    let object = object_value(
+        "ReflectionAttribute",
+        [("name", Value::string(definition.name.clone()))],
+    );
+    eg.register_reflection_attribute(
+        &object,
+        definition.name.clone(),
+        Value::array(arguments),
+        definition.target,
+        repeated,
+        evaluation_error,
+        definition.source_file.clone(),
+        definition.source_line,
+        definition.strict_types,
+    );
+    object
+}
+
+fn reflection_attributes(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    definitions: Vec<AttributeDefinition>,
+) -> Result<(), VmError> {
+    let filter = with_argument(ed, 1, |value| value.as_str().map(str::to_owned));
+    let flags = with_argument(ed, 2, Value::as_long).unwrap_or(0);
+    if flags != 0 && flags != 2 {
+        let owner = match receiver_class_name(ed).as_deref() {
+            Some("ReflectionFunction" | "ReflectionMethod") => {
+                "ReflectionFunctionAbstract".to_string()
+            }
+            Some(owner) => owner.to_string(),
+            None => "ReflectionClass".to_string(),
+        };
+        eg.exception = Some(make_error_value(
+            "ValueError",
+            &format!(
+                "{owner}::getAttributes(): Argument #2 ($flags) must be a valid attribute filter flag"
+            ),
+        ));
+        return Ok(());
+    }
+    if flags == 2 {
+        let Some(filter_name) = filter.as_deref() else {
+            eg.exception = Some(make_error_value(
+                "ValueError",
+                "ReflectionFunctionAbstract::getAttributes(): Argument #1 ($name) must be provided when using ReflectionAttribute::IS_INSTANCEOF",
+            ));
+            return Ok(());
+        };
+        if eg.find_class(filter_name).is_none()
+            && !crate::stdlib::autoload::ensure_symbol_loaded(eg, filter_name)?
+        {
+            eg.exception = Some(make_error_value(
+                "Error",
+                &format!("Class \"{filter_name}\" not found"),
+            ));
+            return Ok(());
+        }
+    }
+
+    let mut counts = HashMap::<String, usize>::new();
+    for definition in &definitions {
+        *counts
+            .entry(definition.name.to_ascii_lowercase())
+            .or_default() += 1;
+    }
+    let mut result = PhpArray::with_packed_capacity(definitions.len());
+    for definition in &definitions {
+        let matches = match filter.as_deref() {
+            None => true,
+            Some(name) if flags == 0 => definition.name.eq_ignore_ascii_case(name),
+            Some(name) => eg.class_is_a(&definition.name, name),
+        };
+        if !matches {
+            continue;
+        }
+        let repeated = counts
+            .get(&definition.name.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0)
+            > 1;
+        result.push(reflection_attribute_value(definition, repeated, eg));
+    }
+    return_value(rv, Value::array(result))
+}
+
+fn attribute_get_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = with_argument(ed, 0, Value::clone);
+    return_value(
+        rv,
+        eg.reflection_attribute_state(&receiver).map_or_else(
+            || reflected_property(ed, "name").unwrap_or_else(|| Value::string("")),
+            |state| Value::string(state.name.clone()),
+        ),
+    )
+}
+
+fn attribute_get_arguments(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = with_argument(ed, 0, Value::clone);
+    let evaluation_error = eg
+        .reflection_attribute_state(&receiver)
+        .and_then(|state| state.evaluation_error.clone());
+    if let Some(error) = evaluation_error {
+        eg.exception = Some(make_error_value("Error", &error));
+        return Ok(());
+    }
+    let arguments = eg
+        .reflection_attribute_state(&receiver)
+        .map(|state| state.arguments.clone())
+        .unwrap_or_else(|| Value::array(PhpArray::new()));
+    return_value(rv, arguments)
+}
+
+fn attribute_get_target(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = with_argument(ed, 0, Value::clone);
+    return_value(
+        rv,
+        Value::long(
+            eg.reflection_attribute_state(&receiver)
+                .map_or(0, |state| state.target),
+        ),
+    )
+}
+
+fn attribute_is_repeated(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = with_argument(ed, 0, Value::clone);
+    return_value(
+        rv,
+        Value::bool(
+            eg.reflection_attribute_state(&receiver)
+                .is_some_and(|state| state.repeated),
+        ),
+    )
+}
+
+fn attribute_target_name(target: i64) -> &'static str {
+    match target {
+        1 => "class",
+        2 => "function",
+        4 => "method",
+        8 => "property",
+        16 => "class constant",
+        32 => "parameter",
+        64 => "constant",
+        _ => "declaration",
+    }
+}
+
+fn attribute_allowed_targets(flags: i64) -> String {
+    [
+        (1, "class"),
+        (2, "function"),
+        (4, "method"),
+        (8, "property"),
+        (16, "class constant"),
+        (32, "parameter"),
+        (64, "constant"),
+    ]
+    .into_iter()
+    .filter_map(|(flag, name)| (flags & flag != 0).then_some(name))
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
+fn attribute_new_instance(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = with_argument(ed, 0, Value::clone);
+    let Some((
+        name,
+        arguments,
+        target,
+        repeated,
+        evaluation_error,
+        source_file,
+        source_line,
+        strict,
+    )) = eg.reflection_attribute_state(&receiver).map(|state| {
+        (
+            state.name.clone(),
+            state.arguments.clone(),
+            state.target,
+            state.repeated,
+            state.evaluation_error.clone(),
+            state.source_file.clone(),
+            state.source_line,
+            state.strict_types,
+        )
+    })
+    else {
+        eg.exception = Some(make_error_value(
+            "Error",
+            "Invalid ReflectionAttribute object",
+        ));
+        return Ok(());
+    };
+    if let Some(error) = evaluation_error {
+        eg.exception = Some(make_error_value("Error", &error));
+        return Ok(());
+    }
+    if eg.find_class(&name).is_none() && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &name)?
+    {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!("Attribute class \"{name}\" not found"),
+        ));
+        return Ok(());
+    }
+
+    let Some(class) = eg.find_class(&name) else {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!("Attribute class \"{name}\" not found"),
+        ));
+        return Ok(());
+    };
+    let Some(marker) = class
+        .attributes
+        .iter()
+        .find(|attribute| attribute.name.eq_ignore_ascii_case("Attribute"))
+    else {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!("Attempting to use non-attribute class \"{name}\" as attribute"),
+        ));
+        return Ok(());
+    };
+    let flags = match marker.arguments.first().map(|argument| &argument.value) {
+        None => 127,
+        Some(Ok(value)) => value.as_long().unwrap_or(127),
+        Some(Err(error)) => {
+            eg.exception = Some(make_error_value("Error", error));
+            return Ok(());
+        }
+    };
+    if flags & target == 0 {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!(
+                "Attribute \"{name}\" cannot target {} (allowed targets: {})",
+                attribute_target_name(target),
+                attribute_allowed_targets(flags)
+            ),
+        ));
+        return Ok(());
+    }
+    if repeated && flags & 128 == 0 {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!("Attribute \"{name}\" must not be repeated"),
+        ));
+        return Ok(());
+    }
+    if class.is_interface || class.is_trait || class.is_abstract || class.is_enum {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!("Cannot instantiate attribute class {name}"),
+        ));
+        return Ok(());
+    }
+    let class_id = class.class_id;
+    let object = Value::object(if class_id == 0 {
+        PhpObject::dynamic(class.name.clone(), 0, HashMap::new())
+    } else {
+        PhpObject::with_layout_from_defaults(
+            class_id,
+            class.property_layout.clone(),
+            class.property_defaults.as_ref(),
+        )
+    });
+
+    let Some((_, visibility, _, _, constructor, _)) =
+        find_reflected_method(eg, &name, "__construct")
+    else {
+        return return_value(rv, object);
+    };
+    if visibility != Visibility::Public {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!(
+                "Call to {} {name}::__construct() from global scope",
+                if visibility == Visibility::Private {
+                    "private"
+                } else {
+                    "protected"
+                }
+            ),
+        ));
+        return Ok(());
+    }
+
+    let common = unsafe { &*constructor };
+    let parameter_names = common.sig.param_names.clone();
+    let parameter_hints = common.sig.param_type_hints.clone();
+    let public_arity = common.sig.public_arity() as usize;
+    let required = common.sig.required_num_args as usize;
+    let is_variadic = common.sig.is_variadic;
+    let supplied = arguments.as_array().map_or(0, PhpArray::len);
+    let mut normalized = Vec::<Value>::new();
+    let mut named_variadic = Vec::<(String, Value)>::new();
+    if let Some(arguments) = arguments.as_array() {
+        for (key, value) in arguments.iter() {
+            match key {
+                ArrayKey::Int(_) => normalized.push(value.clone()),
+                ArrayKey::String(name) => {
+                    if let Some(position) = parameter_names
+                        .iter()
+                        .position(|parameter| parameter == &name)
+                    {
+                        if normalized.len() <= position {
+                            normalized.resize_with(position + 1, Value::undef);
+                        }
+                        if !normalized[position].is_undef() {
+                            eg.exception = Some(make_error_value(
+                                "Error",
+                                &format!("Named parameter ${name} overwrites previous argument"),
+                            ));
+                            return Ok(());
+                        }
+                        normalized[position] = value.clone();
+                    } else if is_variadic {
+                        named_variadic.push((name.to_string(), value.clone()));
+                    } else {
+                        eg.exception = Some(make_error_value(
+                            "Error",
+                            &format!("Unknown named parameter ${name}"),
+                        ));
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    if (0..required).any(|index| normalized.get(index).is_none_or(Value::is_undef)) {
+        let relation = if public_arity > required {
+            "at least"
+        } else {
+            "exactly"
+        };
+        eg.exception = Some(make_error_value(
+            "ArgumentCountError",
+            &format!(
+                "Too few arguments to function {name}::__construct(), {supplied} passed in {source_file} on line {source_line} and {relation} {required} expected"
+            ),
+        ));
+        return Ok(());
+    }
+
+    for index in 0..normalized.len().min(parameter_hints.len()) {
+        if normalized[index].is_undef()
+            || matches!(
+                parameter_hints[index],
+                ParamTypeHint::None | ParamTypeHint::Mixed
+            )
+        {
+            continue;
+        }
+        let prepared = crate::vm::execute::prepare_call_argument(
+            &normalized[index],
+            &parameter_hints[index],
+            eg,
+            strict,
+            Some(&name),
+        )?;
+        match prepared {
+            crate::vm::execute::CallArgumentPreparation::Exact => {}
+            crate::vm::execute::CallArgumentPreparation::Coerced(value) => {
+                normalized[index] = value;
+            }
+            crate::vm::execute::CallArgumentPreparation::Invalid => {
+                let parameter = parameter_names.get(index).map_or("unknown", String::as_str);
+                eg.exception = Some(make_error_value(
+                    "TypeError",
+                    &format!(
+                        "{name}::__construct(): Argument #{} (${parameter}) must be of type {}, {} given, called in {source_file} on line {source_line}",
+                        index + 1,
+                        parameter_hints[index].diagnostic_display_name(),
+                        normalized[index].diagnostic_type_name()
+                    ),
+                ));
+                return Ok(());
+            }
+        }
+    }
+    while normalized.last().is_some_and(Value::is_undef) {
+        normalized.pop();
+    }
+    let num_args = 1 + normalized.len();
+    crate::vm::execute::call_function_owned_iter_with_context_and_named(
+        eg,
+        constructor,
+        num_args,
+        std::iter::once(object.clone()).chain(normalized),
+        class_id,
+        None,
+        0,
+        None,
+        named_variadic,
+    )?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    return_value(rv, object)
+}
+
 fn function_get_closure(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -336,6 +860,10 @@ fn function_get_parameters(
             "ReflectionParameter",
             [
                 ("name", Value::string(name)),
+                (
+                    "__reflection_function_pointer",
+                    Value::long(function as *const FunctionCommon as usize as i64),
+                ),
                 ("__reflection_position", Value::long(index as i64)),
                 ("__reflection_has_type", Value::bool(has_type)),
                 ("__reflection_type_kind", Value::string(type_kind)),
@@ -627,11 +1155,19 @@ fn parameter_allows_null(
 }
 
 fn parameter_get_attributes(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    return_value(rv, Value::array(PhpArray::new()))
+    let position = reflected_property(ed, "__reflection_position")
+        .and_then(|value| value.as_long())
+        .and_then(|position| usize::try_from(position).ok());
+    let attributes = reflected_user_function(ed)
+        .zip(position)
+        .and_then(|(function, position)| function.parameter_attributes.get(position))
+        .cloned()
+        .unwrap_or_default();
+    reflection_attributes(ed, rv, eg, attributes)
 }
 
 fn parameter_get_declaring_class(
@@ -713,6 +1249,90 @@ fn class_construct(
         }
     });
     Ok(())
+}
+
+fn constant_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let name = argument_string(ed, 1);
+    if eg.find_constant(&name).is_none() {
+        reflection_exception(eg, format!("Constant \"{name}\" does not exist"));
+        return Ok(());
+    }
+    with_argument(ed, 0, |value| {
+        if let Some(mut object) = value.as_object_mut() {
+            object.set_property("name", Value::string(name));
+        }
+    });
+    Ok(())
+}
+
+fn class_constant_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let class_name = with_argument(ed, 1, |value| {
+        value
+            .as_object()
+            .map(|object| object.class_name.to_string())
+            .unwrap_or_else(|| argument_string(ed, 1))
+    });
+    let constant_name = argument_string(ed, 2);
+    if eg.find_class(&class_name).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?
+    {
+        reflection_exception(eg, format!("Class \"{class_name}\" does not exist"));
+        return Ok(());
+    }
+    let Some((declaring_class, value, modifiers)) = eg.find_class(&class_name).and_then(|class| {
+        class
+            .constants
+            .iter()
+            .find(|constant| constant.name == constant_name)
+            .map(|constant| {
+                let visibility = match constant.visibility {
+                    Visibility::Public => 1,
+                    Visibility::Protected => 2,
+                    Visibility::Private => 4,
+                };
+                (
+                    constant.declaring_class.clone(),
+                    constant.value.clone(),
+                    visibility | if constant.is_final { 32 } else { 0 },
+                )
+            })
+    }) else {
+        reflection_exception(
+            eg,
+            format!("Constant {class_name}::{constant_name} does not exist"),
+        );
+        return Ok(());
+    };
+    with_argument(ed, 0, |receiver| {
+        if let Some(mut object) = receiver.as_object_mut() {
+            object.set_property("name", Value::string(constant_name));
+            object.set_property("class", Value::string(declaring_class));
+            object.set_property("__reflection_modifiers", Value::long(modifiers));
+            object.set_property("__reflection_value", value);
+        }
+    });
+    Ok(())
+}
+
+fn constant_get_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(name) =
+        reflected_property(ed, "name").and_then(|value| value.as_str().map(str::to_owned))
+    else {
+        return return_value(rv, Value::null());
+    };
+    return_value(rv, eg.find_constant(&name).unwrap_or_else(Value::null))
 }
 
 fn reflection_quoted_string(value: &str) -> String {
@@ -1084,13 +1704,12 @@ fn class_get_name(
 }
 
 fn class_get_attributes(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    // Attribute syntax is accepted during S2 compilation, but metadata is not
-    // retained yet. The truthful observable view is therefore an empty list.
-    return_value(rv, Value::array(PhpArray::new()))
+    let attributes = reflected_attribute_definitions(ed, eg);
+    reflection_attributes(ed, rv, eg, attributes)
 }
 
 fn reflection_get_doc_comment(
@@ -1427,6 +2046,48 @@ fn class_get_reflection_constants(
         ));
     }
     return_value(rv, Value::array(constants))
+}
+
+fn class_get_reflection_constant(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::bool(false));
+    }
+    let name = argument_string(ed, 1);
+    let Some(constant) = eg.find_class(&owner).and_then(|class| {
+        class
+            .constants
+            .iter()
+            .find(|constant| constant.name == name)
+    }) else {
+        return return_value(rv, Value::bool(false));
+    };
+    let visibility = match constant.visibility {
+        Visibility::Public => 1,
+        Visibility::Protected => 2,
+        Visibility::Private => 4,
+    };
+    let modifiers = visibility | if constant.is_final { 32 } else { 0 };
+    return_value(
+        rv,
+        object_value(
+            "ReflectionClassConstant",
+            [
+                ("name", Value::string(constant.name.clone())),
+                ("class", Value::string(constant.declaring_class.clone())),
+                ("__reflection_modifiers", Value::long(modifiers)),
+                ("__reflection_value", constant.value.clone()),
+            ],
+        ),
+    )
 }
 
 fn class_get_default_properties(

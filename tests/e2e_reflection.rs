@@ -112,6 +112,46 @@ fn reflection_class_reports_class_level_readonly_metadata() {
 }
 
 #[test]
+fn reflection_attributes_preserve_names_arguments_targets_and_instances() {
+    assert_eq!(
+        run_php(
+            "<?php namespace Metadata; #[\\Attribute(\\Attribute::TARGET_ALL | \\Attribute::IS_REPEATABLE)] class Label { public function __construct(public string $name, public int $rank = 7) {} } #[Label('class'), Label(name: 'again', rank: 9)] class Subject { #[Label('constant')] public const TOKEN = 1; #[Label('property')] public string $value; #[Label('method')] public function run(#[Label('parameter')] $input): void {} } #[Label('function')] function helper() {} #[Label('global')] const GLOBAL_TOKEN = 1; $class = new \\ReflectionClass(Subject::class); $first = $class->getAttributes()[0]; $second = $class->getAttributes()[1]; $instance = $second->newInstance(); echo $first->getName(), ':', $first->getArguments()[0], ':', $first->getTarget(), ':', (int) $first->isRepeated(), '|'; echo $instance->name, ':', $instance->rank, '|'; echo $class->getReflectionConstant('TOKEN')->getAttributes()[0]->getTarget(), ','; echo $class->getProperty('value')->getAttributes()[0]->getTarget(), ','; echo $class->getMethod('run')->getAttributes()[0]->getTarget(), ','; echo $class->getMethod('run')->getParameters()[0]->getAttributes()[0]->getTarget(), ','; echo (new \\ReflectionFunction(__NAMESPACE__ . '\\\\helper'))->getAttributes()[0]->getTarget(), ','; echo (new \\ReflectionConstant(__NAMESPACE__ . '\\\\GLOBAL_TOKEN'))->getAttributes()[0]->getTarget();"
+        ),
+        "Metadata\\Label:class:1:1|again:9|16,8,4,32,2,64"
+    );
+}
+
+#[test]
+fn reflection_attribute_filtering_and_validation_are_deferred_until_instantiation() {
+    assert_eq!(
+        run_php(
+            "<?php #[Attribute(Attribute::TARGET_FUNCTION)] class FunctionLabel { public function __construct(public int $value = 5) {} } class PlainLabel {} #[FunctionLabel(11)] function valid() {} #[FunctionLabel] class WrongTarget {} #[PlainLabel] function wrongClass() {} $valid = (new ReflectionFunction('valid'))->getAttributes(FunctionLabel::class, ReflectionAttribute::IS_INSTANCEOF)[0]; echo $valid->newInstance()->value, '|'; try { (new ReflectionClass(WrongTarget::class))->getAttributes()[0]->newInstance(); } catch (Error $error) { echo $error->getMessage(), '|'; } try { (new ReflectionFunction('wrongClass'))->getAttributes()[0]->newInstance(); } catch (Error $error) { echo $error->getMessage(); }"
+        ),
+        "11|Attribute \"FunctionLabel\" cannot target class (allowed targets: function)|Attempting to use non-attribute class \"PlainLabel\" as attribute"
+    );
+}
+
+#[test]
+fn reflection_attribute_exposes_only_its_public_name_projection() {
+    assert_eq!(
+        run_php(
+            "<?php #[Attribute] class VisibleLabel {} #[VisibleLabel] class VisibleSubject {} $attribute = (new ReflectionClass(VisibleSubject::class))->getAttributes()[0]; $properties = get_object_vars($attribute); echo count($properties), ':', $properties['name'], ':', $attribute->getName();"
+        ),
+        "1:VisibleLabel:VisibleLabel"
+    );
+}
+
+#[test]
+fn class_scoped_attribute_constants_are_available_before_member_compilation() {
+    assert_eq!(
+        run_php(
+            "<?php #[Attribute] class ScopedLabel { public function __construct(public string $owner, public int $value) {} } #[ScopedLabel(self::class, self::VALUE)] class ScopedSubject { private const VALUE = 42; #[ScopedLabel(self::class, self::VALUE)] public function read(#[ScopedLabel(self::class, self::VALUE)] $input): void {} } $class = new ReflectionClass(ScopedSubject::class); foreach ([$class->getAttributes()[0], $class->getMethod('read')->getAttributes()[0], $class->getMethod('read')->getParameters()[0]->getAttributes()[0]] as $attribute) { echo implode(':', $attribute->getArguments()), '|'; }"
+        ),
+        "ScopedSubject:42|ScopedSubject:42|ScopedSubject:42|"
+    );
+}
+
+#[test]
 fn test_get_class_returns_class_name() {
     let out = run_php(
         r#"<?php

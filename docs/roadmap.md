@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,817/5,599 with zero timeouts and zero crashes after exact malformed-Unicode-escape diagnostics added six passes without a lost pass. The focused Unicode-escape slice has eight passes and one explicit surrogate-half byte-string failure; remaining runtime string behavior, attribute metadata, unknown INI directives and `disable_functions` remain explicit gaps. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,841/5,599 with zero timeouts and zero crashes. General userland attribute metadata and `ReflectionAttribute` behavior add 22 focused and 24 corpus-wide exact passes without a lost pass. Dynamic trait/closure attribute scope, deferred runtime constant expressions, exact remaining diagnostics, unknown INI directives and `disable_functions` remain explicit gaps; the measured +3.427% property-control movement is retained as compatibility-first performance debt. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

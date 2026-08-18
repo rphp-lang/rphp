@@ -233,6 +233,7 @@ fn main() {
     let mut eg = ExecutorGlobals::new();
     stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
     eg.generic_metadata = result.generic_metadata;
+    eg.constant_attributes = result.constant_attributes;
     let emitted_compile_deprecations = !result.deprecations.is_empty();
     eg.emit_compile_deprecations(&result.deprecations);
     if let Some(executed_file) = executed_file {

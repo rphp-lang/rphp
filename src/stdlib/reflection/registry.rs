@@ -15,34 +15,37 @@ use super::generic_parameters::{
     generic_variance_cases, is_generic, type_parameter_reference_parameter,
 };
 use super::{
-    class_construct, class_file_name, class_get_attributes, class_get_constants,
-    class_get_constructor, class_get_default_properties, class_get_interface_names,
-    class_get_interfaces, class_get_lazy_initializer, class_get_method, class_get_methods,
-    class_get_name, class_get_parent, class_get_properties, class_get_property,
-    class_get_reflection_constants, class_get_trait_names, class_get_traits, class_has_method,
-    class_implements_interface, class_initialize_lazy_object, class_is_abstract, class_is_final,
-    class_is_instantiable, class_is_interface, class_is_internal, class_is_readonly,
-    class_is_subclass_of, class_is_trait, class_is_uninitialized_lazy_object,
-    class_is_user_defined, class_mark_lazy_object_as_initialized,
-    class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
-    class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_to_string, function_construct,
-    function_get_closure, function_get_closure_called_class, function_get_closure_this,
-    function_get_number_of_parameters, function_get_number_of_required_parameters,
-    function_get_parameters, function_get_return_type, function_get_tentative_return_type,
-    function_has_return_type, function_has_tentative_return_type, function_is_anonymous,
-    function_is_closure, function_returns_reference, generic_arguments, generic_runtime_modes,
-    method_construct, method_file_name, method_get_closure, method_get_modifiers,
-    method_get_prototype, method_has_prototype, method_invoke, method_is_abstract,
-    method_is_constructor, method_is_destructor, method_is_final, method_is_private,
-    method_is_protected, method_is_public, method_is_static, object_construct,
-    parameter_allows_null, parameter_get_attributes, parameter_get_declaring_class,
-    parameter_get_default_value, parameter_get_name, parameter_get_type, parameter_has_type,
-    parameter_is_default_available, parameter_is_optional, parameter_is_passed_by_reference,
-    parameter_is_variadic, property_construct, property_get_default_value, property_get_modifiers,
-    property_get_raw_value, property_get_value, property_has_default_value, property_is_abstract,
-    property_is_default, property_is_final, property_is_initialized, property_is_lazy,
-    property_is_private, property_is_protected, property_is_public, property_is_readonly,
-    property_is_static, property_is_virtual, property_set_raw_value,
+    attribute_get_arguments, attribute_get_name, attribute_get_target, attribute_is_repeated,
+    attribute_new_instance, class_constant_construct, class_construct, class_file_name,
+    class_get_attributes, class_get_constants, class_get_constructor, class_get_default_properties,
+    class_get_interface_names, class_get_interfaces, class_get_lazy_initializer, class_get_method,
+    class_get_methods, class_get_name, class_get_parent, class_get_properties, class_get_property,
+    class_get_reflection_constant, class_get_reflection_constants, class_get_trait_names,
+    class_get_traits, class_has_method, class_implements_interface, class_initialize_lazy_object,
+    class_is_abstract, class_is_final, class_is_instantiable, class_is_interface,
+    class_is_internal, class_is_readonly, class_is_subclass_of, class_is_trait,
+    class_is_uninitialized_lazy_object, class_is_user_defined,
+    class_mark_lazy_object_as_initialized, class_new_instance_without_constructor,
+    class_new_lazy_ghost, class_new_lazy_proxy, class_reset_as_lazy_ghost,
+    class_reset_as_lazy_proxy, class_to_string, constant_construct, constant_get_value,
+    function_construct, function_get_closure, function_get_closure_called_class,
+    function_get_closure_this, function_get_number_of_parameters,
+    function_get_number_of_required_parameters, function_get_parameters, function_get_return_type,
+    function_get_tentative_return_type, function_has_return_type,
+    function_has_tentative_return_type, function_is_anonymous, function_is_closure,
+    function_returns_reference, generic_arguments, generic_runtime_modes, method_construct,
+    method_file_name, method_get_closure, method_get_modifiers, method_get_prototype,
+    method_has_prototype, method_invoke, method_is_abstract, method_is_constructor,
+    method_is_destructor, method_is_final, method_is_private, method_is_protected,
+    method_is_public, method_is_static, object_construct, parameter_allows_null,
+    parameter_get_attributes, parameter_get_declaring_class, parameter_get_default_value,
+    parameter_get_name, parameter_get_type, parameter_has_type, parameter_is_default_available,
+    parameter_is_optional, parameter_is_passed_by_reference, parameter_is_variadic,
+    property_construct, property_get_default_value, property_get_modifiers, property_get_raw_value,
+    property_get_value, property_has_default_value, property_is_abstract, property_is_default,
+    property_is_final, property_is_initialized, property_is_lazy, property_is_private,
+    property_is_protected, property_is_public, property_is_readonly, property_is_static,
+    property_is_virtual, property_set_raw_value,
     property_set_raw_value_without_lazy_initialization, property_set_value,
     property_skip_lazy_initialization, property_to_string, reflection_compound_types,
     reflection_get_doc_comment, reflection_type_allows_null, reflection_type_generic_arguments,
@@ -54,7 +57,7 @@ use crate::compiler::make_internal_method;
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 use crate::value::Value;
-use crate::vm::function::ParamTypeHint;
+use crate::vm::function::{AttributeArgument, AttributeDefinition, ParamTypeHint};
 use crate::vm::function::{FunctionCommon, InternalFunction};
 
 fn register_reflection_class(
@@ -88,6 +91,7 @@ fn register_reflection_class_kind(
     implements: &[&str],
 ) {
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: name.to_string(),
         source_file: None,
         declaration_line: 0,
@@ -115,6 +119,7 @@ fn register_reflection_class_kind(
             ]
             .into_iter()
             .map(|(constant, value)| ClassConstantDefinition {
+                attributes: Vec::new(),
                 name: constant.to_string(),
                 value: Value::long(value),
                 evaluation_error: None,
@@ -131,6 +136,7 @@ fn register_reflection_class_kind(
             ]
             .into_iter()
             .map(|(constant, value)| ClassConstantDefinition {
+                attributes: Vec::new(),
                 name: constant.to_string(),
                 value: Value::long(value),
                 evaluation_error: None,
@@ -155,6 +161,7 @@ fn register_reflection_class_kind(
 
 fn register_reflection_interface(eg: &mut ExecutorGlobals, name: &str) {
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: name.to_string(),
         source_file: None,
         declaration_line: 0,
@@ -197,6 +204,7 @@ fn register_generic_variance(eg: &mut ExecutorGlobals) {
         })
         .collect();
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "ReflectionGenericVariance".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -247,6 +255,65 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     }
 
     register_reflection_interface(eg, "Reflector");
+    eg.register_class(ClassDef {
+        name: "Attribute".to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: true,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: [
+            ("TARGET_CLASS", 1),
+            ("TARGET_FUNCTION", 2),
+            ("TARGET_METHOD", 4),
+            ("TARGET_PROPERTY", 8),
+            ("TARGET_CLASS_CONSTANT", 16),
+            ("TARGET_PARAMETER", 32),
+            ("TARGET_CONSTANT", 64),
+            ("TARGET_ALL", 127),
+            ("IS_REPEATABLE", 128),
+        ]
+        .into_iter()
+        .map(|(name, value)| ClassConstantDefinition {
+            name: name.to_string(),
+            value: Value::long(value),
+            evaluation_error: None,
+            visibility: Visibility::Public,
+            declaring_class: "Attribute".to_string(),
+            type_hint: ParamTypeHint::Int,
+            is_final: false,
+            attributes: Vec::new(),
+        })
+        .collect(),
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+        attributes: vec![AttributeDefinition {
+            name: "Attribute".to_string(),
+            arguments: vec![AttributeArgument {
+                name: None,
+                value: Ok(Value::long(1)),
+            }],
+            target: 1,
+            source_file: String::new(),
+            source_line: 0,
+            strict_types: false,
+        }],
+    })
+    .unwrap();
     register_reflection_class_with_interfaces(
         eg,
         "ReflectionFunctionAbstract",
@@ -256,6 +323,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         &["Reflector"],
     );
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "ReflectionAttribute".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -273,6 +341,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         properties: vec![],
         static_properties: vec![],
         constants: vec![ClassConstantDefinition {
+            attributes: Vec::new(),
             name: "IS_INSTANCEOF".to_string(),
             value: Value::long(2),
             evaluation_error: None,
@@ -289,6 +358,46 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         class_id: 0,
     })
     .unwrap();
+    register_method!(
+        "ReflectionAttribute",
+        "getname",
+        attribute_get_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionAttribute",
+        "getarguments",
+        attribute_get_arguments,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionAttribute",
+        "gettarget",
+        attribute_get_target,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionAttribute",
+        "isrepeated",
+        attribute_is_repeated,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionAttribute",
+        "newinstance",
+        attribute_new_instance,
+        1,
+        0,
+        []
+    );
     for class in ["ReflectionFunction", "ReflectionMethod"] {
         register_method!(class, "getname", parameter_get_name, 1, 0, []);
         register_reflection_class(eg, class, Some("ReflectionFunctionAbstract"), false, false);
@@ -317,6 +426,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         false,
     );
     eg.register_class(ClassDef {
+        attributes: Vec::new(),
         name: "ReflectionProperty".to_string(),
         source_file: None,
         declaration_line: 0,
@@ -345,6 +455,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         ]
         .into_iter()
         .map(|(name, value)| ClassConstantDefinition {
+            attributes: Vec::new(),
             name: name.to_string(),
             value: Value::long(value),
             evaluation_error: None,
@@ -374,6 +485,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     register_reflection_class_with_interfaces(
         eg,
         "ReflectionParameter",
+        None,
+        false,
+        false,
+        &["Reflector"],
+    );
+    register_reflection_class_with_interfaces(
+        eg,
+        "ReflectionConstant",
         None,
         false,
         false,
@@ -500,6 +619,38 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         1,
         0,
         []
+    );
+    register_method!(
+        "ReflectionConstant",
+        "__construct",
+        constant_construct,
+        2,
+        1,
+        ["name"]
+    );
+    register_method!(
+        "ReflectionConstant",
+        "getname",
+        parameter_get_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionConstant",
+        "getvalue",
+        constant_get_value,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionConstant",
+        "getattributes",
+        class_get_attributes,
+        3,
+        0,
+        ["name", "flags"]
     );
     register_method!(
         "ReflectionParameter",
@@ -698,6 +849,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         2,
         0,
         ["filter"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "getreflectionconstant",
+        class_get_reflection_constant,
+        2,
+        1,
+        ["name"]
     );
     register_method!(
         "ReflectionClass",
@@ -938,6 +1097,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         1,
         0,
         []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "__construct",
+        class_constant_construct,
+        3,
+        2,
+        ["class", "constant"]
     );
     register_method!(
         "ReflectionClassConstant",

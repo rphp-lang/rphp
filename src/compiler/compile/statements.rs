@@ -1923,6 +1923,7 @@ impl Compiler {
             }
             Stmt::Function {
                 line,
+                attributes,
                 name,
                 returns_by_ref,
                 params,
@@ -1999,7 +2000,7 @@ impl Compiler {
                     block_plans: Vec::new(),
                     ip_to_block: Vec::new(),
                 };
-                let user_func = make_user_function_typed(
+                let mut user_func = make_user_function_typed(
                     op_array,
                     cp.num_args,
                     cp.required_num_args,
@@ -2011,6 +2012,11 @@ impl Compiler {
                     cp.return_type_hint,
                     *returns_by_ref,
                 );
+                user_func.attributes = self.compile_attributes(attributes, 2);
+                user_func.parameter_attributes = params
+                    .iter()
+                    .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                    .collect();
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
@@ -3174,7 +3180,11 @@ impl Compiler {
                     }
                 }
             }
-            Stmt::Const { declarations } => {
+            Stmt::Const {
+                attributes,
+                declarations,
+            } => {
+                let reflected_attributes = self.compile_attributes(attributes, 64);
                 for (name, value) in declarations {
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
@@ -3183,6 +3193,9 @@ impl Compiler {
                     .current_namespace
                     .as_ref()
                     .map_or_else(|| name.clone(), |namespace| format!("{namespace}\\{name}"));
+                self.constant_attributes
+                    .borrow_mut()
+                    .insert(declaration_name.clone(), reflected_attributes.clone());
                 let compile_time = self
                     .eval_const_expr_in_source(value, &self.known_constants)
                     .ok();
@@ -3312,6 +3325,7 @@ impl Compiler {
             }
             Stmt::Class {
                 line: class_line,
+                attributes,
                 name,
                 parent,
                 implements,
@@ -3379,6 +3393,15 @@ impl Compiler {
                         &property.name,
                     )?;
                 }
+                // Make same-class constants available while compiling method
+                // bodies and their nested closures. Attribute arguments use
+                // lexical class scope even though the ClassDef is linked only
+                // after every member has been compiled.
+                let compiled_constants = self.compile_class_constants(
+                    &resolved_class,
+                    resolved_parent.as_deref(),
+                    constants,
+                )?;
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
@@ -3388,6 +3411,7 @@ impl Compiler {
                 }) {
                     effective_methods.push(crate::parser::ClassMethod {
                         line: property.line,
+                        attributes: Vec::new(),
                         visibility: property.visibility,
                         name: format!("${}::get", property.name),
                         params: Vec::new(),
@@ -3412,9 +3436,11 @@ impl Compiler {
                     });
                     effective_methods.push(crate::parser::ClassMethod {
                         line: property.line,
+                        attributes: Vec::new(),
                         visibility: property.visibility,
                         name: format!("${}::set", property.name),
                         params: vec![crate::parser::Param {
+                            attributes: Vec::new(),
                             name: "value".to_string(),
                             line: property.line,
                             default: None,
@@ -3697,7 +3723,7 @@ impl Compiler {
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
-                    let user_func = finalize_user_method(
+                    let mut user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -3713,6 +3739,24 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.attributes = self.compile_attributes_in_scope(
+                        &method.attributes,
+                        4,
+                        Some(&resolved_class),
+                        resolved_parent.as_deref(),
+                    );
+                    user_func.parameter_attributes = method
+                        .params
+                        .iter()
+                        .map(|parameter| {
+                            self.compile_attributes_in_scope(
+                                &parameter.attributes,
+                                32,
+                                Some(&resolved_class),
+                                resolved_parent.as_deref(),
+                            )
+                        })
+                        .collect();
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -3728,11 +3772,6 @@ impl Compiler {
                 // allows a property declared in the same class to use
                 // `self::CONSTANT`, even though the class itself is not linked
                 // until the complete declaration has been compiled.
-                let compiled_constants = self.compile_class_constants(
-                    &resolved_class,
-                    resolved_parent.as_deref(),
-                    constants,
-                )?;
                 let mut property_constants = self.known_constants.clone();
                 property_constants.insert(
                     "self::class".to_string(),
@@ -3891,6 +3930,12 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, *class_line)
                     .with_reflection_order(prop.line);
+                    definition.attributes = self.compile_attributes_in_scope(
+                        &prop.attributes,
+                        8,
+                        Some(&resolved_class),
+                        resolved_parent.as_deref(),
+                    );
                     definition.set_final(prop.is_final);
                     definition.set_abstract_hooks(
                         prop.has_abstract_get_hook,
@@ -3967,6 +4012,12 @@ impl Compiler {
                         type_hint_requires_reified_check(&promoted.type_hint),
                     ).with_source_location(&self.source_file, *class_line)
                     .with_reflection_order(promoted.line);
+                    definition.attributes = self.compile_attributes_in_scope(
+                        &promoted.attributes,
+                        8,
+                        Some(&resolved_class),
+                        resolved_parent.as_deref(),
+                    );
                     definition.set_final(promoted.is_final);
                     // A constructor parameter default belongs to the parameter,
                     // not to the promoted property declaration.
@@ -4023,6 +4074,12 @@ impl Compiler {
                     })
                     .collect();
                 self.class_defs.push(ClassDef {
+                    attributes: self.compile_attributes_in_scope(
+                        attributes,
+                        1,
+                        Some(&resolved_class),
+                        resolved_parent.as_deref(),
+                    ),
                     name: resolved_class,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -4054,6 +4111,7 @@ impl Compiler {
                 });
             }
             Stmt::Interface {
+                attributes,
                 name,
                 extends,
                 properties,
@@ -4180,7 +4238,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = make_user_function_typed(
+                    let mut user_func = make_user_function_typed(
                         op_array,
                         cp.num_args,
                         cp.required_num_args,
@@ -4192,6 +4250,12 @@ impl Compiler {
                         cp.return_type_hint,
                         method.returns_by_ref,
                     );
+                    user_func.attributes = self.compile_attributes(&method.attributes, 4);
+                    user_func.parameter_attributes = method
+                        .params
+                        .iter()
+                        .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                        .collect();
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -4258,6 +4322,7 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, property.line)
                     .with_reflection_order(property.line);
+                    definition.attributes = self.compile_attributes(&property.attributes, 8);
                     definition.has_get_hook = property.has_get_hook;
                     definition.has_set_hook = property.has_set_hook;
                     definition.set_abstract_hooks(
@@ -4268,6 +4333,7 @@ impl Compiler {
                     compiled_properties.push(definition);
                 }
                 self.class_defs.push(ClassDef {
+                    attributes: self.compile_attributes(attributes, 1),
                     name: resolved_iface,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -4295,6 +4361,7 @@ impl Compiler {
                 });
             }
             Stmt::Trait {
+                attributes,
                 name,
                 properties,
                 constants,
@@ -4416,7 +4483,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = finalize_user_method(
+                    let mut user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -4432,6 +4499,12 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.attributes = self.compile_attributes(&method.attributes, 4);
+                    user_func.parameter_attributes = method
+                        .params
+                        .iter()
+                        .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                        .collect();
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -4533,6 +4606,7 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, prop.line)
                     .with_reflection_order(prop.line);
+                    definition.attributes = self.compile_attributes(&prop.attributes, 8);
                     definition.set_final(prop.is_final);
                     definition.set_abstract_hooks(
                         prop.has_abstract_get_hook,
@@ -4601,6 +4675,7 @@ impl Compiler {
                     })
                     .collect();
                 self.class_defs.push(ClassDef {
+                    attributes: self.compile_attributes(attributes, 1),
                     name: resolved_trait,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -4633,6 +4708,7 @@ impl Compiler {
             }
             Stmt::Enum {
                 line: enum_line,
+                attributes,
                 name,
                 backing_type,
                 implements,
@@ -4712,6 +4788,7 @@ impl Compiler {
                 let mut enum_methods = methods.clone();
                 enum_methods.push(crate::parser::ClassMethod {
                     line: 0,
+                    attributes: Vec::new(),
                     visibility: Visibility::Public,
                     name: "cases".to_string(),
                     params: vec![],
@@ -4778,6 +4855,7 @@ impl Compiler {
                         body
                     };
                     let value_param = crate::parser::Param {
+                        attributes: Vec::new(),
                         name: "value".to_string(),
                         line: 0,
                         default: None,
@@ -4790,6 +4868,7 @@ impl Compiler {
                     };
                     enum_methods.push(crate::parser::ClassMethod {
                         line: 0,
+                        attributes: Vec::new(),
                         visibility: Visibility::Public,
                         name: "tryFrom".to_string(),
                         params: vec![value_param.clone()],
@@ -4833,6 +4912,7 @@ impl Compiler {
                     };
                     enum_methods.push(crate::parser::ClassMethod {
                         line: 0,
+                        attributes: Vec::new(),
                         visibility: Visibility::Public,
                         name: "from".to_string(),
                         params: vec![value_param],
@@ -4947,7 +5027,7 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = finalize_user_method(
+                    let mut user_func = finalize_user_method(
                         make_user_function_typed(
                             op_array,
                             cp.num_args + 1,
@@ -4963,6 +5043,12 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.attributes = self.compile_attributes(&method.attributes, 4);
+                    user_func.parameter_attributes = method
+                        .params
+                        .iter()
+                        .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                        .collect();
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
@@ -5052,6 +5138,7 @@ impl Compiler {
                     })
                     .collect();
                 self.class_defs.push(ClassDef {
+                    attributes: self.compile_attributes(attributes, 1),
                     name: resolved_enum,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -5221,6 +5308,12 @@ impl Compiler {
                     })?
                 };
                 Ok(ClassConstantDefinition {
+                    attributes: self.compile_attributes_in_scope(
+                        &constant.attributes,
+                        16,
+                        Some(owner),
+                        parent,
+                    ),
                     name: constant.name.clone(),
                     value,
                     evaluation_error,

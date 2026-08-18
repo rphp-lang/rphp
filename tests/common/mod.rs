@@ -61,9 +61,11 @@ fn run_php_with_compiler(
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = compiler.compile(&stmts).unwrap();
     let generic_metadata = result.generic_metadata;
+    let constant_attributes = result.constant_attributes;
     let main_func = make_user_function(result.main);
     let (mut eg, buf) = make_eg_with_capture();
     eg.generic_metadata = generic_metadata;
+    eg.constant_attributes = constant_attributes;
     eg.emit_compile_deprecations(&result.deprecations);
     // Register stdlib functions
     let _stdlib = stdlib::register_stdlib(&mut eg);
@@ -88,9 +90,11 @@ pub fn run_php_silent(source: &str) {
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = Compiler::new().compile(&stmts).unwrap();
     let generic_metadata = result.generic_metadata;
+    let constant_attributes = result.constant_attributes;
     let main_func = make_user_function(result.main);
     let (mut eg, _buf) = make_eg_with_capture();
     eg.generic_metadata = generic_metadata;
+    eg.constant_attributes = constant_attributes;
     eg.emit_compile_deprecations(&result.deprecations);
     let _stdlib = stdlib::register_stdlib(&mut eg);
     for (name, func) in &result.functions {
@@ -126,9 +130,11 @@ impl PreparedPhp {
         let stmts = Parser::new(tokens).parse().unwrap();
         let result = Compiler::new().compile(&stmts).unwrap();
         let generic_metadata = result.generic_metadata;
+        let constant_attributes = result.constant_attributes;
         let main_func = make_user_function(result.main);
         let (mut eg, buf) = make_eg_with_capture();
         eg.generic_metadata = generic_metadata;
+        eg.constant_attributes = constant_attributes;
         let stdlib = stdlib::register_stdlib(&mut eg);
         for (name, func) in &result.functions {
             eg.register_function(name, &func.common as *const FunctionCommon)
@@ -182,9 +188,11 @@ fn run_php_expect_error_with_compiler(source: &str, compiler: Compiler) -> execu
         Err(e) => return execute::VmError::Fatal(e.message),
     };
     let generic_metadata = result.generic_metadata;
+    let constant_attributes = result.constant_attributes;
     let main_func = make_user_function(result.main);
     let (mut eg, _buf) = make_eg_with_capture();
     eg.generic_metadata = generic_metadata;
+    eg.constant_attributes = constant_attributes;
     let _stdlib = stdlib::register_stdlib(&mut eg);
     for (name, func) in &result.functions {
         if let Err(e) = eg.register_function(name, &func.common as *const FunctionCommon) {

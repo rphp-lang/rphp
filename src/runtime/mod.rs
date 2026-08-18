@@ -268,6 +268,21 @@ pub(crate) struct LazyObjectState {
     pub(crate) options: u8,
 }
 
+/// Cold request-local payload for one engine-created ReflectionAttribute.
+/// Keeping this state outside PhpObject preserves the ordinary object layout
+/// and exposes only Zend's public `name` property to PHP code.
+pub(crate) struct ReflectionAttributeState {
+    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) name: String,
+    pub(crate) arguments: crate::value::Value,
+    pub(crate) target: i64,
+    pub(crate) repeated: bool,
+    pub(crate) evaluation_error: Option<String>,
+    pub(crate) source_file: String,
+    pub(crate) source_line: usize,
+    pub(crate) strict_types: bool,
+}
+
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -298,6 +313,8 @@ pub struct ExecutorGlobals {
     /// Constant table — name → Value (case-sensitive, like PHP)
     /// Uses RefCell to allow define() from internal functions (which receive &self).
     pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
+    /// Reflection-only metadata for source-level global constants.
+    pub constant_attributes: HashMap<String, Vec<crate::vm::function::AttributeDefinition>>,
     /// Parsed and compiled regular expressions shared by all preg_* calls for
     /// the lifetime of this executor.
     pub regex_cache: crate::regex::RegexCache,
@@ -464,6 +481,9 @@ pub struct ExecutorGlobals {
     /// Lazily allocated request-local overrides for the admitted mutable INI
     /// subset. Requests that never call `ini_set()` retain only this null word.
     pub(crate) ini_overrides: Option<Box<HashMap<String, String>>>,
+    /// Engine-created ReflectionAttribute payloads are rare and must not
+    /// appear as user-visible dynamic properties.
+    pub(crate) reflection_attributes: Option<Box<HashMap<usize, ReflectionAttributeState>>>,
 }
 
 pub(crate) enum ClassAliasRegistrationError {
@@ -474,6 +494,50 @@ pub(crate) enum ClassAliasRegistrationError {
 const PHP_82_SUPPRESSED_ERROR_REPORTING: i64 = 1 | 4 | 16 | 64 | 256 | 4096;
 
 impl ExecutorGlobals {
+    #[cold]
+    pub(crate) fn register_reflection_attribute(
+        &mut self,
+        object: &crate::value::Value,
+        name: String,
+        arguments: crate::value::Value,
+        target: i64,
+        repeated: bool,
+        evaluation_error: Option<String>,
+        source_file: String,
+        source_line: usize,
+        strict_types: bool,
+    ) {
+        let (Some(identity), Some(owner)) = (object.object_identity(), object.object_weak()) else {
+            return;
+        };
+        self.reflection_attributes
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .insert(
+                identity,
+                ReflectionAttributeState {
+                    owner,
+                    name,
+                    arguments,
+                    target,
+                    repeated,
+                    evaluation_error,
+                    source_file,
+                    source_line,
+                    strict_types,
+                },
+            );
+    }
+
+    #[inline]
+    pub(crate) fn reflection_attribute_state(
+        &self,
+        object: &crate::value::Value,
+    ) -> Option<&ReflectionAttributeState> {
+        let identity = object.object_identity()?;
+        let state = self.reflection_attributes.as_ref()?.get(&identity)?;
+        (state.owner.strong_count() != 0).then_some(state)
+    }
+
     #[cold]
     pub(crate) fn register_lazy_object(
         &mut self,
@@ -829,9 +893,9 @@ impl ExecutorGlobals {
         // installing that fixed set never rehashes stored function pointers.
         self.function_table.reserve(512);
         self.class_table.reserve(66);
-        self.method_declaring_class.reserve(256);
-        self.class_by_id.reserve(66);
-        self.static_property_slots_by_class.reserve(66);
+        self.method_declaring_class.reserve(512);
+        self.class_by_id.reserve(68);
+        self.static_property_slots_by_class.reserve(68);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
@@ -877,6 +941,7 @@ impl ExecutorGlobals {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            constant_attributes: HashMap::new(),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             finally_exceptions: HashMap::new(),
@@ -922,6 +987,7 @@ impl ExecutorGlobals {
             static_generic_property_contracts: Vec::new(),
             gc_enabled: true,
             ini_overrides: None,
+            reflection_attributes: None,
         }
     }
 
@@ -966,6 +1032,7 @@ impl ExecutorGlobals {
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            constant_attributes: HashMap::new(),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             finally_exceptions: HashMap::new(),
@@ -1011,6 +1078,7 @@ impl ExecutorGlobals {
             static_generic_property_contracts: Vec::new(),
             gc_enabled: true,
             ini_overrides: None,
+            reflection_attributes: None,
         }
     }
 

@@ -17,8 +17,8 @@ use crate::generics::{
     PendingGenericUseSite,
 };
 use crate::parser::{
-    BinOp, CallArg, CastType, ClassConstant, ClassProperty, Expr, ForeachTarget, GenericAncestor,
-    GlobalTarget, ListTarget, Param, Stmt, TypeHint, UseKind, Visibility,
+    Attribute, BinOp, CallArg, CastType, ClassConstant, ClassProperty, Expr, ForeachTarget,
+    GenericAncestor, GlobalTarget, ListTarget, Param, Stmt, TypeHint, UseKind, Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -549,7 +549,9 @@ use super::{
     make_user_function_typed_with_return_mode as make_user_function_typed,
     make_user_function_with_args,
 };
-use crate::vm::function::{CallStrategy, ParamTypeHint, UserFunction};
+use crate::vm::function::{
+    AttributeArgument, AttributeDefinition, CallStrategy, ParamTypeHint, UserFunction,
+};
 
 /// One declaration-time warning or deprecation emitted before the compiled
 /// unit runs. The existing collection name is retained for API stability.
@@ -587,6 +589,7 @@ pub struct CompileResult {
     pub main: OpArray,
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
+    pub constant_attributes: HashMap<String, Vec<AttributeDefinition>>,
     pub generic_metadata: GenericMetadata,
     pub deprecations: Vec<CompileDeprecation>,
 }
@@ -1762,6 +1765,9 @@ pub struct PropertyDefinition {
     /// instance and static definitions have been stored separately. Link-time
     /// diagnostics intentionally keep `source_line` at the owning class line.
     pub reflection_order: usize,
+    /// Reflection-only declaration metadata stays after all established
+    /// property execution fields so their offsets remain stable.
+    pub attributes: Vec<AttributeDefinition>,
 }
 
 impl PropertyDefinition {
@@ -1775,6 +1781,7 @@ impl PropertyDefinition {
         let has_default = default.is_some();
         let type_scope = declaring_class.clone();
         Self {
+            attributes: Vec::new(),
             name,
             default,
             visibility,
@@ -1808,6 +1815,7 @@ impl PropertyDefinition {
         let has_default = default.is_some() || matches!(type_hint, ParamTypeHint::None);
         let type_scope = declaring_class.clone();
         Self {
+            attributes: Vec::new(),
             name,
             default,
             visibility,
@@ -2038,6 +2046,7 @@ pub struct ClassConstantDefinition {
     pub declaring_class: String,
     pub type_hint: ParamTypeHint,
     pub is_final: bool,
+    pub attributes: Vec<AttributeDefinition>,
 }
 
 #[derive(Debug, Clone)]
@@ -2090,6 +2099,9 @@ pub struct ClassDef {
     /// Stable numeric ID assigned at registration time. Used as inline cache key.
     /// 0 = not yet assigned (set by ExecutorGlobals::register_class).
     pub class_id: u32,
+    /// Reflection-only declaration metadata stays after the existing runtime
+    /// class fields so frequently read field offsets remain stable.
+    pub attributes: Vec<AttributeDefinition>,
 }
 
 impl ClassDef {
@@ -2185,6 +2197,9 @@ pub struct Compiler {
     try_entries: Vec<TryEntry>,
     /// Class definitions
     class_defs: Vec<ClassDef>,
+    /// Source-unit constant attributes are shared by nested compilers and
+    /// published into one cold executor side table after compilation.
+    constant_attributes: Rc<RefCell<HashMap<String, Vec<AttributeDefinition>>>>,
     /// Cold declaration metadata. Finalized into one interned side table after
     /// compilation; never embedded in a function, frame, object or Value.
     generic_declarations: Vec<PendingGenericDeclaration>,
@@ -2395,6 +2410,7 @@ impl Compiler {
             finally_jump_cv: None,
             try_entries: Vec::new(),
             class_defs: Vec::new(),
+            constant_attributes: Rc::new(RefCell::new(HashMap::new())),
             generic_declarations: Vec::new(),
             generic_inheritances: Vec::new(),
             generic_use_sites: Rc::new(RefCell::new(Vec::new())),
@@ -2538,6 +2554,7 @@ impl Compiler {
         let mut child = Self::new();
         child.generic_use_sites = Rc::clone(&self.generic_use_sites);
         child.compile_deprecations = Rc::clone(&self.compile_deprecations);
+        child.constant_attributes = Rc::clone(&self.constant_attributes);
         // Nested op arrays still compile in the same file scope. Keeping this
         // context here prevents methods and closures from silently losing
         // namespace aliases or strict-types semantics when their bytecode is
@@ -3070,7 +3087,7 @@ impl Compiler {
     ) {
         for stmt in stmts {
             match stmt {
-                Stmt::Const { declarations } => {
+                Stmt::Const { declarations, .. } => {
                     for (name, value) in declarations {
                         let fqn = match ns {
                             Some(prefix) => format!("{}\\{}", prefix, name),
@@ -3476,6 +3493,7 @@ impl Compiler {
             },
             functions: self.functions,
             class_defs: self.class_defs,
+            constant_attributes: self.constant_attributes.borrow().clone(),
             generic_metadata,
             deprecations: self.compile_deprecations.borrow().clone(),
         })
@@ -3696,6 +3714,72 @@ impl Compiler {
         )
     }
 
+    fn compile_attributes(
+        &self,
+        attributes: &[Attribute],
+        target: i64,
+    ) -> Vec<AttributeDefinition> {
+        self.compile_attributes_in_scope(
+            attributes,
+            target,
+            self.lexical_static_class.as_deref(),
+            self.lexical_static_parent.as_deref(),
+        )
+    }
+
+    fn compile_attributes_in_scope(
+        &self,
+        attributes: &[Attribute],
+        target: i64,
+        lexical_class: Option<&str>,
+        lexical_parent: Option<&str>,
+    ) -> Vec<AttributeDefinition> {
+        let mut known = self.known_constants.clone();
+        if let Some(class) = lexical_class {
+            known.insert("self::class".to_string(), Value::string(class));
+            let prefix = format!("{class}::");
+            for (name, value) in &self.known_constants {
+                if let Some(constant) = name.strip_prefix(&prefix) {
+                    known.insert(format!("self::{constant}"), value.clone());
+                }
+            }
+        }
+        if let Some(parent) = lexical_parent {
+            known.insert("parent::class".to_string(), Value::string(parent));
+            let prefix = format!("{parent}::");
+            for (name, value) in &self.known_constants {
+                if let Some(constant) = name.strip_prefix(&prefix) {
+                    known.insert(format!("parent::{constant}"), value.clone());
+                }
+            }
+        }
+        attributes
+            .iter()
+            .map(|attribute| AttributeDefinition {
+                name: self.resolve_name(&attribute.name),
+                arguments: attribute
+                    .args
+                    .iter()
+                    .map(|argument| {
+                        let (name, expression) = match argument {
+                            CallArg::Positional(expression) => (None, expression),
+                            CallArg::Named { name, value } => (Some(name.clone()), value),
+                            CallArg::Unpack(expression) => (None, expression),
+                        };
+                        AttributeArgument {
+                            name,
+                            value: self.eval_const_expr_in_source(expression, &known),
+                        }
+                    })
+                    .collect(),
+                target,
+                source_file: self.source_file.clone(),
+                source_line: attribute.line,
+                strict_types: self.strict_types,
+            })
+            .collect()
+    }
+
     /// PHP rejects an array-unpack operand during compilation only when its
     /// value is already fixed by the source expression. Ordinary user
     /// constants and runtime expressions remain catchable at execution time;
@@ -3728,11 +3812,23 @@ impl Compiler {
             Expr::ClassConstant {
                 class_name,
                 constant,
-            } if constant.eq_ignore_ascii_case("class") => {
-                known.insert(
-                    format!("{class_name}::{constant}"),
-                    Value::string(self.resolve_name(class_name)),
-                );
+            } => {
+                let source_key = format!("{class_name}::{constant}");
+                if constant.eq_ignore_ascii_case("class") {
+                    known
+                        .entry(source_key)
+                        .or_insert_with(|| Value::string(self.resolve_name(class_name)));
+                } else if !known.contains_key(&source_key) {
+                    let resolved_class = self.resolve_name(class_name);
+                    let resolved_key = format!("{resolved_class}::{constant}");
+                    if let Some(value) = known
+                        .get(&resolved_key)
+                        .cloned()
+                        .or_else(|| crate::builtin_class_constant(&resolved_class, constant))
+                    {
+                        known.insert(source_key, value);
+                    }
+                }
             }
             Expr::BinaryOp { left, right, .. }
             | Expr::NullCoalesce { left, right }
@@ -7284,6 +7380,7 @@ impl Compiler {
             }
             Expr::Closure {
                 line,
+                attributes,
                 is_static,
                 returns_by_ref,
                 params,
@@ -7432,6 +7529,11 @@ impl Compiler {
                     cp.return_type_hint,
                     *returns_by_ref,
                 );
+                user_func.attributes = self.compile_attributes(attributes, 2);
+                user_func.parameter_attributes = params
+                    .iter()
+                    .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                    .collect();
                 user_func.reference_cvs = closure_reference_cvs;
                 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
                 {
@@ -7665,6 +7767,7 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::AnonymousNew {
+                attributes,
                 args,
                 is_readonly,
                 allow_dynamic_properties,
@@ -7701,6 +7804,7 @@ impl Compiler {
                 let class_name = format!("class@anonymous#{sequence}");
                 let declaration = Stmt::Class {
                     line: *call_line,
+                    attributes: attributes.clone(),
                     name: format!("\\{class_name}"),
                     parent: parent.clone(),
                     implements: implements.clone(),

@@ -114,6 +114,16 @@ pub enum CallArg {
     Named { name: String, value: Expr },
 }
 
+/// One source-level PHP attribute. Names are resolved in the declaration's
+/// lexical namespace by the compiler; arguments remain constant-expression
+/// AST until that same context is available.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attribute {
+    pub name: String,
+    pub args: Vec<CallArg>,
+    pub line: usize,
+}
+
 impl CallArg {
     /// Return a reference to the underlying expression.
     pub fn expr(&self) -> &Expr {
@@ -253,6 +263,7 @@ pub enum Expr {
     Closure {
         // [static] function($x) use($y) { ... }: ReturnType
         line: usize,
+        attributes: Vec<Attribute>,
         is_static: bool,
         returns_by_ref: bool,
         params: Vec<Param>,
@@ -277,6 +288,7 @@ pub enum Expr {
         call_line: usize,
     },
     AnonymousNew {
+        attributes: Vec<Attribute>,
         args: Vec<CallArg>,
         is_readonly: bool,
         allow_dynamic_properties: bool,
@@ -710,6 +722,7 @@ pub struct GenericAncestor {
 /// Function parameter with optional default value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
+    pub attributes: Vec<Attribute>,
     pub name: std::string::String,
     /// Declaration line used by compile-time parameter diagnostics.
     pub line: usize,
@@ -784,6 +797,7 @@ pub enum Stmt {
     },
     Function {
         line: usize,
+        attributes: Vec<Attribute>,
         name: String,
         returns_by_ref: bool,
         params: Vec<Param>,
@@ -856,6 +870,7 @@ pub enum Stmt {
     },
     Class {
         line: usize,
+        attributes: Vec<Attribute>,
         name: String,
         parent: Option<GenericAncestor>,
         implements: Vec<GenericAncestor>,
@@ -871,6 +886,7 @@ pub enum Stmt {
         generic_params: Vec<GenericParameter>,
     },
     Interface {
+        attributes: Vec<Attribute>,
         name: String,
         extends: Vec<GenericAncestor>,
         properties: Vec<ClassProperty>,
@@ -879,6 +895,7 @@ pub enum Stmt {
         generic_params: Vec<GenericParameter>,
     },
     Trait {
+        attributes: Vec<Attribute>,
         name: String,
         properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
@@ -925,6 +942,7 @@ pub enum Stmt {
         imports: Vec<(UseKind, String, String)>, // (kind, fully_qualified, alias)
     },
     Const {
+        attributes: Vec<Attribute>,
         // const FOO = expr, BAR = expr;
         declarations: Vec<(String, Expr)>,
     },
@@ -942,6 +960,7 @@ pub enum Stmt {
     },
     Enum {
         line: usize,
+        attributes: Vec<Attribute>,
         name: String,
         backing_type: Option<TypeHint>,
         implements: Vec<GenericAncestor>,
@@ -973,7 +992,7 @@ impl Stmt {
             | Stmt::Throw { expr, .. }
             | Stmt::ExprStmt(expr)
             | Stmt::Include { path: expr, .. } => expr.contains_yield(),
-            Stmt::Const { declarations } => declarations
+            Stmt::Const { declarations, .. } => declarations
                 .iter()
                 .any(|(_, expression)| expression.contains_yield()),
             Stmt::CoalesceAssign { target, expr }
@@ -1107,6 +1126,7 @@ pub enum Visibility {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassProperty {
+    pub attributes: Vec<Attribute>,
     /// Declaration line used by compile/link diagnostics.
     pub line: usize,
     pub visibility: Visibility,
@@ -1135,6 +1155,7 @@ pub struct ClassProperty {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassConstant {
+    pub attributes: Vec<Attribute>,
     pub visibility: Visibility,
     pub name: String,
     pub value: Expr,
@@ -1145,6 +1166,7 @@ pub struct ClassConstant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassMethod {
     pub line: usize,
+    pub attributes: Vec<Attribute>,
     pub visibility: Visibility,
     pub name: String,
     pub params: Vec<Param>,
