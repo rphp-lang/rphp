@@ -2076,10 +2076,36 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BoolNot => {
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                let negated = !val.is_truthy();
-                unsafe { frame_tmp_set_bool(frame, result_ptr, negated) };
+                // SAFETY: operands were allocated by this op array and the
+                // compiler reserves the result as a live TMP/VAR frame slot.
+                unsafe {
+                    let val = &*(*frame).get_op_ptr(
+                        opline.op1 as u32,
+                        opline.op1_type,
+                        op_array,
+                    );
+                    let result_ptr =
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                    frame_tmp_set_bool(frame, result_ptr, !val.is_truthy());
+                }
+            }
+
+            OpCode::AssertCheck => {
+                if !eg.assertion_state.active {
+                    let target = opline.op1 as usize;
+                    // SAFETY: the compiler emits a live assertion result slot
+                    // and patches op1 to an instruction in this active array.
+                    unsafe {
+                        debug_assert!(target < op_array.instructions().len());
+                        let result_ptr = (*frame).get_op_mut(
+                            opline.result as u32,
+                            opline.result_type,
+                        );
+                        frame_tmp_set_bool(frame, result_ptr, true);
+                        (*frame).opline = op_array.instructions().as_ptr().add(target);
+                    }
+                    continue;
+                }
             }
 
             OpCode::Jmp => {

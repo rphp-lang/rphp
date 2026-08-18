@@ -217,6 +217,9 @@ pub(crate) struct OutputBuffer {
 /// Minimal ExecutorGlobals for vertical slice.
 /// Will grow as we implement more features.
 pub(crate) struct AssertionState {
+    /// Startup compilation mode from `zend.assertions`: -1 removes assertion
+    /// bytecode, while 0 and 1 retain it and may toggle at runtime.
+    pub startup_mode: i8,
     pub active: bool,
     pub bail: bool,
     pub warning: bool,
@@ -227,6 +230,7 @@ pub(crate) struct AssertionState {
 impl Default for AssertionState {
     fn default() -> Self {
         Self {
+            startup_mode: 1,
             active: true,
             bail: false,
             warning: true,

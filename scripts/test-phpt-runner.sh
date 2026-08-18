@@ -133,6 +133,30 @@ if (classify_failure("Parse error: emitted by user code", 0) !== "output"
 }
 ' "$script_root/scripts/phpt/expectation.php"
 
+"$php_bin" -r '
+require $argv[1];
+require $argv[2];
+require $argv[3];
+$supported = "zend.assertions=0\nassert.exception=1";
+$unsupported = "zend.assertions=1\nmemory_limit=64M";
+if (unsupported_rphp_ini_directives($supported) !== []
+    || unsupported_rphp_ini_directives($unsupported) !== ["memory_limit"]
+    || target_command("/rphp", "rphp", "test.php", $supported, "") !== [
+        "/rphp",
+        "-d",
+        "zend.assertions=0",
+        "-d",
+        "assert.exception=1",
+        "test.php",
+    ]
+) {
+    fwrite(STDERR, "unexpected RPHP CLI INI capability routing\n");
+    exit(1);
+}
+' "$script_root/scripts/phpt/case.php" \
+  "$script_root/scripts/phpt/process.php" \
+  "$script_root/scripts/phpt/execution.php"
+
 # Exercise the public wrapper as well as the underlying PHP runner. A supplied
 # executable does not expose its Cargo features, so an unset label must match
 # the documented default-feature contract build.

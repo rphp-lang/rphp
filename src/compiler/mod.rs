@@ -394,7 +394,7 @@ impl OpArray {
         // Scan for jump targets and instructions after branches
         for (i, instr) in self.instructions.iter().enumerate() {
             match instr.opcode {
-                OpCode::Jmp | OpCode::QuickLongLoopJmp => {
+                OpCode::Jmp | OpCode::QuickLongLoopJmp | OpCode::AssertCheck => {
                     // Jmp stores target in op1
                     let target = instr.op1 as usize;
                     if target < n {

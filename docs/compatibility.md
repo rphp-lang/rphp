@@ -1103,6 +1103,37 @@ paths. Complete binary-string representation, the exact exception class for an
 operating-system random-source failure, and per-process CLI-INI support for
 `settype_double.phpt` remain explicit non-claims.
 
+The CLI now accepts repeated separate or attached `-d NAME[=VALUE]` settings
+and transports the admitted assertion subset through request compilation and
+execution. `zend.assertions=-1` removes assertion evaluation while preserving
+generator classification, mode `0` retains guarded bytecode for a later
+runtime switch to mode `1`, and attempts to cross the completely-disabled
+`-1` boundary at runtime emit PHP 8.5's warning and fail. Included files inherit
+the startup compilation mode, `assert.exception` initializes the request-local
+exception policy, and failed assertions render the newly exercised `new`,
+empty anonymous-class and `instanceof` expression forms.
+
+The complete 29-case `Zend/tests/assert` directory moves from 3 passes and 26
+unsupported cases to 24 passes, four ordinary failures and one unsupported
+`disable_functions` case. A final release rerun of all 5,599 pinned PHP 8.5.6
+cases reaches 2,748 passes, 2,500 ordinary failures, 110 skips, one XFAIL and
+240 unsupported cases, with zero timeouts and zero crashes. All 40 changed
+statuses were previously unsupported: 22 become exact passes and 18 expose
+later independent failures, with no lost pass. Runtime is reached by 4,576 of
+5,248 attempted cases (87.195%).
+
+All five Cargo feature configurations, formatting, unsafe-policy,
+all-feature/all-target, Composer S0, all four Symfony S1 and warmed-kernel S2
+gates pass on AMD64. The unsafe inventory is 1,621 production blocks against a
+ceiling of 1,623. Twenty-one alternating release pairs of the unaffected
+five-million-iteration call control measured baseline p10/median/p90 of
+0.357937/0.365312/0.369293 seconds and candidate
+0.358686/0.364591/0.369860 seconds (median -0.20%; balanced pair delta -0.09%)
+with the identical `37500007500000` checksum. Unknown CLI INI directives,
+`disable_functions`, the complete assertion AST source printer, backtick and
+interpolated-string parsing, array-target `??=`, and the startup deprecation
+contract for `assert.exception=0` remain explicit non-claims.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

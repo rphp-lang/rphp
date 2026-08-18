@@ -88,7 +88,7 @@ function target_command(
     string $args,
 ): array {
     if ($kind === 'rphp') {
-        return [$target, $file, ...script_arguments($args)];
+        return [$target, ...ini_arguments($ini), $file, ...script_arguments($args)];
     }
     return [
         $target,

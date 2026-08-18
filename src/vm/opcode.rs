@@ -232,6 +232,9 @@ pub enum OpCode {
     Eval = 166,
     /// Validate PHP 8.5 clone-with's property array before cloning begins.
     ValidateCloneWith = 167,
+    /// Skip one compiled assertion expression when request-local assertions
+    /// are inactive. op1 is the continuation and result receives true.
+    AssertCheck = 168,
     /// Close the frame-local readonly update window after clone-with.
     EndCloneWith = 169,
 

@@ -78,6 +78,73 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                     .collect::<Option<Vec<_>>>()?;
                 (format!("{name}({})", args.join(", ")), 100)
             }
+            Expr::New {
+                class_name, args, ..
+            } => {
+                let args = args
+                    .iter()
+                    .map(|argument| match argument {
+                        CallArg::Positional(value) => render(value, 0, false),
+                        CallArg::Named { name, value } => {
+                            render(value, 0, false).map(|value| format!("{name}: {value}"))
+                        }
+                        CallArg::Unpack(value) => {
+                            render(value, 0, false).map(|value| format!("...{value}"))
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                (format!("new {class_name}({})", args.join(", ")), 100)
+            }
+            Expr::AnonymousNew {
+                args,
+                parent,
+                implements,
+                properties,
+                constants,
+                methods,
+                uses,
+                ..
+            } if implements.is_empty()
+                && properties.is_empty()
+                && constants.is_empty()
+                && methods.is_empty()
+                && uses.is_empty() =>
+            {
+                let args = args
+                    .iter()
+                    .map(|argument| match argument {
+                        CallArg::Positional(value) => render(value, 0, false),
+                        CallArg::Named { name, value } => {
+                            render(value, 0, false).map(|value| format!("{name}: {value}"))
+                        }
+                        CallArg::Unpack(value) => {
+                            render(value, 0, false).map(|value| format!("...{value}"))
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let arguments = (!args.is_empty()).then(|| format!("({})", args.join(", ")));
+                let parent = parent
+                    .as_ref()
+                    .map(|parent| format!(" extends {}", parent.name))
+                    .unwrap_or_default();
+                (
+                    format!(
+                        "new class{}{} {{\n}}",
+                        arguments.as_deref().unwrap_or_default(),
+                        parent
+                    ),
+                    100,
+                )
+            }
+            Expr::Instanceof { expr, class_name } => {
+                let expr = render(expr, 30, false)?;
+                (format!("{expr} instanceof {class_name}"), 30)
+            }
+            Expr::DynamicInstanceof { expr, class } => {
+                let expr = render(expr, 30, false)?;
+                let class = render(class, 30, true)?;
+                (format!("{expr} instanceof {class}"), 30)
+            }
             Expr::Closure {
                 is_static,
                 returns_by_ref,
@@ -783,6 +850,7 @@ fn propagate_declared_scalar_types(
             OpCode::Jmp
                 | OpCode::JmpZ
                 | OpCode::JmpNZ
+                | OpCode::AssertCheck
                 | OpCode::QuickLongLoopJmp
                 | OpCode::ForeachInit
                 | OpCode::ForeachNext
@@ -1803,6 +1871,10 @@ pub struct Compiler {
     known_ref_args: HashMap<String, u64>,
     /// Per-file strict_types flag from `declare(strict_types=1);`
     strict_types: bool,
+    /// Request startup mode for PHP's assertion construct. A negative value
+    /// removes the expression; zero and one retain a runtime guard so
+    /// `ini_set("zend.assertions", ...)` can toggle already-compiled code.
+    zend_assertions: i8,
     /// Current namespace (None = global namespace)
     current_namespace: Option<String>,
     /// Use aliases: alias → fully qualified name
@@ -1999,6 +2071,7 @@ impl Compiler {
             deferred_error: None,
             known_ref_args: HashMap::new(),
             strict_types: false,
+            zend_assertions: 1,
             current_namespace: None,
             use_map: HashMap::new(),
             function_use_map: HashMap::new(),
@@ -2050,6 +2123,11 @@ impl Compiler {
     ) -> Self {
         self.source_file = file.into();
         self.source_directory = directory.into();
+        self
+    }
+
+    pub fn with_zend_assertions(mut self, mode: i8) -> Self {
+        self.zend_assertions = mode.clamp(-1, 1);
         self
     }
 
@@ -2134,6 +2212,7 @@ impl Compiler {
         // namespace aliases or strict-types semantics when their bytecode is
         // emitted by a fresh compiler instance.
         child.strict_types = self.strict_types;
+        child.zend_assertions = self.zend_assertions;
         child.current_namespace = self.current_namespace.clone();
         child.use_map = self.use_map.clone();
         child.function_use_map = self.function_use_map.clone();
@@ -5927,13 +6006,22 @@ impl Compiler {
                 generic_args,
                 line,
             } => {
+                let assertion_construct = generic_args.is_empty()
+                    && name.trim_start_matches('\\').eq_ignore_ascii_case("assert");
+                if assertion_construct && self.zend_assertions < 0 {
+                    let enabled = self.add_literal(Value::bool(true));
+                    return (enabled, OpType::Const);
+                }
+                let assertion_check = assertion_construct.then(|| {
+                    let index = self.instructions.len();
+                    self.instructions
+                        .push(Instruction::new(OpCode::AssertCheck));
+                    index
+                });
+
                 // PHP's assert construct supplies canonical source text when
                 // the caller omitted an explicit description.
-                let synthesized_assert_args = if generic_args.is_empty()
-                    && !name.contains('\\')
-                    && name.eq_ignore_ascii_case("assert")
-                    && args.len() == 1
-                {
+                let synthesized_assert_args = if assertion_construct && args.len() == 1 {
                     assertion_expression_source(args[0].expr()).map(|mut source| {
                         if let CallArg::Named { name, .. } = &args[0] {
                             source.insert_str("assert(".len(), &format!("{name}: "));
@@ -6304,6 +6392,14 @@ impl Compiler {
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
                 for (writeback, value, value_type) in reference_writebacks {
                     self.emit_foreach_reference_source_writeback(writeback, value, value_type);
+                }
+
+                if let Some(index) = assertion_check {
+                    let target = u16::try_from(self.instructions.len()).unwrap_or(u16::MAX);
+                    let guard = &mut self.instructions[index];
+                    guard.op1 = target;
+                    guard.result = tmp;
+                    guard.result_type = OpType::Tmp;
                 }
 
                 (tmp, OpType::Tmp)

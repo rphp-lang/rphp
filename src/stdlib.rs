@@ -15157,6 +15157,46 @@ fn fn_header(
     Ok(())
 }
 
+/// Resolve the last startup value exactly once before compiling the request.
+/// Invalid values retain PHP's ordinary enabled default until their separate
+/// startup-diagnostic contract is admitted.
+pub fn startup_zend_assertions(settings: &[(String, String)]) -> i8 {
+    settings
+        .iter()
+        .rev()
+        .find(|(name, _)| name.eq_ignore_ascii_case("zend.assertions"))
+        .and_then(|(_, value)| value.parse::<i8>().ok())
+        .filter(|value| (-1..=1).contains(value))
+        .unwrap_or(1)
+}
+
+/// Apply the admitted request-startup INI subset after compilation. Unknown
+/// CLI definitions remain accepted by the CLI but are not published through
+/// `ini_get()` until their observable runtime contract is implemented.
+pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String, String)]) {
+    let zend_assertions = startup_zend_assertions(settings);
+    eg.assertion_state.startup_mode = zend_assertions;
+    eg.assertion_state.active = zend_assertions > 0;
+
+    for (name, value) in settings {
+        let normalized = name.to_ascii_lowercase();
+        match normalized.as_str() {
+            "zend.assertions" => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, zend_assertions.to_string());
+            }
+            "assert.exception" => {
+                eg.assertion_state.exception = ini_boolean(value);
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, value.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
 fn fn_ini_get(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -15190,6 +15230,13 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
     }
     Some(match option {
         "display_errors" | "report_memleaks" => "1".to_string(),
+        "zend.assertions" => eg.assertion_state.startup_mode.to_string(),
+        "assert.exception" => if eg.assertion_state.exception {
+            "1"
+        } else {
+            "0"
+        }
+        .to_string(),
         "zend.exception_ignore_args" => "0".to_string(),
         "zend.enable_gc" => if eg.gc_enabled { "1" } else { "0" }.to_string(),
         "memory_limit" => "-1".to_string(),
@@ -15217,6 +15264,31 @@ fn fn_ini_set(
         ret!(rv, Value::bool(false));
     };
 
+    if option == "zend.assertions" {
+        let Some(requested) = value
+            .parse::<i8>()
+            .ok()
+            .filter(|value| (-1..=1).contains(value))
+        else {
+            ret!(rv, Value::bool(false));
+        };
+        if (eg.assertion_state.startup_mode < 0) != (requested < 0) {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                "zend.assertions may be completely enabled or disabled only in php.ini",
+            )?;
+            ret!(rv, Value::bool(false));
+        }
+        eg.assertion_state.active = requested > 0;
+        eg.ini_overrides
+            .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+            .insert(option, requested.to_string());
+        ret!(rv, Value::string(previous));
+    }
+
     if option == "zend.exception_string_param_max_len"
         && !value
             .parse::<i64>()
@@ -15236,6 +15308,9 @@ fn fn_ini_set(
     }
     if option == "zend.enable_gc" {
         eg.gc_enabled = ini_boolean(&value);
+    }
+    if option == "assert.exception" {
+        eg.assertion_state.exception = ini_boolean(&value);
     }
     eg.ini_overrides
         .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))

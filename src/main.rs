@@ -20,6 +20,8 @@ Arguments:
 
 Options:
   -r <CODE>    Execute PHP code without requiring an opening tag
+  -d <NAME[=VALUE]>
+               Define a per-process INI setting
   -h, --help   Print help
   -v, --version
                Print the RPHP version
@@ -37,22 +39,77 @@ enum CliAction {
     Stdin,
 }
 
-fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
-    match args {
-        [] => Ok(CliAction::Stdin),
-        [flag] if flag == "-h" || flag == "--help" => Ok(CliAction::Help),
-        [flag] if flag == "-v" || flag == "--version" => Ok(CliAction::Version),
-        [flag] if flag == "-r" => Err("option '-r' requires a code argument".to_string()),
-        [flag, code] if flag == "-r" => Ok(CliAction::Inline(code.clone())),
-        [separator, file] if separator == "--" => Ok(CliAction::File(file.clone())),
-        [arg] if arg.starts_with('-') => Err(format!("unsupported option '{arg}'")),
-        [file] => Ok(CliAction::File(file.clone())),
-        [first, ..] if first == "-r" => {
-            Err("script arguments after '-r' are not supported yet".to_string())
-        }
-        [first, ..] if first.starts_with('-') => Err(format!("unsupported option '{first}'")),
-        _ => Err("script arguments are not supported yet".to_string()),
+#[derive(Debug, PartialEq, Eq)]
+struct CliInvocation {
+    action: CliAction,
+    ini_settings: Vec<(String, String)>,
+}
+
+fn parse_ini_definition(definition: &str) -> Result<(String, String), String> {
+    let (name, value) = definition
+        .split_once('=')
+        .map_or((definition, "1"), |(name, value)| (name, value));
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("option '-d' requires a non-empty INI name".to_string());
     }
+    Ok((name.to_ascii_lowercase(), value.trim().to_string()))
+}
+
+fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
+    let mut action_args = Vec::new();
+    let mut ini_settings = Vec::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--" {
+            action_args.extend_from_slice(&args[index..]);
+            break;
+        }
+        if argument == "-d" {
+            let Some(definition) = args.get(index + 1) else {
+                return Err("option '-d' requires an INI definition".to_string());
+            };
+            ini_settings.push(parse_ini_definition(definition)?);
+            index += 2;
+            continue;
+        }
+        if let Some(definition) = argument.strip_prefix("-d")
+            && !definition.is_empty()
+        {
+            ini_settings.push(parse_ini_definition(definition)?);
+            index += 1;
+            continue;
+        }
+        // Once a script or `-r` is selected, later values belong to that
+        // invocation rather than the process option list.
+        action_args.extend_from_slice(&args[index..]);
+        break;
+    }
+
+    let action = match action_args.as_slice() {
+        [] => CliAction::Stdin,
+        [flag] if flag == "-h" || flag == "--help" => CliAction::Help,
+        [flag] if flag == "-v" || flag == "--version" => CliAction::Version,
+        [flag] if flag == "-r" => {
+            return Err("option '-r' requires a code argument".to_string());
+        }
+        [flag, code] if flag == "-r" => CliAction::Inline(code.clone()),
+        [separator, file] if separator == "--" => CliAction::File(file.clone()),
+        [arg] if arg.starts_with('-') => return Err(format!("unsupported option '{arg}'")),
+        [file] => CliAction::File(file.clone()),
+        [first, ..] if first == "-r" => {
+            return Err("script arguments after '-r' are not supported yet".to_string());
+        }
+        [first, ..] if first.starts_with('-') => {
+            return Err(format!("unsupported option '{first}'"));
+        }
+        _ => return Err("script arguments are not supported yet".to_string()),
+    };
+    Ok(CliInvocation {
+        action,
+        ini_settings,
+    })
 }
 
 fn read_source(action: CliAction) -> Result<String, String> {
@@ -83,10 +140,14 @@ fn read_stdin() -> Result<String, String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let action = parse_cli_args(&args).unwrap_or_else(|error| {
+    let invocation = parse_cli_args(&args).unwrap_or_else(|error| {
         eprintln!("error: {error}\n\nTry 'rphp --help' for more information.");
         std::process::exit(2);
     });
+    let CliInvocation {
+        action,
+        ini_settings,
+    } = invocation;
     match &action {
         CliAction::Help => {
             print!("{HELP}");
@@ -154,10 +215,12 @@ fn main() {
         });
 
     let result = Compiler::new()
+        .with_zend_assertions(stdlib::startup_zend_assertions(&ini_settings))
         .with_source_context(source_file, source_directory)
         .compile(&stmts)
         .unwrap_or_else(|failure| {
             let mut eg = ExecutorGlobals::new();
+            stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
             eg.emit_compile_deprecations(&failure.deprecations);
             if failure.deprecations.is_empty() {
                 eprintln!("Fatal error: {}", failure.message);
@@ -168,6 +231,7 @@ fn main() {
         });
     let main_func = make_user_function(result.main);
     let mut eg = ExecutorGlobals::new();
+    stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
     eg.generic_metadata = result.generic_metadata;
     let emitted_compile_deprecations = !result.deprecations.is_empty();
     eg.emit_compile_deprecations(&result.deprecations);
@@ -237,7 +301,7 @@ fn register_coroutine_api(_eg: &mut ExecutorGlobals) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{CliAction, parse_cli_args, read_source};
+    use super::{CliAction, CliInvocation, parse_cli_args, read_source};
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -245,19 +309,54 @@ mod tests {
 
     #[test]
     fn parses_help_version_file_and_stdin() {
-        assert_eq!(parse_cli_args(&args(&[])), Ok(CliAction::Stdin));
-        assert_eq!(parse_cli_args(&args(&["--help"])), Ok(CliAction::Help));
+        let invocation = |action| {
+            Ok(CliInvocation {
+                action,
+                ini_settings: Vec::new(),
+            })
+        };
+        assert_eq!(parse_cli_args(&args(&[])), invocation(CliAction::Stdin));
+        assert_eq!(
+            parse_cli_args(&args(&["--help"])),
+            invocation(CliAction::Help)
+        );
         assert_eq!(
             parse_cli_args(&args(&["--version"])),
-            Ok(CliAction::Version)
+            invocation(CliAction::Version)
         );
         assert_eq!(
             parse_cli_args(&args(&["example.php"])),
-            Ok(CliAction::File("example.php".to_string()))
+            invocation(CliAction::File("example.php".to_string()))
         );
         assert_eq!(
             parse_cli_args(&args(&["--", "-example.php"])),
-            Ok(CliAction::File("-example.php".to_string()))
+            invocation(CliAction::File("-example.php".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_separate_attached_and_repeated_ini_definitions() {
+        assert_eq!(
+            parse_cli_args(&args(&[
+                "-d",
+                "zend.assertions=0",
+                "-dassert.exception=1",
+                "example.php",
+            ])),
+            Ok(CliInvocation {
+                action: CliAction::File("example.php".to_string()),
+                ini_settings: vec![
+                    ("zend.assertions".to_string(), "0".to_string()),
+                    ("assert.exception".to_string(), "1".to_string()),
+                ],
+            })
+        );
+        assert_eq!(
+            parse_cli_args(&args(&["-d", "display_errors", "-r", "echo 1;"])),
+            Ok(CliInvocation {
+                action: CliAction::Inline("echo 1;".to_string()),
+                ini_settings: vec![("display_errors".to_string(), "1".to_string())],
+            })
         );
     }
 
@@ -265,7 +364,7 @@ mod tests {
     fn rejects_unsupported_options_and_script_arguments() {
         assert_eq!(
             parse_cli_args(&args(&["-d"])),
-            Err("unsupported option '-d'".to_string())
+            Err("option '-d' requires an INI definition".to_string())
         );
         assert_eq!(
             parse_cli_args(&args(&["-r"])),

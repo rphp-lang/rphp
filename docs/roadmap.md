@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,726/5,599 with zero timeouts and zero crashes after the general `settype()` conversion and NaN-warning checkpoint added 22 exact passes without a lost pass. The focused `settype` directory is 25/26; its sole unsupported case requires per-process CLI-INI. The focused lazy-object frontier is 207/223 after unifying object property-name conversion, with internal classes, weak references, cycle collection and broader shutdown ordering still visible. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,748/5,599 with zero timeouts and zero crashes after repeated CLI `-d` transport and compile/runtime `zend.assertions` semantics added 22 exact passes without a lost pass. The focused assertion directory is 24/29; the remaining cases expose `disable_functions`, parser, AST-source and array-mutation gaps. Unknown INI directives remain explicitly unsupported. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

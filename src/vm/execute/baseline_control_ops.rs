@@ -142,6 +142,7 @@ fn execute_source_unit(
     let mut compile_attempts = 0usize;
     let mut compile_result = loop {
         let compiler = crate::compiler::compile::Compiler::new()
+            .with_zend_assertions(eg.assertion_state.startup_mode)
             .with_source_path(canonical.clone())
             .with_implicit_return_value(implicit_return.clone())
             .with_lexical_class_scope(caller_class.clone(), caller_parent.clone())

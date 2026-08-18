@@ -2,6 +2,28 @@
 
 declare(strict_types=1);
 
+/** @return list<string> */
+function unsupported_rphp_ini_directives(string $section): array
+{
+    $supported = [
+        'assert.exception' => true,
+        'zend.assertions' => true,
+    ];
+    $unsupported = [];
+    $arguments = ini_arguments($section);
+    for ($index = 1; $index < count($arguments); $index += 2) {
+        $definition = $arguments[$index];
+        $separator = strpos($definition, '=');
+        $name = strtolower($separator === false
+            ? $definition
+            : substr($definition, 0, $separator));
+        if (!isset($supported[$name])) {
+            $unsupported[$name] = true;
+        }
+    }
+    return array_keys($unsupported);
+}
+
 /** @return array<string, mixed> */
 function run_test(
     string $absolutePath,
@@ -36,10 +58,14 @@ function run_test(
         $result['reason'] = 'unsupported PHPT section(s): ' . implode(', ', $unknown);
         return $result;
     }
-    if ($kind === 'rphp' && isset($sections['INI']) && trim($sections['INI']) !== '') {
+    $unsupportedIni = $kind === 'rphp'
+        ? unsupported_rphp_ini_directives($sections['INI'] ?? '')
+        : [];
+    if ($unsupportedIni !== []) {
         $result['status'] = 'unsupported';
         $result['category'] = 'runtime-cli-ini';
-        $result['reason'] = 'RPHP CLI does not yet expose per-process INI settings';
+        $result['reason'] = 'unsupported RPHP CLI INI directive(s): '
+            . implode(', ', $unsupportedIni);
         return $result;
     }
     if ($kind === 'rphp' && isset($sections['ARGS']) && trim($sections['ARGS']) !== '') {
