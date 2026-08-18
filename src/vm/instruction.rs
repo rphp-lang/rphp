@@ -51,6 +51,11 @@ pub const CALL_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 9;
 /// that frame returns or unwinds.
 pub const CALL_FLAG_ERROR_SUPPRESS: u16 = 1 << 10;
 
+/// DoFcall flag: a source-level `(void)` cast explicitly acknowledges and
+/// ignores this return value. This is distinct from an ordinary unused result
+/// for PHP 8.5's `#[NoDiscard]` warning contract.
+pub const CALL_FLAG_RETURN_EXPLICITLY_IGNORED: u16 = 1 << 11;
+
 /// SendRef/SendVarEx flag: the source expression is the special `$GLOBALS`
 /// root. PHP permits reading that table by value but never exposing it through
 /// a reference parameter.

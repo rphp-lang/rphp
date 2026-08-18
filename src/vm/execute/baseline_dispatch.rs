@@ -3037,13 +3037,55 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     eg.begin_error_suppression(call as usize);
                 }
                 // SAFETY: a non-null resolved pending activation always owns a
-                // registered FunctionCommon for the duration of DoFcall.
-                let func_common_fast = unsafe { &*(*call).func };
+                // registered descriptor for the duration of DoFcall. A user
+                // descriptor begins with FunctionCommon by the VM ABI.
+                let (func_common_fast, user_callee_fast) = unsafe {
+                    let common = &*(*call).func;
+                    let user = (common.fn_type == FunctionType::User)
+                        .then(|| &*((*call).func as *const UserFunction));
+                    (common, user)
+                };
                 if func_common_fast.plan.has_deprecated_attribute() {
                     let reported = report_deprecated_user_call(
                         eg,
                         frame,
                         func_common_fast as *const FunctionCommon,
+                        Some(call as usize),
+                        None,
+                    );
+                    if let Err(error) = reported {
+                        if suppressed_call {
+                            eg.end_error_suppression(call as usize);
+                        }
+                        discard_pending_vm_call_frame(eg, call);
+                        return Err(error);
+                    }
+                    if let Some(exception) = eg.exception.take() {
+                        if suppressed_call {
+                            eg.end_error_suppression(call as usize);
+                        }
+                        discard_pending_vm_call_frame(eg, call);
+                        match throw_in_frame(eg, frame, exception) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                if func_common_fast.plan.has_no_discard_attribute()
+                    && opline.result_type == OpType::Unused
+                    && opline._pad & CALL_FLAG_RETURN_EXPLICITLY_IGNORED == 0
+                {
+                    let reported = report_no_discard_user_call(
+                        eg,
+                        frame,
+                        user_callee_fast.expect("NoDiscard call plan belongs to a user function"),
                         Some(call as usize),
                         None,
                     );
@@ -5564,7 +5606,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // setup. This removes one more baseline dispatch from
                         // the ordinary `$object->method(...)` protocol.
                         if !has_active_generic_contract
-                            && !common.plan.has_deprecated_attribute()
+                            && !common.plan.has_call_diagnostic_attribute()
                             && ic.method_fusion_eligible()
                             && bound == num_args as usize
                         {

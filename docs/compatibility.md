@@ -9,13 +9,50 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,975 pass, 2,322 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,002 pass, 2,295 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-56.164%; 4,620 of 5,297 attempted cases reach runtime (87.219%). Relative to
-the preceding 2,973-pass checkpoint, the exact pass-set delta is +2/-0. The
+56.674%; 4,619 of 5,297 attempted cases reach runtime (87.200%). Relative to
+the preceding 2,975-pass checkpoint, the exact pass-set delta is +27/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
 
-PHP 8.5's internal unit enum `Random\IntervalBoundary` now exposes the four
+PHP 8.5's final internal `NoDiscard` attribute now exposes its nullable
+`message` constructor contract and public protected(set) readonly property.
+Unused direct, static, magic, closure and trait-method results emit PHP's
+`E_USER_WARNING` diagnostic before the body runs; assigned results and an
+explicit `(void)` discard remain silent. `call_user_func()` and
+`call_user_func_array()` propagate that source-level discard state through
+their detached callback frame, while `Deprecated` continues to diagnose first.
+Throwing handlers, strict and weak attribute-argument validation, repeated
+attributes, unsupported lifecycle methods, property hooks and `void`/`never`
+returns retain PHP's error ordering and source locations. The six pinned PHP
+8.5 `(void)` cases now pass, including destruction timing, assertion AST text,
+for-list placement and the invalid assignment/final-condition boundaries.
+
+The exact additions comprise 19 cases in `attributes/nodiscard`, two delayed-
+target-validation interactions and six void-cast cases. The NoDiscard
+directory is 20/25: its remaining ordinary failure needs the unimplemented
+`DateTimeImmutable` class, two `zend_test` execute-hook cases remain explicitly
+unsupported and two native-extension cases skip. The two broader delayed-
+validation failures still need `ReflectionProperty::getHook()`; arbitrary
+nested `(void)` parse diagnostics are not claimed by this slice. All five Cargo
+configurations, all-feature/all-target, formatting and the exact unsafe ratchet
+pass. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and cold-build S3
+also pass against PHP 8.5 on AMD64.
+
+The exact base `3610743c` and final release candidate were compared on one
+physical Ryzen 9 7950X core with no outlier removal. Sixty-three balanced
+ABBA/BAAB pairs of 150 empty-output file requests measured baseline
+p10/median/p90 0.191630/0.193140/0.194568 seconds and candidate
+0.191056/0.192258/0.194409 seconds: -0.457% by independent medians and -0.422%
+by the paired-ratio median, whose p10/p90 is -1.082%/+0.451%. A separate
+63-pair `bench_calls.php` control retained computed result `37500007500000` and
+measured baseline 0.365947/0.370798/0.385319 seconds versus candidate
+0.364929/0.368054/0.385935 seconds: -0.740% independently and -0.337% paired,
+with paired p10/p90 -3.919%/+2.204%. Both common-path controls remain below the
+five-percent median regression ceiling.
+
+The preceding `random-interval-boundary` checkpoint added PHP 8.5's internal
+unit enum `Random\IntervalBoundary` with the four
 canonical cases `ClosedOpen`, `ClosedClosed`, `OpenClosed` and `OpenOpen` with
 stable identity, readonly `name`, `UnitEnum` membership and ordered `cases()`.
 Reflection reports the enum as internal and non-final, while the class linker
@@ -24,9 +61,9 @@ render enum arguments symbolically as `Class::Case`, matching PHP rather than
 the ordinary object placeholder. These contracts turn
 `Zend/tests/attributes/deprecated/type_validation_004.phpt` and
 `Zend/tests/enum/enum_in_stack_trace.phpt` into exact passes with no lost pass,
-so the complete PHP 8.5 `Deprecated` directory is now 47/47. `NoDiscard`
-remains an independent missing built-in attribute, and `Randomizer::getFloat()`
-is not claimed by this checkpoint. All five Cargo configurations,
+so the complete PHP 8.5 `Deprecated` directory is now 47/47. At that
+checkpoint, `NoDiscard` remained an independent missing built-in attribute;
+`Randomizer::getFloat()` is still not claimed. All five Cargo configurations,
 all-feature/all-target, formatting and the exact unsafe ratchet pass, as do
 Composer S0, all four Symfony S1 gates and warmed-kernel S2. On AMD64, an
 independent 63-pair balanced ABBA/BAAB release confirmation over 150 ordinary

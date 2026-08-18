@@ -658,6 +658,25 @@ identical output. No outliers were removed; paired p10/p90 is
 -3.921%/+6.646%, while the independent p90 delta is +0.904%, so the median
 five-percent gate passes with the noisier paired upper tail disclosed.
 
+The `no-discard-attribute` checkpoint reaches 3,002 passes with 2,295
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. PHP 8.5's final internal `NoDiscard` attribute now provides its
+readonly nullable-message ABI, declaration validators and warning semantics
+for direct, static, magic, closure, trait and detached `call_user_func*()`
+calls. Assigned results and explicit `(void)` discards remain silent; all six
+pinned void-cast cases pass. The exact full-corpus delta is +27/-0: 19
+NoDiscard-directory cases, two delayed-validation interactions and six void-
+cast cases. The NoDiscard directory is 20/25; `DateTimeImmutable`, two
+`zend_test` execute-hook cases and two skipped native-extension cases remain
+outside this checkpoint, while two broader delayed-validation failures need
+`ReflectionProperty::getHook()`. All five feature configurations, all-target,
+unsafe, Composer S0, four Symfony S1 gates, warmed-kernel S2 and cold-build S3
+pass. Sixty-three balanced AMD64 release pairs put the empty-output file-
+request median at -0.457% independently and -0.422% paired, while the ordinary
+call control is -0.740% independently and -0.337% paired; both retain exact
+outputs/checksums and remain below the five-percent ceiling without removing
+outliers.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

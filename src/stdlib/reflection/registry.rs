@@ -37,15 +37,16 @@ use super::{
     generic_runtime_modes, method_construct, method_file_name, method_get_closure,
     method_get_modifiers, method_get_prototype, method_has_prototype, method_invoke,
     method_is_abstract, method_is_constructor, method_is_destructor, method_is_final,
-    method_is_private, method_is_protected, method_is_public, method_is_static, object_construct,
-    parameter_allows_null, parameter_get_attributes, parameter_get_declaring_class,
-    parameter_get_default_value, parameter_get_name, parameter_get_type, parameter_has_type,
-    parameter_is_default_available, parameter_is_optional, parameter_is_passed_by_reference,
-    parameter_is_variadic, parameter_to_string, property_construct, property_get_default_value,
-    property_get_modifiers, property_get_raw_value, property_get_value, property_has_default_value,
-    property_is_abstract, property_is_default, property_is_final, property_is_initialized,
-    property_is_lazy, property_is_private, property_is_protected, property_is_public,
-    property_is_readonly, property_is_static, property_is_virtual, property_set_raw_value,
+    method_is_private, method_is_protected, method_is_public, method_is_static,
+    no_discard_construct, object_construct, parameter_allows_null, parameter_get_attributes,
+    parameter_get_declaring_class, parameter_get_default_value, parameter_get_name,
+    parameter_get_type, parameter_has_type, parameter_is_default_available, parameter_is_optional,
+    parameter_is_passed_by_reference, parameter_is_variadic, parameter_to_string,
+    property_construct, property_get_default_value, property_get_modifiers, property_get_raw_value,
+    property_get_value, property_has_default_value, property_is_abstract, property_is_default,
+    property_is_final, property_is_initialized, property_is_lazy, property_is_private,
+    property_is_protected, property_is_public, property_is_readonly, property_is_static,
+    property_is_virtual, property_set_raw_value,
     property_set_raw_value_without_lazy_initialization, property_set_value,
     property_skip_lazy_initialization, property_to_string, reflection_compound_types,
     reflection_get_doc_comment, reflection_type_allows_null, reflection_type_generic_arguments,
@@ -433,6 +434,69 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
         ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
     ];
+    eg.register_class(ClassDef {
+        name: "NoDiscard".to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: true,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        trait_precedences: vec![],
+        properties: vec![PropertyDefinition::declared_with_set_visibility(
+            "message".to_string(),
+            None,
+            Visibility::Public,
+            Some(Visibility::Protected),
+            "NoDiscard".to_string(),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+            true,
+            false,
+        )],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec!["message".to_string()],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+        attributes: vec![AttributeDefinition {
+            name: "Attribute".to_string(),
+            arguments: vec![AttributeArgument {
+                name: None,
+                value: Ok(Value::long(6)),
+                deferred_expression: None,
+            }],
+            evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
+            target: 1,
+            source_file: String::new(),
+            source_line: 0,
+            strict_types: false,
+        }],
+    })
+    .unwrap();
+    register_method!(
+        "NoDiscard",
+        "__construct",
+        no_discard_construct,
+        2,
+        0,
+        ["message"]
+    );
+    functions
+        .last_mut()
+        .expect("NoDiscard constructor was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))];
     register_reflection_class_with_interfaces(
         eg,
         "ReflectionFunctionAbstract",

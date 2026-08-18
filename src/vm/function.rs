@@ -1352,6 +1352,7 @@ impl CallPlan {
     const LATE_STATIC_SCOPE: u8 = 1 << 1;
     const EMBEDDED_LATE_STATIC_SCOPE: u8 = 1 << 2;
     const DEPRECATED_ATTRIBUTE: u8 = 1 << 3;
+    const NO_DISCARD_ATTRIBUTE: u8 = 1 << 4;
 
     /// `$this` may be copied into a nested method frame without incrementing
     /// its Rc. The caller owns the object for the entire synchronous call and
@@ -1400,6 +1401,25 @@ impl CallPlan {
     pub fn set_has_deprecated_attribute(&mut self, enabled: bool) {
         self.flags = (self.flags & !Self::DEPRECATED_ATTRIBUTE)
             | u8::from(enabled) * Self::DEPRECATED_ATTRIBUTE;
+    }
+
+    /// The declaration carries PHP's built-in `#[NoDiscard]` attribute.
+    /// This shares the existing cold plan byte with the Deprecated marker so
+    /// discarded-return diagnostics cannot be bypassed by a frame-free plan.
+    #[inline(always)]
+    pub fn has_no_discard_attribute(&self) -> bool {
+        self.flags & Self::NO_DISCARD_ATTRIBUTE != 0
+    }
+
+    #[inline]
+    pub fn set_has_no_discard_attribute(&mut self, enabled: bool) {
+        self.flags = (self.flags & !Self::NO_DISCARD_ATTRIBUTE)
+            | u8::from(enabled) * Self::NO_DISCARD_ATTRIBUTE;
+    }
+
+    #[inline(always)]
+    pub fn has_call_diagnostic_attribute(&self) -> bool {
+        self.flags & (Self::DEPRECATED_ATTRIBUTE | Self::NO_DISCARD_ATTRIBUTE) != 0
     }
 
     pub const fn without_flags(
@@ -1467,7 +1487,7 @@ impl FunctionCommon {
     /// `void`; property mutator plans use it only at unused-result sites.
     #[inline(always)]
     pub fn supports_scalar_long_plan(&self) -> bool {
-        if self.sig.returns_reference || self.plan.has_deprecated_attribute() {
+        if self.sig.returns_reference || self.plan.has_call_diagnostic_attribute() {
             return false;
         }
         if self.plan.call.supports_scalar_long_plan() {
@@ -1496,7 +1516,7 @@ impl FunctionCommon {
     #[inline(always)]
     pub fn supports_scalar_double_plan(&self) -> bool {
         !self.sig.returns_reference
-            && !self.plan.has_deprecated_attribute()
+            && !self.plan.has_call_diagnostic_attribute()
             && self.plan.call.is_compact_user_call()
             && self.sig.ref_args == 0
             && self.sig.param_type_hints.iter().all(|hint| {
@@ -1524,7 +1544,7 @@ impl FunctionCommon {
     #[inline]
     pub fn can_promote_to_hot(&self) -> bool {
         self.fn_type == FunctionType::User
-            && !self.plan.has_deprecated_attribute()
+            && !self.plan.has_call_diagnostic_attribute()
             && self.plan.call.is_compact_user_call()
             && !self.sig.is_variadic
             && self.sig.ref_args == 0
@@ -1577,6 +1597,12 @@ pub struct AttributeDefinition {
     pub strict_types: bool,
 }
 
+/// Internal attribute-target metadata layered above PHP's public TARGET_ALL
+/// mask. Reflection still exposes the method target; built-in validators can
+/// distinguish a property hook from an ordinary method.
+pub const ATTRIBUTE_TARGET_PROPERTY_HOOK: i64 = 1 << 8;
+pub const ATTRIBUTE_PUBLIC_TARGET_MASK: i64 = 127;
+
 #[repr(C)]
 pub struct UserFunction {
     pub common: FunctionCommon,
@@ -1611,15 +1637,20 @@ pub struct UserFunction {
 }
 
 impl UserFunction {
-    /// Publish declaration attributes together with the call-plan marker that
-    /// keeps `#[Deprecated]` observable across every optimized entry point.
+    /// Publish declaration attributes together with call-plan markers that
+    /// keep `#[Deprecated]` and `#[NoDiscard]` observable across every
+    /// optimized entry point.
     pub fn set_attributes(&mut self, attributes: Vec<AttributeDefinition>) {
         let deprecated = attributes
             .iter()
             .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"));
+        let no_discard = attributes
+            .iter()
+            .any(|attribute| attribute.name.eq_ignore_ascii_case("NoDiscard"));
         self.common.plan.set_has_deprecated_attribute(deprecated);
+        self.common.plan.set_has_no_discard_attribute(no_discard);
         self.attributes = attributes;
-        if deprecated {
+        if deprecated || no_discard {
             // A semantic diagnostic must happen once per attempted call,
             // before ordinary argument validation. Frame-free body plans can
             // bypass that boundary, so deprecated declarations deliberately

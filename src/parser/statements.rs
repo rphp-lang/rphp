@@ -544,6 +544,17 @@ impl Parser {
                         });
                     }
                     let expr = self.parse_assignment_or_yield()?;
+                    if let Expr::Cast {
+                        cast_type: CastType::Void,
+                        line: void_line,
+                        ..
+                    } = &expr
+                    {
+                        return Err(self.source_error(
+                            "syntax error, unexpected token \"(void)\"",
+                            *void_line,
+                        ));
+                    }
                     let assignment = if var_name == "GLOBALS" {
                         self.globals_modification_error(line)
                     } else {
@@ -774,6 +785,17 @@ impl Parser {
                         break;
                     }
                     self.advance();
+                }
+                if let Some(Expr::Cast {
+                    cast_type: CastType::Void,
+                    line,
+                    ..
+                }) = condition.last()
+                {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \";\", expecting \",\"",
+                        *line,
+                    ));
                 }
                 self.expect(&Token::Semicolon)?;
 

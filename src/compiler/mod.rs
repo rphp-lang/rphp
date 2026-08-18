@@ -5754,7 +5754,7 @@ pub fn finalize_user_method(
 
     let common = &function.common;
     let scalar_strategy = common.sig.declared_scalar_call_strategy();
-    let can_use_fast_scalar = !common.plan.has_deprecated_attribute()
+    let can_use_fast_scalar = !common.plan.has_call_diagnostic_attribute()
         && !common.sig.returns_reference
         && scalar_strategy.is_some()
         && !common.plan.needs_late_static_scope()
@@ -5771,7 +5771,7 @@ pub fn finalize_user_method(
         function.common.plan.call = scalar_strategy.unwrap();
     }
 
-    if !function.common.plan.has_deprecated_attribute() {
+    if !function.common.plan.has_call_diagnostic_attribute() {
         function.long_property_plan = build_long_property_method_plan(&function);
         function.property_getter_plan = build_property_getter_method_plan(&function);
         function.property_init_plan = build_property_init_method_plan(&function);
@@ -5789,7 +5789,7 @@ pub fn finalize_user_method(
     }
     #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
     {
-        let indirect_scalar_long_plan = (!function.common.plan.has_deprecated_attribute())
+        let indirect_scalar_long_plan = (!function.common.plan.has_call_diagnostic_attribute())
             .then(|| build_indirect_scalar_long_function_plan(&function))
             .flatten();
         function.set_indirect_scalar_long_plan(indirect_scalar_long_plan);
@@ -5798,10 +5798,9 @@ pub fn finalize_user_method(
     function
 }
 
-/// Clone a static-bearing trait method for one concrete composed method name.
-/// Ordinary trait methods keep sharing their original function pointer; this
-/// cold path exists because PHP gives every trait alias/consumer independent
-/// function-static storage.
+/// Clone a trait method for one concrete composed method name. Ordinary trait
+/// methods share their original pointer; this cold path covers independent
+/// function-static storage and consumer-specific declaration diagnostics.
 pub fn clone_trait_method_with_static_storage(
     source: &UserFunction,
     class_name: &str,
@@ -5809,6 +5808,12 @@ pub fn clone_trait_method_with_static_storage(
     is_static: bool,
 ) -> UserFunction {
     let source_op = &source.op_array;
+    let method_name = source_op
+        .name
+        .rsplit_once("::")
+        .map(|(_, source_method)| source_method)
+        .filter(|source_method| source_method.eq_ignore_ascii_case(method_name))
+        .unwrap_or(method_name);
     let mut op_array = OpArray {
         num_cvs: source_op.num_cvs,
         num_temps: source_op.num_temps,
@@ -5851,6 +5856,7 @@ pub fn clone_trait_method_with_static_storage(
     plan.set_needs_late_static_scope(source.common.plan.needs_late_static_scope());
     plan.set_has_embedded_late_static_scope(source.common.plan.has_embedded_late_static_scope());
     plan.set_has_deprecated_attribute(source.common.plan.has_deprecated_attribute());
+    plan.set_has_no_discard_attribute(source.common.plan.has_no_discard_attribute());
     let function = UserFunction {
         common: FunctionCommon {
             fn_type: FunctionType::User,

@@ -194,6 +194,17 @@ impl Parser {
             false
         };
         let expr = Box::new(self.parse_assignment_or_yield()?);
+        if let Expr::Cast {
+            cast_type: CastType::Void,
+            line,
+            ..
+        } = expr.as_ref()
+        {
+            return Err(self.source_error(
+                "syntax error, unexpected token \"(void)\"",
+                *line,
+            ));
+        }
         if let Some(line) = Self::nullsafe_chain_line(&target) {
             return Ok(self.nullsafe_write_error(line));
         }
@@ -822,7 +833,8 @@ impl Parser {
                 })
             }
             Token::LParen(line) => {
-                // Check for type cast: (int), (string), (float), (bool), (array), (object)
+                // Check for a PHP type cast, including PHP 8.5's explicit
+                // discard marker `(void)`.
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
                 let cast_type = match &next {
                     Token::Identifier(name, _) => match name.as_str() {
@@ -831,6 +843,7 @@ impl Parser {
                         "string" => Some(CastType::String),
                         "bool" | "boolean" => Some(CastType::Bool),
                         "object" => Some(CastType::Object),
+                        "void" => Some(CastType::Void),
                         _ => None,
                     },
                     Token::ArrayKw => Some(CastType::Array),

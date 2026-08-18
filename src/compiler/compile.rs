@@ -30,14 +30,15 @@ use crate::vm::instruction::{
     ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
     ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
     CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
-    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY,
-    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
-    FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
-    FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
-    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
-    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType, REFERENCE_RESULT_INTERNAL,
+    CALL_FLAG_RETURN_EXPLICITLY_IGNORED, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
+    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
+    CLONE_OBJ_WITH_PROPERTIES, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS,
+    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
+    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS,
+    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE,
+    InlineCache, Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
+    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_HOOK_BYPASS,
+    OBJ_PROP_REFERENCE_BIND, OpType, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
     STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
     STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
@@ -280,6 +281,11 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
             }
             Expr::Constant(name) => (name.clone(), 100),
             Expr::Not(value) => (format!("!{}", render(value, 80, false)?), 80),
+            Expr::Cast {
+                cast_type: CastType::Void,
+                expr,
+                ..
+            } => (format!("(void){}", render(expr, 80, false)?), 80),
             Expr::FirstClassCallable(callable) => {
                 let callable = render(callable, 100, false)?;
                 (format!("{callable}(...)"), 100)
@@ -550,9 +556,18 @@ use super::{
     make_user_function_with_args,
 };
 use crate::vm::function::{
-    AttributeArgument, AttributeDefinition, AttributeEvaluationScope, CallStrategy, ParamTypeHint,
-    UserFunction,
+    ATTRIBUTE_TARGET_PROPERTY_HOOK, AttributeArgument, AttributeDefinition,
+    AttributeEvaluationScope, CallStrategy, ParamTypeHint, UserFunction,
 };
+
+#[inline]
+fn attribute_method_target(name: &str) -> i64 {
+    4 | if name.starts_with('$') {
+        ATTRIBUTE_TARGET_PROPERTY_HOOK
+    } else {
+        0
+    }
+}
 
 /// One declaration-time warning or deprecation emitted before the compiled
 /// unit runs. The existing collection name is retained for API stability.
@@ -3881,6 +3896,102 @@ impl Compiler {
                 .eq_ignore_ascii_case("Deprecated")
                 .then_some(attribute.line)
         })
+    }
+
+    fn attribute_line(&self, attributes: &[Attribute], name: &str) -> Option<usize> {
+        attributes.iter().find_map(|attribute| {
+            self.resolve_name(&attribute.name)
+                .eq_ignore_ascii_case(name)
+                .then_some(attribute.line)
+        })
+    }
+
+    /// Return the first NoDiscard declaration after enforcing the built-in's
+    /// non-repeatable contract. DelayedTargetValidation suppresses target and
+    /// validator checks, but deliberately does not suppress repetition.
+    fn no_discard_attribute_line(&self, attributes: &[Attribute]) -> Result<Option<usize>, String> {
+        let mut lines = attributes.iter().filter_map(|attribute| {
+            self.resolve_name(&attribute.name)
+                .eq_ignore_ascii_case("NoDiscard")
+                .then_some(attribute.line)
+        });
+        let first = lines.next();
+        if let Some(line) = lines.next() {
+            return Err(self.goto_error("Attribute \"NoDiscard\" must not be repeated", line));
+        }
+        Ok(first)
+    }
+
+    fn has_delayed_target_validation(&self, attributes: &[Attribute]) -> bool {
+        self.attribute_line(attributes, "DelayedTargetValidation")
+            .is_some()
+    }
+
+    fn validate_no_discard_target(
+        &self,
+        attributes: &[Attribute],
+        target: &str,
+    ) -> Result<(), String> {
+        let Some(line) = self.no_discard_attribute_line(attributes)? else {
+            return Ok(());
+        };
+        if self.has_delayed_target_validation(attributes) {
+            return Ok(());
+        }
+        Err(self.goto_error(
+            &format!(
+                "Attribute \"NoDiscard\" cannot target {target} (allowed targets: function, method)"
+            ),
+            line,
+        ))
+    }
+
+    fn validate_no_discard_callable(
+        &self,
+        attributes: &[Attribute],
+        owner: Option<&str>,
+        name: &str,
+        return_type: &ParamTypeHint,
+    ) -> Result<(), String> {
+        let Some(line) = self.no_discard_attribute_line(attributes)? else {
+            return Ok(());
+        };
+        if self.has_delayed_target_validation(attributes) {
+            return Ok(());
+        }
+        if name.starts_with('$') {
+            return Err(self.goto_error("#[\\NoDiscard] is not supported for property hooks", line));
+        }
+        if let Some(owner) = owner
+            && matches!(
+                name.to_ascii_lowercase().as_str(),
+                "__construct" | "__destruct" | "__clone"
+            )
+        {
+            return Err(self.goto_error(
+                &format!("Method {owner}::{name} cannot be #[\\NoDiscard]"),
+                line,
+            ));
+        }
+        let kind = if owner.is_some() {
+            "method"
+        } else {
+            "function"
+        };
+        let returning = match return_type {
+            ParamTypeHint::Void => Some("void"),
+            ParamTypeHint::Never => Some("never returning"),
+            _ => None,
+        };
+        if let Some(returning) = returning {
+            return Err(self.goto_error(
+                &format!(
+                    "A {returning} {kind} does not return a value, but #[\\NoDiscard] requires a return value"
+                ),
+                line,
+            ));
+        }
+        Ok(())
     }
 
     fn compile_attributes_in_scope(
@@ -7329,6 +7440,23 @@ impl Compiler {
                 expr,
                 line,
             } => {
+                if *cast_type == CastType::Void {
+                    let first_instruction = self.instructions.len();
+                    let (inner_op, inner_type) = self.compile_expr(expr);
+                    if inner_type == OpType::Tmp
+                        && let Some(call) = self.instructions[first_instruction..]
+                            .iter_mut()
+                            .rev()
+                            .find(|instruction| {
+                                instruction.opcode == OpCode::DoFcall
+                                    && instruction.result_type == OpType::Tmp
+                                    && instruction.result == inner_op
+                            })
+                    {
+                        call._pad |= CALL_FLAG_RETURN_EXPLICITLY_IGNORED;
+                    }
+                    return (inner_op, inner_type);
+                }
                 let (inner_op, inner_type) = self.compile_expr(expr);
                 let tmp = self.alloc_tmp();
                 let mut instr = Instruction::new(OpCode::Cast);
@@ -7650,6 +7778,14 @@ impl Compiler {
                     self.deferred_error = Some(error);
                 }
                 cp.return_type_hint = self.convert_type_hint(return_type);
+                if let Err(error) = self.validate_no_discard_callable(
+                    attributes,
+                    None,
+                    "{closure}",
+                    &cp.return_type_hint,
+                ) {
+                    self.deferred_error = Some(error);
+                }
                 func_compiler.return_type_context = cp.return_type_hint.clone();
                 if let Err(error) = self.validate_generator_return_type(
                     func_compiler.contains_yield,
@@ -9170,7 +9306,17 @@ impl Compiler {
         if result_type != OpType::Tmp {
             return;
         }
-        if let Some(instruction) = self.instructions.last_mut() {
+        // A temporary method receiver is retired immediately after DoFcall.
+        // That ReleaseTemps does not consume the return value and must not
+        // prevent a standalone call from publishing an Unused result. Stop at
+        // any other trailing opcode because return/generic checks do consume
+        // the materialized value.
+        if let Some(instruction) = self
+            .instructions
+            .iter_mut()
+            .rev()
+            .find(|instruction| instruction.opcode != OpCode::ReleaseTemps)
+        {
             if matches!(
                 instruction.opcode,
                 OpCode::DirectInternalCall1

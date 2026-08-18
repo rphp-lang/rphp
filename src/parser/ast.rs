@@ -629,6 +629,7 @@ pub enum CastType {
     Bool = 3,
     Array = 4,
     Object = 5,
+    Void = 6,
 }
 
 #[derive(Debug, Clone, PartialEq)]

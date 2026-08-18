@@ -386,6 +386,116 @@ echo get_class($marker), ':', $marker->flags;
 }
 
 #[test]
+fn no_discard_builtin_exposes_php_85_metadata_and_readonly_message() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$class = new ReflectionClass(NoDiscard::class);
+$property = $class->getProperty('message');
+$marker = $class->getAttributes()[0]->newInstance();
+$empty = new NoDiscard();
+$message = new NoDiscard('keep this');
+echo $class->getName(), ':', (int) $class->isFinal(), (int) $class->isInternal(), '|';
+echo $marker->flags, ':', (int) $property->isReadOnly(), ':';
+var_dump($empty->message);
+echo $message->message, '|';
+try {
+    $message->__construct('again');
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "NoDiscard:11|6:1:NULL\n",
+            "keep this|Cannot modify readonly property NoDiscard::$message",
+        )
+    );
+}
+
+#[test]
+fn no_discard_reports_only_unused_results_across_direct_and_callback_calls() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, '|';
+    return true;
+});
+
+#[NoDiscard('retain function result')]
+function retained() { echo 'function-body|'; return 1; }
+
+trait RetainedTrait {
+    #[NoDiscard]
+    public function fromTrait() { echo 'trait-body|'; return 2; }
+}
+class RetainedCalls {
+    use RetainedTrait;
+    #[NoDiscard]
+    public function method() { echo 'method-body|'; return 3; }
+}
+
+$closure = #[NoDiscard] function () { echo 'closure-body|'; return 4; };
+$object = new RetainedCalls();
+retained();
+$_ = retained();
+(void)retained();
+call_user_func('retained');
+$_ = call_user_func('retained');
+(void)call_user_func_array('retained', []);
+$object->method();
+$object->fromTrait();
+$closure();
+"#,
+        ),
+        concat!(
+            "512:The return value of function retained() should either be used or intentionally ignored by casting it as (void), retain function result|function-body|",
+            "function-body|function-body|",
+            "512:The return value of function retained() should either be used or intentionally ignored by casting it as (void), retain function result|function-body|",
+            "function-body|function-body|",
+            "512:The return value of method RetainedCalls::method() should either be used or intentionally ignored by casting it as (void)|method-body|",
+            "512:The return value of method RetainedCalls::fromTrait() should either be used or intentionally ignored by casting it as (void)|trait-body|",
+            "512:The return value of function {closure}() should either be used or intentionally ignored by casting it as (void)|closure-body|",
+        )
+    );
+}
+
+#[test]
+fn no_discard_validation_rejects_unsupported_declarations_before_execution() {
+    let cases = [
+        (
+            "<?php #[NoDiscard] function invalid(): void {}",
+            "A void function does not return a value, but #[\\NoDiscard] requires a return value",
+        ),
+        (
+            "<?php #[NoDiscard] function invalid(): never { throw new Exception(); }",
+            "A never returning function does not return a value, but #[\\NoDiscard] requires a return value",
+        ),
+        (
+            "<?php class Invalid { #[NoDiscard] function __construct() {} }",
+            "Method Invalid::__construct cannot be #[\\NoDiscard]",
+        ),
+        (
+            "<?php class Invalid { public string $value { #[NoDiscard] get => 'x'; } }",
+            "#[\\NoDiscard] is not supported for property hooks",
+        ),
+        (
+            "<?php #[DelayedTargetValidation] #[NoDiscard] #[NoDiscard] class Invalid {}",
+            "Attribute \"NoDiscard\" must not be repeated",
+        ),
+    ];
+
+    for (source, expected) in cases {
+        let error = run_php_expect_error(source);
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected NoDiscard validation error: {error}"
+        );
+    }
+}
+
+#[test]
 fn deprecated_attribute_resolves_deferred_constants_when_the_callable_is_invoked() {
     assert_eq!(
         run_php(

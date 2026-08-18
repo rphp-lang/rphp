@@ -26,8 +26,8 @@ use crate::value::{
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{
-    AttributeDefinition, AttributeEvaluationScope, FunctionCommon, FunctionType, ParamTypeHint,
-    UserFunction,
+    ATTRIBUTE_PUBLIC_TARGET_MASK, ATTRIBUTE_TARGET_PROPERTY_HOOK, AttributeDefinition,
+    AttributeEvaluationScope, FunctionCommon, FunctionType, ParamTypeHint, UserFunction,
 };
 
 pub(super) use registry::register;
@@ -1413,6 +1413,36 @@ fn deprecated_construct(
     Ok(())
 }
 
+fn no_discard_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let message = with_argument(ed, 1, |value| {
+        if value.is_undef() {
+            Value::null()
+        } else {
+            value.clone()
+        }
+    });
+    with_argument(ed, 0, |receiver| {
+        if let Some(mut object) = receiver.as_object_mut() {
+            if object
+                .get_property("message")
+                .is_some_and(|value| !value.is_undef())
+            {
+                eg.exception = Some(make_error_value(
+                    "Error",
+                    "Cannot modify readonly property NoDiscard::$message",
+                ));
+                return;
+            }
+            object.set_property("message", message);
+        }
+    });
+    Ok(())
+}
+
 fn attribute_get_name(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -1454,10 +1484,9 @@ fn attribute_get_target(
     let receiver = with_argument(ed, 0, Value::clone);
     return_value(
         rv,
-        Value::long(
-            eg.reflection_attribute_state(&receiver)
-                .map_or(0, |state| state.definition.target),
-        ),
+        Value::long(eg.reflection_attribute_state(&receiver).map_or(0, |state| {
+            state.definition.target & ATTRIBUTE_PUBLIC_TARGET_MASK
+        })),
     )
 }
 
@@ -1550,6 +1579,7 @@ fn instantiate_attribute_definition_at_use(
     };
     let name = definition.name.clone();
     let target = definition.target;
+    let public_target = target & ATTRIBUTE_PUBLIC_TARGET_MASK;
     let source_file = definition.source_file.clone();
     let source_line = definition.source_line;
     let strict = definition.strict_types;
@@ -1604,12 +1634,12 @@ fn instantiate_attribute_definition_at_use(
         ));
         return Ok(());
     }
-    if flags & target == 0 {
+    if flags & public_target == 0 {
         eg.exception = Some(make_error_value(
             "Error",
             &format!(
                 "Attribute \"{name}\" cannot target {} (allowed targets: {})",
-                attribute_target_name(target),
+                attribute_target_name(public_target),
                 attribute_allowed_targets(flags)
             ),
         ));
@@ -1619,6 +1649,13 @@ fn instantiate_attribute_definition_at_use(
         eg.exception = Some(make_error_value(
             "Error",
             &format!("Attribute \"{name}\" must not be repeated"),
+        ));
+        return Ok(());
+    }
+    if name.eq_ignore_ascii_case("NoDiscard") && target & ATTRIBUTE_TARGET_PROPERTY_HOOK != 0 {
+        eg.exception = Some(make_error_value(
+            "Error",
+            "#[\\NoDiscard] is not supported for property hooks",
         ));
         return Ok(());
     }

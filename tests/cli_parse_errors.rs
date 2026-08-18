@@ -74,3 +74,25 @@ fn unicode_escape_parse_errors_report_the_escape_line() {
         "Parse error: Invalid UTF-8 codepoint escape sequence: Codepoint too large in Standard input code on line 4\n"
     );
 }
+
+#[test]
+fn void_cast_is_a_discard_statement_not_an_assignment_value() {
+    let (status, stderr) = run_stdin("<?php\n$result = (void)$value;\n");
+
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Parse error: syntax error, unexpected token \"(void)\" in Standard input code on line 2\n"
+    );
+}
+
+#[test]
+fn void_cast_cannot_be_the_final_for_condition() {
+    let (status, stderr) = run_stdin("<?php\nfor (; (void)true;);\n");
+
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Parse error: syntax error, unexpected token \";\", expecting \",\" in Standard input code on line 2\n"
+    );
+}

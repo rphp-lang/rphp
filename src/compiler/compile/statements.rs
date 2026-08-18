@@ -1953,6 +1953,12 @@ impl Compiler {
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
                 func_compiler.validate_declared_type_hint(return_type, *line)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
+                self.validate_no_discard_callable(
+                    attributes,
+                    None,
+                    &resolved_name,
+                    &cp.return_type_hint,
+                )?;
                 func_compiler.return_type_context = cp.return_type_hint.clone();
                 self.validate_generator_return_type(
                     func_compiler.contains_yield,
@@ -3359,6 +3365,7 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_class = self.resolve_name(name);
+                self.validate_no_discard_target(attributes, "class")?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
                     return Err(self.goto_error(
                         &format!("Cannot apply #[\\Deprecated] to class {resolved_class}"),
@@ -3640,6 +3647,12 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_no_discard_callable(
+                        &method.attributes,
+                        Some(&resolved_class),
+                        &method.name,
+                        &cp.return_type_hint,
+                    )?;
                     self.validate_magic_method_return_type(
                         &resolved_class,
                         &method.name,
@@ -3765,7 +3778,7 @@ impl Compiler {
                     );
                     user_func.set_attributes(self.compile_attributes_in_scope(
                         &method.attributes,
-                        4,
+                        attribute_method_target(&method.name),
                         Some(&resolved_class),
                         resolved_parent.as_deref(),
                     ));
@@ -4160,6 +4173,7 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_iface = self.resolve_name(name);
+                self.validate_no_discard_target(attributes, "class")?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
                     return Err(self.goto_error(
                         &format!("Cannot apply #[\\Deprecated] to interface {resolved_iface}"),
@@ -4231,6 +4245,12 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_no_discard_callable(
+                        &method.attributes,
+                        Some(&resolved_iface),
+                        &method.name,
+                        &cp.return_type_hint,
+                    )?;
                     self.validate_magic_method_return_type(
                         &resolved_iface,
                         &method.name,
@@ -4298,7 +4318,7 @@ impl Compiler {
                     );
                     user_func.set_attributes(self.compile_attributes_in_scope(
                         &method.attributes,
-                        4,
+                        attribute_method_target(&method.name),
                         Some(&resolved_iface),
                         None,
                     ));
@@ -4432,6 +4452,7 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_trait = self.resolve_name(name);
+                self.validate_no_discard_target(attributes, "class")?;
                 if !generic_params.is_empty()
                     || methods
                         .iter()
@@ -4487,6 +4508,12 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_no_discard_callable(
+                        &method.attributes,
+                        Some(&resolved_trait),
+                        &method.name,
+                        &cp.return_type_hint,
+                    )?;
                     self.validate_magic_method_return_type(
                         &resolved_trait,
                         &method.name,
@@ -4562,7 +4589,7 @@ impl Compiler {
                     );
                     user_func.set_attributes(self.compile_attributes_in_scope_mode(
                         &method.attributes,
-                        4,
+                        attribute_method_target(&method.name),
                         Some(&resolved_trait),
                         None,
                         true,
@@ -4810,6 +4837,7 @@ impl Compiler {
                 methods,
             } => {
                 let resolved_enum = self.resolve_name(name);
+                self.validate_no_discard_target(attributes, "class")?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
                     return Err(self.goto_error(
                         &format!("Cannot apply #[\\Deprecated] to enum {resolved_enum}"),
@@ -5067,6 +5095,12 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_no_discard_callable(
+                        &method.attributes,
+                        Some(&resolved_enum),
+                        &method.name,
+                        &cp.return_type_hint,
+                    )?;
                     self.validate_magic_method_return_type(
                         &resolved_enum,
                         &method.name,
@@ -5140,7 +5174,10 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
-                    user_func.set_attributes(self.compile_attributes(&method.attributes, 4));
+                    user_func.set_attributes(self.compile_attributes(
+                        &method.attributes,
+                        attribute_method_target(&method.name),
+                    ));
                     user_func.parameter_attributes = method
                         .params
                         .iter()

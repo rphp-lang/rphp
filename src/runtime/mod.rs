@@ -411,6 +411,11 @@ pub struct ExecutorGlobals {
     /// constructors are reported at the attribute declaration rather than at
     /// the later ReflectionAttribute::newInstance() invocation.
     detached_trace_origins: Option<Box<HashMap<usize, (String, usize)>>>,
+    /// A discarded `call_user_func*()` result applies to the resolved callback,
+    /// whose engine-created detached frame otherwise has an ordinary return
+    /// slot. The wrapper publishes this one synchronous bit until the user
+    /// callback entry consumes it.
+    detached_return_discarded: bool,
     /// Globals modified by the last callee Return (for selective re-read by caller)
     pub dirty_globals: std::collections::HashSet<String>,
     /// Static variables — persisted across function calls: func_name → (var_name → value)
@@ -430,8 +435,8 @@ pub struct ExecutorGlobals {
     included_file_order: Vec<String>,
     /// Owned storage for functions/data from included files (prevents dangling pointers)
     pub included_functions: Vec<Box<crate::vm::function::UserFunction>>,
-    /// Static-bearing trait methods are cloned per consumer/alias because
-    /// each composed method owns independent function-static storage in PHP.
+    /// Trait methods cloned per consumer/alias for independent function-static
+    /// storage or consumer-specific declaration diagnostics.
     trait_static_functions: Vec<Box<crate::vm::function::UserFunction>>,
     /// Lazily allocated SPL autoload stack and recursion guard.
     pub(crate) autoload: Option<Box<AutoloadState>>,
@@ -940,8 +945,8 @@ impl ExecutorGlobals {
         self.function_table.reserve(512);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
-        self.class_by_id.reserve(70);
-        self.static_property_slots_by_class.reserve(70);
+        self.class_by_id.reserve(71);
+        self.static_property_slots_by_class.reserve(71);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
@@ -1023,6 +1028,7 @@ impl ExecutorGlobals {
             dynamic_scope_owners: HashMap::new(),
             detached_trace_callers: None,
             detached_trace_origins: None,
+            detached_return_discarded: false,
             dirty_globals: std::collections::HashSet::new(),
             static_vars: HashMap::new(),
             closure_static_frames: None,
@@ -1123,6 +1129,7 @@ impl ExecutorGlobals {
             dynamic_scope_owners: HashMap::new(),
             detached_trace_callers: None,
             detached_trace_origins: None,
+            detached_return_discarded: false,
             dirty_globals: std::collections::HashSet::new(),
             static_vars: HashMap::new(),
             closure_static_frames: None,
@@ -1163,6 +1170,21 @@ impl ExecutorGlobals {
     pub(crate) fn alias_dynamic_scope(&mut self, frame: usize, owner: usize) {
         let owner = self.dynamic_scope_owner(owner);
         self.dynamic_scope_owners.insert(frame, owner);
+    }
+
+    #[inline]
+    pub(crate) fn detached_return_discarded(&self) -> bool {
+        self.detached_return_discarded
+    }
+
+    #[inline]
+    pub(crate) fn replace_detached_return_discarded(&mut self, discarded: bool) -> bool {
+        std::mem::replace(&mut self.detached_return_discarded, discarded)
+    }
+
+    #[inline]
+    pub(crate) fn take_detached_return_discarded(&mut self) -> bool {
+        std::mem::take(&mut self.detached_return_discarded)
     }
 
     pub(crate) fn discard_dynamic_scope(&mut self, frame: usize) {
@@ -2172,7 +2194,8 @@ impl ExecutorGlobals {
             }
             &*(source as *const crate::vm::function::UserFunction)
         };
-        if source.op_array.static_vars.is_empty() {
+        if source.op_array.static_vars.is_empty() && !source.common.plan.has_no_discard_attribute()
+        {
             return &source.common;
         }
         let function = crate::compiler::clone_trait_method_with_static_storage(

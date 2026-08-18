@@ -12811,10 +12811,16 @@ fn fn_call_user_func(
         }
     };
 
+    // A discarded wrapper result semantically discards the resolved callback
+    // result. Detached callbacks always own a temporary return slot, so carry
+    // that source-level fact across the engine boundary explicitly.
+    let discarded = rv.is_null() || eg.detached_return_discarded();
+    let previous_discarded = eg.replace_detached_return_discarded(discarded);
+
     // Stream prepend args (e.g. $this), variadic values and closure captures
     // directly into the callback frame. No intermediate argument vectors.
     let result = if let Some(arr) = variadic_val.as_array() {
-        call_resolved_with_array(eg, &resolved, arr)?
+        call_resolved_with_array(eg, &resolved, arr)
     } else if variadic_val.value_type() != ValueType::Undef {
         let num_args = resolved.prepend_args.len() + 1 + resolved.use_vars.len();
         call_resolved_iter(
@@ -12826,7 +12832,7 @@ fn fn_call_user_func(
                 .iter()
                 .chain(std::iter::once(variadic_val))
                 .chain(resolved.use_vars.iter()),
-        )?
+        )
     } else {
         let num_args = resolved.prepend_args.len() + resolved.use_vars.len();
         call_resolved_iter(
@@ -12838,8 +12844,10 @@ fn fn_call_user_func(
                 .iter()
                 .chain(std::iter::empty())
                 .chain(resolved.use_vars.iter()),
-        )?
+        )
     };
+    eg.replace_detached_return_discarded(previous_discarded);
+    let result = result?;
     if eg.exception.is_some() {
         return Ok(());
     }
@@ -15981,13 +15989,17 @@ fn fn_call_user_func_array(
     let callback = arg!(ed, 0);
     let args_val = arg!(ed, 1);
     let caller_class = get_calling_scope_class(ed, eg).map(str::to_owned);
+    let discarded = rv.is_null() || eg.detached_return_discarded();
+    let previous_discarded = eg.replace_detached_return_discarded(discarded);
     let result = invoke_call_user_func_array(
         callback,
         args_val,
         eg,
         caller_class.as_deref(),
         callback_cache_slot(ed),
-    )?;
+    );
+    eg.replace_detached_return_discarded(previous_discarded);
+    let result = result?;
     if eg.exception.is_some() {
         return Ok(());
     }

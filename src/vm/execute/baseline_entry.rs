@@ -675,6 +675,13 @@ where
             (*func_ptr).fn_type,
         )
     };
+    // `call_user_func*()` executes the resolved callback through this detached
+    // boundary. Consume its discarded-result marker at the first user
+    // callable; internal trampolines leave it published for a nested wrapper.
+    let detached_return_discarded = user_callee
+        .is_some()
+        .then(|| eg.take_detached_return_discarded())
+        .unwrap_or(false);
     if user_callee.is_some_and(|user| user.common.plan.has_deprecated_attribute()) {
         let source_override = trace_origin
             .as_ref()
@@ -683,6 +690,23 @@ where
             eg,
             saved_execute_data,
             func_ptr,
+            None,
+            source_override,
+        )?;
+        if eg.exception.is_some() {
+            return Ok((Value::null(), None));
+        }
+    }
+    if detached_return_discarded
+        && user_callee.is_some_and(|user| user.common.plan.has_no_discard_attribute())
+    {
+        let source_override = trace_origin
+            .as_ref()
+            .map(|(file, line, _)| (file.as_str(), *line));
+        report_no_discard_user_call(
+            eg,
+            saved_execute_data,
+            user_callee.expect("detached NoDiscard marker belongs to a user function"),
             None,
             source_override,
         )?;

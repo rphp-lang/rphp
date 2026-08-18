@@ -176,6 +176,71 @@ fn report_php_deprecation(
     )
 }
 
+#[cold]
+fn report_user_call_diagnostic(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+    source_override: Option<(&str, usize)>,
+    diagnostic: &str,
+    level: i64,
+    label: &str,
+) -> Result<(), VmError> {
+    if source_override.is_none() {
+        // Detached callbacks may suspend an internal handler. Walk to the
+        // nearest user frame so callback-forwarded calls retain their PHP
+        // source site unless the caller supplied a synthetic origin.
+        let mut source_frame = caller;
+        // SAFETY: `caller` and every predecessor are live synchronous frames.
+        // Registered metadata outlives them, and an opline is dereferenced
+        // only after its index is proven inside that user op-array.
+        unsafe {
+            while !source_frame.is_null() {
+                let source_function = (*source_frame).func;
+                if !source_function.is_null() && (*source_function).fn_type == FunctionType::User {
+                    let source_user = &*(source_function as *const UserFunction);
+                    let source_op_array = &source_user.op_array;
+                    let source_opline = (*source_frame).opline;
+                    if !source_opline.is_null() {
+                        let index = source_opline.offset_from(source_op_array.instructions.as_ptr());
+                        if index >= 0 && (index as usize) < source_op_array.instructions.len() {
+                            return report_php_diagnostic(
+                                eg,
+                                source_frame,
+                                source_op_array,
+                                &*source_opline,
+                                diagnostic,
+                                level,
+                                label,
+                                false,
+                            );
+                        }
+                    }
+                }
+                source_frame = (*source_frame).prev_execute_data;
+            }
+        }
+    }
+
+    let (file, line) = source_override.unwrap_or(("Unknown", 0));
+    let handled = crate::stdlib::dispatch_php_error(
+        eg,
+        caller,
+        level,
+        diagnostic,
+        file,
+        line,
+    )?;
+    if !handled {
+        eg.record_last_error(level, diagnostic, file, line);
+    }
+    if !handled && eg.error_reporting & level != 0 {
+        eg.write_output(
+            format!("\n{label}: {diagnostic} in {file} on line {line}\n").as_bytes(),
+        );
+    }
+    Ok(())
+}
+
 /// Materialize PHP's built-in `#[Deprecated]` attribute and report the
 /// declaration-specific E_USER_DEPRECATED diagnostic before call validation.
 /// Attribute arguments may depend on runtime constants, so this stays on the
@@ -264,60 +329,93 @@ fn report_deprecated_user_call(
         diagnostic.push_str(&message);
     }
 
-    if source_override.is_none() {
-        // Detached callbacks may suspend an internal handler. Walk to the
-        // nearest user frame so ordinary array/callback calls retain their PHP
-        // call site unless the caller supplied a synthetic internal origin.
-        let mut source_frame = caller;
-        // SAFETY: `caller` and every predecessor are live synchronous frames.
-        // Registered function metadata outlives them, and a non-null opline is
-        // dereferenced only after its index is proven inside that user op-array.
-        unsafe {
-            while !source_frame.is_null() {
-                let source_function = (*source_frame).func;
-                if !source_function.is_null() && (*source_function).fn_type == FunctionType::User {
-                    let source_user = &*(source_function as *const UserFunction);
-                    let source_op_array = &source_user.op_array;
-                    let source_opline = (*source_frame).opline;
-                    if !source_opline.is_null() {
-                        let index = source_opline.offset_from(source_op_array.instructions.as_ptr());
-                        if index >= 0 && (index as usize) < source_op_array.instructions.len() {
-                            return report_php_diagnostic(
-                                eg,
-                                source_frame,
-                                source_op_array,
-                                &*source_opline,
-                                &diagnostic,
-                                16_384,
-                                "Deprecated",
-                                false,
-                            );
-                        }
-                    }
-                }
-                source_frame = (*source_frame).prev_execute_data;
-            }
-        }
-    }
-
-    let (file, line) = source_override.unwrap_or(("Unknown", 0));
-    let handled = crate::stdlib::dispatch_php_error(
+    report_user_call_diagnostic(
         eg,
         caller,
-        16_384,
+        source_override,
         &diagnostic,
-        file,
-        line,
+        16_384,
+        "Deprecated",
+    )
+}
+
+/// Materialize PHP's built-in `#[NoDiscard]` attribute before entering a user
+/// callable whose result is syntactically unused. Attribute type errors and a
+/// throwing E_USER_WARNING handler therefore stop the call before its body.
+#[cold]
+fn report_no_discard_user_call(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+    user: &UserFunction,
+    call_key: Option<usize>,
+    source_override: Option<(&str, usize)>,
+) -> Result<(), VmError> {
+    let mut definitions = user
+        .attributes
+        .iter()
+        .filter(|attribute| attribute.name.eq_ignore_ascii_case("NoDiscard"));
+    let Some(definition) = definitions.next().cloned() else {
+        return Ok(());
+    };
+    let repeated = definitions.next().is_some();
+
+    let mut instance = Value::undef();
+    crate::stdlib::reflection::instantiate_attribute_definition(
+        caller,
+        &mut instance,
+        &definition,
+        repeated,
+        eg,
     )?;
-    if !handled {
-        eg.record_last_error(16_384, &diagnostic, file, line);
+    if eg.exception.is_some() {
+        return Ok(());
     }
-    if !handled && eg.error_reporting & 16_384 != 0 {
-        eg.write_output(
-            format!("\nDeprecated: {diagnostic} in {file} on line {line}\n").as_bytes(),
-        );
+
+    let message = instance.as_object().and_then(|object| {
+        object
+            .get_property("message")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    });
+    let function = &user.common as *const FunctionCommon;
+    let mut name = if user.op_array.name.starts_with("__closure_")
+        || user
+            .op_array
+            .name
+            .rsplit_once("::")
+            .is_some_and(|(_, method)| method.starts_with("__closure_"))
+    {
+        displayed_function_name(eg, function)
+    } else {
+        user.op_array.name.clone()
+    };
+    if let Some(method) = call_key.and_then(|key| pending_magic_call_name(eg, key))
+        && let Some((class, implementation)) = name.rsplit_once("::")
+        && matches!(implementation.to_ascii_lowercase().as_str(), "__call" | "__callstatic")
+    {
+        name = format!("{class}::{method}");
     }
-    Ok(())
+    let noun = if name.contains("{closure") || !name.contains("::") {
+        "function"
+    } else {
+        "method"
+    };
+    let mut diagnostic = format!(
+        "The return value of {noun} {name}() should either be used or intentionally ignored by casting it as (void)"
+    );
+    if let Some(message) = message {
+        diagnostic.push_str(", ");
+        diagnostic.push_str(&message);
+    }
+    report_user_call_diagnostic(
+        eg,
+        caller,
+        source_override,
+        &diagnostic,
+        512,
+        "Warning",
+    )
 }
 
 fn scalar_dynamic_variable_name(value: &Value) -> Result<String, VmError> {
