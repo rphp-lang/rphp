@@ -246,10 +246,12 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
+            let registered_name = format!("{}::{}", $class, $method);
             eg.function_table.insert(
-                format!("{}::{}", $class, $method).to_lowercase(),
+                registered_name.to_ascii_lowercase(),
                 pointer,
             );
+            eg.register_internal_function_display_name(pointer, registered_name);
             eg.method_declaring_class
                 .insert(pointer, $class.to_string());
             functions.push(function);
@@ -418,7 +420,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_method!(
         "ReflectionAttribute",
-        "newinstance",
+        "newInstance",
         attribute_new_instance,
         1,
         0,

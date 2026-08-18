@@ -1,5 +1,5 @@
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 
 #[test]
 fn reflection_class_get_name_returns_the_declared_qualified_name() {
@@ -118,6 +118,58 @@ fn reflection_attributes_preserve_names_arguments_targets_and_instances() {
             "<?php namespace Metadata; #[\\Attribute(\\Attribute::TARGET_ALL | \\Attribute::IS_REPEATABLE)] class Label { public function __construct(public string $name, public int $rank = 7) {} } #[Label('class'), Label(name: 'again', rank: 9)] class Subject { #[Label('constant')] public const TOKEN = 1; #[Label('property')] public string $value; #[Label('method')] public function run(#[Label('parameter')] $input): void {} } #[Label('function')] function helper() {} #[Label('global')] const GLOBAL_TOKEN = 1; $class = new \\ReflectionClass(Subject::class); $first = $class->getAttributes()[0]; $second = $class->getAttributes()[1]; $instance = $second->newInstance(); echo $first->getName(), ':', $first->getArguments()[0], ':', $first->getTarget(), ':', (int) $first->isRepeated(), '|'; echo $instance->name, ':', $instance->rank, '|'; echo $class->getReflectionConstant('TOKEN')->getAttributes()[0]->getTarget(), ','; echo $class->getProperty('value')->getAttributes()[0]->getTarget(), ','; echo $class->getMethod('run')->getAttributes()[0]->getTarget(), ','; echo $class->getMethod('run')->getParameters()[0]->getAttributes()[0]->getTarget(), ','; echo (new \\ReflectionFunction(__NAMESPACE__ . '\\\\helper'))->getAttributes()[0]->getTarget(), ','; echo (new \\ReflectionConstant(__NAMESPACE__ . '\\\\GLOBAL_TOKEN'))->getAttributes()[0]->getTarget();"
         ),
         "Metadata\\Label:class:1:1|again:9|16,8,4,32,2,64"
+    );
+}
+
+#[test]
+fn reflection_attribute_constructor_trace_retains_use_site_and_internal_trampoline() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+#[Attribute]
+class TraceOriginLabel {
+    public function __construct() {
+        $trace = debug_backtrace(DEBUG_BACKTRACE_PROVIDE_OBJECT);
+        echo $trace[0]['file'], ':', $trace[0]['line'], ':', $trace[0]['function'], ':', $trace[0]['class'], ':', get_class($trace[0]['object']), '|';
+        echo $trace[1]['function'], ':', $trace[1]['class'], ':', get_class($trace[1]['object']);
+    }
+}
+#[TraceOriginLabel]
+class TraceOriginTarget {}
+(new ReflectionClass(TraceOriginTarget::class))->getAttributes()[0]->newInstance();
+"#,
+            "/app/attribute-trace.php",
+            "/app",
+        ),
+        "/app/attribute-trace.php:10:__construct:TraceOriginLabel:TraceOriginLabel|newInstance:ReflectionAttribute:ReflectionAttribute"
+    );
+}
+
+#[test]
+fn strict_attribute_argument_error_snapshots_the_pending_constructor_call() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+declare(strict_types=1);
+#[Attribute]
+class StrictOriginLabel {
+    public function __construct(public int $value) {}
+}
+#[StrictOriginLabel('9')]
+class StrictOriginTarget {}
+try {
+    (new ReflectionClass(StrictOriginTarget::class))->getAttributes()[0]->newInstance();
+} catch (TypeError $error) {
+    $trace = $error->getTrace();
+    echo $error->getFile(), ':', $error->getLine(), '|';
+    echo $trace[0]['file'], ':', $trace[0]['line'], ':', $trace[0]['function'], ':', $trace[0]['args'][0], '|';
+    echo $trace[1]['function'];
+}
+"#,
+            "/app/attribute-strict.php",
+            "/app",
+        ),
+        "/app/attribute-strict.php:5|/app/attribute-strict.php:7:__construct:9|newInstance"
     );
 }
 

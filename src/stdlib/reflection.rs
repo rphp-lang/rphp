@@ -1240,7 +1240,7 @@ fn attribute_new_instance(
             }
             crate::vm::execute::CallArgumentPreparation::Invalid => {
                 let parameter = parameter_names.get(index).map_or("unknown", String::as_str);
-                eg.exception = Some(make_error_value(
+                let error = make_error_value(
                     "TypeError",
                     &format!(
                         "{name}::__construct(): Argument #{} (${parameter}) must be of type {}, {} given, called in {source_file} on line {source_line}",
@@ -1248,7 +1248,18 @@ fn attribute_new_instance(
                         parameter_hints[index].diagnostic_display_name(),
                         normalized[index].diagnostic_type_name()
                     ),
-                ));
+                );
+                crate::vm::execute::attach_detached_argument_type_error_origin(
+                    eg,
+                    ed,
+                    constructor,
+                    1 + normalized.len(),
+                    std::iter::once(object.clone()).chain(normalized.iter().cloned()),
+                    &source_file,
+                    source_line,
+                    &error,
+                )?;
+                eg.exception = Some(error);
                 return Ok(());
             }
         }
@@ -1257,8 +1268,9 @@ fn attribute_new_instance(
         normalized.pop();
     }
     let num_args = 1 + normalized.len();
-    crate::vm::execute::call_function_owned_iter_with_context_and_named(
+    crate::vm::execute::call_function_owned_iter_with_context_and_named_from(
         eg,
+        ed,
         constructor,
         num_args,
         std::iter::once(object.clone()).chain(normalized),
@@ -1267,6 +1279,7 @@ fn attribute_new_instance(
         0,
         None,
         named_variadic,
+        (source_file, source_line),
     )?;
     if eg.exception.is_some() {
         return Ok(());

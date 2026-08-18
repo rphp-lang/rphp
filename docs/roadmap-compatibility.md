@@ -545,6 +545,18 @@ delta is +1/-0, bringing the cumulative gain from the initial baseline to
 Symfony S1 and warmed-kernel S2 gates pass. The check remains in dynamic
 callback resolution, leaving ordinary cached method dispatch unchanged.
 
+The `attribute-trace-origin` checkpoint reaches 2,864 passes with 2,384
+failures, 110 skips, one XFAIL, 240 unsupported cases, zero timeouts and zero
+crashes. Attribute constructors now retain their logical
+`ReflectionAttribute::newInstance()` caller and attribute use-site while their
+physical detached frame still exits the baseline executor safely. Strict
+argument failures snapshot the pending constructor before execution, and
+internal Reflection diagnostics retain canonical method spelling. The exact
+PHP 8.5.6 delta is +8/-0. All five feature configurations, all-target, unsafe,
+Composer S0, four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass.
+The affected grouped and retained callback controls move by +0.83% and +0.19%
+across 1,003 alternating AMD64 release pairs, below their five-percent ceiling.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

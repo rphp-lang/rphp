@@ -358,6 +358,9 @@ pub struct ExecutorGlobals {
     pub(crate) exception_handler_stack: Vec<Option<crate::value::Value>>,
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
     pub method_declaring_class: HashMap<*const FunctionCommon, String>,
+    /// Sparse canonical spellings for built-ins whose public name is not the
+    /// lowercase lookup key. Most internal functions need no entry.
+    internal_function_display_names: Option<Box<HashMap<*const FunctionCommon, String>>>,
     /// Output buffer — collected output for testing, or stdout
     output: std::cell::RefCell<Box<dyn Write>>,
     output_buffers: std::cell::RefCell<Vec<OutputBuffer>>,
@@ -385,6 +388,14 @@ pub struct ExecutorGlobals {
     /// aliases an include frame to the owning caller frame without changing
     /// the ordinary ExecuteData layout.
     pub(crate) dynamic_scope_owners: HashMap<usize, usize>,
+    /// Logical callers of synchronous engine-created callback frames. Their
+    /// physical predecessor stays null so `Return` exits the detached
+    /// executor, while live backtraces can still cross the callback boundary.
+    detached_trace_callers: Option<Box<HashMap<usize, usize>>>,
+    /// Optional synthetic call sites for engine-created callbacks. Attribute
+    /// constructors are reported at the attribute declaration rather than at
+    /// the later ReflectionAttribute::newInstance() invocation.
+    detached_trace_origins: Option<Box<HashMap<usize, (String, usize)>>>,
     /// Globals modified by the last callee Return (for selective re-read by caller)
     pub dirty_globals: std::collections::HashSet<String>,
     /// Static variables — persisted across function calls: func_name → (var_name → value)
@@ -979,6 +990,7 @@ impl ExecutorGlobals {
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             method_declaring_class: HashMap::new(),
+            internal_function_display_names: None,
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
             output_buffers: std::cell::RefCell::new(Vec::new()),
@@ -989,6 +1001,8 @@ impl ExecutorGlobals {
             globals: HashMap::new(),
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
+            detached_trace_callers: None,
+            detached_trace_origins: None,
             dirty_globals: std::collections::HashSet::new(),
             static_vars: HashMap::new(),
             closure_static_frames: None,
@@ -1071,6 +1085,7 @@ impl ExecutorGlobals {
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             method_declaring_class: HashMap::new(),
+            internal_function_display_names: None,
 
             output: std::cell::RefCell::new(output),
             output_buffers: std::cell::RefCell::new(Vec::new()),
@@ -1081,6 +1096,8 @@ impl ExecutorGlobals {
             globals: HashMap::new(),
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
+            detached_trace_callers: None,
+            detached_trace_origins: None,
             dirty_globals: std::collections::HashSet::new(),
             static_vars: HashMap::new(),
             closure_static_frames: None,
@@ -1126,6 +1143,96 @@ impl ExecutorGlobals {
     pub(crate) fn discard_dynamic_scope(&mut self, frame: usize) {
         self.dynamic_scope_owners.remove(&frame);
         self.dynamic_variables.remove(&frame);
+    }
+
+    #[cold]
+    pub(crate) fn register_internal_function_display_name(
+        &mut self,
+        function: *const FunctionCommon,
+        name: String,
+    ) {
+        if name != name.to_ascii_lowercase() {
+            self.internal_function_display_names
+                .get_or_insert_with(|| Box::new(HashMap::new()))
+                .insert(function, name);
+        }
+    }
+
+    pub(crate) fn internal_function_display_name(
+        &self,
+        function: *const FunctionCommon,
+    ) -> Option<&str> {
+        self.internal_function_display_names
+            .as_deref()
+            .and_then(|names| names.get(&function))
+            .map(String::as_str)
+    }
+
+    #[cold]
+    pub(crate) fn publish_detached_trace_caller(&mut self, frame: usize, caller: usize) {
+        if caller != 0 {
+            self.detached_trace_callers
+                .get_or_insert_with(|| Box::new(HashMap::new()))
+                .insert(frame, caller);
+        }
+    }
+
+    #[cold]
+    pub(crate) fn publish_detached_trace_origin(
+        &mut self,
+        frame: usize,
+        file: String,
+        line: usize,
+    ) {
+        self.detached_trace_origins
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .insert(frame, (file, line));
+    }
+
+    pub(crate) fn detached_trace_origin(&self, frame: usize) -> Option<(&str, usize)> {
+        self.detached_trace_origins
+            .as_deref()
+            .and_then(|origins| origins.get(&frame))
+            .map(|(file, line)| (file.as_str(), *line))
+    }
+
+    pub(crate) fn discard_detached_trace_caller(&mut self, frame: usize) {
+        let callers_empty = self
+            .detached_trace_callers
+            .as_deref_mut()
+            .is_some_and(|callers| {
+                callers.remove(&frame);
+                callers.is_empty()
+            });
+        if callers_empty {
+            self.detached_trace_callers = None;
+        }
+        let origins_empty = self
+            .detached_trace_origins
+            .as_deref_mut()
+            .is_some_and(|origins| {
+                origins.remove(&frame);
+                origins.is_empty()
+            });
+        if origins_empty {
+            self.detached_trace_origins = None;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn trace_caller(
+        &self,
+        frame: usize,
+        physical: *mut ExecuteData,
+    ) -> *mut ExecuteData {
+        if !physical.is_null() {
+            return physical;
+        }
+        self.detached_trace_callers
+            .as_deref()
+            .and_then(|callers| callers.get(&frame))
+            .copied()
+            .map_or(std::ptr::null_mut(), |caller| caller as *mut ExecuteData)
     }
 
     #[cold]

@@ -395,6 +395,8 @@ where
         0,
         None,
         None,
+        std::ptr::null_mut(),
+        None,
     )?;
     Ok(return_value)
 }
@@ -432,6 +434,8 @@ where
         capture_count,
         closure_static_vars,
         None,
+        std::ptr::null_mut(),
+        None,
     )?;
     Ok(return_value)
 }
@@ -449,7 +453,19 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, _) =
-        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args, 0, None, 0, None, None)?;
+        call_function_value_iter::<_, false>(
+            eg,
+            func_ptr,
+            num_args,
+            args,
+            0,
+            None,
+            0,
+            None,
+            None,
+            std::ptr::null_mut(),
+            None,
+        )?;
     Ok(return_value)
 }
 
@@ -476,6 +492,8 @@ where
         bound_this,
         capture_count,
         closure_static_vars,
+        None,
+        std::ptr::null_mut(),
         None,
     )?;
     Ok(return_value)
@@ -505,6 +523,40 @@ where
         capture_count,
         closure_static_vars,
         Some(named_variadic),
+        std::ptr::null_mut(),
+        None,
+    )?;
+    Ok(return_value)
+}
+
+pub(crate) fn call_function_owned_iter_with_context_and_named_from<I>(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    bound_this: Option<Value>,
+    capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
+    named_variadic: Vec<(String, Value)>,
+    trace_origin: (String, usize),
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        called_scope_class_id,
+        bound_this,
+        capture_count,
+        closure_static_vars,
+        Some(named_variadic),
+        logical_caller,
+        Some((trace_origin.0, trace_origin.1, None)),
     )?;
     Ok(return_value)
 }
@@ -523,7 +575,19 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, arg0) =
-        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args, 0, None, 0, None, None)?;
+        call_function_value_iter::<_, true>(
+            eg,
+            func_ptr,
+            num_args,
+            args,
+            0,
+            None,
+            0,
+            None,
+            None,
+            std::ptr::null_mut(),
+            None,
+        )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
 
@@ -550,6 +614,8 @@ where
         0,
         closure_static_vars,
         None,
+        std::ptr::null_mut(),
+        None,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
@@ -566,6 +632,8 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     capture_count: usize,
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
     named_variadic: Option<Vec<(String, Value)>>,
+    logical_caller: *mut ExecuteData,
+    trace_origin: Option<(String, usize, Option<&Value>)>,
 ) -> Result<(Value, Option<Value>), VmError>
 where
     I: Iterator<Item = Value>,
@@ -658,6 +726,20 @@ where
         std::ptr::null_mut(),
         std::ptr::null_mut(),
     );
+    let trace_caller = if logical_caller.is_null() {
+        saved_execute_data
+    } else {
+        logical_caller
+    };
+    if !logical_caller.is_null() {
+        eg.publish_detached_trace_caller(frame as usize, trace_caller as usize);
+    }
+    let pending_argument_error = trace_origin
+        .as_ref()
+        .and_then(|(_, _, throwable)| *throwable);
+    if let Some((file, line, _)) = trace_origin.as_ref() {
+        eg.publish_detached_trace_origin(frame as usize, file.clone(), *line);
+    }
     let mut return_value = Value::null();
 
     // SAFETY: `frame` is a fresh compiler-sized activation. All argument and
@@ -685,6 +767,39 @@ where
             eg.publish_closure_static_vars(frame as usize, storage);
         }
         initialize_bound_this_frame(frame, func_ptr, bound_this);
+
+        if let Some(throwable) = pending_argument_error {
+            let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+                .as_deref()
+                .is_some_and(crate::stdlib::ini_boolean);
+            let trace_options = if ignore_arguments { 2 } else { 0 };
+            let trace = crate::stdlib::collect_debug_backtrace(
+                frame,
+                trace_options,
+                0,
+                eg,
+                true,
+            );
+            let function = Function::from_common_ptr(func_ptr);
+            if function.fn_type() == FunctionType::User {
+                let op_array = &function.as_user().op_array;
+                if let Some(line) = op_array.declaration_line()
+                    && !op_array.source_file.is_empty()
+                    && let Some(mut object) = throwable.as_object_mut()
+                {
+                    object.set_property(
+                        "file",
+                        Value::shared_string(op_array.source_file.clone()),
+                    );
+                    object.set_property("line", Value::long(line as i64));
+                    object.set_property("trace", Value::array(trace));
+                }
+            }
+            eg.discard_detached_trace_caller(frame as usize);
+            cleanup_frame_slots(frame);
+            pop_vm_call_frame(eg, frame);
+            return Ok((Value::null(), None));
+        }
 
         // Detached callback entry bypasses DoFcall, whose full path normally
         // materializes the variadic bucket. Internal handlers use the same ABI in
@@ -780,6 +895,7 @@ where
                 None
             };
             eg.current_execute_data.set(saved_execute_data);
+            eg.discard_detached_trace_caller(frame as usize);
             cleanup_frame_slots(frame);
             pop_vm_call_frame(eg, frame);
             return if eg.exception.is_some() {
@@ -831,7 +947,7 @@ where
         // and its real call site. A non-empty trace belongs to a deeper frame
         // and must retain that immutable creation snapshot.
         let needs_detached_trace = callback_threw
-            && !saved_execute_data.is_null()
+            && !trace_caller.is_null()
             && eg.exception.as_ref().is_some_and(|exception| {
                 exception.as_object().is_some_and(|object| {
                     object
@@ -849,26 +965,31 @@ where
                 })
         });
         if needs_detached_trace {
-            let caller_opline = (*saved_execute_data).opline;
-            let caller_op_array = (*saved_execute_data).op_array();
-            let caller_index = caller_opline.offset_from(caller_op_array.instructions.as_ptr());
-            let advanced_caller = usize::try_from(caller_index)
-                .ok()
-                .filter(|index| *index < caller_op_array.instructions.len())
-                .is_some();
+            let caller_is_user = !(*trace_caller).func.is_null()
+                && (*(*trace_caller).func).fn_type == FunctionType::User;
+            let caller_opline = caller_is_user.then(|| (*trace_caller).opline);
+            let advanced_caller = caller_opline.is_some_and(|opline| {
+                let caller_op_array = (*trace_caller).op_array();
+                let caller_index = opline.offset_from(caller_op_array.instructions.as_ptr());
+                usize::try_from(caller_index)
+                    .ok()
+                    .filter(|index| *index < caller_op_array.instructions.len())
+                    .is_some()
+            });
             if advanced_caller {
-                (*saved_execute_data).opline = caller_opline.add(1);
+                (*trace_caller).opline = caller_opline.unwrap().add(1);
             }
-            (*frame).prev_execute_data = saved_execute_data;
+            (*frame).prev_execute_data = trace_caller;
             let trace = crate::stdlib::collect_debug_backtrace(frame, 0, 0, eg, true);
             (*frame).prev_execute_data = std::ptr::null_mut();
             if advanced_caller {
-                (*saved_execute_data).opline = caller_opline;
+                (*trace_caller).opline = caller_opline.unwrap();
             }
             if let Some(mut exception) = eg.exception.as_ref().and_then(Value::as_object_mut) {
                 exception.set_property("trace", Value::array(trace));
             }
         }
+        eg.discard_detached_trace_caller(frame as usize);
         eg.current_execute_data.set(saved_execute_data);
         cleanup_frame_slots(frame);
     }
@@ -890,6 +1011,39 @@ where
     } else {
         Ok((return_value, arg0))
     }
+}
+
+/// Snapshot a pending detached user call for an argument TypeError raised
+/// before its body can execute. Attribute construction uses the declaration
+/// site as its synthetic call origin while retaining the internal trampoline
+/// and public arguments in the immutable Throwable trace.
+pub(crate) fn attach_detached_argument_type_error_origin<I>(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    call_file: &str,
+    call_line: usize,
+    throwable: &Value,
+) -> Result<(), VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let _ = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        0,
+        None,
+        0,
+        None,
+        None,
+        logical_caller,
+        Some((call_file.to_string(), call_line, Some(throwable))),
+    )?;
+    Ok(())
 }
 
 /// Like `call_function`, but reads back the first public argument before frame
@@ -923,6 +1077,8 @@ where
         None,
         0,
         None,
+        None,
+        std::ptr::null_mut(),
         None,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))

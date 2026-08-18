@@ -2149,13 +2149,19 @@ fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommo
             return &(*(function as *const UserFunction)).op_array.name;
         }
     }
+    if let Some(name) = eg.internal_function_display_name(function) {
+        return name;
+    }
     eg.function_table
         .iter()
         .find_map(|(name, pointer)| std::ptr::eq(*pointer, function).then_some(name.as_str()))
         .unwrap_or("internal function")
 }
 
-fn displayed_function_name(eg: &ExecutorGlobals, function: *const FunctionCommon) -> String {
+pub(crate) fn displayed_function_name(
+    eg: &ExecutorGlobals,
+    function: *const FunctionCommon,
+) -> String {
     let registered_name = registered_function_name(eg, function);
     if let Some((_, hook)) = registered_name.split_once("::$") {
         return eg

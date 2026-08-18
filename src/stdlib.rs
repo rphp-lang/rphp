@@ -9048,52 +9048,29 @@ pub(crate) unsafe fn collect_debug_backtrace(
     let mut frame = if include_creation_frame {
         ed
     } else {
-        (*ed).prev_execute_data
+        eg.trace_caller(ed as usize, (*ed).prev_execute_data)
     };
     while !frame.is_null() && (limit == 0 || trace.len() < limit) {
         // The top-level script is represented by an executable frame in RPHP,
         // but PHP traces stop at the last function/method called from it.
-        if (*frame).prev_execute_data.is_null() {
+        let caller = eg.trace_caller(frame as usize, (*frame).prev_execute_data);
+        if caller.is_null() {
             break;
         }
         let function = Function::from_common_ptr((*frame).func);
-        let name = match function.fn_type() {
-            FunctionType::User => {
-                let op_array = &function.as_user().op_array;
-                let name = op_array.name.clone();
-                if name.is_empty() {
-                    break;
-                }
-                if name.starts_with("__closure_") {
-                    name.split_once('@')
-                        .map(|(_, public_name)| public_name.to_string())
-                        .unwrap_or_else(|| "{closure}".to_string())
-                } else {
-                    name
-                }
-            }
-            FunctionType::Internal => {
-                let Some(mut name) = eg
-                    .function_table
-                    .iter()
-                    .find(|(_, candidate)| **candidate == (*frame).func)
-                    .map(|(name, _)| name.clone())
-                else {
-                    break;
-                };
-                if let Some((_, method)) = name.rsplit_once("::")
-                    && let Some(class) = eg.declaring_class_of((*frame).func)
-                {
-                    name = format!("{class}::{method}");
-                }
-                name
-            }
-            FunctionType::Undef => break,
-        };
+        if function.fn_type() == FunctionType::Undef {
+            break;
+        }
+        let name = crate::vm::execute::displayed_function_name(eg, (*frame).func);
+        if name.is_empty() {
+            break;
+        }
         let common = &*(*frame).func;
         let mut entry = PhpArray::new();
-        let caller = (*frame).prev_execute_data;
-        if !caller.is_null() && !(*caller).func.is_null() {
+        if let Some((file, line)) = eg.detached_trace_origin(frame as usize) {
+            entry.set_str("file", Value::string(file.to_string()));
+            entry.set_str("line", Value::long(line as i64));
+        } else if !caller.is_null() && !(*caller).func.is_null() {
             let caller_function = Function::from_common_ptr((*caller).func);
             if caller_function.fn_type() == FunctionType::User {
                 let caller_op_array = &caller_function.as_user().op_array;
@@ -9128,23 +9105,23 @@ pub(crate) unsafe fn collect_debug_backtrace(
         {
             entry.set_str("function", Value::string(name));
             entry.set_str("class", Value::string("Closure"));
-            entry.set_str("type", Value::string("->"));
             if include_object {
                 entry.set_str("object", (*frame).cv(*this_cv).dereferenced().clone());
             }
+            entry.set_str("type", Value::string("->"));
         } else if let Some((class, method)) = name.rsplit_once("::") {
             entry.set_str("function", Value::string(method.to_string()));
             entry.set_str("class", Value::string(class.to_string()));
             let is_instance = !eg
                 .find_method_info(class, method)
                 .is_some_and(|(_, is_static, _)| is_static);
-            entry.set_str("type", Value::string(if is_instance { "->" } else { "::" }));
             if include_object && is_instance {
                 let object = (*frame).cv(0).dereferenced();
                 if object.as_object().is_some() {
                     entry.set_str("object", object.clone());
                 }
             }
+            entry.set_str("type", Value::string(if is_instance { "->" } else { "::" }));
         } else {
             entry.set_str("function", Value::string(name));
         }
@@ -9175,7 +9152,7 @@ pub(crate) unsafe fn collect_debug_backtrace(
             entry.set_str("args", Value::array(arguments));
         }
         trace.push(Value::array(entry));
-        frame = (*frame).prev_execute_data;
+        frame = caller;
     }
     trace
 }

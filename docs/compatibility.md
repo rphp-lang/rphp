@@ -9,11 +9,29 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,856 pass, 2,392 fail, 110 skip, one is an upstream XFAIL,
+`tests/lang` cases, 2,864 pass, 2,384 fail, 110 skip, one is an upstream XFAIL,
 240 are unsupported, and none time out or crash. The headline pass rate is
-54.421%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
-the preceding `07a1875` checkpoint, the exact pass-set delta is +8/-0. The
+54.573%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
+the preceding 2,856-pass checkpoint, the exact pass-set delta is +8/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
+
+Attribute construction now retains its logical call chain while the physical
+callback frame remains detached from the interpreter's return protocol.
+`debug_backtrace()`, `debug_print_backtrace()` and Throwable snapshots expose
+the pending attribute constructor at the attribute use-site followed by the
+live `ReflectionAttribute->newInstance()` frame, including PHP's canonical
+method spelling, object/argument projections and key order. A strict argument
+failure snapshots that same pending constructor before its body runs while
+keeping the constructor declaration as the TypeError origin. Sparse
+request-local sidecars carry only the exceptional logical caller, source and
+canonical internal name, so ordinary `ExecuteData` and callback traces remain
+unchanged. This adds eight exact PHP 8.5.6 passes with no lost pass, moved
+failure stage, timeout or crash. All five Cargo configurations, the
+all-target/all-features and exact unsafe-policy gates pass, as do Composer S0,
+all four Symfony S1 gates, warmed-kernel S2 and cold-build S3 against PHP 8.5.
+On AMD64, 1,003 alternating release pairs place the directly affected grouped
+regex callback at +0.83% and retained callback at +0.19%; all adjacent regex
+controls remain below the five-percent regression ceiling.
 
 One-use object receivers now reach their Zend lifetime boundary immediately
 after `DoFcall`, before a fluent expression continues or a returned temporary
