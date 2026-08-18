@@ -1583,6 +1583,7 @@ pub struct AttributeEvaluationScope {
     pub constant_imports: HashMap<String, String>,
     pub lexical_class: Option<String>,
     pub lexical_parent: Option<String>,
+    pub lexical_property: Option<String>,
     pub source_directory: String,
 }
 

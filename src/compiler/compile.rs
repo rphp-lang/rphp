@@ -2116,9 +2116,15 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
         | Expr::Null
         | Expr::Constant(_)
         | Expr::ClassConstant { .. } => true,
-        Expr::MagicConstant { name, .. } => ["__LINE__", "__FILE__", "__DIR__", "__CLASS__"]
-            .iter()
-            .any(|supported| name.eq_ignore_ascii_case(supported)),
+        Expr::MagicConstant { name, .. } => [
+            "__LINE__",
+            "__FILE__",
+            "__DIR__",
+            "__CLASS__",
+            "__PROPERTY__",
+        ]
+        .iter()
+        .any(|supported| name.eq_ignore_ascii_case(supported)),
         Expr::DynamicNamedClassConstant { constant, .. } => {
             deferred_constant_expression_is_supported(constant)
         }
@@ -2406,6 +2412,10 @@ pub struct Compiler {
     closure_capture_names: HashSet<String>,
     /// Current function name (for static variable keying)
     current_function_name: String,
+    /// Property name visible to PHP 8.5's `__PROPERTY__` magic constant while
+    /// compiling a property hook body. Nested closures deliberately start
+    /// without this context, matching PHP's lexical boundary.
+    current_property_name: Option<String>,
     /// Direct variable operands returned from a declaration using `function
     /// &name()` are acquired as references, not read in the ordinary warning
     /// context.
@@ -2464,6 +2474,11 @@ fn builtin_ref_args(name: &str) -> u64 {
 }
 
 impl Compiler {
+    fn property_hook_name(method: &str) -> Option<&str> {
+        let (property, hook) = method.strip_prefix('$')?.split_once("::")?;
+        (hook.eq_ignore_ascii_case("get") || hook.eq_ignore_ascii_case("set")).then_some(property)
+    }
+
     fn current_hook_matches(&self, property: &str) -> bool {
         self.current_function_name
             .rsplit_once("::$")
@@ -2592,6 +2607,7 @@ impl Compiler {
             static_vars: Vec::new(),
             closure_capture_names: HashSet::new(),
             current_function_name: String::new(),
+            current_property_name: None,
             returns_reference_context: false,
             return_type_context: ParamTypeHint::None,
             source_file: String::new(),
@@ -2751,6 +2767,7 @@ impl Compiler {
             "__DIR__" => Value::string(self.source_directory.clone()),
             "__NAMESPACE__" => Value::string(self.current_namespace.clone().unwrap_or_default()),
             "__CLASS__" => Value::string(self.lexical_static_class.clone().unwrap_or_default()),
+            "__PROPERTY__" => Value::string(self.current_property_name.clone().unwrap_or_default()),
             "__TRAIT__" => Value::string(if self.dynamic_static_scope {
                 self.lexical_static_class.clone().unwrap_or_default()
             } else {
@@ -3831,6 +3848,15 @@ impl Compiler {
         expr: &Expr,
         known: &HashMap<String, Value>,
     ) -> Result<Value, String> {
+        self.eval_const_expr_in_source_with_property(expr, known, None)
+    }
+
+    fn eval_const_expr_in_source_with_property(
+        &self,
+        expr: &Expr,
+        known: &HashMap<String, Value>,
+        lexical_property: Option<&str>,
+    ) -> Result<Value, String> {
         // Constant expressions can contain class-constant reads at any depth
         // (for example in an array property default).  The context-free
         // evaluator below deliberately knows nothing about this source unit's
@@ -3869,6 +3895,10 @@ impl Compiler {
                 }
             }
         }
+        imported.insert(
+            "__PROPERTY__".to_string(),
+            Value::string(lexical_property.unwrap_or_default()),
+        );
         self.collect_class_name_literals(expr, &mut imported);
         Self::eval_const_expr_with_context(
             expr,
@@ -4001,11 +4031,29 @@ impl Compiler {
         lexical_class: Option<&str>,
         lexical_parent: Option<&str>,
     ) -> Vec<AttributeDefinition> {
-        self.compile_attributes_in_scope_mode(
+        self.compile_attributes_in_scope_with_property(
             attributes,
             target,
             lexical_class,
             lexical_parent,
+            None,
+        )
+    }
+
+    fn compile_attributes_in_scope_with_property(
+        &self,
+        attributes: &[Attribute],
+        target: i64,
+        lexical_class: Option<&str>,
+        lexical_parent: Option<&str>,
+        lexical_property: Option<&str>,
+    ) -> Vec<AttributeDefinition> {
+        self.compile_attributes_in_scope_mode_with_property(
+            attributes,
+            target,
+            lexical_class,
+            lexical_parent,
+            lexical_property,
             false,
         )
     }
@@ -4016,6 +4064,25 @@ impl Compiler {
         target: i64,
         lexical_class: Option<&str>,
         lexical_parent: Option<&str>,
+        dynamic_scope: bool,
+    ) -> Vec<AttributeDefinition> {
+        self.compile_attributes_in_scope_mode_with_property(
+            attributes,
+            target,
+            lexical_class,
+            lexical_parent,
+            None,
+            dynamic_scope,
+        )
+    }
+
+    fn compile_attributes_in_scope_mode_with_property(
+        &self,
+        attributes: &[Attribute],
+        target: i64,
+        lexical_class: Option<&str>,
+        lexical_parent: Option<&str>,
+        lexical_property: Option<&str>,
         _dynamic_scope: bool,
     ) -> Vec<AttributeDefinition> {
         let evaluation_scope = Rc::new(AttributeEvaluationScope {
@@ -4024,6 +4091,7 @@ impl Compiler {
             constant_imports: self.constant_use_map.clone(),
             lexical_class: lexical_class.map(str::to_owned),
             lexical_parent: lexical_parent.map(str::to_owned),
+            lexical_property: lexical_property.map(str::to_owned),
             source_directory: self.source_directory.clone(),
         });
         let mut known = self.known_constants.clone();
@@ -4045,6 +4113,10 @@ impl Compiler {
                 }
             }
         }
+        known.insert(
+            "__PROPERTY__".to_string(),
+            Value::string(lexical_property.unwrap_or_default()),
+        );
         attributes
             .iter()
             .map(|attribute| AttributeDefinition {
@@ -4058,7 +4130,11 @@ impl Compiler {
                             CallArg::Named { name, value } => (Some(name.clone()), value),
                             CallArg::Unpack(expression) => (None, expression),
                         };
-                        let value = self.eval_const_expr_in_source(expression, &known);
+                        let value = self.eval_const_expr_in_source_with_property(
+                            expression,
+                            &known,
+                            lexical_property,
+                        );
                         AttributeArgument {
                             name,
                             // Attribute arguments are instantiated only on
@@ -4218,6 +4294,11 @@ impl Compiler {
                             "magic constant __DIR__ requires the active compilation context"
                                 .to_string()
                         })
+                } else if name.eq_ignore_ascii_case("__PROPERTY__") {
+                    Ok(known
+                        .get("__PROPERTY__")
+                        .cloned()
+                        .unwrap_or_else(|| Value::string("")))
                 } else {
                     Err(format!(
                         "magic constant {} requires the active compilation context",

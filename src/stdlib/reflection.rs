@@ -584,6 +584,9 @@ fn evaluate_deferred_attribute_expression(
         Expr::MagicConstant { name, .. } if name.eq_ignore_ascii_case("__CLASS__") => Ok(
             Value::string(scope.lexical_class.clone().unwrap_or_default()),
         ),
+        Expr::MagicConstant { name, .. } if name.eq_ignore_ascii_case("__PROPERTY__") => Ok(
+            Value::string(scope.lexical_property.clone().unwrap_or_default()),
+        ),
         Expr::ClassConstant {
             class_name,
             constant,
@@ -626,6 +629,7 @@ fn evaluate_deferred_attribute_expression(
                 constant_imports: HashMap::new(),
                 lexical_class: scope.lexical_class.clone(),
                 lexical_parent: scope.lexical_parent.clone(),
+                lexical_property: scope.lexical_property.clone(),
                 source_directory: scope.source_directory.clone(),
             };
             deferred_class_constant(class, constant, &dynamic_scope, eg)
@@ -1114,6 +1118,7 @@ fn report_deprecated_expression_references(
                     constant_imports: HashMap::new(),
                     lexical_class: scope.lexical_class.clone(),
                     lexical_parent: scope.lexical_parent.clone(),
+                    lexical_property: scope.lexical_property.clone(),
                     source_directory: scope.source_directory.clone(),
                 };
                 report_deprecated_expression_references(

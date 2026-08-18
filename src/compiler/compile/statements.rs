@@ -3213,6 +3213,7 @@ impl Compiler {
                                 constant_imports: self.constant_use_map.clone(),
                                 lexical_class: None,
                                 lexical_parent: None,
+                                lexical_property: None,
                                 source_directory: self.source_directory.clone(),
                             }),
                             source_file: self.source_file.clone(),
@@ -3620,12 +3621,14 @@ impl Compiler {
                         Some(&method.params),
                         method.return_type.as_ref(),
                     );
+                    let hook_property = Self::property_hook_name(&method.name).map(str::to_owned);
                     let mut func_compiler = self.child_compiler();
                     func_compiler.lexical_static_class = Some(resolved_class.clone());
                     func_compiler.lexical_static_parent = resolved_parent.clone();
                     func_compiler.dynamic_static_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_class, method.name);
+                    func_compiler.current_property_name = hook_property.clone();
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
@@ -3776,21 +3779,23 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
-                    user_func.set_attributes(self.compile_attributes_in_scope(
+                    user_func.set_attributes(self.compile_attributes_in_scope_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
                         Some(&resolved_class),
                         resolved_parent.as_deref(),
+                        hook_property.as_deref(),
                     ));
                     user_func.parameter_attributes = method
                         .params
                         .iter()
                         .map(|parameter| {
-                            self.compile_attributes_in_scope(
+                            self.compile_attributes_in_scope_with_property(
                                 &parameter.attributes,
                                 32,
                                 Some(&resolved_class),
                                 resolved_parent.as_deref(),
+                                hook_property.as_deref(),
                             )
                         })
                         .collect();
@@ -3935,7 +3940,7 @@ impl Compiler {
                         resolved_parent.as_deref(),
                     );
                     let default = match &prop.default {
-                        Some(expr) => Some(self.eval_const_expr_in_source(expr, &property_constants).map_err(|e| {
+                        Some(expr) => Some(self.eval_const_expr_in_source_with_property(expr, &property_constants, Some(&prop.name)).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
@@ -3967,11 +3972,12 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, *class_line)
                     .with_reflection_order(prop.line);
-                    definition.attributes = self.compile_attributes_in_scope(
+                    definition.attributes = self.compile_attributes_in_scope_with_property(
                         &prop.attributes,
                         8,
                         Some(&resolved_class),
                         resolved_parent.as_deref(),
+                        Some(&prop.name),
                     );
                     definition.set_final(prop.is_final);
                     definition.set_abstract_hooks(
@@ -4228,6 +4234,7 @@ impl Compiler {
                         Some(&method.params),
                         method.return_type.as_ref(),
                     );
+                    let hook_property = Self::property_hook_name(&method.name).map(str::to_owned);
                     // Create a minimal op_array that just returns null
                     let mut func_compiler = self.child_compiler();
                     func_compiler.lexical_static_class = Some(resolved_iface.clone());
@@ -4235,6 +4242,7 @@ impl Compiler {
                     func_compiler.dynamic_static_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_iface, method.name);
+                    func_compiler.current_property_name = hook_property.clone();
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
@@ -4316,21 +4324,23 @@ impl Compiler {
                         cp.return_type_hint,
                         method.returns_by_ref,
                     );
-                    user_func.set_attributes(self.compile_attributes_in_scope(
+                    user_func.set_attributes(self.compile_attributes_in_scope_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
                         Some(&resolved_iface),
                         None,
+                        hook_property.as_deref(),
                     ));
                     user_func.parameter_attributes = method
                         .params
                         .iter()
                         .map(|parameter| {
-                            self.compile_attributes_in_scope(
+                            self.compile_attributes_in_scope_with_property(
                                 &parameter.attributes,
                                 32,
                                 Some(&resolved_iface),
                                 None,
+                                hook_property.as_deref(),
                             )
                         })
                         .collect();
@@ -4400,7 +4410,13 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, property.line)
                     .with_reflection_order(property.line);
-                    definition.attributes = self.compile_attributes(&property.attributes, 8);
+                    definition.attributes = self.compile_attributes_in_scope_with_property(
+                        &property.attributes,
+                        8,
+                        Some(&resolved_iface),
+                        None,
+                        Some(&property.name),
+                    );
                     definition.has_get_hook = property.has_get_hook;
                     definition.has_set_hook = property.has_set_hook;
                     definition.set_abstract_hooks(
@@ -4492,12 +4508,14 @@ impl Compiler {
                         Some(&method.params),
                         method.return_type.as_ref(),
                     );
+                    let hook_property = Self::property_hook_name(&method.name).map(str::to_owned);
                     let mut func_compiler = self.child_compiler();
                     func_compiler.lexical_static_class = Some(resolved_trait.clone());
                     func_compiler.lexical_static_parent = None;
                     func_compiler.dynamic_static_scope = true;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_trait, method.name);
+                    func_compiler.current_property_name = hook_property.clone();
                     func_compiler.returns_reference_context = method.returns_by_ref;
                     func_compiler.contains_yield = method.body.iter().any(Stmt::contains_yield);
                     func_compiler.known_ref_args = self.build_known_ref_args();
@@ -4587,22 +4605,24 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
-                    user_func.set_attributes(self.compile_attributes_in_scope_mode(
+                    user_func.set_attributes(self.compile_attributes_in_scope_mode_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
                         Some(&resolved_trait),
                         None,
+                        hook_property.as_deref(),
                         true,
                     ));
                     user_func.parameter_attributes = method
                         .params
                         .iter()
                         .map(|parameter| {
-                            self.compile_attributes_in_scope_mode(
+                            self.compile_attributes_in_scope_mode_with_property(
                                 &parameter.attributes,
                                 32,
                                 Some(&resolved_trait),
                                 None,
+                                hook_property.as_deref(),
                                 true,
                             )
                         })
@@ -4679,7 +4699,7 @@ impl Compiler {
                     )?;
                     let type_hint = self.convert_type_hint(&prop.type_hint);
                     let default = match &prop.default {
-                        Some(expr) => Some(self.eval_const_expr_in_source(expr, &self.known_constants).map_err(|e| {
+                        Some(expr) => Some(self.eval_const_expr_in_source_with_property(expr, &self.known_constants, Some(&prop.name)).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for trait property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
@@ -4708,7 +4728,13 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, prop.line)
                     .with_reflection_order(prop.line);
-                    definition.attributes = self.compile_attributes(&prop.attributes, 8);
+                    definition.attributes = self.compile_attributes_in_scope_with_property(
+                        &prop.attributes,
+                        8,
+                        Some(&resolved_trait),
+                        None,
+                        Some(&prop.name),
+                    );
                     definition.set_final(prop.is_final);
                     definition.set_abstract_hooks(
                         prop.has_abstract_get_hook,
@@ -5477,6 +5503,7 @@ impl Compiler {
                         constant_imports: self.constant_use_map.clone(),
                         lexical_class: Some(owner.to_string()),
                         lexical_parent: parent.map(str::to_owned),
+                        lexical_property: None,
                         source_directory: self.source_directory.clone(),
                     })
                 });

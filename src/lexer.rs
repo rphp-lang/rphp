@@ -650,6 +650,7 @@ impl<'a> Lexer<'a> {
                                 | "__METHOD__"
                                 | "__CLASS__"
                                 | "__TRAIT__"
+                                | "__PROPERTY__"
                                 | "__NAMESPACE__"
                         )
                     {
@@ -1168,9 +1169,11 @@ mod tests {
 
     #[test]
     fn magic_constants_are_case_insensitive_but_member_names_remain_identifiers() {
-        let tokens = Lexer::new("<?php\necho __line__; echo \\__FILE__; echo Example::__CLASS__;")
-            .tokenize()
-            .unwrap();
+        let tokens = Lexer::new(
+            "<?php\necho __line__, __property__; echo \\__FILE__; echo Example::__CLASS__;",
+        )
+        .tokenize()
+        .unwrap();
         assert_eq!(
             tokens,
             vec![
@@ -1178,6 +1181,11 @@ mod tests {
                 echo(2),
                 Token::MagicConstant {
                     name: "__line__".into(),
+                    line: 2,
+                },
+                Token::Comma,
+                Token::MagicConstant {
+                    name: "__property__".into(),
                     line: 2,
                 },
                 Token::Semicolon,

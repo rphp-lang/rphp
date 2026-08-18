@@ -9,11 +9,39 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,003 pass, 2,294 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,007 pass, 2,290 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-56.692%; 4,619 of 5,297 attempted cases reach runtime (87.200%). Relative to
-the preceding 3,002-pass checkpoint, the exact pass-set delta is +1/-0. The
+56.768%; 4,620 of 5,297 attempted cases reach runtime (87.219%). Relative to
+the preceding 3,003-pass checkpoint, the exact pass-set delta is +4/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
+
+PHP 8.5's `__PROPERTY__` magic constant now resolves to the declared property
+name in property defaults and attributes, property-hook bodies and attributes,
+and hook-parameter attributes. The same scope is preserved for interfaces and
+traits, while ordinary functions and methods, promoted-parameter contexts and
+nested functions or closures correctly observe the empty string. Deferred
+attribute expressions retain this property scope until Reflection evaluates
+their arguments.
+
+All four PHP 8.5.6 corpus cases containing `__PROPERTY__` now pass exactly:
+`constants/gh17222.phpt` advances from a compile failure and the three
+`property_hooks` cases advance from runtime failures. The full-corpus delta is
++4/-0 with no category regressions, timeout or crash. All five Cargo
+configurations, all-feature/all-target, formatting and the exact unsafe
+ratchet pass. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and
+cold-build S3 also pass on AMD64.
+
+The exact base `013b66ef` and release candidate were compared without removing
+outliers. A 63-pair ABBA/BAAB confirmation over 150 empty-output file requests
+per executable measured baseline p10/median/p90
+0.201749/0.205205/0.209230 seconds and candidate
+0.201326/0.204412/0.209375 seconds: -0.386% by independent medians and +0.063%
+by the paired-ratio median, whose p10/p90 is -2.731%/+2.159%. A separate
+31-pair `bench_calls.php` control retained checksum `37500007500000` and
+measured baseline 0.363736/0.369090/0.376324 seconds versus candidate
+0.360420/0.365244/0.372666 seconds: -1.042% independently and -1.013% paired,
+with paired p10/p90 -3.133%/+1.100%. The lexer and cold compiler-context
+extension remain below the five-percent median regression ceiling.
 
 PHP 8.5's internal string-backed `PropertyHookType` enum now exposes canonical
 `Get`/`Set` cases, readonly `name`/`value`, `BackedEnum`/`UnitEnum` identity and
@@ -29,11 +57,11 @@ The exact PHP 8.5.6 delta is +1/-0:
 an undefined-method runtime failure to an exact pass. Two directly related
 cases now reach their later output comparison, and two adjacent pre-existing
 ReflectionMethod string-conversion failures also advance from runtime to
-output; no pass is lost and no timeout or crash appears. Full
-`__PROPERTY__` constant-expression support, exact internal-enum object-handle
-numbering and broader Reflection string formatting remain explicit follow-up
-work. All five Cargo configurations, all-feature/all-target, formatting and
-the exact unsafe ratchet pass. Composer S0, all four Symfony S1 gates,
+output; no pass is lost and no timeout or crash appears. Exact internal-enum
+object-handle numbering and broader Reflection string formatting remain
+explicit follow-up work. All five Cargo configurations,
+all-feature/all-target, formatting and the exact unsafe ratchet pass. Composer
+S0, all four Symfony S1 gates,
 warmed-kernel S2 and cold-build S3 also pass on AMD64.
 
 The exact base `68f190c5` and release candidate were compared without removing

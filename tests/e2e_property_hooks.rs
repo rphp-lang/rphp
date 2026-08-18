@@ -3,6 +3,71 @@ mod common;
 use common::{run_php, run_php_expect_error};
 
 #[test]
+fn property_magic_constant_covers_defaults_hooks_and_attribute_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[Attribute]
+class PropertyName {
+    public function __construct(public string $value) {}
+}
+
+class NamedProperty {
+    #[PropertyName(__PROPERTY__)]
+    public string $item = __PROPERTY__ {
+        #[PropertyName(__PROPERTY__)]
+        get {
+            echo __PROPERTY__, '|';
+            return $this->item;
+        }
+        set (#[PropertyName(__PROPERTY__)] string $value) {
+            $this->item = $value;
+        }
+    }
+}
+
+$object = new NamedProperty();
+echo $object->item, '|';
+$property = new ReflectionProperty(NamedProperty::class, 'item');
+echo $property->getAttributes()[0]->getArguments()[0], '|';
+echo $property->getHook(PropertyHookType::Get)->getAttributes()[0]->getArguments()[0], '|';
+echo $property->getHook(PropertyHookType::Set)->getParameters()[0]->getAttributes()[0]->getArguments()[0];
+"#,
+        ),
+        "item|item|item|item|item"
+    );
+}
+
+#[test]
+fn property_magic_constant_is_empty_outside_the_immediate_property_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo '[', __PROPERTY__, ']';
+function ordinaryFunction() { echo '[', __PROPERTY__, ']'; }
+ordinaryFunction();
+
+class PropertyBoundary {
+    public function ordinaryMethod() { echo '[', __PROPERTY__, ']'; }
+    public string $item {
+        get {
+            $nested = fn () => __PROPERTY__;
+            echo '[', $nested(), ']';
+            return __PROPERTY__;
+        }
+    }
+}
+
+$object = new PropertyBoundary();
+$object->ordinaryMethod();
+echo '[', $object->item, ']';
+"#,
+        ),
+        "[][][][[]item]"
+    );
+}
+
+#[test]
 fn getter_hook_runs_and_getter_only_property_rejects_writes() {
     assert_eq!(
         run_php(

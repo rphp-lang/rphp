@@ -685,15 +685,30 @@ hook metadata without inventing accessors for ordinary properties. Reflected
 hooks retain attributes and implicit signatures, and ReflectionMethod string
 rendering closes the delayed `NoDiscard` validator case. The exact full-corpus
 delta is +1/-0; four inspected runtime failures advance to later output
-comparisons and no pass is lost. `__PROPERTY__`, exact internal-enum object
-handles and broader Reflection output remain separate work. All five feature
-configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+comparisons and no pass is lost. Exact internal-enum object handles and broader
+Reflection output remain separate work; `__PROPERTY__` is closed by the
+following checkpoint. All five feature configurations, all-target, unsafe,
+Composer S0, four Symfony S1 gates,
 warmed-kernel S2 and cold-build S3 pass. A 63-pair empty-request confirmation
 places the candidate at +0.100% independently and +0.266% paired; a 31-pair
 ordinary-call control is +0.859% independently and +0.665% paired. Both retain
 exact observable results and remain below the five-percent median ceiling;
 startup-cost recovery is deferred to the combined performance pass requested
 after the compatibility push.
+
+The `property-magic-constant` checkpoint reaches 3,007 passes with 2,290
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. PHP 8.5's `__PROPERTY__` now preserves the immediate property scope in
+defaults, property and hook attributes, hook bodies and hook-parameter
+attributes, including interface and trait declarations; ordinary and nested
+callable scopes correctly receive the empty string. All four upstream cases
+containing this magic constant move to exact passes, for a full-corpus delta of
++4/-0 with no category regression. All five feature configurations,
+all-target, unsafe, Composer S0, four Symfony S1 gates, warmed-kernel S2 and
+cold-build S3 pass. A 63-pair empty-request confirmation places the candidate
+at -0.386% independently and +0.063% paired; a 31-pair ordinary-call control is
+-1.042% independently and -1.013% paired. Both retain exact observable results
+and remain below the five-percent median ceiling.
 
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
