@@ -1,8 +1,20 @@
 use super::{Lexer, StringPart, Token, decode_php_source};
 
+const MAX_NESTED_DOCUMENT_DEPTH: usize = 256;
+
+pub(super) struct InterpolatedString {
+    pub(super) parts: Vec<StringPart>,
+    pub(super) deprecations: Vec<(String, usize)>,
+}
+
 pub(super) struct DocumentStringError {
     pub(super) message: String,
     pub(super) line: usize,
+}
+
+struct DocumentStringEnd {
+    line_start: usize,
+    marker_start: usize,
 }
 
 impl DocumentStringError {
@@ -48,7 +60,7 @@ impl<'a> Lexer<'a> {
         Ok(result)
     }
 
-    pub(super) fn read_double_quoted_string(&mut self) -> Result<Vec<StringPart>, String> {
+    pub(super) fn read_double_quoted_string(&mut self) -> Result<InterpolatedString, String> {
         let opener = self.pos;
         self.pos += 1;
         let start = self.pos;
@@ -63,20 +75,15 @@ impl<'a> Lexer<'a> {
             return Err("Unterminated string literal".into());
         }
         let content = &self.src[start..self.pos];
-        let source_line = if content.windows(2).any(|window| window == b"->") {
-            1 + self.src[..opener]
-                .iter()
-                .filter(|byte| **byte == b'\n')
-                .count()
-        } else {
-            0
-        };
-        let parts = Self::interpolate_string_content(content, source_line)?;
+        let source_line = self.source_line_at(opener);
+        let parts = Self::interpolate_string_content(content, source_line, 0)?;
         self.pos += 1;
         Ok(parts)
     }
 
-    pub(super) fn read_document_string(&mut self) -> Result<Vec<StringPart>, DocumentStringError> {
+    pub(super) fn read_document_string(
+        &mut self,
+    ) -> Result<InterpolatedString, DocumentStringError> {
         let opener = self.pos;
         let opener_line = self.source_line_at(opener);
         self.pos += 3;
@@ -135,88 +142,231 @@ impl<'a> Lexer<'a> {
 
         let content_start = self.pos;
         let content_start_line = self.source_line_at(content_start);
-        let mut line_start = content_start;
-        while line_start <= self.src.len() {
-            let newline = self.src[line_start..]
+        let Some(document_end) =
+            Self::find_document_string_end(self.src, &label, content_start, !nowdoc, 0)
+        else {
+            let message = if content_start == self.src.len() {
+                "syntax error, unexpected end of file"
+            } else {
+                "syntax error, unexpected end of file, expecting variable or heredoc end or \"${\" or \"{$\""
+            };
+            return Err(DocumentStringError::new(
+                message,
+                self.source_line_at(self.src.len()),
+            ));
+        };
+
+        let indentation = &self.src[document_end.line_start..document_end.marker_start];
+        if indentation.contains(&b' ') && indentation.contains(&b'\t') {
+            return Err(DocumentStringError::new(
+                "Invalid indentation - tabs and spaces cannot be mixed",
+                self.source_line_at(document_end.line_start),
+            ));
+        }
+
+        let mut content_end = document_end.line_start;
+        if content_end > content_start && self.src[content_end - 1] == b'\n' {
+            content_end -= 1;
+            if content_end > content_start && self.src[content_end - 1] == b'\r' {
+                content_end -= 1;
+            }
+        }
+        let content = Self::strip_document_indentation(
+            &self.src[content_start..content_end],
+            indentation,
+            content_start_line,
+        )?;
+        self.pos = document_end.marker_start + label.len();
+
+        if nowdoc {
+            let literal = String::from_utf8(content).map_err(|_| {
+                DocumentStringError::new("Nowdoc content is not valid UTF-8", content_start_line)
+            })?;
+            return Ok(InterpolatedString {
+                parts: vec![StringPart::Literal(literal)],
+                deprecations: Vec::new(),
+            });
+        }
+        Self::interpolate_string_content(&content, content_start_line, 1)
+            .map_err(|message| DocumentStringError::new(message, content_start_line))
+    }
+
+    fn find_document_string_end(
+        source: &[u8],
+        label: &[u8],
+        mut line_start: usize,
+        scan_interpolation: bool,
+        document_depth: usize,
+    ) -> Option<DocumentStringEnd> {
+        if document_depth > MAX_NESTED_DOCUMENT_DEPTH {
+            return None;
+        }
+        let mut expression_depth = 0_usize;
+        let mut quote = None;
+
+        while line_start <= source.len() {
+            let newline = source[line_start..]
                 .iter()
                 .position(|byte| *byte == b'\n')
                 .map(|offset| line_start + offset);
-            let line_end = newline.unwrap_or(self.src.len());
-            let logical_end = if line_end > line_start && self.src[line_end - 1] == b'\r' {
+            let line_end = newline.unwrap_or(source.len());
+            let logical_end = if line_end > line_start && source[line_end - 1] == b'\r' {
                 line_end - 1
             } else {
                 line_end
             };
             let mut marker_start = line_start;
-            while marker_start < logical_end && matches!(self.src[marker_start], b' ' | b'\t') {
+            while marker_start < logical_end && matches!(source[marker_start], b' ' | b'\t') {
                 marker_start += 1;
             }
-
-            let candidate = &self.src[marker_start..logical_end];
-            if candidate.starts_with(&label)
-                && candidate
-                    .get(label.len())
-                    .copied()
-                    .is_none_or(|byte| !Self::is_identifier_continue(byte))
+            if expression_depth == 0
+                && Self::is_document_marker(&source[marker_start..logical_end], label)
             {
-                let indentation = &self.src[line_start..marker_start];
-                if indentation.contains(&b' ') && indentation.contains(&b'\t') {
-                    return Err(DocumentStringError::new(
-                        "Invalid indentation - tabs and spaces cannot be mixed",
-                        self.source_line_at(line_start),
-                    ));
+                return Some(DocumentStringEnd {
+                    line_start,
+                    marker_start,
+                });
+            }
+            if !scan_interpolation {
+                match newline {
+                    Some(newline) => line_start = newline + 1,
+                    None => break,
                 }
-
-                let mut content_end = line_start;
-                if content_end > content_start && self.src[content_end - 1] == b'\n' {
-                    content_end -= 1;
-                    if content_end > content_start && self.src[content_end - 1] == b'\r' {
-                        content_end -= 1;
-                    }
-                }
-                let content = Self::strip_document_indentation(
-                    &self.src[content_start..content_end],
-                    indentation,
-                    content_start_line,
-                )?;
-                self.pos = marker_start + label.len();
-
-                if nowdoc {
-                    let literal = String::from_utf8(content).map_err(|_| {
-                        DocumentStringError::new(
-                            "Nowdoc content is not valid UTF-8",
-                            content_start_line,
-                        )
-                    })?;
-                    return Ok(vec![StringPart::Literal(literal)]);
-                }
-                let source_line = if content.windows(2).any(|window| window == b"->") {
-                    2 + self.src[..opener]
-                        .iter()
-                        .filter(|byte| **byte == b'\n')
-                        .count()
-                } else {
-                    0
-                };
-                return Self::interpolate_string_content(&content, source_line)
-                    .map_err(|message| DocumentStringError::new(message, content_start_line));
+                continue;
             }
 
-            match newline {
+            let mut cursor = line_start;
+            let mut active_logical_end = logical_end;
+            let mut active_newline = newline;
+            loop {
+                if cursor >= active_logical_end {
+                    break;
+                }
+                let byte = source[cursor];
+                if let Some(active_quote) = quote {
+                    if byte == b'\\' && cursor + 1 < active_logical_end {
+                        cursor += 2;
+                        continue;
+                    }
+                    if byte == active_quote {
+                        quote = None;
+                    }
+                    cursor += 1;
+                    continue;
+                }
+
+                if expression_depth == 0 {
+                    if byte == b'\\' && cursor + 1 < active_logical_end {
+                        cursor += 2;
+                    } else if (byte == b'$' && source.get(cursor + 1) == Some(&b'{'))
+                        || (byte == b'{' && source.get(cursor + 1) == Some(&b'$'))
+                    {
+                        expression_depth = 1;
+                        cursor += 2;
+                    } else {
+                        cursor += 1;
+                    }
+                    continue;
+                }
+
+                if byte == b'<'
+                    && source.get(cursor..cursor + 3) == Some(b"<<<")
+                    && let Some((nested_label, nested_content_start, nested_nowdoc)) =
+                        Self::document_opener_at(source, cursor)
+                    && let Some(nested_end) = Self::find_document_string_end(
+                        source,
+                        nested_label,
+                        nested_content_start,
+                        !nested_nowdoc,
+                        document_depth + 1,
+                    )
+                {
+                    line_start = nested_end.line_start;
+                    active_newline = source[line_start..]
+                        .iter()
+                        .position(|byte| *byte == b'\n')
+                        .map(|offset| line_start + offset);
+                    let nested_line_end = active_newline.unwrap_or(source.len());
+                    active_logical_end =
+                        if nested_line_end > line_start && source[nested_line_end - 1] == b'\r' {
+                            nested_line_end - 1
+                        } else {
+                            nested_line_end
+                        };
+                    cursor = nested_end.marker_start + nested_label.len();
+                    continue;
+                }
+
+                match byte {
+                    b'\'' | b'"' => quote = Some(byte),
+                    b'$' if source.get(cursor + 1) == Some(&b'{') => {
+                        expression_depth += 1;
+                        cursor += 2;
+                        continue;
+                    }
+                    b'{' => expression_depth += 1,
+                    b'}' => expression_depth = expression_depth.saturating_sub(1),
+                    _ => {}
+                }
+                cursor += 1;
+            }
+
+            match active_newline {
                 Some(newline) => line_start = newline + 1,
                 None => break,
             }
         }
+        None
+    }
 
-        let message = if content_start == self.src.len() {
-            "syntax error, unexpected end of file"
-        } else {
-            "syntax error, unexpected end of file, expecting variable or heredoc end or \"${\" or \"{$\""
+    fn is_document_marker(candidate: &[u8], label: &[u8]) -> bool {
+        candidate.starts_with(label)
+            && candidate
+                .get(label.len())
+                .copied()
+                .is_none_or(|byte| !Self::is_identifier_continue(byte))
+    }
+
+    fn document_opener_at(source: &[u8], opener: usize) -> Option<(&[u8], usize, bool)> {
+        let mut cursor = opener + 3;
+        let quote = match source.get(cursor).copied() {
+            Some(b'\'' | b'"') => {
+                let quote = source[cursor];
+                cursor += 1;
+                Some(quote)
+            }
+            _ => None,
         };
-        Err(DocumentStringError::new(
-            message,
-            self.source_line_at(self.src.len()),
-        ))
+        let label_start = cursor;
+        if !source
+            .get(cursor)
+            .copied()
+            .is_some_and(Self::is_identifier_start)
+        {
+            return None;
+        }
+        cursor += 1;
+        while source
+            .get(cursor)
+            .copied()
+            .is_some_and(Self::is_identifier_continue)
+        {
+            cursor += 1;
+        }
+        let label = &source[label_start..cursor];
+        if let Some(quote) = quote {
+            if source.get(cursor) != Some(&quote) {
+                return None;
+            }
+            cursor += 1;
+        }
+        if source.get(cursor..cursor + 2) == Some(b"\r\n") {
+            Some((label, cursor + 2, quote == Some(b'\'')))
+        } else if source.get(cursor) == Some(&b'\n') {
+            Some((label, cursor + 1, quote == Some(b'\'')))
+        } else {
+            None
+        }
     }
 
     fn strip_document_indentation(
@@ -308,8 +458,10 @@ impl<'a> Lexer<'a> {
     fn interpolate_string_content(
         content: &[u8],
         source_line: usize,
-    ) -> Result<Vec<StringPart>, String> {
+        heredoc_line_adjustment: usize,
+    ) -> Result<InterpolatedString, String> {
         let mut parts = Vec::new();
+        let mut deprecations = Vec::new();
         let mut current = String::new();
         let mut pos = 0;
 
@@ -410,7 +562,51 @@ impl<'a> Lexer<'a> {
             } else if content[pos] == b'$' {
                 let variable_offset = pos;
                 let next = content.get(pos + 1).copied().unwrap_or(0);
-                if Self::is_identifier_start(next) {
+                if next == b'{' {
+                    if !current.is_empty() {
+                        parts.push(StringPart::Literal(std::mem::take(&mut current)));
+                    }
+                    let expression_line = source_line
+                        + content[..variable_offset]
+                            .iter()
+                            .filter(|byte| **byte == b'\n')
+                            .count();
+                    let deprecation_line = expression_line.saturating_sub(heredoc_line_adjustment);
+                    let expression_start = pos + 2;
+                    let expression_end =
+                        Self::complex_interpolation_end(content, expression_start)?;
+                    let expression = &content[expression_start..expression_end];
+                    let trimmed = expression.trim_ascii();
+                    if trimmed.len() == expression.len()
+                        && !trimmed.is_empty()
+                        && Self::is_identifier_start(trimmed[0])
+                        && trimmed[1..]
+                            .iter()
+                            .all(|byte| Self::is_identifier_continue(*byte))
+                    {
+                        let name = std::str::from_utf8(trimmed)
+                            .map_err(|_| {
+                                "Interpolated variable name is not valid UTF-8".to_string()
+                            })?
+                            .to_string();
+                        parts.push(StringPart::Variable(name));
+                        deprecations.push((
+                            "Using ${var} in strings is deprecated, use {$var} instead".to_string(),
+                            deprecation_line,
+                        ));
+                    } else {
+                        let (tokens, nested_deprecations) =
+                            Self::tokenize_interpolation_expression(expression, expression_line)?;
+                        parts.push(StringPart::DynamicVariable(tokens, expression_line));
+                        deprecations.push((
+                            "Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead"
+                                .to_string(),
+                            deprecation_line,
+                        ));
+                        deprecations.extend(nested_deprecations);
+                    }
+                    pos = expression_end + 1;
+                } else if Self::is_identifier_start(next) {
                     if !current.is_empty() {
                         parts.push(StringPart::Literal(std::mem::take(&mut current)));
                     }
@@ -481,10 +677,11 @@ impl<'a> Lexer<'a> {
                             .iter()
                             .filter(|byte| **byte == b'\n')
                             .count();
-                    let tokens = Self::tokenize_interpolation_expression(
+                    let (tokens, nested_deprecations) = Self::tokenize_interpolation_expression(
                         &content[expression_start..expression_end],
                         expression_line,
                     )?;
+                    deprecations.extend(nested_deprecations);
                     pos = expression_end + 1;
                     parts.push(StringPart::Expression(tokens));
                 }
@@ -496,7 +693,10 @@ impl<'a> Lexer<'a> {
         if !current.is_empty() || parts.is_empty() {
             parts.push(StringPart::Literal(current));
         }
-        Ok(parts)
+        Ok(InterpolatedString {
+            parts,
+            deprecations,
+        })
     }
 
     fn complex_interpolation_end(content: &[u8], mut pos: usize) -> Result<usize, String> {
@@ -533,7 +733,7 @@ impl<'a> Lexer<'a> {
     fn tokenize_interpolation_expression(
         expression: &[u8],
         source_line: usize,
-    ) -> Result<Vec<Token>, String> {
+    ) -> Result<(Vec<Token>, Vec<(String, usize)>), String> {
         let decoded = decode_php_source(expression);
         let line_prefix = "\n".repeat(source_line.saturating_sub(1));
         let source = format!("<?php {line_prefix}{decoded}");
@@ -543,10 +743,19 @@ impl<'a> Lexer<'a> {
         }
         tokens.remove(0);
         tokens.pop();
+        let mut deprecations = Vec::new();
+        tokens.retain(|token| {
+            if let Token::CompileDeprecation(message, line) = token {
+                deprecations.push((message.clone(), *line));
+                false
+            } else {
+                true
+            }
+        });
         if tokens.is_empty() {
             return Err("Empty complex string interpolation".into());
         }
-        Ok(tokens)
+        Ok((tokens, deprecations))
     }
 
     fn read_content_identifier(content: &[u8], pos: &mut usize) -> Result<String, String> {
@@ -637,6 +846,13 @@ impl<'a> Lexer<'a> {
                     tokens.push(Token::RParen);
                     tokens.push(Token::RParen);
                 }
+                StringPart::DynamicVariable(expression, line) => {
+                    tokens.push(Token::LParen(0));
+                    tokens.push(Token::StringLiteral(String::new()));
+                    tokens.push(Token::Dot);
+                    Self::emit_dynamic_variable_tokens(tokens, expression, *line);
+                    tokens.push(Token::RParen);
+                }
             }
             return;
         }
@@ -659,6 +875,9 @@ impl<'a> Lexer<'a> {
                     tokens.push(Token::LParen(0));
                     tokens.extend(expression.iter().cloned());
                     tokens.push(Token::RParen);
+                }
+                StringPart::DynamicVariable(expression, line) => {
+                    Self::emit_dynamic_variable_tokens(tokens, expression, *line);
                 }
             }
         }
@@ -683,6 +902,13 @@ impl<'a> Lexer<'a> {
             Token::Arrow
         });
         tokens.push(Token::Identifier(property.to_string(), line));
+    }
+
+    fn emit_dynamic_variable_tokens(tokens: &mut Vec<Token>, expression: &[Token], line: usize) {
+        tokens.push(Token::Dollar(line));
+        tokens.push(Token::LBrace);
+        tokens.extend(expression.iter().cloned());
+        tokens.push(Token::RBrace);
     }
 
     fn emit_array_access_tokens(tokens: &mut Vec<Token>, name: &str, index: &str) {

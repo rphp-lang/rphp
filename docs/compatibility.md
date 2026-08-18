@@ -1207,6 +1207,31 @@ new paths are confined to lexing, parsing and cold error rendering. Nested
 document interpolation, scan-ahead warning ordering and unrelated runtime
 string semantics remain explicit non-claims.
 
+Nested heredoc interpolation now keeps a recursive document boundary instead
+of accepting a same-named marker that belongs to `${...}`. The scanner also
+ignores label-shaped lines inside ordinary interpolated expressions while
+keeping nowdoc content non-interpolated. Deprecated `${var}` and `${expr}`
+forms retain their distinct PHP 8.5 variable and variable-variable semantics,
+emit source-located compile-time deprecations even in dead code, and propagate
+diagnostics from nested document expressions. Standalone compound statements
+share their surrounding scope, including within a namespace.
+
+The 65-case `Zend/tests/heredoc_nowdoc` slice advances from 53 to 57 passes,
+with four failures and four unsupported cases; adding the adjacent deprecated
+interpolation case produces 58 passes across 66 focused cases. A final release
+rerun of all 5,599 pinned PHP 8.5.6 cases reaches 2,803 passes, 2,445 ordinary
+failures, 110 skips, one XFAIL and 240 unsupported cases, with zero timeouts
+and zero crashes. The exact pass-set delta is +7/-0: four complex heredoc
+cases, both general deprecated-interpolation cases and the namespaced compound
+block case. Runtime is reached by 4,565 of 5,248 attempted cases (86.986%). All
+five Cargo feature configurations, formatting, unsafe-policy,
+all-feature/all-target, Composer S0, all four Symfony S1 and warmed-kernel S2
+gates pass on AMD64. No runtime performance gate applies: ordinary string
+tokens and bytecode are unchanged, standalone blocks lower to their existing
+statement sequence, and the additional work is confined to source-unit
+lexing/parsing and compile-time diagnostics. Heredoc scan-ahead warning order
+and unrelated runtime string behavior remain explicit non-claims.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

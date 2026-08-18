@@ -20,6 +20,7 @@ impl ListTarget {
                 | Expr::DynamicVariable { line, .. }
                 | Expr::Globals { line }
                 | Expr::CompileError { line, .. }
+                | Expr::CompileDeprecation { line, .. }
                 | Expr::ArrayAccess { line, .. }
                 | Expr::PropertyAccess { line, .. }
                 | Expr::DynamicPropertyAccess { line, .. } => *line,
@@ -153,6 +154,10 @@ pub enum Expr {
     /// rejected during compilation. This preserves PHP's compile-error stage
     /// and source location without making the parser report a syntax error.
     CompileError { message: String, line: usize },
+    /// A declaration-time diagnostic whose expression value is unused. The
+    /// lexer appends these markers at source-unit scope so dead code cannot
+    /// suppress PHP's compile-time deprecation.
+    CompileDeprecation { message: String, line: usize },
     BinaryOp {
         op: BinOp,
         left: Box<Expr>,
@@ -579,6 +584,7 @@ impl Expr {
             | Expr::Variable { .. }
             | Expr::Globals { .. }
             | Expr::CompileError { .. }
+            | Expr::CompileDeprecation { .. }
             | Expr::PostInc { .. }
             | Expr::PostDec { .. }
             | Expr::PreInc { .. }
@@ -733,6 +739,7 @@ pub struct TraitAlias {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Noop,
+    Block(Vec<Stmt>),
     Label(String),
     Goto {
         name: String,
@@ -1062,6 +1069,7 @@ impl Stmt {
                 GlobalTarget::Variable(_) => false,
                 GlobalTarget::Dynamic(expr) => expr.contains_yield(),
             }),
+            Stmt::Block(body) => body.iter().any(Stmt::contains_yield),
             Stmt::Noop
             | Stmt::Label(_)
             | Stmt::Goto { .. }

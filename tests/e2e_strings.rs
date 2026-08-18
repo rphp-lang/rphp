@@ -209,6 +209,70 @@ fn test_string_interpolation_curly_brace() {
 }
 
 #[test]
+fn deprecated_dollar_brace_interpolation_preserves_both_variable_forms() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+$foo = 'bar';
+$name = 'foo';
+echo "${foo}|${ $name }";
+"#,
+            "/virtual/deprecated-interpolation.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nDeprecated: Using ${var} in strings is deprecated, use {$var} instead in /virtual/deprecated-interpolation.php on line 4\n",
+            "\nDeprecated: Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead in /virtual/deprecated-interpolation.php on line 4\n",
+            "bar|bar",
+        )
+    );
+
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nif (false) { echo \"${missing}\"; }\necho 'ok';",
+            "/virtual/dead-interpolation.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nDeprecated: Using ${var} in strings is deprecated, use {$var} instead in /virtual/dead-interpolation.php on line 2\n",
+            "ok",
+        )
+    );
+}
+
+#[test]
+fn nested_same_label_heredoc_is_scanned_inside_dollar_brace_interpolation() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+${"inner"} = "resolved";
+echo <<<OUT
+    start
+    ${<<<OUT
+        inner
+        OUT}
+    end
+    OUT;
+"#,
+            "/virtual/nested-heredoc.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nDeprecated: Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead in /virtual/nested-heredoc.php on line 4\n",
+            "start\nresolved\nend",
+        )
+    );
+}
+
+#[test]
+fn standalone_compound_statements_share_the_surrounding_scope() {
+    assert_eq!(
+        run_php("<?php { $value = 'inside'; } echo $value;"),
+        "inside"
+    );
+}
+
+#[test]
 fn simple_property_interpolation_uses_normal_property_reads_and_boundaries() {
     assert_eq!(
         run_php(

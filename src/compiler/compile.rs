@@ -188,6 +188,14 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
     fn render_statement(statement: &Stmt) -> Option<String> {
         match statement {
             Stmt::Noop => Some(String::new()),
+            Stmt::Block(body) => {
+                let body = body
+                    .iter()
+                    .map(render_statement)
+                    .collect::<Option<Vec<_>>>()?
+                    .join("\n");
+                Some(format!("{{\n{}\n}}", indent_source(&body, 4)))
+            }
             Stmt::Return { expr, .. } => Some(match expr {
                 Some(expr) => format!("return {};", render(expr, 0, false)?),
                 None => "return;".to_string(),
@@ -3082,6 +3090,9 @@ impl Compiler {
                         file_context,
                     );
                 }
+                Stmt::Block(body) => {
+                    Self::prescan_constants_pass(body, ns, known, file_context);
+                }
                 _ => {}
             }
         }
@@ -3277,6 +3288,17 @@ impl Compiler {
         // after the entire source has parsed. Check it before constant-branch
         // elimination or any other lowering can hide it or surface a later
         // runtime-oriented diagnostic first.
+        for statement in stmts {
+            if let Stmt::ExprStmt(Expr::CompileDeprecation { message, line }) = statement {
+                self.compile_deprecations
+                    .borrow_mut()
+                    .push(CompileDeprecation {
+                        message: message.clone(),
+                        file: self.source_file.clone(),
+                        line: *line,
+                    });
+            }
+        }
         if let Some((message, line)) = stmts.iter().find_map(|statement| match statement {
             Stmt::ExprStmt(Expr::CompileError { message, line }) => Some((message, *line)),
             _ => None,
@@ -3451,6 +3473,10 @@ impl Compiler {
 
     fn statement_statically_returns(&self, statement: &Stmt) -> bool {
         match statement {
+            Stmt::Block(body) => body.iter().any(|statement| {
+                matches!(statement, Stmt::Return { .. })
+                    || self.statement_statically_returns(statement)
+            }),
             Stmt::If {
                 condition,
                 then_body,
@@ -5592,6 +5618,10 @@ impl Compiler {
             }
             Expr::CompileError { message, line } => {
                 self.deferred_error = Some(self.goto_error(message, *line));
+                let null = self.add_literal(Value::null());
+                (null, OpType::Const)
+            }
+            Expr::CompileDeprecation { .. } => {
                 let null = self.add_literal(Value::null());
                 (null, OpType::Const)
             }

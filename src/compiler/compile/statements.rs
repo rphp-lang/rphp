@@ -1713,6 +1713,11 @@ impl Compiler {
         }
         match stmt {
             Stmt::Noop => {}
+            Stmt::Block(body) => {
+                for statement in body {
+                    self.compile_stmt(statement)?;
+                }
+            }
             Stmt::Label(name) => {
                 self.definitely_defined_cvs.clear();
                 self.define_label(name)?;

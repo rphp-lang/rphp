@@ -163,6 +163,15 @@ impl Parser {
             return Ok(Stmt::Goto { name, line });
         }
         match self.peek() {
+            Token::LBrace => {
+                self.advance();
+                let mut body = Vec::new();
+                while self.peek() != Token::RBrace && !self.at_eof() {
+                    body.push(self.parse_stmt()?);
+                }
+                self.expect(&Token::RBrace)?;
+                Ok(Stmt::Block(body))
+            }
             Token::ParseError(message, line) => {
                 self.advance();
                 Err(self.source_error(&message, line))
@@ -171,6 +180,10 @@ impl Parser {
                 self.advance();
                 self.compile_error(message, line);
                 Ok(Stmt::Noop)
+            }
+            Token::CompileDeprecation(message, line) => {
+                self.advance();
+                Ok(Stmt::ExprStmt(Expr::CompileDeprecation { message, line }))
             }
             Token::Semicolon => {
                 self.advance();

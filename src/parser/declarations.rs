@@ -1791,6 +1791,7 @@ impl Parser {
             | Expr::Null
             | Expr::Globals { .. }
             | Expr::CompileError { .. }
+            | Expr::CompileDeprecation { .. }
             | Expr::Constant(_)
             | Expr::MagicConstant { .. } => {}
             // Yield — collect vars from value/key expressions

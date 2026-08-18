@@ -155,6 +155,7 @@ pub enum Token {
     ShiftRight,       // >>
     DotDotDot(usize), // ... (variadic / spread) with source line
     CompileError(String, usize),
+    CompileDeprecation(String, usize),
     ParseError(String, usize),
     Eof,
 }
@@ -165,12 +166,14 @@ enum StringPart {
     PropertyAccess(String, String, bool, usize), // var_name, property_name, nullsafe, source line
     ArrayAccess(String, String),                 // var_name, index (string or integer literal)
     Expression(Vec<Token>),
+    DynamicVariable(Vec<Token>, usize),
 }
 
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
     deferred_compile_errors: Vec<(String, usize)>,
+    deferred_compile_deprecations: Vec<(String, usize)>,
     pending_attributes: Vec<Token>,
 }
 
@@ -223,6 +226,7 @@ impl<'a> Lexer<'a> {
             src: source.as_bytes(),
             pos: 0,
             deferred_compile_errors: Vec::new(),
+            deferred_compile_deprecations: Vec::new(),
             pending_attributes: Vec::new(),
         }
     }
@@ -245,6 +249,11 @@ impl<'a> Lexer<'a> {
             tokens.append(&mut self.pending_attributes);
 
             if self.pos >= self.src.len() {
+                tokens.extend(
+                    self.deferred_compile_deprecations
+                        .drain(..)
+                        .map(|(message, line)| Token::CompileDeprecation(message, line)),
+                );
                 tokens.extend(
                     self.deferred_compile_errors
                         .drain(..)
@@ -291,7 +300,11 @@ impl<'a> Lexer<'a> {
                 b'<' => {
                     if self.starts_with(b"<<<") {
                         match self.read_document_string() {
-                            Ok(parts) => Self::emit_string_parts(&mut tokens, &parts),
+                            Ok(interpolated) => {
+                                self.deferred_compile_deprecations
+                                    .extend(interpolated.deprecations);
+                                Self::emit_string_parts(&mut tokens, &interpolated.parts);
+                            }
                             Err(error) => {
                                 tokens.push(Token::ParseError(error.message, error.line));
                                 self.pos = self.src.len();
@@ -439,8 +452,10 @@ impl<'a> Lexer<'a> {
                     tokens.push(Token::StringLiteral(s));
                 }
                 b'"' => {
-                    let parts = self.read_double_quoted_string()?;
-                    Self::emit_string_parts(&mut tokens, &parts);
+                    let interpolated = self.read_double_quoted_string()?;
+                    self.deferred_compile_deprecations
+                        .extend(interpolated.deprecations);
+                    Self::emit_string_parts(&mut tokens, &interpolated.parts);
                 }
                 b'-' => {
                     if self.peek_next() == Some(b'>') {
@@ -1514,6 +1529,40 @@ mod tests {
                 .into(),
             4,
         )));
+    }
+
+    #[test]
+    fn outer_document_marker_is_not_taken_from_an_interpolated_expression() {
+        let tokens = Lexer::new(
+            "<?php echo <<<DOC\n    outer\n    ${<<<DOC\n        inner\n        DOC}\n    tail\n    DOC;",
+        )
+        .tokenize()
+        .unwrap();
+
+        assert!(tokens.iter().any(|token| matches!(
+            token,
+            Token::CompileDeprecation(message, 2)
+                if message.starts_with("Using ${expr} (variable variables)")
+        )));
+        assert_eq!(tokens.last(), Some(&Token::Eof));
+    }
+
+    #[test]
+    fn nowdoc_marker_scanning_does_not_treat_dollar_braces_as_interpolation() {
+        let tokens = Lexer::new("<?php echo <<<'DOC'\n${\nDOC;")
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                echo(1),
+                Token::StringLiteral("${".into()),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
     }
 
     #[test]
