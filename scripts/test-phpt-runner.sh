@@ -137,7 +137,7 @@ if (classify_failure("Parse error: emitted by user code", 0) !== "output"
 require $argv[1];
 require $argv[2];
 require $argv[3];
-$supported = "zend.assertions=0\nassert.exception=1";
+$supported = "zend.assertions=0\nassert.exception=1\nerror_reporting=E_ALL";
 $unsupported = "zend.assertions=1\nmemory_limit=64M";
 if (unsupported_rphp_ini_directives($supported) !== []
     || unsupported_rphp_ini_directives($unsupported) !== ["memory_limit"]
@@ -147,6 +147,8 @@ if (unsupported_rphp_ini_directives($supported) !== []
         "zend.assertions=0",
         "-d",
         "assert.exception=1",
+        "-d",
+        "error_reporting=E_ALL",
         "test.php",
     ]
 ) {

@@ -7,6 +7,7 @@ function unsupported_rphp_ini_directives(string $section): array
 {
     $supported = [
         'assert.exception' => true,
+        'error_reporting' => true,
         'zend.assertions' => true,
     ];
     $unsupported = [];

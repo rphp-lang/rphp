@@ -557,6 +557,18 @@ Composer S0, four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass.
 The affected grouped and retained callback controls move by +0.83% and +0.19%
 across 1,003 alternating AMD64 release pairs, below their five-percent ceiling.
 
+The `startup-error-reporting` checkpoint reaches 2,878 passes with 2,402
+failures, 110 skips, one XFAIL, 208 unsupported cases, zero timeouts and zero
+crashes. Repeated CLI `-d error_reporting=...` definitions now initialize the
+request-local diagnostic mask using PHP 8.5's INI integer grammar, and the PHPT
+runner admits all 32 affected cases. Fourteen become exact passes and 18 expose
+pre-existing independent failures instead of remaining hidden as unsupported;
+the exact pass-set delta is +14/-0. The larger attempted denominator moves the
+headline rate from 54.573% to 54.508%. The implementation remains in cold CLI,
+startup and explicit INI parsing paths, so no execution-path performance gate
+applies. All five feature configurations, all-target, unsafe, Composer S0,
+four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

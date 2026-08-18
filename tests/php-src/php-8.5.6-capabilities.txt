@@ -6,9 +6,10 @@
 # passes.
 
 runtime-cli:INI
-  RPHP supports a request-local subset through ini_get()/ini_set(), but its CLI
-  does not yet accept arbitrary per-process INI settings. Tests with a non-empty
-  INI section outside that admitted subset are classified unsupported.
+  RPHP accepts assert.exception, zend.assertions and error_reporting through
+  repeated CLI -d definitions and exposes their request-local state. It does
+  not yet accept arbitrary per-process INI settings. Tests with a non-empty INI
+  section outside that admitted subset are classified unsupported.
 
 runtime-cli:ARGS
   RPHP does not yet publish script arguments to the executed program.

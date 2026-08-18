@@ -15183,8 +15183,27 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, value.clone());
             }
+            "error_reporting" => {
+                let (published, level) = normalize_error_reporting_ini(value);
+                eg.set_error_reporting(level);
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, published);
+            }
             _ => {}
         }
+    }
+}
+
+fn normalize_error_reporting_ini(value: &str) -> (String, i64) {
+    let value = value.trim();
+    if let Some(level) = parse_ini::evaluate_ini_integer_expression(value) {
+        return (level.to_string(), level);
+    }
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "on" | "yes" => ("1".to_string(), 1),
+        "false" | "off" | "no" | "none" | "" => (String::new(), 0),
+        _ => (value.to_string(), 0),
     }
 }
 

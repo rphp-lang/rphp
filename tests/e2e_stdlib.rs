@@ -1363,11 +1363,11 @@ $typed = parse_ini_string("[service]\nport=8080\nenabled=yes\nmissing=null\n", t
 var_dump($typed['service']['port'], $typed['service']['enabled'], $typed['service']['missing']);
 $raw = parse_ini_string("token=\"a;b\" ; ignored\nmask=(1|2)&3", false, INI_SCANNER_RAW);
 echo $raw['token'], ':', $raw['mask'], '|';
-$normal = parse_ini_string("mask=(1|2)&3", false, INI_SCANNER_NORMAL);
-echo $normal['mask'];
+$normal = parse_ini_string("mask=(1|2)&3\nfull=E_ALL", false, INI_SCANNER_NORMAL);
+echo $normal['mask'], ':', $normal['full'];
 "#
         ),
-        "int(8080)\nbool(true)\nNULL\na;b:(1|2)&3|3"
+        "int(8080)\nbool(true)\nNULL\na;b:(1|2)&3|3:30719"
     );
 }
 

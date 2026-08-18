@@ -194,7 +194,7 @@ fn parse_value(raw: &str, mode: i64, line: usize) -> Result<Value, ParseError> {
     if mode == INI_SCANNER_RAW || quoted {
         return Ok(Value::string(value));
     }
-    if let Some(evaluated) = evaluate_integer_expression(&value) {
+    if let Some(evaluated) = evaluate_ini_integer_expression(&value) {
         return Ok(if mode == INI_SCANNER_TYPED {
             Value::long(evaluated)
         } else {
@@ -225,13 +225,7 @@ fn parse_value(raw: &str, mode: i64, line: usize) -> Result<Value, ParseError> {
 /// NORMAL and TYPED modes. Keep this parser deliberately separate from PHP
 /// expression evaluation: operands are decimal integers or integer constants,
 /// with unary `~`/`!`, parentheses, `&`, and `|`.
-fn evaluate_integer_expression(source: &str) -> Option<i64> {
-    if !source
-        .bytes()
-        .any(|byte| matches!(byte, b'&' | b'|' | b'~' | b'!' | b'('))
-    {
-        return None;
-    }
+pub(super) fn evaluate_ini_integer_expression(source: &str) -> Option<i64> {
     let mut parser = IniIntegerExpression { source, offset: 0 };
     let value = parser.parse_or()?;
     parser.skip_whitespace();
@@ -504,8 +498,9 @@ mod tests {
         assert_eq!(raw.get_str("a").unwrap().as_str(), Some("foo;bar"));
         assert_eq!(raw.get_str("b").unwrap().as_str(), Some("baz"));
 
-        let normal = parse_ini("a=(1|2)&3\nb=E_ALL & ~E_NOTICE\n", false, 0).unwrap();
+        let normal = parse_ini("a=(1|2)&3\nb=E_ALL & ~E_NOTICE\nc=E_ALL\n", false, 0).unwrap();
         assert_eq!(normal.get_str("a").unwrap().as_str(), Some("3"));
         assert_eq!(normal.get_str("b").unwrap().as_str(), Some("30711"));
+        assert_eq!(normal.get_str("c").unwrap().as_str(), Some("30719"));
     }
 }

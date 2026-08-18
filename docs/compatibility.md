@@ -9,11 +9,24 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,864 pass, 2,384 fail, 110 skip, one is an upstream XFAIL,
-240 are unsupported, and none time out or crash. The headline pass rate is
-54.573%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
-the preceding 2,856-pass checkpoint, the exact pass-set delta is +8/-0. The
+`tests/lang` cases, 2,878 pass, 2,402 fail, 110 skip, one is an upstream XFAIL,
+208 are unsupported, and none time out or crash. The headline pass rate is
+54.508%; 4,582 of 5,280 attempted cases reach runtime (86.780%). Relative to
+the preceding 2,864-pass checkpoint, the exact pass-set delta is +14/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
+
+Repeated CLI `-d error_reporting=...` definitions now initialize the same
+request-local diagnostic mask exposed by `error_reporting()` and `ini_get()`.
+Numeric, boolean, named-constant and bitwise INI values use the PHP 8.5 INI
+integer grammar, including its 30,719 `E_ALL` value; the last definition wins.
+The PHPT runner therefore attempts 32 cases that were previously classified as
+unsupported: 14 now pass, while the remaining 18 honestly expose independent
+compile, runtime or output gaps. No previous pass is lost and no existing
+attempted case changes failure stage. Expanding the attempted denominator by
+32 lowers the headline rate from 54.573% to 54.508% despite the 14 new passes.
+All five Cargo configurations, all-feature/all-target, formatting and unsafe
+gates pass, as do Composer S0, all four Symfony S1 gates, warmed-kernel S2 and
+cold-build S3 against PHP 8.5.
 
 Attribute construction now retains its logical call chain while the physical
 callback frame remains detached from the interpreter's return protocol.
