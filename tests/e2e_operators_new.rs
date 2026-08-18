@@ -44,6 +44,110 @@ echo ("a" <=> "b") . " " . ("b" <=> "b") . " " . ("c" <=> "b");
 }
 
 #[test]
+fn object_comparison_initializes_lazy_properties_but_string_cast_does_not() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ComparableBox {
+    public int $value;
+
+    public function __construct(int $value) {
+        $this->value = $value;
+    }
+
+    public function __toString(): string {
+        return 'C';
+    }
+}
+
+class OtherBox {
+    public int $value = 1;
+}
+
+$reflection = new ReflectionClass(ComparableBox::class);
+$ghost = $reflection->newLazyGhost(function ($object) {
+    echo "ghost\n";
+    $object->__construct(1);
+});
+$proxy = $reflection->newLazyProxy(function () {
+    echo "proxy\n";
+    return new ComparableBox(1);
+});
+
+var_dump($ghost > $proxy);
+var_dump($ghost == $proxy);
+var_dump($ghost <=> $proxy);
+
+$equalLeft = $reflection->newLazyGhost(function ($object) {
+    echo "equal-left\n";
+    $object->__construct(1);
+});
+$equalRight = $reflection->newLazyProxy(function () {
+    echo "equal-right\n";
+    return new ComparableBox(1);
+});
+var_dump($equalLeft == $equalRight);
+
+$greaterLeft = $reflection->newLazyGhost(function ($object) {
+    echo "greater-left\n";
+    $object->__construct(2);
+});
+$greaterRight = $reflection->newLazyProxy(function () {
+    echo "greater-right\n";
+    return new ComparableBox(1);
+});
+var_dump($greaterLeft >= $greaterRight);
+
+$identity = $reflection->newLazyGhost(function ($object) {
+    echo "unexpected identity initialization\n";
+    $object->__construct(1);
+});
+var_dump($identity == $identity);
+var_dump($identity >= $identity);
+
+$otherReflection = new ReflectionClass(OtherBox::class);
+$differentLeft = $reflection->newLazyGhost(function ($object) {
+    echo "unexpected left class initialization\n";
+    $object->__construct(1);
+});
+$differentRight = $otherReflection->newLazyGhost(function ($object) {
+    echo "unexpected right class initialization\n";
+    $object->value = 1;
+});
+var_dump($differentLeft < $differentRight);
+
+$throwing = $reflection->newLazyProxy(function () {
+    throw new Exception('compare initialization');
+});
+$notReached = $reflection->newLazyGhost(function ($object) {
+    echo "right-before-throw\n";
+    $object->__construct(1);
+});
+try {
+    $throwing < $notReached;
+} catch (Exception $exception) {
+    echo "caught: ", $exception->getMessage(), "\n";
+}
+
+$low = new ComparableBox(1);
+$high = new ComparableBox(2);
+var_dump($low < $high);
+var_dump($low <=> $high);
+var_dump($low < new OtherBox());
+var_dump($low <=> new OtherBox());
+
+$stringGhost = $reflection->newLazyGhost(function ($object) {
+    echo "unexpected initialization\n";
+    $object->__construct(9);
+});
+var_dump('A' < $stringGhost);
+"#
+        ),
+        "ghost\nproxy\nbool(false)\nbool(true)\nint(0)\nequal-right\nequal-left\nbool(true)\ngreater-left\ngreater-right\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nright-before-throw\ncaught: compare initialization\nbool(true)\nint(-1)\nbool(false)\nint(1)\nbool(true)\n"
+    );
+}
+
+#[test]
 fn test_power() {
     assert_eq!(
         run_php(

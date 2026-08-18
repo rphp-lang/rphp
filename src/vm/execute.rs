@@ -3071,6 +3071,179 @@ pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
     equal_inner(a, b, &mut ComparisonContext::default(), 0)
 }
 
+/// PHP three-way comparison for compound values. Object and array tables are
+/// compared by key without requiring insertion-order identity, and recursive
+/// dependencies use the same bounded error contract as loose equality.
+pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
+    #[inline]
+    fn ordering(value: std::cmp::Ordering) -> i32 {
+        match value {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
+    }
+
+    fn compare_inner(
+        a: &Value,
+        b: &Value,
+        context: &mut ComparisonContext,
+        depth: usize,
+    ) -> Result<i32, ()> {
+        let a = a.dereferenced();
+        let b = b.dereferenced();
+
+        if matches!(a.value_type(), ValueType::True | ValueType::False)
+            || matches!(b.value_type(), ValueType::True | ValueType::False)
+            || matches!(a.value_type(), ValueType::Null | ValueType::Undef)
+            || matches!(b.value_type(), ValueType::Null | ValueType::Undef)
+        {
+            return Ok(ordering(a.is_truthy().cmp(&b.is_truthy())));
+        }
+
+        match (a.value_type(), b.value_type()) {
+            (ValueType::Long, ValueType::Long) => {
+                Ok(ordering(a.as_long().unwrap().cmp(&b.as_long().unwrap())))
+            }
+            (ValueType::Long | ValueType::Double, ValueType::Long | ValueType::Double) => {
+                let left = a.to_double().unwrap();
+                let right = b.to_double().unwrap();
+                Ok(left.partial_cmp(&right).map_or(0, ordering))
+            }
+            (ValueType::String, ValueType::String) => {
+                let left = a.as_str().unwrap();
+                let right = b.as_str().unwrap();
+                Ok(
+                    match (left.trim().parse::<f64>(), right.trim().parse::<f64>()) {
+                        (Ok(left), Ok(right)) => left.partial_cmp(&right).map_or(0, ordering),
+                        _ => ordering(left.cmp(right)),
+                    },
+                )
+            }
+            (ValueType::Array, ValueType::Array) => {
+                let left_identity = a.array_identity().unwrap();
+                let right_identity = b.array_identity().unwrap();
+                if left_identity == right_identity {
+                    return Ok(0);
+                }
+                if depth >= MAX_COMPARISON_DEPTH
+                    || !context.active_left.insert(left_identity)
+                    || !context.active_right.insert(right_identity)
+                {
+                    return Err(());
+                }
+                let left = a.as_array().unwrap();
+                let right = b.as_array().unwrap();
+                let mut result = ordering(left.len().cmp(&right.len()));
+                let mut comparison_error = false;
+                if result == 0 {
+                    for (key, value) in left.iter() {
+                        let other = match key {
+                            ArrayKey::Int(key) => right.get_int(key),
+                            ArrayKey::String(key) => right.get_str(&key),
+                        };
+                        let Some(other) = other else {
+                            result = 1;
+                            break;
+                        };
+                        match compare_inner(value, other, context, depth + 1) {
+                            Ok(cmp) if cmp != 0 => {
+                                result = cmp;
+                                break;
+                            }
+                            Ok(_) => {}
+                            Err(()) => {
+                                comparison_error = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                context.active_left.remove(&left_identity);
+                context.active_right.remove(&right_identity);
+                if comparison_error {
+                    Err(())
+                } else {
+                    Ok(result)
+                }
+            }
+            (ValueType::Object, ValueType::Object) => {
+                let left_identity = a.object_identity().unwrap();
+                let right_identity = b.object_identity().unwrap();
+                if left_identity == right_identity {
+                    return Ok(0);
+                }
+                if depth >= MAX_COMPARISON_DEPTH
+                    || !context.active_left.insert(left_identity)
+                    || !context.active_right.insert(right_identity)
+                {
+                    return Err(());
+                }
+
+                let left = a.as_object().unwrap();
+                let right = b.as_object().unwrap();
+                let same_class = if left.class_id != 0 || right.class_id != 0 {
+                    left.class_id == right.class_id
+                } else {
+                    left.class_name.eq_ignore_ascii_case(&right.class_name)
+                };
+                if !same_class {
+                    context.active_left.remove(&left_identity);
+                    context.active_right.remove(&right_identity);
+                    return Ok(1);
+                }
+
+                let mut left_count = 0usize;
+                left.for_each_property(|_, _| left_count += 1);
+                let mut right_count = 0usize;
+                right.for_each_property(|_, _| right_count += 1);
+                let mut result = ordering(left_count.cmp(&right_count));
+                let mut comparison_error = false;
+                if result == 0 {
+                    left.for_each_property(|name, value| {
+                        if result != 0 || comparison_error {
+                            return;
+                        }
+                        let Some(other) = right.get_property(name) else {
+                            result = 1;
+                            return;
+                        };
+                        match compare_inner(value, other, context, depth + 1) {
+                            Ok(cmp) => result = cmp,
+                            Err(()) => comparison_error = true,
+                        }
+                    });
+                }
+                context.active_left.remove(&left_identity);
+                context.active_right.remove(&right_identity);
+                if comparison_error {
+                    Err(())
+                } else {
+                    Ok(result)
+                }
+            }
+            (ValueType::Closure, ValueType::Closure) => Ok(
+                if a.as_closure()
+                    .zip(b.as_closure())
+                    .is_some_and(|(left, right)| left.same_identity(right))
+                {
+                    0
+                } else {
+                    1
+                },
+            ),
+            (ValueType::Resource, ValueType::Resource) => Ok(ordering(
+                a.as_resource_id()
+                    .unwrap()
+                    .cmp(&b.as_resource_id().unwrap()),
+            )),
+            _ => Ok(1),
+        }
+    }
+
+    compare_inner(a, b, &mut ComparisonContext::default(), 0)
+}
+
 /// PHP === comparison: same type and same value (recursive for arrays).
 pub(crate) fn values_identical_checked(a: &Value, b: &Value) -> Result<bool, ()> {
     fn identical_inner(

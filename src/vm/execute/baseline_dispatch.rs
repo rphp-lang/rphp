@@ -44,12 +44,7 @@ fn throw_invalid_dynamic_call_class<'a>(
 }
 
 #[cold]
-fn enum_relational_result(
-    eg: &ExecutorGlobals,
-    left: &Value,
-    right: &Value,
-    inclusive: bool,
-) -> Option<bool> {
+fn enum_comparison_result(eg: &ExecutorGlobals, left: &Value, right: &Value) -> Option<i32> {
     let left = left.dereferenced();
     let right = right.dereferenced();
     let is_enum = |value: &Value| {
@@ -60,8 +55,84 @@ fn enum_relational_result(
     };
     let left_is_enum = is_enum(left);
     let right_is_enum = is_enum(right);
-    (left_is_enum || right_is_enum)
-        .then(|| inclusive && left_is_enum && right_is_enum && values_identical(left, right))
+    (left_is_enum || right_is_enum).then(|| {
+        if left_is_enum && right_is_enum && values_identical(left, right) {
+            0
+        } else {
+            1
+        }
+    })
+}
+
+#[cold]
+fn enum_relational_result(
+    eg: &ExecutorGlobals,
+    left: &Value,
+    right: &Value,
+    inclusive: bool,
+) -> Option<bool> {
+    enum_comparison_result(eg, left, right).map(|comparison| inclusive && comparison == 0)
+}
+
+/// Prepare the object-handler cases whose comparison may execute user code.
+/// Zend avoids touching lazy state for identity and class-mismatch decisions,
+/// while same-class property comparison realizes both distinct operands.
+#[cold]
+fn prepare_object_comparison_operands(
+    eg: &mut ExecutorGlobals,
+    left: &Value,
+    right: &Value,
+) -> Result<Option<(Value, Value, Option<i32>)>, VmError> {
+    let left = left.dereferenced();
+    let right = right.dereferenced();
+
+    match (left.value_type(), right.value_type()) {
+        (ValueType::Object, ValueType::Object) => {
+            let mut prepared_left = left.clone();
+            let mut prepared_right = right.clone();
+            let same_identity = left.object_identity() == right.object_identity();
+            let same_class = left
+                .as_object()
+                .zip(right.as_object())
+                .is_some_and(|(left, right)| {
+                    if left.class_id != 0 || right.class_id != 0 {
+                        left.class_id == right.class_id
+                    } else {
+                        left.class_name.eq_ignore_ascii_case(&right.class_name)
+                    }
+                });
+            if !same_identity && same_class {
+                if eg.lazy_object_state(&prepared_right).is_some() {
+                    prepared_right = crate::stdlib::reflection::resolve_lazy_object_chain(
+                        eg,
+                        &prepared_right,
+                    )?;
+                }
+                if eg.exception.is_none() && eg.lazy_object_state(&prepared_left).is_some() {
+                    prepared_left = crate::stdlib::reflection::resolve_lazy_object_chain(
+                        eg,
+                        &prepared_left,
+                    )?;
+                }
+            }
+            Ok(Some((prepared_left, prepared_right, None)))
+        }
+        (ValueType::Object, ValueType::String) => {
+            let rendered = call_object_string_conversion(eg, left)?;
+            Ok(Some(match rendered {
+                Some(rendered) => (rendered, right.clone(), None),
+                None => (left.clone(), right.clone(), Some(1)),
+            }))
+        }
+        (ValueType::String, ValueType::Object) => {
+            let rendered = call_object_string_conversion(eg, right)?;
+            Ok(Some(match rendered {
+                Some(rendered) => (left.clone(), rendered, None),
+                None => (left.clone(), right.clone(), Some(-1)),
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Return the innermost finally block crossed by a non-local jump. The whole
@@ -1586,20 +1657,63 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-
-                let cmp = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
-                    l1.cmp(&l2)
+                let scalar_cmp = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    Some(l1.cmp(&l2))
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    d1.partial_cmp(&d2).unwrap_or(std::cmp::Ordering::Equal)
-                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
-                    s1.cmp(s2)
+                    Some(d1.partial_cmp(&d2).unwrap_or(std::cmp::Ordering::Equal))
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for <=>".into()));
+                    op1.as_str().zip(op2.as_str()).map(|(left, right)| left.cmp(right))
                 };
-                let val = match cmp {
-                    std::cmp::Ordering::Less => -1i64,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
+                let prepared = if scalar_cmp.is_none() {
+                    prepare_object_comparison_operands(eg, op1, op2)?
+                } else {
+                    None
+                };
+                if scalar_cmp.is_none() {
+                    resume_pending_exception!();
+                }
+                let (op1_owner, op2_owner, forced_cmp) = match prepared {
+                    Some((left, right, forced_cmp)) => {
+                        (Some(left), Some(right), forced_cmp)
+                    }
+                    None => (None, None, None),
+                };
+                let op1 = op1_owner.as_ref().unwrap_or(op1);
+                let op2 = op2_owner.as_ref().unwrap_or(op2);
+
+                let val = if let Some(cmp) = scalar_cmp {
+                    match cmp {
+                        std::cmp::Ordering::Less => -1i64,
+                        std::cmp::Ordering::Equal => 0,
+                        std::cmp::Ordering::Greater => 1,
+                    }
+                } else if let Some(cmp) = enum_comparison_result(eg, op1, op2) {
+                    cmp as i64
+                } else if let Some(cmp) = forced_cmp {
+                    cmp as i64
+                } else if matches!(
+                    (op1.value_type(), op2.value_type()),
+                    (ValueType::Object, ValueType::Object)
+                ) {
+                    let Ok(cmp) = values_compare_checked(op1, op2) else {
+                        throw_operator!("Error", "Nesting level too deep - recursive dependency?");
+                    };
+                    cmp as i64
+                } else {
+                    let cmp = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                        l1.cmp(&l2)
+                    } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                        d1.partial_cmp(&d2).unwrap_or(std::cmp::Ordering::Equal)
+                    } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                        s1.cmp(s2)
+                    } else {
+                        return Err(VmError::Fatal("Unsupported operand types for <=>".into()));
+                    };
+                    match cmp {
+                        std::cmp::Ordering::Less => -1i64,
+                        std::cmp::Ordering::Equal => 0,
+                        std::cmp::Ordering::Greater => 1,
+                    }
                 };
                 unsafe { frame_tmp_set_long(frame, result_ptr, val) };
             }
@@ -1749,12 +1863,68 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+                let object_involved = op1.value_type() == ValueType::Object
+                    || op2.value_type() == ValueType::Object;
+                let prepared = if object_involved {
+                    prepare_object_comparison_operands(eg, op1, op2)?
+                } else {
+                    None
+                };
+                if object_involved {
+                    resume_pending_exception!();
+                }
+                let (op1_owner, op2_owner, forced_cmp) = match prepared {
+                    Some((left, right, forced_cmp)) => {
+                        (Some(left), Some(right), forced_cmp)
+                    }
+                    None => (None, None, None),
+                };
+                let op1 = op1_owner.as_ref().unwrap_or(op1);
+                let op2 = op2_owner.as_ref().unwrap_or(op2);
 
-                let result = if matches!(opline.opcode, OpCode::IsEqual | OpCode::IsNotEqual)
+                let enum_relational = (object_involved
+                    && matches!(
+                        opline.opcode,
+                        OpCode::IsSmaller | OpCode::IsSmallerOrEqual
+                    ))
+                .then(|| {
+                    enum_relational_result(
+                        eg,
+                        op1,
+                        op2,
+                        opline.opcode == OpCode::IsSmallerOrEqual,
+                    )
+                })
+                .flatten();
+
+                let result = if let Some(result) = enum_relational {
+                    result
+                } else if let Some(cmp) = forced_cmp {
+                    match opline.opcode {
+                        OpCode::IsEqual => cmp == 0,
+                        OpCode::IsNotEqual => cmp != 0,
+                        OpCode::IsSmaller => cmp < 0,
+                        OpCode::IsSmallerOrEqual => cmp <= 0,
+                        _ => unreachable!(),
+                    }
+                } else if matches!(
+                    (op1.value_type(), op2.value_type()),
+                    (ValueType::Object, ValueType::Object)
+                ) {
+                    let Ok(cmp) = values_compare_checked(op1, op2) else {
+                        throw_operator!("Error", "Nesting level too deep - recursive dependency?");
+                    };
+                    match opline.opcode {
+                        OpCode::IsEqual => cmp == 0,
+                        OpCode::IsNotEqual => cmp != 0,
+                        OpCode::IsSmaller => cmp < 0,
+                        OpCode::IsSmallerOrEqual => cmp <= 0,
+                        _ => unreachable!(),
+                    }
+                } else if matches!(opline.opcode, OpCode::IsEqual | OpCode::IsNotEqual)
                     && matches!(
                         (op1.value_type(), op2.value_type()),
                         (ValueType::Array, ValueType::Array)
-                            | (ValueType::Object, ValueType::Object)
                             | (ValueType::Closure, ValueType::Closure)
                     )
                 {
@@ -1790,16 +1960,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         OpCode::IsSmallerOrEqual => d1 <= d2,
                         _ => unreachable!(),
                     }
-                } else if matches!(
-                    opline.opcode,
-                    OpCode::IsSmaller | OpCode::IsSmallerOrEqual
-                ) && let Some(result) = enum_relational_result(
-                    eg,
-                    op1,
-                    op2,
-                    opline.opcode == OpCode::IsSmallerOrEqual,
-                ) {
-                    result
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
                 };

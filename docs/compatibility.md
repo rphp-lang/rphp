@@ -861,6 +861,27 @@ The established five-million-operation ordinary property control retained the
 `12499997500000` checksum and measured 1.275476/1.284359/1.299421 seconds
 versus 1.277888/1.294315/1.329062 seconds (median +0.78 percent).
 
+Object comparison now follows PHP's three-way object handler instead of
+rejecting non-scalar relational operands. Distinct same-class lazy objects are
+realized through their terminal proxy chains before their properties are
+compared, initializer exceptions remain catchable, and source left-to-right
+initializer order for `>` and `>=` survives the compiler's internal operand
+swap. Equality, `<`, `<=` and `<=>` retain Zend's right-operand-first handler
+order. Identity and class-mismatch decisions do not initialize either object.
+String/object comparison invokes `__toString()` on the lazy shell without
+eager realization, so initialization occurs only if that method observes lazy
+state. The exact 223-case lazy-object pass set moves from 194 to 196, a +2/-0
+delta: `get_properties.phpt` and `init_trigger_compare.phpt` are the only
+changed statuses.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting, unsafe self-test and ratchet, Composer S0, all four Symfony S1
+gates and warmed-kernel S2 pass on AMD64. Twenty alternating release pairs of
+the established five-million-operation property control measured baseline
+p10/median/p90 of 1.272029/1.286560/1.318402 seconds versus
+1.268573/1.292946/1.313119 seconds for the candidate (overall median +0.50
+percent; balanced order-specific median ratio +0.266 percent).
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact
