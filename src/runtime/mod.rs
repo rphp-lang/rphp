@@ -460,9 +460,6 @@ pub struct ExecutorGlobals {
     /// Lazily allocated request-local overrides for the admitted mutable INI
     /// subset. Requests that never call `ini_set()` retain only this null word.
     pub(crate) ini_overrides: Option<Box<HashMap<String, String>>>,
-    /// Bounded recursive bridge while nested `yield from` still enters a
-    /// delegated generator through Rust calls rather than an explicit stack.
-    pub(crate) generator_delegation_depth: u32,
 }
 
 pub(crate) enum ClassAliasRegistrationError {
@@ -911,7 +908,6 @@ impl ExecutorGlobals {
             static_generic_property_contracts: Vec::new(),
             gc_enabled: true,
             ini_overrides: None,
-            generator_delegation_depth: 0,
         }
     }
 
@@ -1001,7 +997,6 @@ impl ExecutorGlobals {
             static_generic_property_contracts: Vec::new(),
             gc_enabled: true,
             ini_overrides: None,
-            generator_delegation_depth: 0,
         }
     }
 

@@ -912,6 +912,71 @@ pub(crate) enum GeneratorResumeOutcome {
     Threw(Value),
 }
 
+enum GeneratorFrameInput {
+    Send(Value),
+    Throw(Value),
+    YieldFromReturn(Value),
+}
+
+enum GeneratorPropagation {
+    Yielded,
+    Completed,
+    Threw(Value),
+}
+
+struct ActiveGeneratorChain {
+    indexed: Option<std::collections::HashSet<usize>>,
+}
+
+impl ActiveGeneratorChain {
+    const INDEX_THRESHOLD: usize = 32;
+
+    fn new() -> Self {
+        Self { indexed: None }
+    }
+
+    fn contains(
+        &self,
+        current: &crate::vm::generator::GeneratorRef,
+        parents: &[crate::vm::generator::GeneratorRef],
+        candidate: &crate::vm::generator::GeneratorRef,
+    ) -> bool {
+        let candidate = generator_identity(candidate);
+        if let Some(indexed) = &self.indexed {
+            return indexed.contains(&candidate);
+        }
+        generator_identity(current) == candidate
+            || parents
+                .iter()
+                .any(|parent| generator_identity(parent) == candidate)
+    }
+
+    fn record_descent(
+        &mut self,
+        current: &crate::vm::generator::GeneratorRef,
+        parents: &[crate::vm::generator::GeneratorRef],
+    ) {
+        if let Some(indexed) = &mut self.indexed {
+            indexed.insert(generator_identity(current));
+            return;
+        }
+        if parents.len() < Self::INDEX_THRESHOLD {
+            return;
+        }
+
+        let mut indexed = std::collections::HashSet::with_capacity(parents.len() + 1);
+        indexed.extend(parents.iter().map(generator_identity));
+        indexed.insert(generator_identity(current));
+        self.indexed = Some(indexed);
+    }
+
+    fn record_ascent(&mut self, child: &crate::vm::generator::GeneratorRef) {
+        if let Some(indexed) = &mut self.indexed {
+            indexed.remove(&generator_identity(child));
+        }
+    }
+}
+
 /// Resume a generator: set up frame, copy state, execute until yield/return.
 /// The generator's state is updated in place and detached exceptions are
 /// returned explicitly rather than left in the executor sidecar.
@@ -941,134 +1006,26 @@ fn resume_generator_with_input(
 ) -> Result<GeneratorResumeOutcome, VmError> {
     use crate::vm::generator::GeneratorState;
 
-    {
-        let gen_data = gen_ref.borrow();
-        match gen_data.state {
-            GeneratorState::Completed => return Ok(GeneratorResumeOutcome::Advanced),
-            GeneratorState::Running => {
-                return Err(VmError::Fatal("Cannot resume an already running generator".into()));
-            }
-            GeneratorState::Suspended | GeneratorState::Created => {}
+    match gen_ref.borrow().state {
+        GeneratorState::Completed => return Ok(GeneratorResumeOutcome::Advanced),
+        GeneratorState::Running => {
+            return Err(VmError::Fatal(
+                "Cannot resume an already running generator".into(),
+            ));
         }
+        GeneratorState::Suspended | GeneratorState::Created => {}
     }
 
-    // Handle yield from delegation
-    {
-        use crate::vm::generator::YieldFromDelegate;
-        let has_delegate = gen_ref.borrow().delegate.is_some();
-        if has_delegate {
-            let delegate = gen_ref.borrow_mut().delegate.take();
-            match delegate {
-                Some(YieldFromDelegate::Generator(inner_gen_ref)) => {
-                    // Forward normal values and injected exceptions through
-                    // the active delegation chain.
-                    if inner_gen_ref.borrow().rewindable {
-                        inner_gen_ref.borrow_mut().rewindable = false;
-                    }
-                    let inner_outcome = if let Some(exception) = injected_exception.clone() {
-                        throw_into_generator(eg, &inner_gen_ref, exception)?
-                    } else {
-                        resume_generator(eg, &inner_gen_ref, send_value)?
-                    };
-                    match inner_outcome {
-                        GeneratorResumeOutcome::Advanced => {}
-                        GeneratorResumeOutcome::Threw(exception) => {
-                            gen_ref.borrow_mut().delegate = None;
-                            let (frame, saved_execute_data) =
-                                materialize_generator_frame(eg, gen_ref);
-                            return execute_resumed_generator_frame(
-                                eg,
-                                gen_ref,
-                                frame,
-                                saved_execute_data,
-                                Some(exception),
-                            );
-                        }
-                    }
-
-                    let inner_state = inner_gen_ref.borrow().state;
-                    if inner_state == GeneratorState::Completed {
-                        // Advance the outer frame past YieldFrom and publish
-                        // the delegate's getReturn() value into its result TMP.
-                        let ret_val = inner_gen_ref.borrow().return_value.clone();
-                        gen_ref.borrow_mut().delegate = None;
-                        {
-                            let mut gen_data = gen_ref.borrow_mut();
-                            gen_data.ip_offset += 1;
-                        }
-                        let (frame, saved_execute_data) =
-                            materialize_generator_frame(eg, gen_ref);
-                        restore_yield_from_result(frame, gen_ref, ret_val);
-
-                        return execute_resumed_generator_frame(
-                            eg,
-                            gen_ref,
-                            frame,
-                            saved_execute_data,
-                            None,
-                        );
-                    } else {
-                        // Inner generator yielded again — copy its value/key to outer
-                        let mut gen_data = gen_ref.borrow_mut();
-                        let inner = inner_gen_ref.borrow();
-                        gen_data.value = inner.value.clone();
-                        gen_data.key = inner.key.clone();
-                        drop(inner);
-                        gen_data.delegate = Some(YieldFromDelegate::Generator(inner_gen_ref));
-                        gen_data.state = GeneratorState::Suspended;
-                        return Ok(GeneratorResumeOutcome::Advanced);
-                    }
-                }
-                Some(YieldFromDelegate::Array(entries, pos)) => {
-                    if let Some(exception) = injected_exception {
-                        drop(entries);
-                        gen_ref.borrow_mut().delegate = None;
-                        let (frame, saved_execute_data) =
-                            materialize_generator_frame(eg, gen_ref);
-                        return execute_resumed_generator_frame(
-                            eg,
-                            gen_ref,
-                            frame,
-                            saved_execute_data,
-                            Some(exception),
-                        );
-                    }
-                    if pos >= entries.len() {
-                        // Array exhausted — remove delegate, resume outer
-                        gen_ref.borrow_mut().delegate = None;
-                        {
-                            let mut gen_data = gen_ref.borrow_mut();
-                            gen_data.ip_offset += 1;
-                        }
-
-                        let (frame, saved_execute_data) =
-                            materialize_generator_frame(eg, gen_ref);
-                        restore_yield_from_result(frame, gen_ref, Value::null());
-
-                        return execute_resumed_generator_frame(
-                            eg,
-                            gen_ref,
-                            frame,
-                            saved_execute_data,
-                            None,
-                        );
-                    } else {
-                        // Yield next array element
-                        let mut gen_data = gen_ref.borrow_mut();
-                        let (ref key, ref val) = entries[pos];
-                        gen_data.value = val.clone();
-                        gen_data.key = match key {
-                            crate::value::ArrayKey::Int(i) => Value::long(*i),
-                            crate::value::ArrayKey::String(s) => Value::string(s.clone()),
-                        };
-                        gen_data.delegate = Some(YieldFromDelegate::Array(entries, pos + 1));
-                        gen_data.state = GeneratorState::Suspended;
-                        return Ok(GeneratorResumeOutcome::Advanced);
-                    }
-                }
-                None => unreachable!(),
-            }
-        }
+    if gen_ref.borrow().delegate.is_some() {
+        return resume_generator_delegation(
+            eg,
+            gen_ref,
+            injected_exception.map_or(
+                GeneratorFrameInput::Send(send_value),
+                GeneratorFrameInput::Throw,
+            ),
+            false,
+        );
     }
 
     let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
@@ -1079,6 +1036,310 @@ fn resume_generator_with_input(
         frame,
         saved_execute_data,
         injected_exception,
+        true,
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn resume_generator_delegation(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    mut input: GeneratorFrameInput,
+    mut fresh_execution: bool,
+) -> Result<GeneratorResumeOutcome, VmError> {
+    use crate::vm::generator::{GeneratorRef, GeneratorState, YieldFromDelegate};
+
+    let mut current = gen_ref.clone();
+    let mut parents: Vec<GeneratorRef> = Vec::new();
+    let mut active_delegates = ActiveGeneratorChain::new();
+    let mut propagation: Option<GeneratorPropagation> = None;
+
+    loop {
+        if let Some(outcome) = propagation.take() {
+            match outcome {
+                GeneratorPropagation::Yielded => {
+                    let mut child = current;
+                    while let Some(parent) = parents.pop() {
+                        let (value, key) = {
+                            let child = child.borrow();
+                            (child.value.clone(), child.key.clone())
+                        };
+                        {
+                            let mut parent_data = parent.borrow_mut();
+                            parent_data.value = value;
+                            parent_data.key = key;
+                            parent_data.state = GeneratorState::Suspended;
+                        }
+                        child = parent;
+                    }
+                    return Ok(GeneratorResumeOutcome::Advanced);
+                }
+                GeneratorPropagation::Completed => {
+                    let Some(parent) = parents.pop() else {
+                        return Ok(GeneratorResumeOutcome::Advanced);
+                    };
+                    let return_value = current.borrow().return_value.clone();
+                    active_delegates.record_ascent(&current);
+                    {
+                        let mut parent_data = parent.borrow_mut();
+                        parent_data.delegate = None;
+                        parent_data.ip_offset += 1;
+                    }
+                    current = parent;
+                    input = GeneratorFrameInput::YieldFromReturn(return_value);
+                    fresh_execution = false;
+                    continue;
+                }
+                GeneratorPropagation::Threw(exception) => {
+                    let Some(parent) = parents.pop() else {
+                        return Ok(GeneratorResumeOutcome::Threw(exception));
+                    };
+                    active_delegates.record_ascent(&current);
+                    parent.borrow_mut().delegate = None;
+                    current = parent;
+                    input = GeneratorFrameInput::Throw(exception);
+                    fresh_execution = false;
+                    continue;
+                }
+            }
+        }
+
+        if fresh_execution {
+            let state = current.borrow().state;
+            match state {
+                GeneratorState::Completed => {
+                    propagation = Some(GeneratorPropagation::Completed);
+                    continue;
+                }
+                GeneratorState::Suspended => {
+                    let delegate = {
+                        let current_data = current.borrow();
+                        match current_data.delegate.as_ref() {
+                            Some(YieldFromDelegate::Generator(delegate)) => {
+                                Some(delegate.clone())
+                            }
+                            Some(YieldFromDelegate::Array(_, _)) | None => None,
+                        }
+                    };
+                    let Some(delegate) = delegate else {
+                        propagation = Some(GeneratorPropagation::Yielded);
+                        continue;
+                    };
+                    if active_delegates.contains(&current, &parents, &delegate) {
+                        current.borrow_mut().delegate = None;
+                        let error = make_error_value(
+                            "Error",
+                            "Impossible to yield from the Generator being currently run",
+                        );
+                        match execute_generator_frame_input(
+                            eg,
+                            &current,
+                            GeneratorFrameInput::Throw(error),
+                        )? {
+                            GeneratorResumeOutcome::Advanced => {
+                                fresh_execution = true;
+                            }
+                            GeneratorResumeOutcome::Threw(exception) => {
+                                propagation = Some(GeneratorPropagation::Threw(exception));
+                            }
+                        }
+                        continue;
+                    }
+                    let delegate_state = delegate.borrow().state;
+                    match delegate_state {
+                        GeneratorState::Created => {
+                            parents.push(current);
+                            current = delegate;
+                            active_delegates.record_descent(&current, &parents);
+                            input = GeneratorFrameInput::Send(Value::null());
+                            fresh_execution = false;
+                            continue;
+                        }
+                        GeneratorState::Completed => {
+                            parents.push(current);
+                            current = delegate;
+                            active_delegates.record_descent(&current, &parents);
+                            propagation = Some(GeneratorPropagation::Completed);
+                            continue;
+                        }
+                        GeneratorState::Suspended => {
+                            parents.push(current);
+                            current = delegate;
+                            active_delegates.record_descent(&current, &parents);
+                            fresh_execution = true;
+                            continue;
+                        }
+                        GeneratorState::Running => {
+                            return Err(VmError::Fatal(
+                                "Cannot resume an already running generator".into(),
+                            ));
+                        }
+                    }
+                }
+                GeneratorState::Running => {
+                    return Err(VmError::Fatal(
+                        "Generator resume returned without yielding or completing".into(),
+                    ));
+                }
+                GeneratorState::Created => {
+                    return Err(VmError::Fatal(
+                        "Generator resume left the generator unstarted".into(),
+                    ));
+                }
+            }
+        }
+
+        let state = current.borrow().state;
+        match state {
+            GeneratorState::Completed => {
+                propagation = Some(GeneratorPropagation::Completed);
+                continue;
+            }
+            GeneratorState::Running => {
+                return Err(VmError::Fatal(
+                    "Cannot resume an already running generator".into(),
+                ));
+            }
+            GeneratorState::Suspended | GeneratorState::Created => {}
+        }
+
+        let generator_delegate = {
+            let current_data = current.borrow();
+            match current_data.delegate.as_ref() {
+                Some(YieldFromDelegate::Generator(delegate)) => Some(delegate.clone()),
+                Some(YieldFromDelegate::Array(_, _)) | None => None,
+            }
+        };
+        if let Some(delegate) = generator_delegate {
+            if active_delegates.contains(&current, &parents, &delegate) {
+                current.borrow_mut().delegate = None;
+                input = GeneratorFrameInput::Throw(make_error_value(
+                    "Error",
+                    "Impossible to yield from the Generator being currently run",
+                ));
+                continue;
+            }
+            if delegate.borrow().rewindable {
+                delegate.borrow_mut().rewindable = false;
+            }
+            parents.push(current);
+            current = delegate;
+            active_delegates.record_descent(&current, &parents);
+            fresh_execution = false;
+            continue;
+        }
+
+        let array_delegate = matches!(
+            current.borrow().delegate,
+            Some(YieldFromDelegate::Array(_, _))
+        );
+        if array_delegate {
+            let delegate = current
+                .borrow_mut()
+                .delegate
+                .take()
+                .expect("array delegation disappeared");
+            let YieldFromDelegate::Array(entries, position) = delegate else {
+                unreachable!();
+            };
+            match std::mem::replace(
+                &mut input,
+                GeneratorFrameInput::Send(Value::null()),
+            ) {
+                GeneratorFrameInput::Throw(exception) => {
+                    drop(entries);
+                    match execute_generator_frame_input(
+                        eg,
+                        &current,
+                        GeneratorFrameInput::Throw(exception),
+                    )? {
+                        GeneratorResumeOutcome::Advanced => fresh_execution = true,
+                        GeneratorResumeOutcome::Threw(exception) => {
+                            propagation = Some(GeneratorPropagation::Threw(exception));
+                        }
+                    }
+                }
+                GeneratorFrameInput::Send(_) | GeneratorFrameInput::YieldFromReturn(_) => {
+                    if position >= entries.len() {
+                        current.borrow_mut().ip_offset += 1;
+                        match execute_generator_frame_input(
+                            eg,
+                            &current,
+                            GeneratorFrameInput::YieldFromReturn(Value::null()),
+                        )? {
+                            GeneratorResumeOutcome::Advanced => fresh_execution = true,
+                            GeneratorResumeOutcome::Threw(exception) => {
+                                propagation = Some(GeneratorPropagation::Threw(exception));
+                            }
+                        }
+                    } else {
+                        let (value, key) = {
+                            let (key, value) = &entries[position];
+                            let key = match key {
+                                crate::value::ArrayKey::Int(key) => Value::long(*key),
+                                crate::value::ArrayKey::String(key) => Value::string(key),
+                            };
+                            (value.clone(), key)
+                        };
+                        {
+                            let mut current_data = current.borrow_mut();
+                            current_data.value = value;
+                            current_data.key = key;
+                            current_data.delegate = Some(YieldFromDelegate::Array(
+                                entries,
+                                position + 1,
+                            ));
+                            current_data.state = GeneratorState::Suspended;
+                        }
+                        propagation = Some(GeneratorPropagation::Yielded);
+                    }
+                }
+            }
+            continue;
+        }
+
+        let frame_input = std::mem::replace(
+            &mut input,
+            GeneratorFrameInput::Send(Value::null()),
+        );
+        match execute_generator_frame_input(eg, &current, frame_input)? {
+            GeneratorResumeOutcome::Advanced => fresh_execution = true,
+            GeneratorResumeOutcome::Threw(exception) => {
+                propagation = Some(GeneratorPropagation::Threw(exception));
+            }
+        }
+    }
+}
+
+fn generator_identity(generator: &crate::vm::generator::GeneratorRef) -> usize {
+    std::rc::Rc::as_ptr(generator) as usize
+}
+
+fn execute_generator_frame_input(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    input: GeneratorFrameInput,
+) -> Result<GeneratorResumeOutcome, VmError> {
+    let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
+    let injected_exception = match input {
+        GeneratorFrameInput::Send(value) => {
+            restore_yield_send_value(frame, gen_ref, value);
+            None
+        }
+        GeneratorFrameInput::Throw(exception) => Some(exception),
+        GeneratorFrameInput::YieldFromReturn(value) => {
+            restore_yield_from_result(frame, gen_ref, value);
+            None
+        }
+    };
+    execute_resumed_generator_frame(
+        eg,
+        gen_ref,
+        frame,
+        saved_execute_data,
+        injected_exception,
+        false,
     )
 }
 
@@ -1128,6 +1389,7 @@ fn materialize_generator_frame(
     (frame, saved_execute_data)
 }
 
+#[inline(always)]
 fn restore_yield_send_value(
     frame: *mut ExecuteData,
     gen_ref: &crate::vm::generator::GeneratorRef,
@@ -1169,6 +1431,7 @@ fn execute_resumed_generator_frame(
     frame: *mut ExecuteData,
     saved_execute_data: *mut ExecuteData,
     injected_exception: Option<Value>,
+    follow_delegation: bool,
 ) -> Result<GeneratorResumeOutcome, VmError> {
     let saved_active = eg.active_generator.take();
     // A caller executing `finally` may already carry an exception that must
@@ -1273,14 +1536,35 @@ fn execute_resumed_generator_frame(
         close_failed_generator(gen_ref);
         return Ok(GeneratorResumeOutcome::Threw(exception));
     }
-    if gen_ref.borrow().state == crate::vm::generator::GeneratorState::Running {
+    let generator = gen_ref.borrow();
+    if generator.state == crate::vm::generator::GeneratorState::Running {
+        drop(generator);
         close_failed_generator(gen_ref);
         return Err(VmError::Fatal(
             "Generator resume returned without yielding or completing".into(),
         ));
     }
+    let delegated = matches!(
+        generator.delegate.as_ref(),
+        Some(crate::vm::generator::YieldFromDelegate::Generator(_))
+    );
+    drop(generator);
     eg.exception = saved_exception;
-    Ok(GeneratorResumeOutcome::Advanced)
+    if follow_delegation && delegated {
+        // The direct frame reached a new generator delegation. Its outer
+        // frame has already unwound, so only this uncommon transition enters
+        // the explicit delegation stack. Slow-path frame execution passes
+        // false and lets its existing heap stack absorb further descendants
+        // without nesting another Rust call.
+        resume_generator_delegation(
+            eg,
+            gen_ref,
+            GeneratorFrameInput::Send(Value::null()),
+            true,
+        )
+    } else {
+        Ok(GeneratorResumeOutcome::Advanced)
+    }
 }
 
 fn close_failed_generator(gen_ref: &crate::vm::generator::GeneratorRef) {
@@ -1289,6 +1573,8 @@ fn close_failed_generator(gen_ref: &crate::vm::generator::GeneratorRef) {
     generator.value = Value::null();
     generator.key = Value::null();
     generator.delegate = None;
+    generator.cv_values.clear();
+    generator.tmp_values.clear();
 }
 
 /// A detached generator owns every frame above and including `root`. Normal

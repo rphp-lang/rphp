@@ -1079,6 +1079,84 @@ echo $result;
     );
 }
 
+#[test]
+fn deep_yield_from_chain_forwards_send_throw_and_return_iteratively() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function deepTunnel($level, $limit) {
+    if ($level === $limit) {
+        try {
+            $sent = yield 'ready';
+            yield 'sent:' . $sent;
+        } catch (Exception $error) {
+            yield 'caught:' . $error->getMessage();
+        }
+        return 9;
+    }
+    $result = yield from deepTunnel($level + 1, $limit);
+    return $result + 1;
+}
+$generator = deepTunnel(0, 10000);
+var_dump($generator->current());
+var_dump($generator->send('payload'));
+var_dump($generator->throw(new Exception('boom')));
+$generator->next();
+var_dump($generator->getReturn());
+"#
+        ),
+        "string(5) \"ready\"\nstring(12) \"sent:payload\"\nstring(11) \"caught:boom\"\nint(10009)\n"
+    );
+}
+
+#[test]
+fn deep_suspended_yield_from_chain_is_released_without_native_recursion() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function disposableChain($level, $limit) {
+    if ($level === $limit) {
+        yield 'leaf';
+        return;
+    }
+    yield from disposableChain($level + 1, $limit);
+}
+$generator = disposableChain(0, 10000);
+echo $generator->current(), "\n";
+unset($generator);
+gc_collect_cycles();
+echo "released\n";
+"#
+        ),
+        "leaf\nreleased\n"
+    );
+}
+
+#[test]
+fn indirect_yield_from_cycle_throws_at_the_delegation_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function bridge() {
+    $other = yield 'ready';
+    yield from $other;
+}
+$first = bridge();
+$second = bridge();
+echo $first->current(), "\n";
+echo $second->current(), "\n";
+echo $first->send($second), "\n";
+try {
+    $second->send($first);
+} catch (Throwable $error) {
+    echo $error::class, ': ', $error->getMessage(), "\n";
+}
+"#
+        ),
+        "ready\nready\nready\nError: Impossible to yield from the Generator being currently run\n"
+    );
+}
+
 // ── send() on fresh generator (P1 fix) ──
 
 #[test]

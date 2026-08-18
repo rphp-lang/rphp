@@ -138,6 +138,37 @@ impl Generator {
     }
 }
 
+impl Drop for Generator {
+    fn drop(&mut self) {
+        let mut next = match self.delegate.take() {
+            Some(YieldFromDelegate::Generator(delegate)) => Some(delegate),
+            Some(YieldFromDelegate::Array(_, _)) | None => None,
+        };
+
+        // A suspended `yield from` frame retains its delegate both explicitly
+        // and in the saved TMP values. Keep the explicit reference alive while
+        // clearing the snapshot, then peel uniquely-owned delegates one by one.
+        // Letting the fields drop structurally would recurse once per delegated
+        // generator and overflow the native stack for valid, deep PHP programs.
+        self.cv_values.clear();
+        self.tmp_values.clear();
+
+        while let Some(generator) = next {
+            if Rc::strong_count(&generator) != 1 {
+                break;
+            }
+
+            let mut generator_data = generator.borrow_mut();
+            next = match generator_data.delegate.take() {
+                Some(YieldFromDelegate::Generator(delegate)) => Some(delegate),
+                Some(YieldFromDelegate::Array(_, _)) | None => None,
+            };
+            generator_data.cv_values.clear();
+            generator_data.tmp_values.clear();
+        }
+    }
+}
+
 impl std::fmt::Debug for Generator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Generator")

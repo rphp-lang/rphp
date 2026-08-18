@@ -6212,6 +6212,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         gen_data.state = crate::vm::generator::GeneratorState::Completed;
                         gen_data.value = Value::null();
                         gen_data.key = Value::null();
+                        // The live frame owns the final CV/TMP values until
+                        // normal frame cleanup below. Retaining the suspended
+                        // snapshots after completion delays PHP lifetimes and
+                        // can recursively drop an arbitrarily deep yield-from
+                        // chain when the outer Generator object is released.
+                        gen_data.cv_values.clear();
+                        gen_data.tmp_values.clear();
+                        gen_data.delegate = None;
                         drop(gen_data);
                         eg.active_generator = Some(gen_ref);
                     }

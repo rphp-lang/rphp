@@ -1006,6 +1006,33 @@ five-million-iteration property read/write workload measure a balanced
 candidate/parent delta of -3.365%, within the +1% regression ceiling and with
 identical output.
 
+Generator delegation now uses an explicit heap-backed resume stack instead of
+nested Rust calls. Send values, injected exceptions, yielded values and final
+return values propagate across deep `yield from` chains; indirect
+delegation cycles still raise PHP's catchable `Error`. Completed and abandoned
+chains release their retained frame snapshots iteratively, so both completing
+and discarding a suspended 50,000-level chain avoid a native stack overflow.
+The ordinary non-delegating resume path stays separate and allocation-free;
+cycle lookup switches from a small linear scan to a hash set only after 32
+active delegates.
+
+A direct parent/candidate rerun of all 5,599 pinned PHP 8.5.6 cases moves from
+2,693 to 2,694 passes, an exact +1/-0 delta whose only changed status is
+`Zend/tests/generators/yield_from_deep_recursion.phpt`. The candidate
+distribution is 2,694 passes, 2,514 ordinary failures, 110 skips, one XFAIL
+and 280 unsupported cases, with zero timeouts and zero crashes. The complete
+184-case generator cluster likewise moves from 99 to 100 passes with no lost
+pass.
+
+All five Cargo feature configurations, formatting, unsafe-policy and
+all-feature/all-target checks, Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64. The established 200-pair generator-resume
+control measures a balanced candidate/parent delta of -1.500%, within the +1%
+regression ceiling; no speedup is claimed. The new delegated path is likewise
+not an optimization claim: an exploratory one-level `yield from` control
+remains slower and is reserved for general performance work after semantic
+compatibility.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact
