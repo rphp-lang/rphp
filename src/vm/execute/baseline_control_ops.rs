@@ -150,7 +150,10 @@ fn execute_source_unit(
     {
         Ok(statements) => statements,
         Err(error) => {
-            if error.starts_with("syntax error,") {
+            if error.starts_with("syntax error,")
+                || error.starts_with("Invalid indentation")
+                || error.starts_with("Invalid body indentation")
+            {
                 let location = format!(" in {canonical} on line ");
                 if let Some((message, line)) = error.rsplit_once(&location)
                     && let Ok(line) = line.parse::<usize>()

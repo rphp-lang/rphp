@@ -155,6 +155,7 @@ pub enum Token {
     ShiftRight,       // >>
     DotDotDot(usize), // ... (variadic / spread) with source line
     CompileError(String, usize),
+    ParseError(String, usize),
     Eof,
 }
 
@@ -289,8 +290,13 @@ impl<'a> Lexer<'a> {
                 }
                 b'<' => {
                     if self.starts_with(b"<<<") {
-                        let parts = self.read_document_string()?;
-                        Self::emit_string_parts(&mut tokens, &parts);
+                        match self.read_document_string() {
+                            Ok(parts) => Self::emit_string_parts(&mut tokens, &parts),
+                            Err(error) => {
+                                tokens.push(Token::ParseError(error.message, error.line));
+                                self.pos = self.src.len();
+                            }
+                        }
                     } else if self.peek_next() == Some(b'=') {
                         if self.src.get(self.pos + 2) == Some(&b'>') {
                             tokens.push(Token::Spaceship);
@@ -569,6 +575,12 @@ impl<'a> Lexer<'a> {
                             Token::Backslash | Token::DoubleColon | Token::Arrow | Token::NullSafe
                         )
                     );
+                    if !is_member_name
+                        && ident.eq_ignore_ascii_case("b")
+                        && self.starts_with(b"<<<")
+                    {
+                        continue;
+                    }
                     if !is_member_name
                         && matches!(
                             ident.to_ascii_uppercase().as_str(),
@@ -1439,10 +1451,69 @@ mod tests {
 
     #[test]
     fn heredoc_rejects_shallow_non_empty_body_indentation() {
-        let error = Lexer::new("<?php echo <<<DOC\n  first\n    DOC;")
+        let tokens = Lexer::new("<?php echo <<<DOC\n  first\n    DOC;")
             .tokenize()
-            .unwrap_err();
-        assert!(error.contains("shallower than the closing marker"));
+            .unwrap();
+        assert!(tokens.contains(&Token::ParseError(
+            "Invalid body indentation level (expecting an indentation level of at least 4)".into(),
+            2,
+        )));
+    }
+
+    #[test]
+    fn binary_document_prefixes_do_not_emit_an_identifier() {
+        let tokens = Lexer::new("<?php echo b<<<DOC\nfirst\nDOC; echo B<<<'RAW'\nsecond\nRAW;")
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                echo(1),
+                Token::StringLiteral("first".into()),
+                Token::Semicolon,
+                echo(3),
+                Token::StringLiteral("second".into()),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn document_indentation_errors_retain_the_first_source_line() {
+        let tokens = Lexer::new("<?php\necho <<<DOC\n a\n\tb\n DOC;")
+            .tokenize()
+            .unwrap();
+        assert!(tokens.contains(&Token::ParseError(
+            "Invalid indentation - tabs and spaces cannot be mixed".into(),
+            4,
+        )));
+
+        let tokens = Lexer::new("<?php\necho <<<DOC\n a\nb\n DOC;")
+            .tokenize()
+            .unwrap();
+        assert!(tokens.contains(&Token::ParseError(
+            "Invalid body indentation level (expecting an indentation level of at least 1)".into(),
+            4,
+        )));
+    }
+
+    #[test]
+    fn unterminated_documents_distinguish_empty_and_started_bodies() {
+        let empty = Lexer::new("<?php\necho <<<DOC\n").tokenize().unwrap();
+        assert!(empty.contains(&Token::ParseError(
+            "syntax error, unexpected end of file".into(),
+            3,
+        )));
+
+        let started = Lexer::new("<?php\necho <<<'DOC'\n\n").tokenize().unwrap();
+        assert!(started.contains(&Token::ParseError(
+            "syntax error, unexpected end of file, expecting variable or heredoc end or \"${\" or \"{$\""
+                .into(),
+            4,
+        )));
     }
 
     #[test]

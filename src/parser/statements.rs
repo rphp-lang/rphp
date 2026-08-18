@@ -99,6 +99,7 @@ impl Parser {
                 Token::This(token_line)
                 | Token::Variable(_, token_line)
                 | Token::LBracket(token_line)
+                | Token::ParseError(_, token_line)
                 | Token::MagicConstant {
                     line: token_line, ..
                 }
@@ -162,6 +163,10 @@ impl Parser {
             return Ok(Stmt::Goto { name, line });
         }
         match self.peek() {
+            Token::ParseError(message, line) => {
+                self.advance();
+                Err(self.source_error(&message, line))
+            }
             Token::CompileError(message, line) => {
                 self.advance();
                 self.compile_error(message, line);

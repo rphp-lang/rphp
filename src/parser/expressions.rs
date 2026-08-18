@@ -883,6 +883,10 @@ impl Parser {
     fn parse_primary_atom(&mut self) -> Result<Expr, String> {
         self.last_primary_line = None;
         match self.peek() {
+            Token::ParseError(message, line) => {
+                self.advance();
+                Err(self.source_error(&message, line))
+            }
             Token::Integer(_) => {
                 let val = match self.advance() {
                     Token::Integer(n) => n,

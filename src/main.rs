@@ -277,6 +277,10 @@ fn main() {
         Err(execute::VmError::Exit(code)) => {
             std::process::exit(code);
         }
+        Err(execute::VmError::Parse(message)) => {
+            eprintln!("\nParse error: {message}");
+            std::process::exit(255);
+        }
         Err(e) => {
             // PHP's displayed runtime fatal begins on a fresh diagnostic line.
             // The leading boundary is trimmed by PHPT when no program output

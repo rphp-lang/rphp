@@ -31,12 +31,38 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
 
     // Check for uncaught exception that propagated through execute_ex.
     if let Some(exc) = eg.exception.take() {
+        if exc.as_object().is_some_and(|object| {
+            object.class_name.as_ref().eq_ignore_ascii_case("ParseError")
+        }) {
+            return Err(VmError::Parse(format_parse_error(&exc)));
+        }
         return Err(VmError::Fatal(format_uncaught_throwable(eg, &exc)));
     }
 
     eg.finalize_pending_named_classes().map_err(VmError::Fatal)?;
 
     Ok(return_value)
+}
+
+#[cold]
+fn format_parse_error(thrown: &Value) -> String {
+    let Some(object) = thrown.as_object() else {
+        return thrown.echo_to_string();
+    };
+    let message = object
+        .get_property("message")
+        .map(Value::echo_to_string)
+        .unwrap_or_default();
+    let location = object
+        .get_property("file")
+        .and_then(Value::as_str)
+        .filter(|file| !file.is_empty())
+        .zip(object.get_property("line").and_then(Value::as_long))
+        .filter(|(_, line)| *line > 0);
+    match location {
+        Some((file, line)) => format!("{message} in {file} on line {line}"),
+        None => message,
+    }
 }
 
 #[cold]

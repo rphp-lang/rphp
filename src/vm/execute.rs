@@ -880,6 +880,9 @@ pub(crate) unsafe fn compact_scalar_call_types_match(
 #[derive(Debug)]
 pub enum VmError {
     Fatal(String),
+    /// An uncaught object whose exact runtime class is ParseError. PHP renders
+    /// this diagnostic without the ordinary "Uncaught" throwable envelope.
+    Parse(String),
     UnimplementedOpcode(OpCode),
     /// `exit($code)` / `die($msg)` — clean script termination.
     Exit(i32),
@@ -888,7 +891,7 @@ pub enum VmError {
 impl std::fmt::Display for VmError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Fatal(message) => formatter.write_str(message),
+            Self::Fatal(message) | Self::Parse(message) => formatter.write_str(message),
             Self::UnimplementedOpcode(opcode) => {
                 write!(formatter, "Unimplemented opcode {opcode:?}")
             }

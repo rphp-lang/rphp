@@ -458,6 +458,38 @@ fn malformed_numeric_separators_report_the_source_identifier_and_line() {
 }
 
 #[test]
+fn document_string_parse_tokens_receive_the_parser_source_location() {
+    let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
+        .tokenize()
+        .unwrap();
+    let error = Parser::new(tokens)
+        .with_source_name("/fixture/document.php")
+        .parse()
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        "Invalid body indentation level (expecting an indentation level of at least 2) in /fixture/document.php on line 4"
+    );
+}
+
+#[test]
+fn standalone_document_string_errors_use_the_same_source_diagnostic() {
+    let tokens = Lexer::new("<?php\n<<<DOC\n\\tvalue\n DOC);")
+        .tokenize()
+        .unwrap();
+    let error = Parser::new(tokens)
+        .with_source_name("/fixture/standalone-document.php")
+        .parse()
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        "Invalid body indentation level (expecting an indentation level of at least 1) in /fixture/standalone-document.php on line 3"
+    );
+}
+
+#[test]
 fn source_less_parser_keeps_structural_unexpected_identifier_errors() {
     let tokens = Lexer::new("<?php 100_;").tokenize().unwrap();
 

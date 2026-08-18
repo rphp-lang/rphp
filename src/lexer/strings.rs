@@ -1,5 +1,19 @@
 use super::{Lexer, StringPart, Token, decode_php_source};
 
+pub(super) struct DocumentStringError {
+    pub(super) message: String,
+    pub(super) line: usize,
+}
+
+impl DocumentStringError {
+    fn new(message: impl Into<String>, line: usize) -> Self {
+        Self {
+            message: message.into(),
+            line,
+        }
+    }
+}
+
 impl<'a> Lexer<'a> {
     pub(super) fn read_string(&mut self, quote: u8) -> Result<String, String> {
         self.pos += 1;
@@ -62,8 +76,9 @@ impl<'a> Lexer<'a> {
         Ok(parts)
     }
 
-    pub(super) fn read_document_string(&mut self) -> Result<Vec<StringPart>, String> {
+    pub(super) fn read_document_string(&mut self) -> Result<Vec<StringPart>, DocumentStringError> {
         let opener = self.pos;
+        let opener_line = self.source_line_at(opener);
         self.pos += 3;
 
         let quote = match self.src.get(self.pos).copied() {
@@ -82,9 +97,9 @@ impl<'a> Lexer<'a> {
             .copied()
             .is_some_and(Self::is_identifier_start)
         {
-            return Err(format!(
-                "Expected heredoc identifier at position {}",
-                opener
+            return Err(DocumentStringError::new(
+                format!("Expected heredoc identifier at position {opener}"),
+                opener_line,
             ));
         }
         self.pos += 1;
@@ -100,17 +115,26 @@ impl<'a> Lexer<'a> {
 
         if let Some(quote) = quote {
             if self.src.get(self.pos) != Some(&quote) {
-                return Err("Unterminated quoted heredoc identifier".into());
+                return Err(DocumentStringError::new(
+                    "syntax error, unexpected token \"<<\"",
+                    opener_line,
+                ));
             }
             self.pos += 1;
         }
         match self.src.get(self.pos..) {
             Some(rest) if rest.starts_with(b"\r\n") => self.pos += 2,
             Some(rest) if rest.starts_with(b"\n") => self.pos += 1,
-            _ => return Err("Heredoc identifier must be followed by a line break".into()),
+            _ => {
+                return Err(DocumentStringError::new(
+                    "Heredoc identifier must be followed by a line break",
+                    opener_line,
+                ));
+            }
         }
 
         let content_start = self.pos;
+        let content_start_line = self.source_line_at(content_start);
         let mut line_start = content_start;
         while line_start <= self.src.len() {
             let newline = self.src[line_start..]
@@ -137,7 +161,10 @@ impl<'a> Lexer<'a> {
             {
                 let indentation = &self.src[line_start..marker_start];
                 if indentation.contains(&b' ') && indentation.contains(&b'\t') {
-                    return Err("Heredoc closing indentation mixes spaces and tabs".into());
+                    return Err(DocumentStringError::new(
+                        "Invalid indentation - tabs and spaces cannot be mixed",
+                        self.source_line_at(line_start),
+                    ));
                 }
 
                 let mut content_end = line_start;
@@ -150,12 +177,17 @@ impl<'a> Lexer<'a> {
                 let content = Self::strip_document_indentation(
                     &self.src[content_start..content_end],
                     indentation,
+                    content_start_line,
                 )?;
                 self.pos = marker_start + label.len();
 
                 if nowdoc {
-                    let literal = String::from_utf8(content)
-                        .map_err(|_| "Nowdoc content is not valid UTF-8".to_string())?;
+                    let literal = String::from_utf8(content).map_err(|_| {
+                        DocumentStringError::new(
+                            "Nowdoc content is not valid UTF-8",
+                            content_start_line,
+                        )
+                    })?;
                     return Ok(vec![StringPart::Literal(literal)]);
                 }
                 let source_line = if content.windows(2).any(|window| window == b"->") {
@@ -166,7 +198,8 @@ impl<'a> Lexer<'a> {
                 } else {
                     0
                 };
-                return Self::interpolate_string_content(&content, source_line);
+                return Self::interpolate_string_content(&content, source_line)
+                    .map_err(|message| DocumentStringError::new(message, content_start_line));
             }
 
             match newline {
@@ -175,13 +208,22 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        Err(format!(
-            "Unterminated heredoc starting at position {}",
-            opener
+        let message = if content_start == self.src.len() {
+            "syntax error, unexpected end of file"
+        } else {
+            "syntax error, unexpected end of file, expecting variable or heredoc end or \"${\" or \"{$\""
+        };
+        Err(DocumentStringError::new(
+            message,
+            self.source_line_at(self.src.len()),
         ))
     }
 
-    fn strip_document_indentation(content: &[u8], indentation: &[u8]) -> Result<Vec<u8>, String> {
+    fn strip_document_indentation(
+        content: &[u8],
+        indentation: &[u8],
+        content_start_line: usize,
+    ) -> Result<Vec<u8>, DocumentStringError> {
         if indentation.is_empty() || content.is_empty() {
             return Ok(content.to_vec());
         }
@@ -189,6 +231,7 @@ impl<'a> Lexer<'a> {
         let width = indentation.len();
         let mut output = Vec::with_capacity(content.len());
         let mut cursor = 0;
+        let mut line_number = content_start_line;
 
         loop {
             let newline = content[cursor..]
@@ -203,18 +246,40 @@ impl<'a> Lexer<'a> {
             };
             let line = &content[cursor..logical_end];
             let whitespace_only = line.iter().all(|byte| matches!(byte, b' ' | b'\t'));
+            let leading_whitespace = line
+                .iter()
+                .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                .count();
             let removable = line
                 .iter()
                 .take(width)
                 .take_while(|byte| **byte == expected)
                 .count();
 
+            if line[..leading_whitespace.min(width)]
+                .iter()
+                .any(|byte| *byte != expected)
+            {
+                return Err(DocumentStringError::new(
+                    "Invalid indentation - tabs and spaces cannot be mixed",
+                    line_number,
+                ));
+            }
+
             if whitespace_only {
                 if line.get(removable).is_some_and(|byte| *byte != expected) {
-                    return Err("Heredoc body indentation mixes spaces and tabs".into());
+                    return Err(DocumentStringError::new(
+                        "Invalid indentation - tabs and spaces cannot be mixed",
+                        line_number,
+                    ));
                 }
             } else if removable != width {
-                return Err("Heredoc body indentation is shallower than the closing marker".into());
+                return Err(DocumentStringError::new(
+                    format!(
+                        "Invalid body indentation level (expecting an indentation level of at least {width})"
+                    ),
+                    line_number,
+                ));
             }
 
             output.extend_from_slice(&line[removable..]);
@@ -227,9 +292,17 @@ impl<'a> Lexer<'a> {
                 break;
             }
             cursor = line_end + 1;
+            line_number += 1;
         }
 
         Ok(output)
+    }
+
+    fn source_line_at(&self, position: usize) -> usize {
+        1 + self.src[..position.min(self.src.len())]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count()
     }
 
     fn interpolate_string_content(

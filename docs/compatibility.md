@@ -1182,6 +1182,31 @@ confined to lexing, parsing and the cold include/eval error path. Canonical
 diagnostics for other unexpected token kinds and unrelated numeric-overflow
 contracts remain explicit non-claims.
 
+Heredoc and nowdoc lexing now preserves PHP 8.5's source line for mixed
+tab/space indentation, shallow body indentation and missing terminators. The
+diagnostics distinguish an empty document from one whose body has started,
+carry the required indentation depth, and remain catchable with the correct
+file and line through `eval()` and include. Historical `b<<<` and `B<<<`
+prefixes are accepted, a missing opening-label quote reports the canonical
+unexpected `<<` token, and an uncaught object whose exact runtime class is
+`ParseError` uses PHP's `Parse error` envelope; user subclasses retain the
+ordinary uncaught-throwable form.
+
+The 65-case `Zend/tests/heredoc_nowdoc` slice moves from 28 passes, 33 failures
+and four unsupported cases to 53 passes, eight failures and four unsupported
+cases. A final release rerun of all 5,599 pinned PHP 8.5.6 cases reaches 2,796
+passes, 2,452 ordinary failures, 110 skips, one XFAIL and 240 unsupported
+cases, with zero timeouts and zero crashes. The exact pass-set delta is +27/-0:
+25 cases from the focused slice plus `Zend/tests/bug69640.phpt` and
+`Zend/tests/grammar/bug78363.phpt`. Runtime is reached by 4,561 of 5,248
+attempted cases (86.909%). All five Cargo feature configurations, formatting,
+unsafe-policy, all-feature/all-target, Composer S0, all four Symfony S1 and
+warmed-kernel S2 gates pass on AMD64. No runtime performance gate applies
+because valid document strings retain the existing tokens and bytecode; the
+new paths are confined to lexing, parsing and cold error rendering. Nested
+document interpolation, scan-ahead warning ordering and unrelated runtime
+string semantics remain explicit non-claims.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

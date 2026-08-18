@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,769/5,599 with zero timeouts and zero crashes after canonical malformed-numeric identifier diagnostics added 12 exact passes without a lost pass. The complete numeric-literal-separator directory is 11/11, and repeated eval/include parse errors retain separate message and origin metadata. Other parser-token diagnostics, attribute metadata, unknown INI directives and `disable_functions` remain explicit gaps. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,796/5,599 with zero timeouts and zero crashes after source-located heredoc/nowdoc diagnostics, historical binary document prefixes and PHP's uncaught `ParseError` envelope added 27 exact passes without a lost pass. The focused document-string slice is 53/65; nested document interpolation, scan-ahead warnings, attribute metadata, unknown INI directives and `disable_functions` remain explicit gaps. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
