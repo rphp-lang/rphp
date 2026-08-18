@@ -1072,6 +1072,39 @@ fn reflection_class_lazy_proxy_preserves_shell_identity_and_forwards_properties(
 }
 
 #[test]
+fn reflection_class_allows_lazy_stdclass_without_reclassifying_internal_types() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$calls = 0;
+$reflection = new ReflectionClass('STDCLASS');
+foreach (['newLazyGhost', 'newLazyProxy'] as $method) {
+    $object = $reflection->$method(function () use (&$calls) {
+        ++$calls;
+    });
+    echo $method, ':', $object::class, ':';
+    echo (int) $reflection->isInternal(), ':';
+    echo (int) $reflection->isUninitializedLazyObject($object), "\n";
+}
+try {
+    (new ReflectionClass(Exception::class))->newLazyGhost(function () {});
+    echo "accepted\n";
+} catch (Throwable) {
+    echo "rejected\n";
+}
+echo "calls:$calls";
+"#,
+        ),
+        concat!(
+            "newLazyGhost:stdClass:1:0\n",
+            "newLazyProxy:stdClass:1:0\n",
+            "rejected\n",
+            "calls:0",
+        )
+    );
+}
+
+#[test]
 fn reflection_lazy_raw_writes_validate_atomically_and_skip_slots_independently() {
     assert_eq!(
         run_php(

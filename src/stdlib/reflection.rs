@@ -1868,7 +1868,7 @@ fn class_new_lazy_object(
             "Class {owner} cannot be instantiated as a lazy object"
         )));
     }
-    if eg.class_is_internal(&owner) {
+    if eg.class_is_internal(&owner) && !owner.eq_ignore_ascii_case("stdClass") {
         reflection_exception(
             eg,
             format!("Class {owner} is an internal class and cannot be lazy"),

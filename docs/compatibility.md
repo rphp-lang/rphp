@@ -893,6 +893,16 @@ moves from 196 to 197, a +1/-0 delta whose only changed status is
 all-feature/all-target check, formatting, unsafe self-test and ratchet,
 Composer S0, all four Symfony S1 gates and warmed-kernel S2 pass on AMD64.
 
+`stdClass` remains classified as internal by Reflection but is now admitted
+through the lazy-object eligibility check, matching PHP's sole internal-class
+exception. With no declared slots its lazy ghost and proxy are immediately
+realized and do not invoke their initializer; other internal classes remain
+rejected. The exact 223-case lazy-object pass set moves from 197 to 198, a
++1/-0 delta whose only changed status is `support_stdClass.phpt`. All five
+Cargo feature configurations, the all-feature/all-target check, formatting,
+unsafe self-test and ratchet, Composer S0, all four Symfony S1 gates and
+warmed-kernel S2 pass on AMD64.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact
