@@ -447,6 +447,20 @@ fn reflection_attributes(
     return_value(rv, Value::array(result))
 }
 
+fn attribute_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let flags = with_argument(ed, 1, Value::as_long).unwrap_or(127);
+    with_argument(ed, 0, |receiver| {
+        if let Some(mut object) = receiver.as_object_mut() {
+            object.set_property("flags", Value::long(flags));
+        }
+    });
+    Ok(())
+}
+
 fn attribute_get_name(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -608,12 +622,31 @@ fn attribute_new_instance(
     };
     let flags = match marker.arguments.first().map(|argument| &argument.value) {
         None => 127,
-        Some(Ok(value)) => value.as_long().unwrap_or(127),
+        Some(Ok(value)) => {
+            let Some(flags) = value.as_long() else {
+                eg.exception = Some(make_error_value(
+                    "TypeError",
+                    &format!(
+                        "Attribute::__construct(): Argument #1 ($flags) must be of type int, {} given",
+                        value.diagnostic_type_name()
+                    ),
+                ));
+                return Ok(());
+            };
+            flags
+        }
         Some(Err(error)) => {
             eg.exception = Some(make_error_value("Error", error));
             return Ok(());
         }
     };
+    if flags & !(127 | 128) != 0 {
+        eg.exception = Some(make_error_value(
+            "Error",
+            "Invalid attribute flags specified",
+        ));
+        return Ok(());
+    }
     if flags & target == 0 {
         eg.exception = Some(make_error_value(
             "Error",

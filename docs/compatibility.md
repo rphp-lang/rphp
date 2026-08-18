@@ -9,10 +9,10 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,841 pass, 2,407 fail, 110 skip, one is an upstream XFAIL,
+`tests/lang` cases, 2,844 pass, 2,404 fail, 110 skip, one is an upstream XFAIL,
 240 are unsupported, and none time out or crash. The headline pass rate is
-54.135%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
-the preceding `5b02307` checkpoint, the exact pass-set delta is +24/-0. The
+54.192%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
+the preceding `1ef77ac` checkpoint, the exact pass-set delta is +3/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
 
 Replacing the final CV handle to an object now commits the opcode-specific
@@ -1313,6 +1313,23 @@ current compatibility-first priority, not as a performance-neutral claim.
 Dynamic trait/closure binding scopes, deferred runtime constant expressions,
 exact remaining diagnostics and full `ReflectionAttribute` immutability remain
 separate compatibility work.
+
+The built-in `Attribute` marker now has its public typed `flags` property,
+defaults direct construction to `TARGET_ALL`, and preserves the self-marker's
+`TARGET_CLASS` value through `ReflectionAttribute::newInstance()`. Deferred
+marker validation rejects a non-integer constructor argument with PHP 8.5's
+exact `TypeError` and rejects flag bits outside the target/repeatable mask with
+`Invalid attribute flags specified` before target validation. The focused
+attribute slice reaches 58 passes and the full release corpus reaches 2,844,
+an exact +3/-0 delta with no other status or failure-stage movement. All five
+Cargo configurations, formatting, unsafe-policy, all-feature/all-target,
+Composer S0, all four Symfony S1 and warmed-kernel S2 gates pass on AMD64. The
+work is confined to built-in startup metadata and explicit construction or
+Reflection instantiation of `Attribute`; it does not change ordinary bytecode
+or VM dispatch, so the preceding compatibility-first performance debt remains
+the current measured control rather than being recharacterized here. Runtime
+evaluation of unresolved class constants in attribute arguments remains a
+separate compatibility boundary.
 
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts

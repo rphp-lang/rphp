@@ -132,6 +132,16 @@ fn reflection_attribute_filtering_and_validation_are_deferred_until_instantiatio
 }
 
 #[test]
+fn attribute_marker_constructs_flags_and_validates_reflected_declarations() {
+    assert_eq!(
+        run_php(
+            "<?php $default = new Attribute(); echo $default->flags, '|'; $marker = (new ReflectionClass(Attribute::class))->getAttributes()[0]->newInstance(); echo get_class($marker), ':', $marker->flags, '|'; #[Attribute('bad')] class InvalidType {} #[InvalidType] class TypeTarget {} try { (new ReflectionClass(TypeTarget::class))->getAttributes()[0]->newInstance(); } catch (TypeError $error) { echo $error->getMessage(), '|'; } #[Attribute(-1)] class InvalidFlags {} #[InvalidFlags] class FlagsTarget {} try { (new ReflectionClass(FlagsTarget::class))->getAttributes()[0]->newInstance(); } catch (Error $error) { echo $error->getMessage(); }"
+        ),
+        "127|Attribute:1|Attribute::__construct(): Argument #1 ($flags) must be of type int, string given|Invalid attribute flags specified"
+    );
+}
+
+#[test]
 fn reflection_attribute_exposes_only_its_public_name_projection() {
     assert_eq!(
         run_php(
