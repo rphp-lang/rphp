@@ -840,6 +840,27 @@ baseline p10/median/p90 was 0.282304/0.286399/0.291069 seconds versus
 by-value `foreach` was 0.304920/0.308074/0.313435 seconds versus
 0.303629/0.306894/0.317169 seconds (median -0.38 percent).
 
+Cloned callback descriptors now retain the shared cell behind explicit closure
+captures such as `use (&$state)`. Lazy initializer assignments and retry
+counters therefore remain visible to their defining scope across registration,
+failed initialization and later invocation. Property reads and object
+projections also follow initialized proxy-of-proxy chains to their terminal
+instance, initialize each reached lazy endpoint when the operation requires
+it, stop safely on cycles, and retain per-property skip and magic-method
+initialization rules. The exact 223-case lazy-object pass set moves from 191 to
+194, a +3/-0 delta: `gh15823.phpt`, `init_trigger_foreach_hooks.phpt` and
+`reset_as_lazy_real_instance.phpt` are the only changed statuses.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting, unsafe inventory, Composer S0, all four Symfony S1 gates and the
+warmed-kernel S2 gate pass on AMD64. Twenty candidate-first release pairs of a
+300,000-read initialized lazy-proxy control retained the `2100000` checksum;
+baseline p10/median/p90 was 0.204670/0.221255/0.233671 seconds versus
+0.203410/0.217748/0.228415 seconds for the candidate (median -1.59 percent).
+The established five-million-operation ordinary property control retained the
+`12499997500000` checksum and measured 1.275476/1.284359/1.299421 seconds
+versus 1.277888/1.294315/1.329062 seconds (median +0.78 percent).
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

@@ -956,16 +956,18 @@ fn op_fetch_obj_r_slow<'a>(
                 || (opline._pad & FETCH_OBJ_SILENT != 0
                     && has_magic_isset
                     && !property_guard_active(eg, obj_val, &name, PROPERTY_GUARD_ISSET)));
-        let must_initialize = (property_accessible || force_dynamic)
+        let triggers_lazy_initialization = (property_accessible || force_dynamic)
             && !dynamic_property
-            && !magic_get_can_handle
-            && eg.lazy_property_requires_initialization(obj_val, &key);
-        let initialized_target = if must_initialize {
-            Some(crate::stdlib::reflection::initialize_lazy_object(
-                eg, obj_val,
+            && !magic_get_can_handle;
+        let initialized_target = if eg.lazy_object_state(obj_val).is_some() {
+            Some(crate::stdlib::reflection::resolve_lazy_property_chain(
+                eg,
+                obj_val,
+                &key,
+                triggers_lazy_initialization,
             )?)
         } else {
-            eg.lazy_proxy_instance(obj_val)
+            None
         };
         if let Some(result) = take_magic_exception(eg, frame) {
             return Ok(result);

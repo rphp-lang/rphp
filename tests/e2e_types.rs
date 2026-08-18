@@ -1284,6 +1284,45 @@ foreach ($object as $name => $value) {
 }
 
 #[test]
+fn lazy_callback_clones_and_nested_proxy_projections_preserve_semantics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CapturedLazyTarget {
+    public function __construct(public int $value) {}
+}
+$reflection = new ReflectionClass(CapturedLazyTarget::class);
+function nestedProxy($reflection, &$captured) {
+    $lazy = $reflection->newLazyProxy(function () use (&$captured) {
+        return $captured = new CapturedLazyTarget(1);
+    });
+    $reflection->initializeLazyObject($lazy);
+    $reflection->resetAsLazyProxy($captured, function () {
+        return new CapturedLazyTarget(3);
+    });
+    return $lazy;
+}
+$property = nestedProxy($reflection, $captured);
+var_dump($captured instanceof CapturedLazyTarget, $captured === $property);
+echo $property->value, "\n";
+$json = nestedProxy($reflection, $captured);
+echo json_encode($json), "\n";
+$iterable = nestedProxy($reflection, $captured);
+foreach ($iterable as $name => $value) {
+    echo $name, ':', $value, "\n";
+}
+"#,
+        ),
+        concat!(
+            "bool(true)\nbool(false)\n",
+            "3\n",
+            "{\"value\":3}\n",
+            "value:3\n"
+        )
+    );
+}
+
+#[test]
 fn lazy_proxy_magic_guards_follow_shell_and_real_instance_recursion() {
     assert_eq!(
         run_php(

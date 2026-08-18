@@ -7727,10 +7727,10 @@ fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 // ============================================================================
 
 fn initialize_lazy_output_value(eg: &mut ExecutorGlobals, value: Value) -> Result<Value, VmError> {
-    if eg.is_uninitialized_lazy_object(&value) {
-        reflection::initialize_lazy_object(eg, &value)
+    if eg.lazy_object_state(&value).is_some() {
+        reflection::resolve_lazy_object_chain(eg, &value)
     } else {
-        Ok(eg.lazy_proxy_instance(&value).unwrap_or(value))
+        Ok(value)
     }
 }
 
@@ -9884,6 +9884,15 @@ fn value_to_json(val: &Value, eg: &mut ExecutorGlobals) -> Result<serde_json::Va
             }
         }
         ValueType::Object => {
+            let projection_owner = if eg.lazy_object_state(val).is_some() {
+                Some(reflection::resolve_lazy_object_chain(eg, val)?)
+            } else {
+                None
+            };
+            if eg.exception.is_some() {
+                return Ok(serde_json::Value::Null);
+            }
+            let val = projection_owner.as_ref().unwrap_or(val);
             let Some(class_id) = val.as_object().map(|object| object.class_id) else {
                 return Ok(serde_json::Value::Null);
             };
@@ -10622,7 +10631,6 @@ pub(crate) fn call_object_public_method(
 }
 
 /// Result of resolving a callback: func pointer + args to prepend (e.g. $this, use_vars).
-#[derive(Clone)]
 pub(crate) struct ResolvedCallback {
     pub(crate) func_ptr: *const FunctionCommon,
     /// Args to prepend before user-supplied args.
@@ -10642,6 +10650,24 @@ pub(crate) struct ResolvedCallback {
     /// Invocation must pack the requested method name and public arguments for
     /// a resolved `__call` or `__callStatic` trampoline.
     pub(crate) is_magic_call: bool,
+}
+
+impl Clone for ResolvedCallback {
+    fn clone(&self) -> Self {
+        Self {
+            func_ptr: self.func_ptr,
+            prepend_args: self.prepend_args.clone(),
+            use_vars: self
+                .use_vars
+                .iter()
+                .map(Value::clone_closure_capture)
+                .collect(),
+            called_scope_class_id: self.called_scope_class_id,
+            bound_this: self.bound_this.clone(),
+            closure_static_vars: self.closure_static_vars.clone(),
+            is_magic_call: self.is_magic_call,
+        }
+    }
 }
 
 impl ResolvedCallback {

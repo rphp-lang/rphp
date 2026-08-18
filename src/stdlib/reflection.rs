@@ -2056,6 +2056,78 @@ pub(crate) fn initialize_lazy_object(
     }
 }
 
+/// Follow an initialized proxy chain and initialize every lazy endpoint
+/// reached along the way. Output and iteration projections require the full
+/// terminal object; explicit Reflection initialization keeps its one-object
+/// contract above.
+pub(crate) fn resolve_lazy_object_chain(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+) -> Result<Value, VmError> {
+    let mut target = object.clone();
+    let mut identities = Vec::with_capacity(4);
+    for _ in 0..16 {
+        let Some(identity) = target.object_identity() else {
+            break;
+        };
+        if identities.contains(&identity) {
+            break;
+        }
+        identities.push(identity);
+
+        if eg.is_uninitialized_lazy_object(&target) {
+            target = initialize_lazy_object(eg, &target)?;
+            if eg.exception.is_some() {
+                break;
+            }
+            continue;
+        }
+        let Some(instance) = eg.lazy_proxy_instance(&target) else {
+            break;
+        };
+        target = instance;
+    }
+    Ok(target)
+}
+
+/// Resolve the same chain for one property operation while retaining per-slot
+/// skip state. A proxy endpoint is initialized only when this access would
+/// trigger that exact property on the endpoint itself.
+pub(crate) fn resolve_lazy_property_chain(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    key: &str,
+    may_initialize: bool,
+) -> Result<Value, VmError> {
+    let mut target = object.clone();
+    let mut identities = Vec::with_capacity(4);
+    for _ in 0..16 {
+        let Some(identity) = target.object_identity() else {
+            break;
+        };
+        if identities.contains(&identity) {
+            break;
+        }
+        identities.push(identity);
+
+        if eg.is_uninitialized_lazy_object(&target) {
+            if !may_initialize || !eg.lazy_property_requires_initialization(&target, key) {
+                break;
+            }
+            target = initialize_lazy_object(eg, &target)?;
+            if eg.exception.is_some() {
+                break;
+            }
+            continue;
+        }
+        let Some(instance) = eg.lazy_proxy_instance(&target) else {
+            break;
+        };
+        target = instance;
+    }
+    Ok(target)
+}
+
 fn reflected_class_object_argument(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,

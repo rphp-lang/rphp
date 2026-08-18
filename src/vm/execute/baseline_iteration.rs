@@ -843,12 +843,12 @@ fn op_foreach_init<'a>(
     let source = raw_source.dereferenced();
     let lazy_source_owner = eg.lazy_object_state(source).map(|_| source.clone());
     let source = lazy_source_owner.as_ref().unwrap_or(source);
-    let initialized_source = if eg.is_uninitialized_lazy_object(source) {
-        Some(crate::stdlib::reflection::initialize_lazy_object(
+    let initialized_source = if eg.lazy_object_state(source).is_some() {
+        Some(crate::stdlib::reflection::resolve_lazy_object_chain(
             eg, source,
         )?)
     } else {
-        eg.lazy_proxy_instance(source)
+        None
     };
     if let Some(control) = take_foreach_protocol_exception(eg, frame) {
         return Ok(control);
@@ -1113,12 +1113,12 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
     let source = iteration_state.dereferenced();
     let lazy_source_owner = eg.lazy_object_state(source).map(|_| source.clone());
     let source = lazy_source_owner.as_ref().unwrap_or(source);
-    let initialized_source = if eg.is_uninitialized_lazy_object(source) {
-        Some(crate::stdlib::reflection::initialize_lazy_object(
+    let initialized_source = if eg.lazy_object_state(source).is_some() {
+        Some(crate::stdlib::reflection::resolve_lazy_object_chain(
             eg, source,
         )?)
     } else {
-        eg.lazy_proxy_instance(source)
+        None
     };
     if let Some(control) = take_foreach_protocol_exception(eg, frame) {
         return Ok(control);
