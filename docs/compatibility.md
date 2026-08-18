@@ -9,40 +9,52 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,027 pass, 2,270 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,037 pass, 2,260 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-57.146%; 4,616 of 5,297 attempted cases reach runtime (87.144%). Relative to
-the preceding 3,024-pass checkpoint, the exact pass-set delta is +3/-0. The
+57.334%; 4,616 of 5,297 attempted cases reach runtime (87.144%). Relative to
+the preceding 3,027-pass checkpoint, the exact pass-set delta is +10/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
 
-Virtual get-only properties now permit covariant child property types, while
-virtual set-only properties permit contravariant child types. Adding the
-opposite hook in a child correctly retains the directional contract exposed by
-the parent. Backed storage remains invariant because it can be read and written
-independently of the declared hook surface. The same compatibility rule decides
-whether unresolved class-like types require delayed linking, so early and late
-declarations cannot disagree about the accepted relation.
+PHP now scopes a protected instance property through the oldest non-private
+declaration in its prototype family. Sibling implementations of one common
+prototype can therefore read or write each other where that prototype admits
+the operation, while unrelated same-name declarations and private boundaries
+remain inaccessible. A virtual get-only prototype does not impose a write
+capability, so a child may add a narrower setter; ordinary and backed
+prototypes continue to constrain write visibility. A plain child redeclaration
+supplies new backing storage but inherits every concrete parent get or set hook
+that it does not replace.
 
-The complete `Zend/tests/property_hooks` directory now has 171 of 211 exact
-passes, up from 168. `type_compatibility.phpt` and the two cases that add the
-opposite hook to a directionally typed parent move to exact passes; the complete
-5,599-case delta is +3/-0 with no lost pass, remaining-failure category
-movement, timeout or crash. All five Cargo configurations, all-feature/all-target,
-formatting and the exact unsafe ratchet pass. Composer S0, all four Symfony S1
-gates, warmed-kernel S2 and cold-build S3 also pass on AMD64 against PHP 8.5.
+The complete `Zend/tests/property_hooks` directory now has 179 of 211 exact
+passes, up from 171. Seven hooked GH-19044 variants, the ordinary and
+asymmetric-visibility GH-19044 cases, and `override_by_plain_prop.phpt` move to
+exact passes. The complete 5,599-case delta is +10/-0 with no lost pass, other
+status or failure-stage movement, timeout or crash. All five Cargo
+configurations, all-feature/all-target, formatting and the exact unsafe ratchet
+pass. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and cold-build S3
+also pass on AMD64; S3 used the available PHP 8.5.9 Phar-capable oracle, while
+the language corpus remained pinned to PHP 8.5.6.
 
-The exact base `6d2389c8` and release candidate were compared without removing
-outliers. A 63-pair balanced alternating confirmation over 150 empty-output file
-requests per executable measured baseline p10/median/p90
-0.204170/0.207980/0.212054 seconds and candidate
-0.202076/0.204950/0.209803 seconds: -1.457% by independent medians and -1.333%
-by the paired-ratio median, whose p10/p90 is -3.774%/+0.625%. A separate
-31-pair `bench_calls.php` control retained checksum `37500007500000` and
-measured baseline 0.356788/0.361653/0.370118 seconds versus candidate
-0.356465/0.361191/0.367840 seconds: -0.128% independently and -0.245% paired,
-with paired p10/p90 -2.107%/+2.887%. The cold linking change remains below the
-five-percent median regression ceiling; these negative samples are not an
-optimization claim.
+The exact base `0a636f0f` and release candidate were compared on one pinned
+AMD64 CPU without removing outliers. A 63-pair balanced confirmation over 150
+empty-output requests measured baseline p10/median/p90
+0.204528/0.205838/0.207635 seconds and candidate
+0.205996/0.207560/0.209697 seconds: +0.837% independently and +0.802% paired.
+Three 31-pair controls retained exact checksums. `bench_calls.php` measured
+-0.645% independently and -0.301% paired; instance-property reads measured
++0.351% and +0.407%; instance-property writes measured -0.297% and -0.240%.
+Their paired p10/p90 ranges were respectively -4.677%/+2.224%,
+-0.755%/+3.855% and -3.786%/+1.944%. All medians remain below the five-percent
+regression ceiling; the samples do not establish an optimization claim.
+
+The preceding checkpoint made virtual get-only property types covariant and
+virtual set-only property types contravariant, including children that add the
+opposite hook. Backed storage remains invariant because it can be read and
+written independently of the declared hook surface. The same compatibility
+rule governs delayed linking for unresolved class-like types, so early and late
+declarations cannot disagree about the accepted relation. That checkpoint
+raised `Zend/tests/property_hooks` from 168 to 171 exact passes and the complete
+corpus by +3/-0.
 
 The preceding checkpoint made an explicit set-hook parameter preserve the
 property's typed versus untyped declaration state and accept every value

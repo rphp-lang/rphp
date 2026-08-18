@@ -982,7 +982,13 @@ fn op_fetch_obj_r_slow<'a>(
                     key = name.to_string();
                     force_dynamic = true;
                 } else if !own_private && !caller_has_own {
-                    if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                    if !eg.check_instance_property_visibility(
+                        caller_class.as_deref(),
+                        &obj.class_name,
+                        &name,
+                        &defining_class,
+                        vis,
+                    ) {
                         let has_getter = eg
                             .find_function(&format!(
                                 "{}::__get",
@@ -1380,7 +1386,13 @@ fn op_isset_obj<'a>(
         .find_property_visibility(&object_ref.class_name, &name)
         .is_none_or(|(visibility, defining_class)| {
             visibility == Visibility::Public
-                || eg.check_visibility(effective_caller, &defining_class, visibility)
+                || eg.check_instance_property_visibility(
+                    caller_class.as_deref(),
+                    &object_ref.class_name,
+                    &name,
+                    &defining_class,
+                    visibility,
+                )
         });
     let hidden_parent_private = eg
         .find_property_visibility(&object_ref.class_name, &name)
@@ -1550,7 +1562,13 @@ fn op_unset_obj<'a>(
         .find_property_set_visibility(&object_ref.class_name, &name)
         .is_none_or(|(visibility, defining_class)| {
             visibility == Visibility::Public
-                || eg.check_visibility(effective_caller, &defining_class, visibility)
+                || eg.check_instance_property_visibility(
+                    caller_class.as_deref(),
+                    &object_ref.class_name,
+                    &name,
+                    &defining_class,
+                    visibility,
+                )
         });
     let hidden_parent_private = eg
         .find_property_visibility(&object_ref.class_name, &name)
@@ -1743,7 +1761,13 @@ fn op_bind_obj_prop_ref<'a>(
         if let Some((visibility, defining_class)) =
             eg.find_property_set_visibility(&class_name, &name)
             && visibility != Visibility::Public
-            && !eg.check_visibility(effective_caller, &defining_class, visibility)
+            && !eg.check_instance_property_visibility(
+                caller_class.as_deref(),
+                &class_name,
+                &name,
+                &defining_class,
+                visibility,
+            )
         {
             if visibility == Visibility::Private
                 && !eg.property_has_asymmetric_set_visibility(&class_name, &name)
@@ -2435,7 +2459,13 @@ fn op_assign_obj_prop<'a>(
                     property_accessible = false;
                     force_dynamic = true;
                 } else if !own_private && !caller_has_own {
-                    if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                    if !eg.check_instance_property_visibility(
+                        caller_class.as_deref(),
+                        &php_obj.class_name,
+                        &name,
+                        &defining_class,
+                        vis,
+                    ) {
                         let storage_key = crate::runtime::resolve_property_key(
                             eg,
                             &php_obj.class_name,

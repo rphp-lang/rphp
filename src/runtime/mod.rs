@@ -2349,11 +2349,25 @@ impl ExecutorGlobals {
             .iter()
             .map(|property| property.name.clone())
             .collect::<std::collections::HashSet<_>>();
+        let own_explicit_property_hooks = class_def
+            .properties
+            .iter()
+            .flat_map(|property| {
+                let getter = property
+                    .has_get_hook
+                    .then(|| format!("${}::get", property.name).to_lowercase());
+                let setter = property
+                    .has_set_hook
+                    .then(|| format!("${}::set", property.name).to_lowercase());
+                getter.into_iter().chain(setter)
+            })
+            .collect::<std::collections::HashSet<_>>();
         let own_static_names = class_def
             .static_properties
             .iter()
             .map(|property| property.name.clone())
             .collect::<std::collections::HashSet<_>>();
+        let mut inherited_concrete_property_hooks = std::collections::HashSet::new();
         // `None` denotes a declaration composed by this class and therefore a
         // fresh slot. Inherited entries carry the parent's canonical slot.
         let mut static_property_slots = vec![None; class_def.static_properties.len()];
@@ -2442,19 +2456,48 @@ impl ExecutorGlobals {
                     .map(|(n, _, _, _, _)| n.to_lowercase())
                     .collect();
                 let parent_prefix = format!("{}::", parent_name).to_lowercase();
-                let inherited: Vec<(String, *const FunctionCommon)> = self
+                let inherited: Vec<(String, *const FunctionCommon, bool)> = self
                     .function_table
                     .iter()
                     .filter(|(k, _)| k.starts_with(&parent_prefix))
                     .map(|(k, v)| {
                         let method_name = &k[parent_prefix.len()..];
-                        (method_name.to_string(), *v)
+                        let concrete_property_hook = method_name
+                            .strip_prefix('$')
+                            .and_then(|name| name.split_once("::"))
+                            .and_then(|(property_name, hook)| {
+                                parent
+                                    .properties
+                                    .iter()
+                                    .find(|property| {
+                                        property.name.eq_ignore_ascii_case(property_name)
+                                    })
+                                    .map(|property| match hook {
+                                        "get" => {
+                                            property.has_get_hook && !property.abstract_get_hook()
+                                        }
+                                        "set" => {
+                                            property.has_set_hook && !property.abstract_set_hook()
+                                        }
+                                        _ => false,
+                                    })
+                            })
+                            .unwrap_or(false);
+                        (method_name.to_string(), *v, concrete_property_hook)
                     })
                     .collect();
-                for (method_name, func_ptr) in inherited {
-                    if !child_method_names.contains(&method_name) {
+                for (method_name, func_ptr, concrete_property_hook) in inherited {
+                    let replaces_synthetic_property_accessor = concrete_property_hook
+                        && method_name.starts_with('$')
+                        && !own_explicit_property_hooks.contains(&method_name);
+                    if !child_method_names.contains(&method_name)
+                        || replaces_synthetic_property_accessor
+                    {
                         let child_full = format!("{}::{}", class_name, method_name).to_lowercase();
                         self.function_table.insert(child_full, func_ptr);
+                        if replaces_synthetic_property_accessor {
+                            inherited_concrete_property_hooks.insert(method_name);
+                        }
                     }
                 }
             }
@@ -2807,7 +2850,8 @@ impl ExecutorGlobals {
             .methods
             .iter()
             .filter(|(method_name, _, _, _, _)| {
-                class.is_interface || !class.method_is_abstract(method_name)
+                (class.is_interface || !class.method_is_abstract(method_name))
+                    && !inherited_concrete_property_hooks.contains(&method_name.to_lowercase())
             })
             .map(|(method_name, _vis, _is_static, _is_final, func)| {
                 let full_name = format!("{}::{}", class_name, method_name).to_lowercase();
@@ -2977,8 +3021,13 @@ impl ExecutorGlobals {
         let mut private_names = std::collections::HashSet::<String>::new();
         for slot in candidates {
             let property = &class.properties[slot];
-            if !self.check_visibility(caller_class, &property.declaring_class, property.visibility)
-            {
+            if !self.check_instance_property_visibility(
+                caller_class,
+                &class.name,
+                &property.name,
+                &property.declaring_class,
+                property.visibility,
+            ) {
                 continue;
             }
             let is_private = property.visibility == Visibility::Private;
@@ -3780,6 +3829,53 @@ impl ExecutorGlobals {
                     self.property_has_asymmetric_set_visibility(parent, prop_name)
                 })
             }
+        })
+    }
+
+    /// Check instance-property visibility against the oldest non-private
+    /// declaration in its override family. PHP scopes protected properties by
+    /// that prototype, allowing sibling implementations of one abstract
+    /// property to access each other without widening unrelated same-name
+    /// declarations.
+    pub(crate) fn check_instance_property_visibility(
+        &self,
+        caller_class: Option<&str>,
+        receiver_class: &str,
+        prop_name: &str,
+        defining_class: &str,
+        visibility: Visibility,
+    ) -> bool {
+        if self.check_visibility(caller_class, defining_class, visibility) {
+            return true;
+        }
+        if visibility != Visibility::Protected {
+            return false;
+        }
+
+        let mut current = Some(receiver_class);
+        let mut prototype = None;
+        while let Some(class_name) = current {
+            let Some(class_def) = self.find_class(class_name) else {
+                break;
+            };
+            let declared_here = class_def.properties.iter().find(|property| {
+                property.name == prop_name
+                    && (property
+                        .declaring_class
+                        .eq_ignore_ascii_case(&class_def.name)
+                        || property.type_scope.eq_ignore_ascii_case(&class_def.name))
+            });
+            if let Some(property) = declared_here {
+                if property.visibility == Visibility::Private {
+                    break;
+                }
+                prototype = Some(class_def.name.as_str());
+            }
+            current = class_def.parent.as_deref();
+        }
+
+        prototype.is_some_and(|prototype| {
+            self.check_visibility(caller_class, prototype, Visibility::Protected)
         })
     }
 

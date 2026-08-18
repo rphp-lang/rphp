@@ -7,13 +7,12 @@ fn inherit_property_definitions(
     child: &mut Vec<PropertyDefinition>,
     parent: &[PropertyDefinition],
 ) {
-    // A hooked child declaration inherits a concrete parent hook that it does
-    // not replace. A plain child declaration intentionally replaces the whole
-    // property surface and can satisfy abstract hook requirements directly.
+    // Every child declaration inherits a concrete parent hook that it does not
+    // replace. A plain child supplies backing storage for inherited concrete
+    // hooks, while still satisfying abstract hook requirements directly.
     for child_property in child.iter_mut() {
-        if !child_property.has_get_hook && !child_property.has_set_hook {
-            continue;
-        }
+        let child_declares_plain_storage =
+            !child_property.has_get_hook && !child_property.has_set_hook;
         let Some(parent_property) = parent.iter().find(|parent_property| {
             parent_property.name == child_property.name
                 && parent_property.visibility != Visibility::Private
@@ -35,14 +34,16 @@ fn inherit_property_definitions(
             && !parent_property.abstract_get_hook()
         {
             child_property.has_get_hook = true;
-            child_property.get_hook_is_backed = parent_property.get_hook_is_backed;
+            child_property.get_hook_is_backed =
+                child_declares_plain_storage || parent_property.get_hook_is_backed;
         }
         if !child_property.has_set_hook
             && parent_property.has_set_hook
             && !parent_property.abstract_set_hook()
         {
             child_property.has_set_hook = true;
-            child_property.set_hook_is_backed = parent_property.set_hook_is_backed;
+            child_property.set_hook_is_backed =
+                child_declares_plain_storage || parent_property.set_hook_is_backed;
         }
     }
     let child_names: std::collections::HashSet<&str> = child
@@ -229,6 +230,11 @@ fn inherited_property_types_are_compatible(
         (false, true) => child_is_supertype(),
         _ => property_type_hints_are_invariant(eg, child, parent, child_class, linking_class),
     }
+}
+
+#[inline]
+fn property_has_set_capability(property: &PropertyDefinition) -> bool {
+    property.has_set_hook || !property.is_virtual_hook_property()
 }
 
 fn property_type_has_unknown_class(
@@ -603,7 +609,7 @@ fn validate_inherited_property_definition(
         Visibility::Public => 2,
     };
     match (parent.set_visibility, child.set_visibility) {
-        (None, Some(_)) => {
+        (None, Some(_)) if property_has_set_capability(parent) => {
             return Err(error(format!(
                 "Set access level of {}::${} must be omitted (as in class {})",
                 child_class, child.name, parent.declaring_class

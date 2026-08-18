@@ -216,6 +216,81 @@ class BackedChild extends BackedParent { public int $value { get => 42; } }
 }
 
 #[test]
+fn property_prototypes_define_set_capability_and_protected_family_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class ReadPrototype { abstract protected int $value { get; } }
+class ReadLeft extends ReadPrototype { protected int $value = 11; }
+class ReadRight extends ReadPrototype {
+    protected int $value = 22;
+    public static function read(ReadPrototype $object): int { return $object->value; }
+}
+
+abstract class WritePrototype {
+    abstract public protected(set) int $value { get; set; }
+}
+class WriteLeft extends WritePrototype {
+    public protected(set) int $value { get => 40; set {} }
+}
+class WriteRight extends WritePrototype {
+    public int $value = 1;
+    public static function increment(WritePrototype $object): int {
+        return $object->value += 2;
+    }
+}
+
+class UnrelatedLeft { protected int $value = 33; }
+class UnrelatedRight {
+    protected int $value = 44;
+    public static function read(UnrelatedLeft $object): string {
+        try { return (string) $object->value; } catch (Error) { return 'blocked'; }
+    }
+}
+
+abstract class GetterOnly { abstract public int $value { get; } }
+class AddsProtectedSetter extends GetterOnly {
+    public protected(set) int $value { get => 1; set {} }
+}
+
+echo ReadRight::read(new ReadLeft), "\n";
+echo WriteRight::increment(new WriteLeft), "\n";
+echo UnrelatedRight::read(new UnrelatedLeft), "\n";
+echo new AddsProtectedSetter()->value, "\n";
+"#,
+        ),
+        "11\n42\nblocked\n1\n"
+    );
+}
+
+#[test]
+fn plain_child_storage_inherits_concrete_prototype_hooks() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class GetterPrototype { public $value { get => 42; } }
+class StoredGetter extends GetterPrototype { public $value = 1; }
+$getter = new StoredGetter;
+$getter->value = 7;
+var_dump($getter->value);
+
+class HookPrototype {
+    public $value {
+        get { echo "get\n"; return 40; }
+        set { echo "set:$value\n"; }
+    }
+}
+class StoredHooks extends HookPrototype { public $value; }
+$hooks = new StoredHooks;
+$hooks->value = 9;
+var_dump($hooks->value);
+"#,
+        ),
+        "int(42)\nset:9\nget\nint(40)\n"
+    );
+}
+
+#[test]
 fn setter_hook_inheritance_diagnostics_include_the_implicit_void_contract() {
     let error = run_php_expect_error(
         r#"<?php

@@ -756,6 +756,21 @@ ordinary-call control is -0.128% independently and -0.245% paired. Both retain
 exact output and remain below the five-percent median ceiling without making
 an optimization claim.
 
+The `property-prototype-inheritance` checkpoint reaches 3,037 passes with
+2,260 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. The oldest non-private property prototype now governs protected
+scope across sibling implementations, and its actual set capability governs
+whether a child may introduce asymmetric write visibility. Plain child storage
+inherits concrete parent hooks that it does not replace. The `property_hooks`
+directory rises from 171 to 179 exact passes; the ordinary and asymmetric
+GH-19044 cases plus the plain-property hook inheritance case make the exact
+full-corpus delta +10/-0 with no other status or category movement. All five
+feature configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. CPU-pinned release A/B measurements
+put empty-request startup at +0.837%, ordinary calls at -0.645%, instance-
+property reads at +0.351% and writes at -0.297% by independent medians, with
+exact observable results and every lane below the five-percent ceiling.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract
