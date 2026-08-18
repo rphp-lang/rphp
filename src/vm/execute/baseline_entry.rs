@@ -219,6 +219,7 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             rendered.push_str(&crate::vm::trace::format_throwable_trace(
                 &trace,
                 crate::stdlib::exception_string_param_max_len(eg),
+                eg,
             ));
         }
     }

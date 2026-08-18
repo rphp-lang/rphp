@@ -940,8 +940,8 @@ impl ExecutorGlobals {
         self.function_table.reserve(512);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
-        self.class_by_id.reserve(69);
-        self.static_property_slots_by_class.reserve(69);
+        self.class_by_id.reserve(70);
+        self.static_property_slots_by_class.reserve(70);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
@@ -2316,9 +2316,15 @@ impl ExecutorGlobals {
         // fresh slot. Inherited entries carry the parent's canonical slot.
         let mut static_property_slots = vec![None; class_def.static_properties.len()];
 
-        // Check if parent is final — cannot extend a final class
+        // Enums and final classes cannot be used as parents.
         if let Some(parent_name) = &class_def.parent {
             if let Some(parent) = self.class_table.get(parent_name.as_str()) {
+                if parent.is_enum {
+                    return Err(format!(
+                        "Class {} cannot extend enum {}",
+                        class_name, parent_name
+                    ));
+                }
                 if parent.is_final {
                     return Err(format!(
                         "Class {} cannot extend final class {}",
@@ -4366,6 +4372,8 @@ mod stdlib_capacity_tests {
             eg.class_table.capacity(),
             eg.method_declaring_class.capacity(),
             eg.class_by_id.capacity(),
+            eg.static_property_slots_by_class.capacity(),
+            eg.static_property_values.capacity(),
         );
 
         let functions = crate::stdlib::register_stdlib(&mut eg);
@@ -4376,6 +4384,8 @@ mod stdlib_capacity_tests {
                 eg.class_table.capacity(),
                 eg.method_declaring_class.capacity(),
                 eg.class_by_id.capacity(),
+                eg.static_property_slots_by_class.capacity(),
+                eg.static_property_values.capacity(),
             ),
             capacities,
             "fixed stdlib registration must not grow a reserved registry"

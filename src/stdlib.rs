@@ -41,6 +41,7 @@ use crate::vm::opcode::OpCode;
 pub(crate) mod include_path;
 mod json_decode;
 mod parse_ini;
+mod random;
 pub(crate) mod reflection;
 mod regex_callback;
 mod serialization;
@@ -1702,6 +1703,7 @@ fn fn_throwable_get_trace_as_string(
         Value::string(crate::vm::trace::format_throwable_trace(
             &trace,
             exception_string_param_max_len(eg),
+            eg,
         ))
     );
 }
@@ -3320,6 +3322,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(empty_internal_type(name, parents, true, false))
             .unwrap();
     }
+    funcs.extend(random::register(eg));
     eg.register_class(empty_internal_type(
         "Iterator",
         vec!["Traversable".to_string()],
@@ -9445,8 +9448,11 @@ fn fn_debug_print_backtrace(
     // SAFETY: the internal activation and its synchronous predecessor chain
     // remain live until this handler returns.
     let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg, false) };
-    let output =
-        crate::vm::trace::format_debug_print_backtrace(&trace, exception_string_param_max_len(eg));
+    let output = crate::vm::trace::format_debug_print_backtrace(
+        &trace,
+        exception_string_param_max_len(eg),
+        eg,
+    );
     eg.write_output(output.as_bytes());
     ret!(rv, Value::null());
 }

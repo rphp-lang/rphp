@@ -9,13 +9,37 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,973 pass, 2,324 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 2,975 pass, 2,322 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-56.126%; 4,620 of 5,297 attempted cases reach runtime (87.219%). Relative to
-the preceding 2,955-pass checkpoint, the exact pass-set delta is +18/-0. The
+56.164%; 4,620 of 5,297 attempted cases reach runtime (87.219%). Relative to
+the preceding 2,973-pass checkpoint, the exact pass-set delta is +2/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
 
-PHP 8.5's final internal `Deprecated` attribute now exposes its nullable
+PHP 8.5's internal unit enum `Random\IntervalBoundary` now exposes the four
+canonical cases `ClosedOpen`, `ClosedClosed`, `OpenClosed` and `OpenOpen` with
+stable identity, readonly `name`, `UnitEnum` membership and ordered `cases()`.
+Reflection reports the enum as internal and non-final, while the class linker
+still rejects every attempt to extend an enum. Throwable and debug traces now
+render enum arguments symbolically as `Class::Case`, matching PHP rather than
+the ordinary object placeholder. These contracts turn
+`Zend/tests/attributes/deprecated/type_validation_004.phpt` and
+`Zend/tests/enum/enum_in_stack_trace.phpt` into exact passes with no lost pass,
+so the complete PHP 8.5 `Deprecated` directory is now 47/47. `NoDiscard`
+remains an independent missing built-in attribute, and `Randomizer::getFloat()`
+is not claimed by this checkpoint. All five Cargo configurations,
+all-feature/all-target, formatting and the exact unsafe ratchet pass, as do
+Composer S0, all four Symfony S1 gates and warmed-kernel S2. On AMD64, an
+independent 63-pair balanced ABBA/BAAB release confirmation over 150 ordinary
+file requests per executable and pair retains identical empty output. The
+candidate is +0.588% by independent medians and +0.898% by the paired-ratio
+median; both order medians remain below +1%. The no-outlier paired p10/p90
+spread is -3.921%/+6.646%, while the independent candidate-versus-control p90
+is +0.904%; the median regression gate passes and the noisy upper paired tail
+is retained explicitly. The added common-path work is fixed startup
+registration whose registry capacity is reserved and regression-tested; enum
+trace formatting remains a cold path.
+
+PHP 8.5's final internal `Deprecated` attribute exposes its nullable
 `message` and `since` constructor contract and public protected(set) readonly
 properties without declaration defaults. Applying it to a function, method,
 closure, constructor, destructor or magic-call implementation emits the
@@ -38,11 +62,11 @@ exception handler setters validate callbacks before mutating their stacks.
 `ReflectionMethod($closure, '__invoke')` keeps its public `Closure` identity
 while exposing the attributes and deprecation status carried through
 `Closure::fromCallable()`. The complete 47-case PHP 8.5 `Deprecated` attribute
-directory now has 46 exact passes, and the standard exception-handler directory
-is 10/10; only the independent Random enum argument type check remains. The
-full corpus gains 18 exact passes without losing one. All five Cargo
-configurations, all-feature/all-target, formatting and the exact unsafe ratchet
-pass, as do Composer S0, all four Symfony S1 gates and warmed-kernel S2. On
+directory has 47 exact passes, and the standard exception-handler directory
+is 10/10. The callable-flow corpus gain was 18 exact passes without losing one.
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass, as do Composer S0, all four Symfony S1 gates and
+warmed-kernel S2. On
 AMD64, 31 balanced ABBA/BAAB release pairs over ordinary file requests retain
 identical output and place the candidate at +1.837% by independent medians and
 +1.863% by the paired-ratio median; paired p10/p90 is -1.174%/+4.257%, below

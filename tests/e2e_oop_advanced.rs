@@ -264,6 +264,26 @@ try {
 }
 
 #[test]
+fn classes_cannot_extend_user_or_internal_enums() {
+    for (source, expected) in [
+        (
+            "<?php enum ParentEnum { case One; } class Child extends ParentEnum {}",
+            "Class Child cannot extend enum ParentEnum",
+        ),
+        (
+            "<?php class Child extends Random\\IntervalBoundary {}",
+            "Class Child cannot extend enum Random\\\\IntervalBoundary",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(
+            format!("{error:?}").contains(expected),
+            "unexpected error: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn test_enum_case_name_immutable() {
     assert_eq!(
         run_php(

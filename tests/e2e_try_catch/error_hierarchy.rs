@@ -193,6 +193,29 @@ try { throw $zero; } catch (ErrorException $caught) {
 }
 
 #[test]
+fn throwable_traces_render_unit_enum_arguments_by_case_identity() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function throw_with_value($value) { throw new Exception("trace"); }
+try {
+    throw_with_value(Random\IntervalBoundary::OpenOpen);
+} catch (Exception $error) {
+    $trace = $error->getTraceAsString();
+    echo (int) str_contains(
+        $trace,
+        "throw_with_value(Random\\IntervalBoundary::OpenOpen)",
+    ), ":", (int) !str_contains($trace, "Object(Random\\IntervalBoundary)");
+}
+"#,
+            "/virtual/enum-trace.php",
+            "/virtual",
+        ),
+        "1:1"
+    );
+}
+
+#[test]
 fn error_exception_constructor_supports_named_metadata_arguments() {
     assert_eq!(
         run_php(

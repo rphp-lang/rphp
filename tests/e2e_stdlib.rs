@@ -51,6 +51,37 @@ fn json_preserve_zero_fraction_constant_matches_php_85() {
 }
 
 #[test]
+fn random_interval_boundary_exposes_the_native_unit_enum_contract() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+use Random\IntervalBoundary;
+
+echo (int) enum_exists(IntervalBoundary::class), ":",
+    (int) class_exists(IntervalBoundary::class), "\n";
+foreach (IntervalBoundary::cases() as $case) {
+    echo $case->name, ":",
+        (int) ($case === constant(IntervalBoundary::class . "::" . $case->name)), ":",
+        (int) ($case instanceof UnitEnum), "\n";
+}
+$class = new ReflectionClass(IntervalBoundary::class);
+$method = new ReflectionMethod(IntervalBoundary::class, "cases");
+echo (int) $class->isInternal(), ":", (int) $class->isFinal(), ":",
+    (int) $method->isStatic(), ":", $method->getReturnType()->getName();
+"#,
+        ),
+        concat!(
+            "1:1\n",
+            "ClosedOpen:1:1\n",
+            "ClosedClosed:1:1\n",
+            "OpenClosed:1:1\n",
+            "OpenOpen:1:1\n",
+            "1:0:1:array",
+        )
+    );
+}
+
+#[test]
 fn assert_callable_uses_boolean_result_description_and_global_namespace_fallback() {
     assert_eq!(
         run_php(

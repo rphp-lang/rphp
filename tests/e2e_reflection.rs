@@ -266,6 +266,28 @@ throw new Exception('handled');
 }
 
 #[test]
+fn native_enum_attribute_arguments_reach_deprecated_constructor_validation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[Deprecated(Random\IntervalBoundary::OpenClosed)]
+function invalid_deprecated_metadata() {}
+
+try {
+    (new ReflectionFunction("invalid_deprecated_metadata"))->getAttributes()[0]->newInstance();
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "Deprecated::__construct(): Argument #1 ($message) must be of type ?string, ",
+            "Random\\IntervalBoundary given",
+        )
+    );
+}
+
+#[test]
 fn reflection_method_on_callable_closure_preserves_source_deprecation_metadata() {
     assert_eq!(
         run_php(

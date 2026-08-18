@@ -641,6 +641,23 @@ pairs put an ordinary file request at +1.837% by independent medians and
 +1.863% by the paired-ratio median, with paired p10/p90 of -1.174%/+4.257% and
 identical output, below the five-percent ceiling.
 
+The `random-interval-boundary` checkpoint reaches 2,975 passes with 2,322
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. PHP 8.5's internal `Random\IntervalBoundary` unit enum supplies its
+four canonical cases, stable identity, readonly name, ordered `cases()` and
+Reflection contract; enum inheritance is rejected and traces render enum
+arguments as `Class::Case`. The exact full-corpus delta is +2/-0, comprising
+the final Deprecated type-validation case and the adjacent enum trace case, so
+the complete Deprecated directory is 47/47. `NoDiscard` and
+`Randomizer::getFloat()` remain separate gaps. All five feature configurations,
+all-target, unsafe, Composer S0, four Symfony S1 gates and warmed-kernel S2
+pass. A 63-pair balanced AMD64 release confirmation over 150 ordinary file
+requests per executable and pair places the candidate at +0.588% by independent
+medians and +0.898% by paired-ratio median, with order medians below +1% and
+identical output. No outliers were removed; paired p10/p90 is
+-3.921%/+6.646%, while the independent p90 delta is +0.904%, so the median
+five-percent gate passes with the noisier paired upper tail disclosed.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

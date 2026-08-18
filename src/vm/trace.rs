@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value, ValueType};
 
 #[inline]
@@ -29,7 +30,12 @@ fn append_exception_string_argument(output: &mut String, value: &str, string_max
     output.push('\'');
 }
 
-fn append_trace_argument(output: &mut String, value: &Value, string_max_len: usize) {
+fn append_trace_argument(
+    output: &mut String,
+    value: &Value,
+    string_max_len: usize,
+    eg: &ExecutorGlobals,
+) {
     let value = value.dereferenced();
     match value.value_type() {
         ValueType::Undef | ValueType::Null => output.push_str("NULL"),
@@ -58,8 +64,18 @@ fn append_trace_argument(output: &mut String, value: &Value, string_max_len: usi
         }
         ValueType::Array => output.push_str("Array"),
         ValueType::Object => {
-            output.push_str("Object(");
             let object = value.as_object().expect("Object-tagged trace argument");
+            if eg
+                .class_by_id(object.class_id)
+                .is_some_and(|class| class.is_enum)
+                && let Some(case) = object.get_property("name").and_then(Value::as_str)
+            {
+                output.push_str(object.class_name.trim_start_matches('\\'));
+                output.push_str("::");
+                output.push_str(case);
+                return;
+            }
+            output.push_str("Object(");
             let class = object.class_name.as_ref();
             output.push_str(displayed_trace_class_name(class));
             output.push(')');
@@ -74,7 +90,12 @@ fn append_trace_argument(output: &mut String, value: &Value, string_max_len: usi
 
 /// Render the shared PHP call-frame shape, with the caller deciding whether
 /// the Throwable-only `{main}` sentinel belongs in the result.
-fn format_trace(trace: &PhpArray, append_main: bool, string_max_len: usize) -> String {
+fn format_trace(
+    trace: &PhpArray,
+    append_main: bool,
+    string_max_len: usize,
+    eg: &ExecutorGlobals,
+) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     for (_, value) in trace.iter() {
@@ -115,7 +136,7 @@ fn format_trace(trace: &PhpArray, append_main: bool, string_max_len: usize) -> S
                 if argument_index != 0 {
                     output.push_str(", ");
                 }
-                append_trace_argument(&mut output, argument, string_max_len);
+                append_trace_argument(&mut output, argument, string_max_len, eg);
             }
         }
         output.push(')');
@@ -135,14 +156,22 @@ fn format_trace(trace: &PhpArray, append_main: bool, string_max_len: usize) -> S
 /// Render the live trace printed by `debug_print_backtrace()`. Unlike a
 /// Throwable string, this contains only actual frames and ends each with a
 /// newline; calling it directly from the main script therefore prints nothing.
-pub(crate) fn format_debug_print_backtrace(trace: &PhpArray, string_max_len: usize) -> String {
-    format_trace(trace, false, string_max_len)
+pub(crate) fn format_debug_print_backtrace(
+    trace: &PhpArray,
+    string_max_len: usize,
+    eg: &ExecutorGlobals,
+) -> String {
+    format_trace(trace, false, string_max_len, eg)
 }
 
 /// Render a stored Throwable trace. The final `{main}` sentinel is not part of
 /// `getTrace()` itself but is always appended to Zend's string representation.
-pub(crate) fn format_throwable_trace(trace: &PhpArray, string_max_len: usize) -> String {
-    format_trace(trace, true, string_max_len)
+pub(crate) fn format_throwable_trace(
+    trace: &PhpArray,
+    string_max_len: usize,
+    eg: &ExecutorGlobals,
+) -> String {
+    format_trace(trace, true, string_max_len, eg)
 }
 
 pub(crate) fn format_exception_string_argument(value: &str, string_max_len: usize) -> String {
