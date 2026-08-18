@@ -463,6 +463,47 @@ echo '|', $second;
 }
 
 #[test]
+fn formatted_string_slots_invoke_object_conversion_in_argument_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FormattedStringValue {
+    public function __construct(private string $value) {}
+    public function __toString(): string {
+        echo 'convert:', $this->value, '|';
+        return $this->value;
+    }
+}
+class RejectedFormattedString {
+    public function __toString(): string {
+        echo 'reject|';
+        throw new Exception('stop');
+    }
+}
+echo sprintf('[%s]', new FormattedStringValue('sprintf')), '|';
+echo vsprintf('[%s]', [new FormattedStringValue('vsprintf')]), '|';
+printf('[%s]', new FormattedStringValue('printf'));
+echo '|';
+vprintf('[%s]', [new FormattedStringValue('vprintf')]);
+echo '|';
+try {
+    printf('hidden:%s', new RejectedFormattedString());
+} catch (Exception $exception) {
+    echo $exception->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "convert:sprintf|[sprintf]|",
+            "convert:vsprintf|[vsprintf]|",
+            "convert:printf|[printf]|",
+            "convert:vprintf|[vprintf]|",
+            "reject|stop",
+        )
+    );
+}
+
+#[test]
 fn binary_hex_conversions_round_trip_bytes_and_report_invalid_input() {
     assert_eq!(
         run_php(

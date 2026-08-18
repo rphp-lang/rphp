@@ -6380,24 +6380,28 @@ fn decode_hex_nibble(byte: u8) -> u8 {
 fn fn_sprintf(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let fmt = arg_str!(ed, 0);
     // The VM materializes the variadic bucket as an array. Reuse the same
     // zero-copy formatter as vsprintf instead of cloning its values.
     let args = arg!(ed, 1).as_array();
-    let result = format_sprintf_values(&fmt, args.as_deref());
+    let Some(result) = format_sprintf_values(ed, eg, &fmt, args.as_deref())? else {
+        return Ok(());
+    };
     ret!(rv, Value::string(result));
 }
 
 fn fn_vsprintf(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let fmt = arg_str!(ed, 0);
     let args = arg!(ed, 1).as_array();
-    let result = format_sprintf_values(&fmt, args.as_deref());
+    let Some(result) = format_sprintf_values(ed, eg, &fmt, args.as_deref())? else {
+        return Ok(());
+    };
     ret!(rv, Value::string(result));
 }
 
@@ -6408,7 +6412,9 @@ fn fn_printf(
 ) -> Result<(), VmError> {
     let fmt = arg_str!(ed, 0);
     let args = arg!(ed, 1).as_array();
-    let result = format_sprintf_values(&fmt, args.as_deref());
+    let Some(result) = format_sprintf_values(ed, eg, &fmt, args.as_deref())? else {
+        return Ok(());
+    };
     let bytes = result.as_bytes();
     let length = bytes.len() as i64;
     eg.write_output(bytes);
@@ -6422,14 +6428,21 @@ fn fn_vprintf(
 ) -> Result<(), VmError> {
     let fmt = arg_str!(ed, 0);
     let args = arg!(ed, 1).as_array();
-    let result = format_sprintf_values(&fmt, args.as_deref());
+    let Some(result) = format_sprintf_values(ed, eg, &fmt, args.as_deref())? else {
+        return Ok(());
+    };
     let bytes = result.as_bytes();
     let length = bytes.len() as i64;
     eg.write_output(bytes);
     ret!(rv, Value::long(length));
 }
 
-fn format_sprintf_values(fmt: &str, args: Option<&PhpArray>) -> String {
+fn format_sprintf_values(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    fmt: &str,
+    args: Option<&PhpArray>,
+) -> Result<Option<String>, VmError> {
     let args_count = args.map_or(0, PhpArray::len);
     let mut result = String::with_capacity(fmt.len().saturating_add(args_count * 8));
     let bytes = fmt.as_bytes();
@@ -6449,7 +6462,18 @@ fn format_sprintf_values(fmt: &str, args: Option<&PhpArray>) -> String {
                     match spec {
                         's' => {
                             if let Some(arg) = arg {
-                                arg.append_echo_to(&mut result);
+                                if matches!(
+                                    arg.dereferenced().value_type(),
+                                    ValueType::Array | ValueType::Object | ValueType::Closure
+                                ) {
+                                    let Some(rendered) = internal_value_to_string(ed, eg, arg)?
+                                    else {
+                                        return Ok(None);
+                                    };
+                                    result.push_str(&rendered);
+                                } else {
+                                    arg.append_echo_to(&mut result);
+                                }
                             }
                         }
                         'd' => {
@@ -6503,7 +6527,7 @@ fn format_sprintf_values(fmt: &str, args: Option<&PhpArray>) -> String {
         index += 1;
     }
     result.push_str(&fmt[literal_start..]);
-    result
+    Ok(Some(result))
 }
 
 // ============================================================================

@@ -940,6 +940,21 @@ against the preceding checkpoint measured a balanced order-specific ratio of
 for the established five-million-operation property control, both within the
 one-percent regression gate.
 
+The `%s` conversion slots of `sprintf()`, `vsprintf()`, `printf()` and
+`vprintf()` now enter PHP object string conversion in argument order. A
+throwing `__toString()` aborts formatting before partial output is published,
+while scalar slots retain their direct append path. This lets a caught built-in
+`Error` render its canonical message and trace through `printf()` and moves the
+exact 223-case lazy-object pass set from 203 to 204, an exact +1/-0 delta whose
+only changed status is `init_may_leave_props_uninit.phpt`.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting, unsafe self-test and ratchet, Composer S0, all four Symfony S1
+gates and warmed-kernel S2 pass on AMD64. No runtime benchmark is required for
+this checkpoint: scalar formatting retains its prior branch and allocation
+behavior, and VM re-entry exists only for compound values that previously
+bypassed their required conversion contract.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

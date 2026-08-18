@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 2,446/5,599 with zero crashes or timeouts. The focused lazy-object frontier is 203/223: final proxies destruct their real instance and acyclic final-owner property trees release nested destructors without retiring shared or resurrected children. Cycle collection, generator finalization and broader request-shutdown ordering remain next. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 2,446/5,599 with zero crashes or timeouts. The focused lazy-object frontier is 204/223: final proxies destruct their real instance, acyclic final-owner property trees release nested destructors, and formatted `%s` object slots honor `__toString()`. Cycle collection, generator finalization and broader request-shutdown ordering remain next. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
