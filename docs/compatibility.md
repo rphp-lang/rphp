@@ -1078,6 +1078,31 @@ does not rehash the fixed function registry. No runtime performance gate applies
 the lexer work is compile-time, `fdiv()` is a new opt-in call, and the output
 formatting change is confined to explicit `var_dump()`.
 
+`settype()` now applies PHP 8.5's case-insensitive scalar, array, object and
+null conversion rules, including array/object projection, object-to-number
+warnings and the rejected `resource` and invalid-type targets. NaN conversions
+emit the target-specific warning before assignment and preserve PHP's
+re-entrant reference behavior: scalar targets convert the call-entry snapshot,
+while array and object targets observe writes or unsets performed by the error
+handler. The system-backed `random_bytes()` subset required by the warning
+handlers supplies ordinary positive-length data and the canonical invalid-length
+`ValueError`.
+
+The complete 26-case `Zend/tests/type_coercion/settype` directory moves from
+3 passes, 22 failures and one unsupported case to 25 passes, zero failures and
+one unsupported CLI-INI case. A final release rerun of all 5,599 pinned PHP
+8.5.6 cases reaches 2,726 passes, 2,482 ordinary failures, 110 skips, one XFAIL
+and 280 unsupported cases, with zero timeouts and zero crashes. The exact
+pass-set delta is +22/-0; runtime is reached by 4,540 of 5,208 attempted cases
+(87.174%). All five Cargo feature configurations, formatting, unsafe-policy,
+all-feature/all-target, Composer S0, all four Symfony S1 and warmed-kernel S2
+gates pass on AMD64. The unsafe inventory remains below its ceiling at 1,622
+production blocks, and the fixed stdlib registry-capacity gate passes. No
+runtime performance gate applies because these are explicit cold/new builtin
+paths. Complete binary-string representation, the exact exception class for an
+operating-system random-source failure, and per-process CLI-INI support for
+`settype_double.phpt` remain explicit non-claims.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

@@ -11,6 +11,7 @@
 ///   - `ret!(rv, expr)` → writes to return_value with null check
 use std::borrow::Cow;
 use std::fmt::Write as _;
+use std::io::Read as _;
 
 use crate::compiler::compile::{ClassConstantDefinition, PropertyDefinition};
 use crate::compiler::{
@@ -20,7 +21,9 @@ use crate::compiler::{
 };
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
-use crate::value::{ArrayKey, ClosureStaticVars, PhpArray, PhpClosure, Value, ValueType};
+use crate::value::{
+    ArrayKey, ClosureStaticVars, PhpArray, PhpClosure, PhpObject, Value, ValueType,
+};
 use crate::vm::execute::{
     ScalarLongSortOrder, VmError, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
@@ -517,6 +520,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- String functions ---
     reg!("strlen", fn_strlen, 1, 1, "string");
+    reg!("random_bytes", fn_random_bytes, 1, 1, "length");
     reg!("bin2hex", fn_bin2hex, 1, 1, "string");
     reg!("hex2bin", fn_hex2bin, 1, 1, "string");
     // S3 exposes xxh128, including the raw-output path used by Symfony's
@@ -6341,6 +6345,41 @@ fn fn_bin2hex(
     ret!(rv, Value::string(output));
 }
 
+fn fn_random_bytes(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let length = arg_long!(ed, 0);
+    if length <= 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "random_bytes(): Argument #1 ($length) must be greater than 0",
+        ));
+        return Ok(());
+    }
+    let length = usize::try_from(length).unwrap_or(usize::MAX);
+    let mut bytes = Vec::new();
+    if bytes.try_reserve_exact(length).is_err() {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            "random_bytes(): Unable to allocate the requested buffer",
+        ));
+        return Ok(());
+    }
+    bytes.resize(length, 0);
+    let read_result =
+        std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes));
+    if read_result.is_err() {
+        eg.exception = Some(crate::value::make_error_value(
+            "RuntimeException",
+            "random_bytes(): Unable to read from the system random source",
+        ));
+        return Ok(());
+    }
+    ret!(rv, Value::string(bytes_to_php_string(&bytes)));
+}
+
 fn fn_hex2bin(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -6578,37 +6617,173 @@ fn fn_settype(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
-    let type_name = arg_str!(ed, 1);
-    let val = unsafe { &*ptr };
-    let new_val = match type_name.as_ref() {
-        "int" | "integer" => Value::long(val.to_long_val()),
-        "float" | "double" => Value::double(val.to_float_val()),
+    let requested_type = arg_str!(ed, 1).to_ascii_lowercase();
+    let target_type = match requested_type.as_str() {
+        "int" | "integer" => "int",
+        "float" | "double" => "float",
+        "string" => "string",
+        "bool" | "boolean" => "bool",
+        "array" => "array",
+        "object" => "object",
+        "null" => "null",
+        "resource" => {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "Cannot convert to resource type",
+            ));
+            return Ok(());
+        }
+        _ => {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                "settype(): Argument #2 ($type) must be a valid type",
+            ));
+            return Ok(());
+        }
+    };
+
+    // A diagnostic handler may write to or unset the by-reference argument.
+    // Scalar conversions use the value observed at call entry; container
+    // conversions intentionally inspect the live reference after the handler.
+    let clone_argument = || {
+        // SAFETY: `arg_mut!` returns the live, initialized argument slot for
+        // this internal call. Cloning does not retain a borrow across a PHP
+        // diagnostic handler, which may re-enter and mutate that same slot.
+        unsafe { (&*ptr).clone() }
+    };
+    let original = clone_argument();
+    let original_is_nan = original.as_double().is_some_and(f64::is_nan);
+    if original_is_nan {
+        let message = if target_type == "int" {
+            "The float NAN is not representable as an int, cast occurred".to_string()
+        } else if target_type != "float" {
+            format!("unexpected NAN value was coerced to {target_type}")
+        } else {
+            String::new()
+        };
+        if !message.is_empty() {
+            report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+    } else if matches!(
+        original.value_type(),
+        ValueType::Object | ValueType::Closure
+    ) && matches!(target_type, "int" | "float")
+    {
+        let class_name = original.diagnostic_type_name();
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!("Object of class {class_name} could not be converted to {target_type}"),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+
+    let live = matches!(target_type, "array" | "object").then(clone_argument);
+    let new_val = match target_type {
+        "int" => {
+            let value = match original.value_type() {
+                ValueType::Object | ValueType::Closure => 1,
+                ValueType::Array => i64::from(!original.as_array().unwrap().is_empty()),
+                ValueType::Double if !original.as_double().unwrap().is_finite() => 0,
+                _ => original.to_long_val(),
+            };
+            Value::long(value)
+        }
+        "float" => {
+            let value = match original.value_type() {
+                ValueType::Object | ValueType::Closure => 1.0,
+                ValueType::Array => f64::from(!original.as_array().unwrap().is_empty()),
+                _ => original.to_float_val(),
+            };
+            Value::double(value)
+        }
         "string" => {
-            let Some(rendered) = internal_value_to_string(ed, eg, val)? else {
+            let Some(rendered) = internal_value_to_string(ed, eg, &original)? else {
                 return Ok(());
             };
             Value::string(rendered)
         }
-        "bool" | "boolean" => Value::bool(val.is_truthy()),
-        "array" => {
-            if val.value_type() == ValueType::Array {
-                val.clone()
-            } else {
-                let mut a = PhpArray::new();
-                a.push(val.clone());
-                Value::array(a)
-            }
-        }
+        "bool" => Value::bool(original.is_truthy()),
+        "array" if original_is_nan => settype_nan_array_value(live.as_ref().unwrap(), &original),
+        "array" => settype_array_value(live.as_ref().unwrap(), eg),
+        "object" if original_is_nan => settype_nan_object_value(live.as_ref().unwrap(), &original),
+        "object" => settype_object_value(live.as_ref().unwrap()),
         "null" => Value::null(),
-        _ => {
-            ret!(rv, Value::bool(false));
-        }
+        _ => unreachable!(),
     };
     unsafe {
         std::ptr::drop_in_place(ptr);
         ptr.write(new_val);
     }
     ret!(rv, Value::bool(true));
+}
+
+fn settype_array_value(value: &Value, eg: &ExecutorGlobals) -> Value {
+    match value.value_type() {
+        ValueType::Array => value.clone(),
+        ValueType::Object => crate::vm::execute::cast_object_to_array(value, eg),
+        ValueType::Closure | ValueType::Null | ValueType::Undef => Value::array(PhpArray::new()),
+        _ => {
+            let mut result = PhpArray::new();
+            result.push(value.clone());
+            Value::array(result)
+        }
+    }
+}
+
+fn settype_nan_array_value<'a>(live: &'a Value, original: &'a Value) -> Value {
+    let value = if live.value_type() == ValueType::Undef {
+        original
+    } else {
+        live
+    };
+    let mut result = PhpArray::new();
+    result.push(value.clone());
+    Value::array(result)
+}
+
+fn settype_object_value(value: &Value) -> Value {
+    match value.value_type() {
+        ValueType::Object | ValueType::Closure => value.clone(),
+        ValueType::Array => {
+            let array = value.as_array().unwrap();
+            let mut object = PhpObject::std_class(std::collections::HashMap::new());
+            for (key, property) in array.iter() {
+                let key = match key {
+                    ArrayKey::Int(key) => key.to_string(),
+                    ArrayKey::String(key) => key,
+                };
+                object.set_property(&key, property.clone());
+            }
+            Value::object(object)
+        }
+        ValueType::Null | ValueType::Undef => {
+            Value::object(PhpObject::std_class(std::collections::HashMap::new()))
+        }
+        _ => {
+            let mut object = PhpObject::std_class(std::collections::HashMap::new());
+            object.set_property("scalar", value.clone());
+            Value::object(object)
+        }
+    }
+}
+
+fn settype_nan_object_value<'a>(live: &'a Value, original: &'a Value) -> Value {
+    let value = if live.value_type() == ValueType::Undef {
+        original
+    } else {
+        live
+    };
+    let mut object = PhpObject::std_class(std::collections::HashMap::new());
+    object.set_property("scalar", value.clone());
+    Value::object(object)
 }
 
 fn internal_value_to_string(

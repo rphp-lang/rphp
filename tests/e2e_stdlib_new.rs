@@ -264,16 +264,96 @@ echo "," . gettype($closure);
 }
 
 // === settype ===
-// Note: settype modifies in-place (needs SendRef). Test return value for now.
 #[test]
 fn test_settype() {
     assert_eq!(
         run_php(
             r#"<?php
-echo settype("42", "integer") ? "ok" : "fail";
+$value = "42";
+var_dump(settype($value, "integer"), $value);
 "#
         ),
-        "ok"
+        "bool(true)\nint(42)\n"
+    );
+}
+
+#[test]
+fn test_settype_nan_warning_observes_reentrant_reference_writes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = fdiv(0, 0);
+set_error_handler(function ($level, $message) use (&$value) {
+    $value = "changed";
+    echo $message, "\n";
+});
+settype($value, "object");
+restore_error_handler();
+echo get_class($value), ":", $value->scalar, "\n";
+
+$value = fdiv(0, 0);
+set_error_handler(function ($level, $message) use (&$value) {
+    $value = null;
+    echo $message, "\n";
+});
+settype($value, "boolean");
+restore_error_handler();
+var_dump($value);
+"#
+        ),
+        "unexpected NAN value was coerced to object\nstdClass:changed\n\
+unexpected NAN value was coerced to bool\nbool(true)\n"
+    );
+}
+
+#[test]
+fn test_settype_container_and_invalid_resource_conversions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = null;
+settype($value, "ARRAY");
+echo count($value), "\n";
+
+$value = [2 => "x", "name" => 7];
+settype($value, "object");
+echo get_class($value), ":", $value->name, ":", count(get_object_vars($value)), "\n";
+
+$value = 12;
+try {
+    settype($value, "resource");
+} catch (ValueError $error) {
+    echo $error->getMessage(), ":", $value, "\n";
+}
+
+class Convertible {}
+$value = new Convertible();
+set_error_handler(function ($level, $message) { echo $message, "\n"; });
+settype($value, "int");
+restore_error_handler();
+var_dump($value);
+"#
+        ),
+        "0\nstdClass:7:2\nCannot convert to resource type:12\n\
+Object of class Convertible could not be converted to int\nint(1)\n"
+    );
+}
+
+#[test]
+fn test_random_bytes_uses_system_source_and_validates_length() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$bytes = random_bytes(8);
+echo strlen(bin2hex($bytes)), "\n";
+try {
+    random_bytes(0);
+} catch (ValueError $error) {
+    echo $error->getMessage();
+}
+"#
+        ),
+        "16\nrandom_bytes(): Argument #1 ($length) must be greater than 0"
     );
 }
 
