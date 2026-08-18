@@ -162,6 +162,66 @@ fn class_scoped_attribute_constants_are_available_before_member_compilation() {
 }
 
 #[test]
+fn reflection_attributes_evaluate_runtime_constants_and_missing_classes_on_demand() {
+    assert_eq!(
+        run_php(
+            "<?php define('RUNTIME_ATTRIBUTE_VALUE', 'ready'); #[Attribute] class DeferredLabel { public function __construct(public mixed $value) {} } #[DeferredLabel([RUNTIME_ATTRIBUTE_VALUE => RUNTIME_ATTRIBUTE_VALUE])] class DeferredSubject {} $arguments = (new ReflectionClass(DeferredSubject::class))->getAttributes()[0]->getArguments(); echo array_key_first($arguments[0]), ':', $arguments[0][RUNTIME_ATTRIBUTE_VALUE], '|'; #[DeferredLabel(MissingArgumentClass::VALUE)] class MissingArgumentSubject {} $missing = (new ReflectionClass(MissingArgumentSubject::class))->getAttributes()[0]; try { $missing->getArguments(); } catch (Error $error) { echo $error->getMessage(), '|'; } try { $missing->newInstance(); } catch (Error $error) { echo $error->getMessage(), '|'; } #[Attribute(MissingMarkerClass::FLAGS)] class InvalidDeferredMarker {} #[InvalidDeferredMarker] class InvalidDeferredTarget {} try { (new ReflectionClass(InvalidDeferredTarget::class))->getAttributes()[0]->newInstance(); } catch (Error $error) { echo $error->getMessage(); }"
+        ),
+        "ready:ready|Class \"MissingArgumentClass\" not found|Class \"MissingArgumentClass\" not found|Class \"MissingMarkerClass\" not found"
+    );
+}
+
+#[test]
+fn attribute_marker_runtime_constants_use_the_marker_declaration_scope() {
+    assert_eq!(
+        run_php(
+            "<?php #[Attribute(parent::MASK)] class DeferredScopedMarker extends DeferredMarkerBase {} class DeferredMarkerBase { protected const MASK = Attribute::TARGET_CLASS; } #[DeferredScopedMarker] class DeferredScopedTarget {} echo get_class((new ReflectionClass(DeferredScopedTarget::class))->getAttributes()[0]->newInstance());"
+        ),
+        "DeferredScopedMarker"
+    );
+}
+
+#[test]
+fn reflected_trait_method_attributes_use_the_consumer_scope() {
+    assert_eq!(
+        run_php(
+            "<?php trait DeferredAttributeTrait { #[DeferredTraitLabel(self::class, self::VALUE)] public function tagged() {} } class DeferredTraitConsumer { use DeferredAttributeTrait; private const VALUE = 'consumer'; } $arguments = (new ReflectionClass(DeferredTraitConsumer::class))->getMethod('tagged')->getAttributes()[0]->getArguments(); echo implode(':', $arguments), '|'; try { (new ReflectionClass(DeferredAttributeTrait::class))->getMethod('tagged')->getAttributes()[0]->getArguments(); } catch (Error $error) { echo $error->getMessage(); }"
+        ),
+        "DeferredTraitConsumer:consumer|Undefined constant self::VALUE"
+    );
+}
+
+#[test]
+fn reflected_closure_attributes_follow_bound_called_scope() {
+    assert_eq!(
+        run_php(
+            "<?php class DeferredClosureFirst { private const VALUE = 'first'; public static function make() { return #[DeferredClosureLabel(self::class, self::VALUE)] function (#[DeferredClosureLabel(self::class, self::VALUE)] $value) {}; } } class DeferredClosureSecond { private const VALUE = 'second'; } $reflection = new ReflectionFunction(DeferredClosureFirst::make()->bindTo(null, DeferredClosureSecond::class)); echo implode(':', $reflection->getAttributes()[0]->getArguments()), '|', implode(':', $reflection->getParameters()[0]->getAttributes()[0]->getArguments());"
+        ),
+        "DeferredClosureSecond:second|DeferredClosureSecond:second"
+    );
+}
+
+#[test]
+fn reflection_parameter_stringification_is_available_to_framework_introspection() {
+    assert_eq!(
+        run_php(
+            "<?php function reflected_parameter_string($required, &...$rest) {} foreach ((new ReflectionFunction('reflected_parameter_string'))->getParameters() as $parameter) { echo (string) $parameter, '|'; }"
+        ),
+        "Parameter #0 [ <required> $required ]|Parameter #1 [ <optional> &...$rest ]|"
+    );
+}
+
+#[test]
+fn anonymous_class_attribute_scope_matches_its_public_reflection_name() {
+    assert_eq!(
+        run_php(
+            "<?php $reflection = new ReflectionObject(new #[DeferredAnonymousLabel(self::class, self::VALUE)] class() { private const VALUE = 'anonymous'; }); $arguments = $reflection->getAttributes()[0]->getArguments(); echo (int) ($arguments[0] === $reflection->getName()), ':', $arguments[1];"
+        ),
+        "1:anonymous"
+    );
+}
+
+#[test]
 fn test_get_class_returns_class_name() {
     let out = run_php(
         r#"<?php

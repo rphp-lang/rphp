@@ -550,7 +550,8 @@ use super::{
     make_user_function_with_args,
 };
 use crate::vm::function::{
-    AttributeArgument, AttributeDefinition, CallStrategy, ParamTypeHint, UserFunction,
+    AttributeArgument, AttributeDefinition, AttributeEvaluationScope, CallStrategy, ParamTypeHint,
+    UserFunction,
 };
 
 /// One declaration-time warning or deprecation emitted before the compiled
@@ -3734,6 +3735,33 @@ impl Compiler {
         lexical_class: Option<&str>,
         lexical_parent: Option<&str>,
     ) -> Vec<AttributeDefinition> {
+        self.compile_attributes_in_scope_mode(
+            attributes,
+            target,
+            lexical_class,
+            lexical_parent,
+            false,
+        )
+    }
+
+    fn compile_attributes_in_scope_mode(
+        &self,
+        attributes: &[Attribute],
+        target: i64,
+        lexical_class: Option<&str>,
+        lexical_parent: Option<&str>,
+        dynamic_scope: bool,
+    ) -> Vec<AttributeDefinition> {
+        let runtime_scope = dynamic_scope
+            || lexical_class.is_some_and(|class| class.starts_with("class@anonymous#"));
+        let evaluation_scope = Rc::new(AttributeEvaluationScope {
+            namespace: self.current_namespace.clone(),
+            class_imports: self.use_map.clone(),
+            constant_imports: self.constant_use_map.clone(),
+            lexical_class: lexical_class.map(str::to_owned),
+            lexical_parent: lexical_parent.map(str::to_owned),
+            source_directory: self.source_directory.clone(),
+        });
         let mut known = self.known_constants.clone();
         if let Some(class) = lexical_class {
             known.insert("self::class".to_string(), Value::string(class));
@@ -3766,12 +3794,16 @@ impl Compiler {
                             CallArg::Named { name, value } => (Some(name.clone()), value),
                             CallArg::Unpack(expression) => (None, expression),
                         };
+                        let value = self.eval_const_expr_in_source(expression, &known);
                         AttributeArgument {
                             name,
-                            value: self.eval_const_expr_in_source(expression, &known),
+                            deferred_expression: (runtime_scope || value.is_err())
+                                .then(|| Box::new(expression.clone())),
+                            value,
                         }
                     })
                     .collect(),
+                evaluation_scope: evaluation_scope.clone(),
                 target,
                 source_file: self.source_file.clone(),
                 source_line: attribute.line,
@@ -4132,7 +4164,11 @@ impl Compiler {
         }
     }
 
-    fn eval_const_binary(op: BinOp, left: &Value, right: &Value) -> Result<Value, String> {
+    pub(crate) fn eval_const_binary(
+        op: BinOp,
+        left: &Value,
+        right: &Value,
+    ) -> Result<Value, String> {
         let integer_pair = || left.as_long().zip(right.as_long());
         let numeric_pair = || left.to_double().zip(right.to_double());
         let unsupported = || format!("unsupported operands for {:?} in constant expression", op);
@@ -7529,10 +7565,24 @@ impl Compiler {
                     cp.return_type_hint,
                     *returns_by_ref,
                 );
-                user_func.attributes = self.compile_attributes(attributes, 2);
+                user_func.attributes = self.compile_attributes_in_scope_mode(
+                    attributes,
+                    2,
+                    self.lexical_static_class.as_deref(),
+                    self.lexical_static_parent.as_deref(),
+                    true,
+                );
                 user_func.parameter_attributes = params
                     .iter()
-                    .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                    .map(|parameter| {
+                        self.compile_attributes_in_scope_mode(
+                            &parameter.attributes,
+                            32,
+                            self.lexical_static_class.as_deref(),
+                            self.lexical_static_parent.as_deref(),
+                            true,
+                        )
+                    })
                     .collect();
                 user_func.reference_cvs = closure_reference_cvs;
                 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]

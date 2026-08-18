@@ -273,14 +273,16 @@ pub(crate) struct LazyObjectState {
 /// and exposes only Zend's public `name` property to PHP code.
 pub(crate) struct ReflectionAttributeState {
     pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
-    pub(crate) name: String,
-    pub(crate) arguments: crate::value::Value,
-    pub(crate) target: i64,
+    pub(crate) definition: crate::vm::function::AttributeDefinition,
     pub(crate) repeated: bool,
-    pub(crate) evaluation_error: Option<String>,
-    pub(crate) source_file: String,
-    pub(crate) source_line: usize,
-    pub(crate) strict_types: bool,
+}
+
+/// Cold request-local scope for one engine-created ReflectionParameter.
+/// Dynamic properties remain compatible with Zend while attributes on trait
+/// methods and bound closures still evaluate in their effective class scope.
+pub(crate) struct ReflectionParameterState {
+    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) attribute_scope_class: String,
 }
 
 pub struct ExecutorGlobals {
@@ -484,6 +486,9 @@ pub struct ExecutorGlobals {
     /// Engine-created ReflectionAttribute payloads are rare and must not
     /// appear as user-visible dynamic properties.
     pub(crate) reflection_attributes: Option<Box<HashMap<usize, ReflectionAttributeState>>>,
+    /// Effective attribute scopes for reflected parameters are equally rare;
+    /// keeping them here preserves ReflectionParameter's observable shape.
+    reflection_parameters: Option<Box<HashMap<usize, ReflectionParameterState>>>,
 }
 
 pub(crate) enum ClassAliasRegistrationError {
@@ -498,14 +503,8 @@ impl ExecutorGlobals {
     pub(crate) fn register_reflection_attribute(
         &mut self,
         object: &crate::value::Value,
-        name: String,
-        arguments: crate::value::Value,
-        target: i64,
+        definition: crate::vm::function::AttributeDefinition,
         repeated: bool,
-        evaluation_error: Option<String>,
-        source_file: String,
-        source_line: usize,
-        strict_types: bool,
     ) {
         let (Some(identity), Some(owner)) = (object.object_identity(), object.object_weak()) else {
             return;
@@ -516,14 +515,8 @@ impl ExecutorGlobals {
                 identity,
                 ReflectionAttributeState {
                     owner,
-                    name,
-                    arguments,
-                    target,
+                    definition,
                     repeated,
-                    evaluation_error,
-                    source_file,
-                    source_line,
-                    strict_types,
                 },
             );
     }
@@ -536,6 +529,33 @@ impl ExecutorGlobals {
         let identity = object.object_identity()?;
         let state = self.reflection_attributes.as_ref()?.get(&identity)?;
         (state.owner.strong_count() != 0).then_some(state)
+    }
+
+    #[cold]
+    pub(crate) fn register_reflection_parameter_scope(
+        &mut self,
+        object: &crate::value::Value,
+        attribute_scope_class: String,
+    ) {
+        let (Some(identity), Some(owner)) = (object.object_identity(), object.object_weak()) else {
+            return;
+        };
+        self.reflection_parameters
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .insert(
+                identity,
+                ReflectionParameterState {
+                    owner,
+                    attribute_scope_class,
+                },
+            );
+    }
+
+    #[inline]
+    pub(crate) fn reflection_parameter_scope(&self, object: &crate::value::Value) -> Option<&str> {
+        let identity = object.object_identity()?;
+        let state = self.reflection_parameters.as_ref()?.get(&identity)?;
+        (state.owner.strong_count() != 0).then_some(state.attribute_scope_class.as_str())
     }
 
     #[cold]
@@ -988,6 +1008,7 @@ impl ExecutorGlobals {
             gc_enabled: true,
             ini_overrides: None,
             reflection_attributes: None,
+            reflection_parameters: None,
         }
     }
 
@@ -1079,6 +1100,7 @@ impl ExecutorGlobals {
             gc_enabled: true,
             ini_overrides: None,
             reflection_attributes: None,
+            reflection_parameters: None,
         }
     }
 

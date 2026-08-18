@@ -1,8 +1,11 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::ptr::NonNull;
+use std::rc::Rc;
 
 use super::frame::ExecuteData;
 use crate::compiler::OpArray;
+use crate::parser::Expr;
 use crate::runtime::ExecutorGlobals;
 use crate::value::Value;
 
@@ -1529,12 +1532,28 @@ impl FunctionCommon {
 pub struct AttributeArgument {
     pub name: Option<String>,
     pub value: Result<Value, String>,
+    /// Constant expressions that depend on runtime declarations are retained
+    /// only on the cold Reflection path. This keeps ordinary attributes fully
+    /// folded while allowing define(), autoload and delayed class linking to
+    /// participate when Reflection asks for the arguments.
+    pub deferred_expression: Option<Box<Expr>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AttributeEvaluationScope {
+    pub namespace: Option<String>,
+    pub class_imports: HashMap<String, String>,
+    pub constant_imports: HashMap<String, String>,
+    pub lexical_class: Option<String>,
+    pub lexical_parent: Option<String>,
+    pub source_directory: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct AttributeDefinition {
     pub name: String,
     pub arguments: Vec<AttributeArgument>,
+    pub evaluation_scope: Rc<AttributeEvaluationScope>,
     pub target: i64,
     pub source_file: String,
     pub source_line: usize,

@@ -546,12 +546,12 @@ Symfony S1 and warmed-kernel S2 gates pass. The check remains in dynamic
 callback resolution, leaving ordinary cached method dispatch unchanged.
 
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
-S2 pass on AMD64. An exact PHP 8.5.6 cold FrameworkBundle S3 revalidation did
-not complete because RPHP remained in the initial cold gate execution for more
-than ten minutes. The retained PHP 8.2 S3 result is therefore historical only;
-the hang is compatibility work, not a PHP 8.5 contract claim. None of these
-bounded gates establishes general PHP, extension, SAPI or production
-compatibility.
+S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
+passes after adding the missing `ReflectionParameter::__toString()` contract
+used while Symfony exports controller argument types. The gate covers clean,
+cached, deleted, malformed and concurrent cache publication/load behavior.
+None of these bounded gates establishes general PHP, extension, SAPI or
+production compatibility.
 
 ## Measurement system
 

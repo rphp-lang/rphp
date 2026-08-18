@@ -15,9 +15,10 @@ use std::rc::Rc;
 use ancestry::reflected_arguments;
 use functions::reflection_function_target;
 
+use crate::compiler::compile::Compiler;
 use crate::compiler::compile::PropertyDefinition;
 use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities};
-use crate::parser::Visibility;
+use crate::parser::{Expr, Visibility};
 use crate::runtime::{ExecutorGlobals, LazyObjectStrategy};
 use crate::value::{
     ArrayKey, DynamicPropertyMap, PhpArray, PhpClosure, PhpObject, ReferencePropertyConstraint,
@@ -26,7 +27,8 @@ use crate::value::{
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{
-    AttributeDefinition, FunctionCommon, FunctionType, ParamTypeHint, UserFunction,
+    AttributeDefinition, AttributeEvaluationScope, FunctionCommon, FunctionType, ParamTypeHint,
+    UserFunction,
 };
 
 pub(super) use registry::register;
@@ -279,14 +281,47 @@ fn receiver_class_name(ed: *mut ExecuteData) -> Option<String> {
     })
 }
 
+fn rebind_attribute_evaluation_scope(
+    definitions: &mut [AttributeDefinition],
+    class_name: Option<&str>,
+    eg: &ExecutorGlobals,
+) {
+    let Some(class_name) = class_name else {
+        return;
+    };
+    let parent = eg
+        .find_class(class_name)
+        .and_then(|class| class.parent.clone());
+    for definition in definitions {
+        let scope = std::rc::Rc::make_mut(&mut definition.evaluation_scope);
+        scope.lexical_class = Some(class_name.to_string());
+        scope.lexical_parent = parent.clone();
+    }
+}
+
 fn reflected_attribute_definitions(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> Vec<AttributeDefinition> {
     match receiver_class_name(ed).as_deref() {
-        Some("ReflectionFunction" | "ReflectionMethod") => reflected_user_function(ed)
-            .map(|function| function.attributes.clone())
-            .unwrap_or_default(),
+        Some("ReflectionFunction") => {
+            let mut definitions = reflected_user_function(ed)
+                .map(|function| function.attributes.clone())
+                .unwrap_or_default();
+            let called_class = reflected_property(ed, "__reflection_closure_called_class")
+                .and_then(|value| value.as_str().map(str::to_owned));
+            rebind_attribute_evaluation_scope(&mut definitions, called_class.as_deref(), eg);
+            definitions
+        }
+        Some("ReflectionMethod") => {
+            let mut definitions = reflected_user_function(ed)
+                .map(|function| function.attributes.clone())
+                .unwrap_or_default();
+            let called_class = reflected_property(ed, "__reflection_method_class")
+                .and_then(|value| value.as_str().map(str::to_owned));
+            rebind_attribute_evaluation_scope(&mut definitions, called_class.as_deref(), eg);
+            definitions
+        }
         Some("ReflectionClass" | "ReflectionObject") => {
             let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
                 return Vec::new();
@@ -339,42 +374,476 @@ fn reflected_attribute_definitions(
     }
 }
 
+enum DeferredAttributeError {
+    Message(String),
+    Vm(VmError),
+}
+
+impl From<VmError> for DeferredAttributeError {
+    fn from(error: VmError) -> Self {
+        Self::Vm(error)
+    }
+}
+
+fn resolve_attribute_class_name(name: &str, scope: &AttributeEvaluationScope) -> String {
+    if name.eq_ignore_ascii_case("self") || name.eq_ignore_ascii_case("static") {
+        return scope
+            .lexical_class
+            .clone()
+            .unwrap_or_else(|| name.to_string());
+    }
+    if name.eq_ignore_ascii_case("parent") {
+        return scope
+            .lexical_parent
+            .clone()
+            .unwrap_or_else(|| name.to_string());
+    }
+    if let Some(relative) = name.strip_prefix("namespace\\") {
+        return scope
+            .namespace
+            .as_ref()
+            .map_or_else(|| relative.to_string(), |ns| format!("{ns}\\{relative}"));
+    }
+    if let Some(fully_qualified) = name.strip_prefix('\\') {
+        return fully_qualified.to_string();
+    }
+    let first_segment = name.split('\\').next().unwrap_or(name);
+    if let Some(fully_qualified) = scope
+        .class_imports
+        .iter()
+        .find(|(alias, _)| alias.eq_ignore_ascii_case(first_segment))
+        .map(|(_, target)| target)
+    {
+        return if name.contains('\\') {
+            format!("{}{}", fully_qualified, &name[first_segment.len()..])
+        } else {
+            fully_qualified.clone()
+        };
+    }
+    scope
+        .namespace
+        .as_ref()
+        .map_or_else(|| name.to_string(), |ns| format!("{ns}\\{name}"))
+}
+
+fn resolve_attribute_constant_name(
+    name: &str,
+    scope: &AttributeEvaluationScope,
+) -> (String, Option<String>) {
+    if let Some(relative) = name.strip_prefix("namespace\\") {
+        return (
+            scope
+                .namespace
+                .as_ref()
+                .map_or_else(|| relative.to_string(), |ns| format!("{ns}\\{relative}")),
+            None,
+        );
+    }
+    if let Some(fully_qualified) = name.strip_prefix('\\') {
+        return (fully_qualified.to_string(), None);
+    }
+    if !name.contains('\\')
+        && let Some(imported) = scope.constant_imports.get(name)
+    {
+        return (imported.clone(), None);
+    }
+    if let Some(namespace) = &scope.namespace {
+        return (
+            format!("{namespace}\\{name}"),
+            (!name.contains('\\')).then(|| name.to_string()),
+        );
+    }
+    (name.to_string(), None)
+}
+
+fn deferred_class_constant(
+    class_name: &str,
+    constant: &str,
+    scope: &AttributeEvaluationScope,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, DeferredAttributeError> {
+    let source_class_name = class_name;
+    let class_name = resolve_attribute_class_name(class_name, scope);
+    if constant.eq_ignore_ascii_case("class") {
+        let public_name = eg
+            .find_class(&class_name)
+            .and_then(|class| class.anonymous_public_name())
+            .unwrap_or(class_name);
+        return Ok(Value::string(public_name));
+    }
+    if eg.find_class(&class_name).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?
+    {
+        return Err(DeferredAttributeError::Message(format!(
+            "Class \"{class_name}\" not found"
+        )));
+    }
+
+    let Some(class) = eg.find_class(&class_name) else {
+        return Err(DeferredAttributeError::Message(format!(
+            "Class \"{class_name}\" not found"
+        )));
+    };
+    let pseudo_scope = matches!(
+        source_class_name.to_ascii_lowercase().as_str(),
+        "self" | "parent" | "static"
+    );
+    if class.is_trait && !pseudo_scope {
+        return Err(DeferredAttributeError::Message(format!(
+            "Cannot access trait constant {}::{constant} directly",
+            class.name
+        )));
+    }
+    let display_class = class.name.clone();
+    let definition = class
+        .constants
+        .iter()
+        .find(|definition| definition.name == constant)
+        .cloned();
+    let enum_value = if definition.is_none() && class.is_enum {
+        class
+            .static_properties
+            .iter()
+            .position(|case| case.name == constant)
+            .and_then(|index| eg.static_property_storage_slot(class.class_id, index))
+            .and_then(|slot| eg.static_property_value(slot))
+            .cloned()
+    } else {
+        None
+    };
+    if let Some(value) = enum_value {
+        return Ok(value);
+    }
+    let Some(definition) = definition else {
+        let display_class = if pseudo_scope {
+            source_class_name
+        } else {
+            &display_class
+        };
+        return Err(DeferredAttributeError::Message(format!(
+            "Undefined constant {display_class}::{constant}"
+        )));
+    };
+    if !eg.check_visibility(
+        scope.lexical_class.as_deref(),
+        &definition.declaring_class,
+        definition.visibility,
+    ) {
+        let visibility = match definition.visibility {
+            Visibility::Private => "private",
+            Visibility::Protected => "protected",
+            Visibility::Public => unreachable!(),
+        };
+        return Err(DeferredAttributeError::Message(format!(
+            "Cannot access {visibility} constant {display_class}::{constant}"
+        )));
+    }
+    if let Some(error) = definition.evaluation_error {
+        return Err(DeferredAttributeError::Message(error));
+    }
+    Ok(definition.value)
+}
+
+fn evaluate_deferred_attribute_expression(
+    expression: &Expr,
+    scope: &AttributeEvaluationScope,
+    source_file: &str,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, DeferredAttributeError> {
+    match expression {
+        Expr::Integer(value) => Ok(Value::long(*value)),
+        Expr::Float(value) => Ok(Value::double(*value)),
+        Expr::StringLiteral(value) => Ok(Value::string(value.clone())),
+        Expr::Bool(value) => Ok(Value::bool(*value)),
+        Expr::Null => Ok(Value::null()),
+        Expr::Constant(name) => {
+            let (primary, fallback) = resolve_attribute_constant_name(name, scope);
+            eg.find_constant(&primary)
+                .or_else(|| fallback.as_deref().and_then(|name| eg.find_constant(name)))
+                .ok_or_else(|| {
+                    DeferredAttributeError::Message(format!("Undefined constant \"{primary}\""))
+                })
+        }
+        Expr::MagicConstant { name, line } if name.eq_ignore_ascii_case("__LINE__") => {
+            Ok(Value::long(*line as i64))
+        }
+        Expr::MagicConstant { name, .. } if name.eq_ignore_ascii_case("__FILE__") => {
+            Ok(Value::string(source_file))
+        }
+        Expr::MagicConstant { name, .. } if name.eq_ignore_ascii_case("__DIR__") => {
+            Ok(Value::string(scope.source_directory.clone()))
+        }
+        Expr::MagicConstant { name, .. } if name.eq_ignore_ascii_case("__CLASS__") => Ok(
+            Value::string(scope.lexical_class.clone().unwrap_or_default()),
+        ),
+        Expr::ClassConstant {
+            class_name,
+            constant,
+        } => deferred_class_constant(class_name, constant, scope, eg),
+        Expr::DynamicNamedClassConstant {
+            class_name,
+            constant,
+        } => {
+            let constant =
+                evaluate_deferred_attribute_expression(constant, scope, source_file, eg)?;
+            let Some(constant) = constant.as_str() else {
+                return Err(DeferredAttributeError::Message(format!(
+                    "Cannot use value of type {} as class constant name",
+                    constant.type_name()
+                )));
+            };
+            deferred_class_constant(class_name, constant, scope, eg)
+        }
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => {
+            let class = evaluate_deferred_attribute_expression(class, scope, source_file, eg)?;
+            let Some(class) = class.as_str() else {
+                return Err(DeferredAttributeError::Message(format!(
+                    "Cannot use value of type {} as class name",
+                    class.type_name()
+                )));
+            };
+            let constant =
+                evaluate_deferred_attribute_expression(constant, scope, source_file, eg)?;
+            let Some(constant) = constant.as_str() else {
+                return Err(DeferredAttributeError::Message(format!(
+                    "Cannot use value of type {} as class constant name",
+                    constant.type_name()
+                )));
+            };
+            let dynamic_scope = AttributeEvaluationScope {
+                namespace: None,
+                class_imports: HashMap::new(),
+                constant_imports: HashMap::new(),
+                lexical_class: scope.lexical_class.clone(),
+                lexical_parent: scope.lexical_parent.clone(),
+                source_directory: scope.source_directory.clone(),
+            };
+            deferred_class_constant(class, constant, &dynamic_scope, eg)
+        }
+        Expr::BinaryOp { op, left, right } => {
+            let left = evaluate_deferred_attribute_expression(left, scope, source_file, eg)?;
+            match op {
+                crate::parser::BinOp::And if !left.is_truthy() => {
+                    return Ok(Value::bool(false));
+                }
+                crate::parser::BinOp::Or if left.is_truthy() => {
+                    return Ok(Value::bool(true));
+                }
+                _ => {}
+            }
+            let right = evaluate_deferred_attribute_expression(right, scope, source_file, eg)?;
+            Compiler::eval_const_binary(*op, &left, &right).map_err(DeferredAttributeError::Message)
+        }
+        Expr::Not(inner) => Ok(Value::bool(
+            !evaluate_deferred_attribute_expression(inner, scope, source_file, eg)?.is_truthy(),
+        )),
+        Expr::UnaryPlus(inner) => {
+            let value = evaluate_deferred_attribute_expression(inner, scope, source_file, eg)?;
+            if let Some(value) = value.as_long() {
+                Ok(Value::long(value))
+            } else if let Some(value) = value.as_double() {
+                Ok(Value::double(value))
+            } else {
+                Err(DeferredAttributeError::Message(
+                    "unsupported unary expression".to_string(),
+                ))
+            }
+        }
+        Expr::UnaryMinus(inner) => {
+            let value = evaluate_deferred_attribute_expression(inner, scope, source_file, eg)?;
+            if let Some(value) = value.as_long() {
+                Ok(value
+                    .checked_neg()
+                    .map(Value::long)
+                    .unwrap_or_else(|| Value::double(-(value as f64))))
+            } else if let Some(value) = value.as_double() {
+                Ok(Value::double(-value))
+            } else {
+                Err(DeferredAttributeError::Message(
+                    "unsupported unary expression".to_string(),
+                ))
+            }
+        }
+        Expr::BitwiseNot(inner) => {
+            let value = evaluate_deferred_attribute_expression(inner, scope, source_file, eg)?;
+            if let Some(value) = value.as_long() {
+                Ok(Value::long(!value))
+            } else if let Some(value) = value.as_str() {
+                Ok(Value::string(crate::value::php_byte_string_from_bytes(
+                    value.bytes().map(|byte| !byte),
+                )))
+            } else {
+                Err(DeferredAttributeError::Message(format!(
+                    "Cannot perform bitwise not on {}",
+                    value.type_name()
+                )))
+            }
+        }
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            if evaluate_deferred_attribute_expression(condition, scope, source_file, eg)?
+                .is_truthy()
+            {
+                evaluate_deferred_attribute_expression(then_expr, scope, source_file, eg)
+            } else {
+                evaluate_deferred_attribute_expression(else_expr, scope, source_file, eg)
+            }
+        }
+        Expr::Elvis { left, right } => {
+            let left = evaluate_deferred_attribute_expression(left, scope, source_file, eg)?;
+            if left.is_truthy() {
+                Ok(left)
+            } else {
+                evaluate_deferred_attribute_expression(right, scope, source_file, eg)
+            }
+        }
+        Expr::NullCoalesce { left, right } => {
+            let left = evaluate_deferred_attribute_expression(left, scope, source_file, eg)?;
+            if left.value_type() == ValueType::Null {
+                evaluate_deferred_attribute_expression(right, scope, source_file, eg)
+            } else {
+                Ok(left)
+            }
+        }
+        Expr::New {
+            class_name,
+            args,
+            generic_args,
+            ..
+        } if class_name.eq_ignore_ascii_case("stdClass")
+            && args.is_empty()
+            && generic_args.is_empty() =>
+        {
+            Ok(Value::object(PhpObject::dynamic(
+                "stdClass".into(),
+                0,
+                HashMap::new(),
+            )))
+        }
+        Expr::ArrayLiteral(elements) => {
+            let mut result = PhpArray::new();
+            for element in elements {
+                let value =
+                    evaluate_deferred_attribute_expression(&element.value, scope, source_file, eg)?;
+                if element.unpack {
+                    let Some(source) = value.as_array() else {
+                        return Err(DeferredAttributeError::Message(
+                            "Only arrays and Traversables can be unpacked".to_string(),
+                        ));
+                    };
+                    for (key, value) in source.iter() {
+                        match key {
+                            ArrayKey::Int(_) => {
+                                if !result.try_push(value.dereferenced().clone()) {
+                                    return Err(DeferredAttributeError::Message(
+                                        "Cannot add element to the array as the next element is already occupied"
+                                            .to_string(),
+                                    ));
+                                }
+                            }
+                            ArrayKey::String(key) => {
+                                result.set_str(&key, value.dereferenced().clone());
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if let Some(key) = &element.key {
+                    let key = evaluate_deferred_attribute_expression(key, scope, source_file, eg)?;
+                    if let Some(key) = key.as_long() {
+                        result.set_int(key, value);
+                    } else if let Some(key) = key.as_str() {
+                        result.set_str(key, value);
+                    } else {
+                        return Err(DeferredAttributeError::Message(
+                            "unsupported array key type in constant expression".to_string(),
+                        ));
+                    }
+                } else {
+                    result.push(value);
+                }
+            }
+            Ok(Value::array(result))
+        }
+        Expr::ArrayAccess { array, index, .. } => {
+            let array = evaluate_deferred_attribute_expression(array, scope, source_file, eg)?;
+            let index = evaluate_deferred_attribute_expression(index, scope, source_file, eg)?;
+            let Some(array) = array.as_array() else {
+                return Err(DeferredAttributeError::Message(
+                    "constant expression cannot index a non-array".to_string(),
+                ));
+            };
+            let value = if let Some(index) = index.as_long() {
+                array.get_int(index)
+            } else if let Some(index) = index.as_str() {
+                array.get_str(index)
+            } else {
+                None
+            };
+            value.cloned().ok_or_else(|| {
+                DeferredAttributeError::Message(
+                    "undefined array key in constant expression".to_string(),
+                )
+            })
+        }
+        _ => Err(DeferredAttributeError::Message(format!(
+            "expression {expression:?} is not a constant expression"
+        ))),
+    }
+}
+
+fn evaluate_attribute_arguments(
+    definition: &AttributeDefinition,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<Value>, VmError> {
+    let mut arguments = PhpArray::with_packed_capacity(definition.arguments.len());
+    for argument in &definition.arguments {
+        let value = match (&argument.value, &argument.deferred_expression) {
+            (_, Some(expression)) => {
+                match evaluate_deferred_attribute_expression(
+                    expression,
+                    &definition.evaluation_scope,
+                    &definition.source_file,
+                    eg,
+                ) {
+                    Ok(value) => value,
+                    Err(DeferredAttributeError::Message(error)) => {
+                        eg.exception = Some(make_error_value("Error", &error));
+                        return Ok(None);
+                    }
+                    Err(DeferredAttributeError::Vm(error)) => return Err(error),
+                }
+            }
+            (Ok(value), None) => value.clone(),
+            (Err(error), None) => {
+                eg.exception = Some(make_error_value("Error", error));
+                return Ok(None);
+            }
+        };
+        if let Some(name) = &argument.name {
+            arguments.set_str(name, value);
+        } else {
+            arguments.push(value);
+        }
+    }
+    Ok(Some(Value::array(arguments)))
+}
+
 fn reflection_attribute_value(
     definition: &AttributeDefinition,
     repeated: bool,
     eg: &mut ExecutorGlobals,
 ) -> Value {
-    let mut arguments = PhpArray::with_packed_capacity(definition.arguments.len());
-    let mut evaluation_error = None;
-    for argument in &definition.arguments {
-        match &argument.value {
-            Ok(value) => {
-                if let Some(name) = &argument.name {
-                    arguments.set_str(name, value.clone());
-                } else {
-                    arguments.push(value.clone());
-                }
-            }
-            Err(error) => {
-                evaluation_error.get_or_insert_with(|| error.clone());
-            }
-        }
-    }
     let object = object_value(
         "ReflectionAttribute",
         [("name", Value::string(definition.name.clone()))],
     );
-    eg.register_reflection_attribute(
-        &object,
-        definition.name.clone(),
-        Value::array(arguments),
-        definition.target,
-        repeated,
-        evaluation_error,
-        definition.source_file.clone(),
-        definition.source_line,
-        definition.strict_types,
-    );
+    eg.register_reflection_attribute(&object, definition.clone(), repeated);
     object
 }
 
@@ -471,7 +940,7 @@ fn attribute_get_name(
         rv,
         eg.reflection_attribute_state(&receiver).map_or_else(
             || reflected_property(ed, "name").unwrap_or_else(|| Value::string("")),
-            |state| Value::string(state.name.clone()),
+            |state| Value::string(state.definition.name.clone()),
         ),
     )
 }
@@ -482,17 +951,15 @@ fn attribute_get_arguments(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let receiver = with_argument(ed, 0, Value::clone);
-    let evaluation_error = eg
+    let definition = eg
         .reflection_attribute_state(&receiver)
-        .and_then(|state| state.evaluation_error.clone());
-    if let Some(error) = evaluation_error {
-        eg.exception = Some(make_error_value("Error", &error));
+        .map(|state| state.definition.clone());
+    let Some(definition) = definition else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let Some(arguments) = evaluate_attribute_arguments(&definition, eg)? else {
         return Ok(());
-    }
-    let arguments = eg
-        .reflection_attribute_state(&receiver)
-        .map(|state| state.arguments.clone())
-        .unwrap_or_else(|| Value::array(PhpArray::new()));
+    };
     return_value(rv, arguments)
 }
 
@@ -506,7 +973,7 @@ fn attribute_get_target(
         rv,
         Value::long(
             eg.reflection_attribute_state(&receiver)
-                .map_or(0, |state| state.target),
+                .map_or(0, |state| state.definition.target),
         ),
     )
 }
@@ -561,27 +1028,9 @@ fn attribute_new_instance(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let receiver = with_argument(ed, 0, Value::clone);
-    let Some((
-        name,
-        arguments,
-        target,
-        repeated,
-        evaluation_error,
-        source_file,
-        source_line,
-        strict,
-    )) = eg.reflection_attribute_state(&receiver).map(|state| {
-        (
-            state.name.clone(),
-            state.arguments.clone(),
-            state.target,
-            state.repeated,
-            state.evaluation_error.clone(),
-            state.source_file.clone(),
-            state.source_line,
-            state.strict_types,
-        )
-    })
+    let Some((definition, repeated)) = eg
+        .reflection_attribute_state(&receiver)
+        .map(|state| (state.definition.clone(), state.repeated))
     else {
         eg.exception = Some(make_error_value(
             "Error",
@@ -589,10 +1038,14 @@ fn attribute_new_instance(
         ));
         return Ok(());
     };
-    if let Some(error) = evaluation_error {
-        eg.exception = Some(make_error_value("Error", &error));
+    let Some(arguments) = evaluate_attribute_arguments(&definition, eg)? else {
         return Ok(());
-    }
+    };
+    let name = definition.name.clone();
+    let target = definition.target;
+    let source_file = definition.source_file.clone();
+    let source_line = definition.source_line;
+    let strict = definition.strict_types;
     if eg.find_class(&name).is_none() && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &name)?
     {
         eg.exception = Some(make_error_value(
@@ -602,27 +1055,28 @@ fn attribute_new_instance(
         return Ok(());
     }
 
-    let Some(class) = eg.find_class(&name) else {
-        eg.exception = Some(make_error_value(
-            "Error",
-            &format!("Attribute class \"{name}\" not found"),
-        ));
-        return Ok(());
-    };
-    let Some(marker) = class
-        .attributes
-        .iter()
-        .find(|attribute| attribute.name.eq_ignore_ascii_case("Attribute"))
-    else {
+    let Some(marker) = eg.find_class(&name).and_then(|class| {
+        class
+            .attributes
+            .iter()
+            .find(|attribute| attribute.name.eq_ignore_ascii_case("Attribute"))
+            .cloned()
+    }) else {
         eg.exception = Some(make_error_value(
             "Error",
             &format!("Attempting to use non-attribute class \"{name}\" as attribute"),
         ));
         return Ok(());
     };
-    let flags = match marker.arguments.first().map(|argument| &argument.value) {
+    let Some(marker_arguments) = evaluate_attribute_arguments(&marker, eg)? else {
+        return Ok(());
+    };
+    let marker_flag = marker_arguments
+        .as_array()
+        .and_then(|arguments| arguments.iter().next().map(|(_, value)| value.clone()));
+    let flags = match marker_flag.as_ref() {
         None => 127,
-        Some(Ok(value)) => {
+        Some(value) => {
             let Some(flags) = value.as_long() else {
                 eg.exception = Some(make_error_value(
                     "TypeError",
@@ -634,10 +1088,6 @@ fn attribute_new_instance(
                 return Ok(());
             };
             flags
-        }
-        Some(Err(error)) => {
-            eg.exception = Some(make_error_value("Error", error));
-            return Ok(());
         }
     };
     if flags & !(127 | 128) != 0 {
@@ -665,6 +1115,13 @@ fn attribute_new_instance(
         ));
         return Ok(());
     }
+    let Some(class) = eg.find_class(&name) else {
+        eg.exception = Some(make_error_value(
+            "Error",
+            &format!("Attribute class \"{name}\" not found"),
+        ));
+        return Ok(());
+    };
     if class.is_interface || class.is_trait || class.is_abstract || class.is_enum {
         eg.exception = Some(make_error_value(
             "Error",
@@ -871,7 +1328,12 @@ fn function_get_parameters(
     };
     let fixed = function.sig.public_arity();
     let count = fixed + u32::from(function.sig.is_variadic);
-    let declaring_class = eg.declaring_class_of(function as *const FunctionCommon);
+    let declaring_class = eg
+        .declaring_class_of(function as *const FunctionCommon)
+        .map(str::to_owned);
+    let attribute_scope_class = reflected_property(ed, "__reflection_closure_called_class")
+        .or_else(|| reflected_property(ed, "__reflection_method_class"))
+        .and_then(|value| value.as_str().map(str::to_owned));
     let mut parameters = PhpArray::with_packed_capacity(count as usize);
     for index in 0..count {
         let name = function
@@ -889,7 +1351,7 @@ fn function_get_parameters(
         let has_type = !matches!(hint, ParamTypeHint::None);
         let is_variadic = function.sig.is_variadic && index == fixed;
         let has_default = !is_variadic && index >= function.sig.required_num_args;
-        parameters.push(object_value(
+        let parameter = object_value(
             "ReflectionParameter",
             [
                 ("name", Value::string(name)),
@@ -910,10 +1372,16 @@ fn function_get_parameters(
                 ("__reflection_has_default", Value::bool(has_default)),
                 (
                     "__reflection_declaring_class",
-                    declaring_class.map_or_else(Value::null, Value::string),
+                    declaring_class
+                        .as_deref()
+                        .map_or_else(Value::null, Value::string),
                 ),
             ],
-        ));
+        );
+        if let Some(attribute_scope_class) = &attribute_scope_class {
+            eg.register_reflection_parameter_scope(&parameter, attribute_scope_class.clone());
+        }
+        parameters.push(parameter);
     }
     return_value(rv, Value::array(parameters))
 }
@@ -1070,6 +1538,57 @@ fn parameter_get_name(
     )
 }
 
+fn parameter_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let position = reflected_property(ed, "__reflection_position")
+        .and_then(|value| value.as_long())
+        .unwrap_or(0);
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let variadic = parameter_property_bool(ed, "__reflection_variadic");
+    let has_default = parameter_property_bool(ed, "__reflection_has_default");
+    let requirement = if variadic || has_default {
+        "optional"
+    } else {
+        "required"
+    };
+    let type_prefix = if parameter_property_bool(ed, "__reflection_has_type") {
+        reflected_property(ed, "__reflection_type_name")
+            .and_then(|value| {
+                value.as_str().map(|name| {
+                    let nullable = parameter_property_bool(ed, "__reflection_allows_null")
+                        && reflected_property(ed, "__reflection_type_kind")
+                            .and_then(|value| value.as_str().map(|kind| kind == "named"))
+                            .unwrap_or(true)
+                        && !matches!(name.to_ascii_lowercase().as_str(), "mixed" | "null");
+                    format!("{}{name} ", if nullable { "?" } else { "" })
+                })
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let reference = if parameter_property_bool(ed, "__reflection_passed_by_reference") {
+        "&"
+    } else {
+        ""
+    };
+    let variadic_prefix = if variadic { "..." } else { "" };
+    // Default expressions currently live in bytecode. Zend uses the same
+    // `<default>` placeholder for values unavailable through reflection.
+    let default = if has_default { " = <default>" } else { "" };
+    return_value(
+        rv,
+        Value::string(format!(
+            "Parameter #{position} [ <{requirement}> {type_prefix}{reference}{variadic_prefix}${name}{default} ]"
+        )),
+    )
+}
+
 fn parameter_get_type(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -1195,11 +1714,15 @@ fn parameter_get_attributes(
     let position = reflected_property(ed, "__reflection_position")
         .and_then(|value| value.as_long())
         .and_then(|position| usize::try_from(position).ok());
-    let attributes = reflected_user_function(ed)
+    let mut attributes = reflected_user_function(ed)
         .zip(position)
         .and_then(|(function, position)| function.parameter_attributes.get(position))
         .cloned()
         .unwrap_or_default();
+    let called_class = with_argument(ed, 0, |receiver| {
+        eg.reflection_parameter_scope(receiver).map(str::to_owned)
+    });
+    rebind_attribute_evaluation_scope(&mut attributes, called_class.as_deref(), eg);
     reflection_attributes(ed, rv, eg, attributes)
 }
 
@@ -1728,8 +2251,15 @@ fn class_to_string(
 fn class_get_name(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed)
+        && let Some(public_name) = eg
+            .find_class(&owner)
+            .and_then(|class| class.anonymous_public_name())
+    {
+        return return_value(rv, Value::string(public_name));
+    }
     return_value(
         rv,
         reflected_property(ed, "name").unwrap_or_else(|| Value::string("")),

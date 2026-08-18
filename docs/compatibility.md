@@ -9,11 +9,27 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,844 pass, 2,404 fail, 110 skip, one is an upstream XFAIL,
+`tests/lang` cases, 2,848 pass, 2,400 fail, 110 skip, one is an upstream XFAIL,
 240 are unsupported, and none time out or crash. The headline pass rate is
-54.192%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
-the preceding `1ef77ac` checkpoint, the exact pass-set delta is +3/-0. The
+54.268%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
+the preceding `9292038` checkpoint, the exact pass-set delta is +4/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
+
+Attribute arguments that depend on runtime constants, autoloaded classes or
+class constants now retain their constant-expression AST and lexical namespace,
+import, class, parent and source-file scope for cold evaluation by
+`ReflectionAttribute::getArguments()` and `newInstance()`. Trait method and
+bound Closure reflection rebind that scope to the effective consumer/called
+class, and anonymous classes expose the same public name to reflection and
+`self::class`. This adds four exact PHP 8.5.6 passes with no lost pass, moved
+failure stage, timeout or crash. ReflectionParameter scope is kept in a weak
+request-local sidecar so its observable object shape and ordinary objects stay
+unchanged. Adding the missing `ReflectionParameter::__toString()` surface also
+removes the pre-existing Symfony cold-container failure; the complete
+FrameworkBundle 7.4.16 S3 gate now passes against PHP 8.5.9. All five Cargo
+configurations, all-target/all-features and unsafe gates pass. The added work is
+confined to cold compilation and explicit Reflection paths, so no ordinary
+execution-path benchmark applies.
 
 Replacing the final CV handle to an object now commits the opcode-specific
 variable or reference state and invokes `__destruct()` at PHP's observable

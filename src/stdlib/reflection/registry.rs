@@ -41,11 +41,11 @@ use super::{
     parameter_allows_null, parameter_get_attributes, parameter_get_declaring_class,
     parameter_get_default_value, parameter_get_name, parameter_get_type, parameter_has_type,
     parameter_is_default_available, parameter_is_optional, parameter_is_passed_by_reference,
-    parameter_is_variadic, property_construct, property_get_default_value, property_get_modifiers,
-    property_get_raw_value, property_get_value, property_has_default_value, property_is_abstract,
-    property_is_default, property_is_final, property_is_initialized, property_is_lazy,
-    property_is_private, property_is_protected, property_is_public, property_is_readonly,
-    property_is_static, property_is_virtual, property_set_raw_value,
+    parameter_is_variadic, parameter_to_string, property_construct, property_get_default_value,
+    property_get_modifiers, property_get_raw_value, property_get_value, property_has_default_value,
+    property_is_abstract, property_is_default, property_is_final, property_is_initialized,
+    property_is_lazy, property_is_private, property_is_protected, property_is_public,
+    property_is_readonly, property_is_static, property_is_virtual, property_set_raw_value,
     property_set_raw_value_without_lazy_initialization, property_set_value,
     property_skip_lazy_initialization, property_to_string, reflection_compound_types,
     reflection_get_doc_comment, reflection_type_allows_null, reflection_type_generic_arguments,
@@ -57,7 +57,9 @@ use crate::compiler::make_internal_method;
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 use crate::value::Value;
-use crate::vm::function::{AttributeArgument, AttributeDefinition, ParamTypeHint};
+use crate::vm::function::{
+    AttributeArgument, AttributeDefinition, AttributeEvaluationScope, ParamTypeHint,
+};
 use crate::vm::function::{FunctionCommon, InternalFunction};
 
 fn register_reflection_class(
@@ -314,7 +316,9 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             arguments: vec![AttributeArgument {
                 name: None,
                 value: Ok(Value::long(1)),
+                deferred_expression: None,
             }],
+            evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
             target: 1,
             source_file: String::new(),
             source_line: 0,
@@ -638,6 +642,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         "ReflectionParameter",
         "getname",
         parameter_get_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "__tostring",
+        parameter_to_string,
         1,
         0,
         []

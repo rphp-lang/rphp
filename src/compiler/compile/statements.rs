@@ -4250,11 +4250,23 @@ impl Compiler {
                         cp.return_type_hint,
                         method.returns_by_ref,
                     );
-                    user_func.attributes = self.compile_attributes(&method.attributes, 4);
+                    user_func.attributes = self.compile_attributes_in_scope(
+                        &method.attributes,
+                        4,
+                        Some(&resolved_iface),
+                        None,
+                    );
                     user_func.parameter_attributes = method
                         .params
                         .iter()
-                        .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                        .map(|parameter| {
+                            self.compile_attributes_in_scope(
+                                &parameter.attributes,
+                                32,
+                                Some(&resolved_iface),
+                                None,
+                            )
+                        })
                         .collect();
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
@@ -4499,11 +4511,25 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
-                    user_func.attributes = self.compile_attributes(&method.attributes, 4);
+                    user_func.attributes = self.compile_attributes_in_scope_mode(
+                        &method.attributes,
+                        4,
+                        Some(&resolved_trait),
+                        None,
+                        true,
+                    );
                     user_func.parameter_attributes = method
                         .params
                         .iter()
-                        .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                        .map(|parameter| {
+                            self.compile_attributes_in_scope_mode(
+                                &parameter.attributes,
+                                32,
+                                Some(&resolved_trait),
+                                None,
+                                true,
+                            )
+                        })
                         .collect();
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
