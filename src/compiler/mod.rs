@@ -3689,6 +3689,27 @@ fn build_object_array_function_plan(
                     destination: instruction.result,
                 }));
             }
+            OpCode::ReleaseTemps => {
+                // A method receiver materialized by FetchObjR is represented
+                // virtually by this plan. The compiler still emits its exact
+                // one-slot Zend lifetime boundary after DoFcall; consume that
+                // boundary without rejecting the otherwise unchanged plan.
+                if pending_call.is_some()
+                    || instruction.op1_type != OpType::Tmp
+                    || instruction.op2_type != OpType::Tmp
+                    || instruction.op2 != instruction.op1.checked_add(1)?
+                {
+                    return None;
+                }
+                let receiver = instruction.op1 as usize;
+                if receiver >= aliases.len()
+                    || !matches!(aliases[receiver], Some(ObjectArraySource::Property { .. }))
+                {
+                    return None;
+                }
+                aliases[receiver] = None;
+                initialized_long[receiver] = false;
+            }
             OpCode::AssignCv => {
                 if pending_call.is_some() || instruction.op1_type != OpType::Cv {
                     return None;

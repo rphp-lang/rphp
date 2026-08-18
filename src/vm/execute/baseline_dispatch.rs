@@ -6456,6 +6456,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     opline.op1 as usize,
                     opline.op2 as usize,
                 )?;
+                resume_pending_exception!();
             }
 
             // All opcodes handled — new opcodes must be added above

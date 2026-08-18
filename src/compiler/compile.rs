@@ -8151,6 +8151,7 @@ impl Compiler {
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.push_instruction_at_line(do_fcall, *line);
+                self.emit_temporary_method_receiver_release(obj_op, obj_type, *line);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 if let Some(idx) = nullsafe_patch {
@@ -9573,11 +9574,32 @@ impl Compiler {
         do_fcall.result = tmp;
         do_fcall.result_type = OpType::Tmp;
         self.push_instruction_at_line(do_fcall, line);
+        self.emit_temporary_method_receiver_release(obj_op, obj_type, line);
         self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
         if let Some(index) = nullsafe_patch {
             self.instructions[index].op2 = self.instructions.len() as u16;
         }
         (tmp, OpType::Tmp)
+    }
+
+    /// Zend releases a one-use object receiver as soon as its method call
+    /// completes, before a surrounding fluent expression continues. Keep CV
+    /// receivers on the existing hot path and retire only compiler temporaries.
+    fn emit_temporary_method_receiver_release(
+        &mut self,
+        receiver: u16,
+        receiver_type: OpType,
+        line: usize,
+    ) {
+        if receiver_type != OpType::Tmp {
+            return;
+        }
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        release.op1 = receiver;
+        release.op1_type = OpType::Tmp;
+        release.op2 = receiver + 1;
+        release.op2_type = OpType::Tmp;
+        self.push_instruction_at_line(release, line);
     }
 
     fn compile_dynamic_call_from_operand(

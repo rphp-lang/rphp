@@ -9,11 +9,28 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,848 pass, 2,400 fail, 110 skip, one is an upstream XFAIL,
+`tests/lang` cases, 2,856 pass, 2,392 fail, 110 skip, one is an upstream XFAIL,
 240 are unsupported, and none time out or crash. The headline pass rate is
-54.268%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
-the preceding `9292038` checkpoint, the exact pass-set delta is +4/-0. The
+54.421%; 4,558 of 5,248 attempted cases reach runtime (86.852%). Relative to
+the preceding `07a1875` checkpoint, the exact pass-set delta is +8/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
+
+One-use object receivers now reach their Zend lifetime boundary immediately
+after `DoFcall`, before a fluent expression continues or a returned temporary
+receives its next handle number. The compiler emits an exact one-slot temporary
+release only for TMP receivers; ordinary CV method calls retain their existing
+bytecode and hot dispatch. A destructor exception raised at that boundary now
+re-enters the shared throw path instead of remaining pending, while the compact
+object-array planner consumes only the matching release of a virtualized
+property receiver. This adds eight exact PHP 8.5.6 passes with no lost pass,
+moved failure stage, timeout or crash. All five Cargo configurations,
+all-target/all-features and unsafe gates pass, as do Composer S0, all four
+Symfony S1 gates, warmed-kernel S2 and cold-build S3. Nine alternating AMD64
+release runs keep the ordinary CV method-call median within noise (0.794 to
+0.784 milliseconds per 10,000 calls). The intentionally affected ephemeral
+receiver workload moves from 1.960 to 2.131 seconds per million calls (+8.8%);
+that localized compatibility-first cost remains explicit performance debt for
+the later whole-runtime optimization pass.
 
 Attribute arguments that depend on runtime constants, autoloaded classes or
 class constants now retain their constant-expression AST and lexical namespace,

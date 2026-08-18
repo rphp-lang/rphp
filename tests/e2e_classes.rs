@@ -393,6 +393,48 @@ echo 'A';
 }
 
 #[test]
+fn temporary_method_receivers_release_at_return_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class TemporaryReceiverA {
+    public function next() { echo "a|"; return new TemporaryReceiverB; }
+    public function __destruct() { echo "~a|"; }
+}
+class TemporaryReceiverB {
+    public function next() { echo "b|"; return new TemporaryReceiverResult; }
+    public function __destruct() { echo "~b|"; }
+}
+class TemporaryReceiverResult {}
+var_dump((new TemporaryReceiverA)->next()->next());
+"#,
+        ),
+        "a|~a|b|~b|object(TemporaryReceiverResult)#1 (0) {\n}\n"
+    );
+}
+
+#[test]
+fn temporary_receiver_destructor_exceptions_resume_at_the_release_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BoundaryDestructorFailure {
+    public function finish() { echo "call|"; }
+    public function __destruct() { echo "destroy|"; throw new Exception("release"); }
+}
+try {
+    (new BoundaryDestructorFailure)->finish();
+    echo "miss|";
+} catch (Exception $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "call|destroy|release"
+    );
+}
+
+#[test]
 fn destructors_are_not_suppressed_when_allocator_addresses_are_reused() {
     assert_eq!(
         run_php(
