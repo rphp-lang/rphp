@@ -580,6 +580,20 @@ startup and diagnostic formatting paths, so no execution-path performance gate
 applies. All five feature configurations, all-target, unsafe, Composer S0,
 four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass.
 
+The `precision-ini` checkpoint reaches 2,902 passes with 2,395 failures, 114
+skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+Request-local startup and mutable `precision` govern significant-digit float
+conversion across the VM and string-oriented library paths, while `var_dump()`
+uses PHP's independent round-trip representation and excessive valid settings
+cannot drive unbounded allocation. Eighteen previously unsupported cases are
+now attempted, and corrected default formatting converts eleven additional
+failures into passes for an exact +19/-0 pass-set delta. All five feature
+configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. Twenty alternating AMD64 release pairs
+put common exact float-to-string conversion at a 1.012 median and 1.044 p90
+candidate/control ratio with identical checksums, below the five-percent
+ceiling.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

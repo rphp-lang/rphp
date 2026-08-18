@@ -324,7 +324,7 @@ $value = calculate(9223372036854775807);
 echo gettype($value) . ':' . $value;
 "#
         ),
-        "double:18446744073709552000"
+        "double:1.844674407371E+19"
     );
 }
 

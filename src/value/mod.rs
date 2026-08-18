@@ -19,6 +19,157 @@ pub(crate) fn php_byte_string_from_bytes(bytes: impl IntoIterator<Item = u8>) ->
     bytes.into_iter().map(char::from).collect()
 }
 
+/// Format a PHP float with Zend's `precision` contract. Rust's scientific
+/// formatter supplies the correctly rounded significant digits; this layer
+/// applies PHP's fixed/scientific cutoff and spelling.
+#[cold]
+fn php_float_to_string(number: f64, precision: i32) -> String {
+    if number.is_nan() {
+        return finite_precision_special("NAN", precision);
+    }
+    if number == f64::INFINITY {
+        return finite_precision_special("INF", precision);
+    }
+    if number == f64::NEG_INFINITY {
+        return finite_precision_special("-INF", precision);
+    }
+
+    // Up to DBL_DIG significant digits, a shortest fixed decimal that already
+    // fits the requested precision cannot expose additional binary64 digits.
+    // Preserve Rust's single-allocation fast path for these common values.
+    if (1..=15).contains(&precision) {
+        let shortest = number.to_string();
+        if fixed_shortest_fits_precision(&shortest, precision as usize) {
+            return shortest;
+        }
+    }
+
+    let (negative, mut digits, decimal_point, significant_digits) = if precision < 0 {
+        let shortest = number.to_string();
+        let negative = shortest.starts_with('-');
+        let unsigned = shortest.strip_prefix('-').unwrap_or(&shortest);
+        let (mantissa, exponent) = unsigned
+            .split_once(['e', 'E'])
+            .map_or((unsigned, 0), |(mantissa, exponent)| {
+                (mantissa, exponent.parse::<i32>().unwrap_or(0))
+            });
+        let integer_digits = mantissa.find('.').unwrap_or(mantissa.len()) as i32;
+        let mut digits = mantissa.replace('.', "");
+        let leading_zeroes = digits.bytes().take_while(|digit| *digit == b'0').count();
+        let decimal_point = integer_digits + exponent - leading_zeroes as i32;
+        if leading_zeroes == digits.len() {
+            digits.clear();
+            digits.push('0');
+            (negative, digits, 1, 17)
+        } else {
+            digits.drain(..leading_zeroes);
+            while digits.len() > 1 && digits.ends_with('0') {
+                digits.pop();
+            }
+            (negative, digits, decimal_point, 17)
+        }
+    } else {
+        let significant_digits = precision.max(1) as usize;
+        // A binary64 value needs fewer than 1,100 significant decimal digits
+        // for its exact finite expansion. Larger INI values must remain
+        // accepted without turning formatting into an unbounded allocation.
+        let rendering_digits = significant_digits.min(1_100);
+        let scientific = format!("{:.*e}", rendering_digits - 1, number);
+        let (mantissa, exponent) = scientific
+            .split_once('e')
+            .expect("Rust scientific float formatting has an exponent");
+        let negative = mantissa.starts_with('-');
+        let mut digits = mantissa
+            .strip_prefix('-')
+            .unwrap_or(mantissa)
+            .replace('.', "");
+        while digits.len() > 1 && digits.ends_with('0') {
+            digits.pop();
+        }
+        (
+            negative,
+            digits,
+            exponent.parse::<i32>().unwrap_or(0) + 1,
+            significant_digits,
+        )
+    };
+
+    if digits.is_empty() {
+        digits.push('0');
+    }
+    let mut output = String::with_capacity(digits.len().saturating_add(12));
+    if negative {
+        output.push('-');
+    }
+    if (decimal_point >= 0 && decimal_point as usize > significant_digits) || decimal_point < -3 {
+        output.push(digits.as_bytes()[0] as char);
+        output.push('.');
+        if digits.len() == 1 {
+            output.push('0');
+        } else {
+            output.push_str(&digits[1..]);
+        }
+        output.push('E');
+        let exponent = decimal_point - 1;
+        if exponent < 0 {
+            output.push('-');
+        } else {
+            output.push('+');
+        }
+        let _ = write!(output, "{}", exponent.unsigned_abs());
+    } else if decimal_point <= 0 {
+        output.push_str("0.");
+        output.extend(std::iter::repeat_n('0', (-decimal_point) as usize));
+        output.push_str(&digits);
+    } else {
+        let decimal_point = decimal_point as usize;
+        if decimal_point >= digits.len() {
+            output.push_str(&digits);
+            output.extend(std::iter::repeat_n('0', decimal_point - digits.len()));
+        } else {
+            output.push_str(&digits[..decimal_point]);
+            output.push('.');
+            output.push_str(&digits[decimal_point..]);
+        }
+    }
+    output
+}
+
+#[inline]
+fn fixed_shortest_fits_precision(value: &str, precision: usize) -> bool {
+    let unsigned = value.strip_prefix('-').unwrap_or(value);
+    if unsigned.bytes().any(|byte| matches!(byte, b'e' | b'E')) {
+        return false;
+    }
+    let integer_digits = unsigned.find('.').unwrap_or(unsigned.len()) as i32;
+    let mut digit_index = 0usize;
+    let mut first_nonzero = None;
+    let mut last_nonzero = None;
+    for digit in unsigned.bytes().filter(u8::is_ascii_digit) {
+        if digit != b'0' {
+            first_nonzero.get_or_insert(digit_index);
+            last_nonzero = Some(digit_index);
+        }
+        digit_index += 1;
+    }
+    let Some(first_nonzero) = first_nonzero else {
+        return true;
+    };
+    let significant_digits = last_nonzero.unwrap_or(first_nonzero) - first_nonzero + 1;
+    let decimal_point = integer_digits - first_nonzero as i32;
+    significant_digits <= precision
+        && decimal_point >= -3
+        && decimal_point as isize <= precision as isize
+}
+
+#[inline]
+fn finite_precision_special(value: &str, precision: i32) -> String {
+    if precision < 0 {
+        return value.to_string();
+    }
+    value.chars().take(precision.max(1) as usize).collect()
+}
+
 #[cold]
 #[inline(never)]
 pub(crate) fn php_byte_string_binary(
@@ -4838,24 +4989,20 @@ impl Value {
 
     /// Display value as PHP would echo it
     pub fn echo_to_string(&self) -> String {
+        self.echo_to_string_with_precision(14)
+    }
+
+    /// Display a value using the request-local PHP float precision.
+    pub fn echo_to_string_with_precision(&self, precision: i32) -> String {
         match self.value_type() {
             ValueType::Undef | ValueType::Null => String::new(),
             ValueType::False => String::new(),
             ValueType::True => "1".to_string(),
             ValueType::Long => unsafe { self.data.long }.to_string(),
             ValueType::Double => {
-                let d = unsafe { self.data.double };
-                if d.is_nan() {
-                    "NAN".to_string()
-                } else if d == f64::INFINITY {
-                    "INF".to_string()
-                } else if d == f64::NEG_INFINITY {
-                    "-INF".to_string()
-                } else if d == d.floor() && d.abs() < 1e15 {
-                    format!("{}", d as i64)
-                } else {
-                    format!("{}", d)
-                }
+                // SAFETY: the ValueType::Double tag makes the double union
+                // member initialized for the lifetime of this value.
+                php_float_to_string(unsafe { self.data.double }, precision)
             }
             ValueType::String => unsafe { &*(self.data.ptr as *const String) }.clone(),
             ValueType::Array => "Array".to_string(),
@@ -4874,6 +5021,11 @@ impl Value {
     /// Append the PHP echo representation directly to an existing buffer.
     /// This avoids allocating a temporary String in join/formatting paths.
     pub fn append_echo_to(&self, output: &mut String) {
+        self.append_echo_to_with_precision(output, 14);
+    }
+
+    /// Append the PHP echo representation using request-local float precision.
+    pub fn append_echo_to_with_precision(&self, output: &mut String, precision: i32) {
         match self.value_type() {
             ValueType::Undef | ValueType::Null | ValueType::False => {}
             ValueType::True => output.push('1'),
@@ -4881,18 +5033,10 @@ impl Value {
                 let _ = write!(output, "{}", unsafe { self.data.long });
             }
             ValueType::Double => {
-                let d = unsafe { self.data.double };
-                if d.is_nan() {
-                    output.push_str("NAN");
-                } else if d == f64::INFINITY {
-                    output.push_str("INF");
-                } else if d == f64::NEG_INFINITY {
-                    output.push_str("-INF");
-                } else if d == d.floor() && d.abs() < 1e15 {
-                    let _ = write!(output, "{}", d as i64);
-                } else {
-                    let _ = write!(output, "{}", d);
-                }
+                // SAFETY: the ValueType::Double tag makes the double union
+                // member initialized for the lifetime of this value.
+                let number = unsafe { self.data.double };
+                output.push_str(&php_float_to_string(number, precision));
             }
             ValueType::String => {
                 output.push_str(unsafe { &*(self.data.ptr as *const String) });

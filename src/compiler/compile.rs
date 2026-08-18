@@ -4232,6 +4232,14 @@ impl Compiler {
                 }
                 Ok(Value::long(left.checked_rem(right).unwrap_or(0)))
             }
+            // Float-to-string conversion observes request-local `precision`
+            // and therefore cannot be folded while compiling the request.
+            BinOp::Concat
+                if left.value_type() == ValueType::Double
+                    || right.value_type() == ValueType::Double =>
+            {
+                Err(unsupported())
+            }
             BinOp::Concat => Ok(Value::string(format!(
                 "{}{}",
                 left.echo_to_string(),

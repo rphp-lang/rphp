@@ -53,21 +53,21 @@ fn op_concat(
     // Stringify each, then concatenate with pre-allocated capacity.
     let s1 = if op1.value_type() == ValueType::Object {
         if let Some(result) = call_magic_method(eg, op1, "__tostring", &[])? {
-            result.echo_to_string()
+            result.echo_to_string_with_precision(eg.precision)
         } else {
-            op1.echo_to_string()
+            op1.echo_to_string_with_precision(eg.precision)
         }
     } else {
-        op1.echo_to_string()
+        op1.echo_to_string_with_precision(eg.precision)
     };
     let s2 = if op2.value_type() == ValueType::Object {
         if let Some(result) = call_magic_method(eg, op2, "__tostring", &[])? {
-            result.echo_to_string()
+            result.echo_to_string_with_precision(eg.precision)
         } else {
-            op2.echo_to_string()
+            op2.echo_to_string_with_precision(eg.precision)
         }
     } else {
-        op2.echo_to_string()
+        op2.echo_to_string_with_precision(eg.precision)
     };
     let mut concatenated = String::with_capacity(s1.len() + s2.len());
     concatenated.push_str(&s1);

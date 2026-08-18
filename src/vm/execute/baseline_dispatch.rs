@@ -921,13 +921,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 {
                     let lhs = (&*(*frame).get_op_ptr(opline.op1 as u32, OpType::Cv, op_array))
-                    .echo_to_string();
+                    .echo_to_string_with_precision(eg.precision);
                     let rhs = (&*(*frame).get_op_ptr(
                             opline.op2 as u32,
                             opline.op2_type,
                             op_array,
                         ))
-                    .echo_to_string();
+                    .echo_to_string_with_precision(eg.precision);
                     let prepared = prepare_reference_write!(
                         opline.op1 as u32,
                         Value::string(lhs + &rhs)
@@ -968,16 +968,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let s = dest_ref.as_string_mut().unwrap_unchecked();
                         s.push_str(rhs_s);
                     } else {
-                        let rhs_str = rhs.echo_to_string();
+                        let rhs_str = rhs.echo_to_string_with_precision(eg.precision);
                         let s = dest_ref.as_string_mut().unwrap_unchecked();
                         s.push_str(&rhs_str);
                     }
                 } else {
-                    let lhs_str = dest_ref.echo_to_string();
+                    let lhs_str = dest_ref.echo_to_string_with_precision(eg.precision);
                     let rhs_str = if rhs.value_type() == ValueType::String {
                         rhs.as_str().unwrap().to_string()
                     } else {
-                        rhs.echo_to_string()
+                        rhs.echo_to_string_with_precision(eg.precision)
                     };
                     let mut new_s = lhs_str;
                     new_s.push_str(&rhs_str);
@@ -1057,7 +1057,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         );
                     }
                 } else {
-                    let output = val.echo_to_string();
+                    let output = val.echo_to_string_with_precision(eg.precision);
                     eg.write_output(output.as_bytes());
                 }
             }
@@ -2030,7 +2030,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 );
                             }
                         } else {
-                            Value::string(val.echo_to_string())
+                            Value::string(val.echo_to_string_with_precision(eg.precision))
                         }
                     }
                     3 => Value::bool(val.is_truthy()),      // (bool)

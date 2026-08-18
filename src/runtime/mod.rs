@@ -341,6 +341,10 @@ pub struct ExecutorGlobals {
     /// routing is still intentionally minimal, but libraries observe the
     /// getter/setter contract while temporarily suppressing warnings.
     pub error_reporting: i64,
+    /// Significant digits used when PHP converts a float to a string. Keeping
+    /// the parsed value request-local makes CLI `-d` and `ini_set()` visible to
+    /// the VM without a hash lookup on each conversion.
+    pub(crate) precision: i32,
     /// Suppressed call frame and the reporting mask to restore when it leaves.
     /// This cold sidecar keeps the ordinary ExecuteData layout unchanged.
     error_suppression_frames: Vec<(usize, i64)>,
@@ -981,6 +985,7 @@ impl ExecutorGlobals {
             lazy_objects: None,
             assertion_state: AssertionState::default(),
             error_reporting: 32767,
+            precision: 14,
             error_suppression_frames: Vec::new(),
             error_handler: None,
             error_handler_levels: 32767,
@@ -1076,6 +1081,7 @@ impl ExecutorGlobals {
             lazy_objects: None,
             assertion_state: AssertionState::default(),
             error_reporting: 32767,
+            precision: 14,
             error_suppression_frames: Vec::new(),
             error_handler: None,
             error_handler_levels: 32767,

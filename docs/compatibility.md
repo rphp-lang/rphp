@@ -9,11 +9,30 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,883 pass, 2,400 fail, 110 skip, one is an upstream XFAIL,
-205 are unsupported, and none time out or crash. The headline pass rate is
-54.571%; 4,585 of 5,283 attempted cases reach runtime (86.788%). Relative to
-the preceding 2,878-pass checkpoint, the exact pass-set delta is +5/-0. The
+`tests/lang` cases, 2,902 pass, 2,395 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+54.786%; 4,596 of 5,297 attempted cases reach runtime (86.766%). Relative to
+the preceding 2,883-pass checkpoint, the exact pass-set delta is +19/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
+
+CLI `-d precision=...`, `ini_get()` and mutable `ini_set()` now share a
+request-local significant-digit setting. Float conversion uses PHP 8.5 fixed
+versus scientific cutoffs, rounding and uppercase exponent spelling for echo,
+casts, concatenation, `print_r()`, string-oriented formatting and collection
+joins; double concatenation remains a runtime operation because startup
+precision cannot be folded at compile time. `var_dump()` independently uses
+round-trip binary64 rendering, and enormous valid precision values are bounded
+by the finite exact binary64 expansion instead of allocating from the raw INI
+value. Admitting all 18 precision-only PHPTs yields eight passes, four platform
+skips and six honest failures in unrelated parser/runtime gaps. Correcting the
+shared default and `var_dump()` format turns another eleven existing failures
+into passes, with no lost pass, timeout or crash. All five Cargo configurations,
+all-feature/all-target, formatting and unsafe gates pass, as do Composer S0,
+all four Symfony S1 gates, warmed-kernel S2 and cold-build S3 against PHP 8.5.
+On AMD64, 20 alternating release pairs over one million common exact
+float-to-string conversions retain the same 5,500,000 checksum and place the
+candidate/control ratio at 1.012 median, 0.990 p10 and 1.044 p90, below the
+five-percent regression ceiling.
 
 Startup `zend.exception_ignore_args` and
 `zend.exception_string_param_max_len` now control both immutable Throwable

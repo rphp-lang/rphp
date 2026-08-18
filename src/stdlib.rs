@@ -5996,7 +5996,7 @@ fn fn_ucwords(
 fn fn_implode(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let glue = arg_str!(ed, 0);
     let pieces = arg!(ed, 1);
@@ -6008,7 +6008,7 @@ fn fn_implode(
             if index > 0 {
                 result.push_str(glue.as_ref());
             }
-            value.append_echo_to(&mut result);
+            value.append_echo_to_with_precision(&mut result, eg.precision);
         }
         ret!(rv, Value::string(result));
     } else {
@@ -6530,7 +6530,7 @@ fn format_sprintf_values(
                                     };
                                     result.push_str(&rendered);
                                 } else {
-                                    arg.append_echo_to(&mut result);
+                                    arg.append_echo_to_with_precision(&mut result, eg.precision);
                                 }
                             }
                         }
@@ -6821,7 +6821,7 @@ fn internal_value_to_string(
         return Ok(None);
     }
     if value.value_type() != ValueType::Object {
-        return Ok(Some(value.echo_to_string()));
+        return Ok(Some(value.echo_to_string_with_precision(eg.precision)));
     }
 
     let class_name = value
@@ -9513,7 +9513,7 @@ fn var_dump_value_inner(
             } else if number == f64::NEG_INFINITY {
                 "-INF".to_string()
             } else {
-                number.to_string()
+                val.echo_to_string_with_precision(-1)
             };
             format!("{prefix}float({display})\n")
         }
@@ -9915,14 +9915,7 @@ fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
         ValueType::True => "1".to_string(),
         ValueType::False => String::new(),
         ValueType::Long => val.as_long().unwrap().to_string(),
-        ValueType::Double => {
-            let d = val.as_double().unwrap();
-            if d == d.floor() && d.abs() < 1e15 {
-                format!("{}", d as i64)
-            } else {
-                format!("{}", d)
-            }
-        }
+        ValueType::Double => val.echo_to_string_with_precision(eg.precision),
         ValueType::String => val.as_str().unwrap().to_string(),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
@@ -9972,7 +9965,11 @@ fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
             let mut out = format!("{} Enum{}\n{}(\n", object.class_name, backing, prefix);
             out.push_str(&format!("{}[name] => {}\n", inner, name));
             if let Some(value) = value {
-                out.push_str(&format!("{}[value] => {}\n", inner, value.echo_to_string()));
+                out.push_str(&format!(
+                    "{}[value] => {}\n",
+                    inner,
+                    value.echo_to_string_with_precision(eg.precision)
+                ));
             }
             out.push_str(&format!("{})\n", prefix));
             out
@@ -15194,6 +15191,19 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, published);
             }
+            "precision" => {
+                if let Some(precision) = parse_precision_ini(value) {
+                    eg.precision = precision;
+                    eg.ini_overrides
+                        .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                        .insert(normalized, value.clone());
+                } else {
+                    eg.precision = 14;
+                    eg.ini_overrides
+                        .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                        .insert(normalized, "14".to_string());
+                }
+            }
             "zend.exception_ignore_args" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
@@ -15220,6 +15230,28 @@ fn normalize_error_reporting_ini(value: &str) -> (String, i64) {
         "false" | "off" | "no" | "none" | "" => (String::new(), 0),
         _ => (value.to_string(), 0),
     }
+}
+
+fn parse_precision_ini(value: &str) -> Option<i32> {
+    let value = value.trim_start().as_bytes();
+    let (negative, digits) = match value {
+        [b'-', rest @ ..] => (true, rest),
+        [b'+', rest @ ..] => (false, rest),
+        _ => (false, value),
+    };
+    let mut parsed = 0i64;
+    for digit in digits.iter().copied().take_while(u8::is_ascii_digit) {
+        parsed = parsed
+            .saturating_mul(10)
+            .saturating_add(i64::from(digit - b'0'));
+    }
+    if negative {
+        parsed = -parsed;
+    }
+    if parsed < -1 {
+        return None;
+    }
+    i32::try_from(parsed).ok()
 }
 
 fn normalize_ini_boolean_value(value: &str) -> String {
@@ -15260,6 +15292,9 @@ fn fn_ini_get(
     if option.eq_ignore_ascii_case("zend.enable_gc") {
         ret!(rv, Value::string(if eg.gc_enabled { "1" } else { "0" }));
     }
+    if option.eq_ignore_ascii_case("precision") {
+        ret!(rv, Value::string(eg.precision.to_string()));
+    }
     ret!(rv, Value::bool(false));
 }
 
@@ -15281,6 +15316,7 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         }
         .to_string(),
         "zend.exception_ignore_args" => "0".to_string(),
+        "precision" => eg.precision.to_string(),
         "zend.enable_gc" => if eg.gc_enabled { "1" } else { "0" }.to_string(),
         "memory_limit" => "-1".to_string(),
         "zend.exception_string_param_max_len" => "15".to_string(),
@@ -15310,7 +15346,7 @@ fn fn_ini_set(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let option = arg_str!(ed, 0).to_ascii_lowercase();
-    let value = arg!(ed, 1).echo_to_string();
+    let value = arg!(ed, 1).echo_to_string_with_precision(eg.precision);
     let Some(previous) = ini_default(eg, &option) else {
         ret!(rv, Value::bool(false));
     };
@@ -15337,6 +15373,17 @@ fn fn_ini_set(
         eg.ini_overrides
             .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
             .insert(option, requested.to_string());
+        ret!(rv, Value::string(previous));
+    }
+
+    if option == "precision" {
+        let Some(precision) = parse_precision_ini(&value) else {
+            ret!(rv, Value::bool(false));
+        };
+        eg.precision = precision;
+        eg.ini_overrides
+            .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+            .insert(option, value);
         ret!(rv, Value::string(previous));
     }
 
