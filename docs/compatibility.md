@@ -821,6 +821,25 @@ pairs of a 300,000-iteration object-serialization benchmark produced the same
 0.684384/0.734046/0.762439 seconds and the candidate measured
 0.677617/0.708024/0.749808 seconds (median -3.55 percent).
 
+Object projections used by `json_encode()` and by-value `foreach` now invoke
+public property getters, including virtual getters and reference-returning
+backed getters, while preserving visible declared-property order and dynamic
+properties. Getter exceptions stop the projection and propagate through the
+calling operation. The exact 223-case lazy-object pass set moves from 190 to
+191, a +1/-0 delta: `init_trigger_json_encode_hooks.phpt` is the sole changed
+status. The corresponding `foreach` hook behavior is covered by an original
+regression, while its complete upstream case remains blocked later by the
+independent closure-reference-capture gap noted above.
+
+All five Cargo feature configurations, the all-feature/all-target check,
+formatting, unsafe inventory, Composer S0, all four Symfony S1 gates and the
+warmed-kernel S2 gate pass on AMD64. Thirty candidate-first release pairs of
+300,000 ordinary object projections retained identical checksums. JSON
+baseline p10/median/p90 was 0.282304/0.286399/0.291069 seconds versus
+0.279966/0.284564/0.288662 seconds for the candidate (median -0.64 percent);
+by-value `foreach` was 0.304920/0.308074/0.313435 seconds versus
+0.303629/0.306894/0.317169 seconds (median -0.38 percent).
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

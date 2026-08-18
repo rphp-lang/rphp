@@ -727,6 +727,26 @@ fn call_guarded_property_magic_method(
     result
 }
 
+/// Reuse a declared property getter from internal object projections such as
+/// JSON encoding and by-value foreach. The ordinary property guard remains
+/// shared with opcode reads, so recursive access observes the backing storage
+/// instead of re-entering the hook indefinitely.
+pub(crate) fn call_object_property_get_hook(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+    name: &str,
+) -> Result<Option<Value>, VmError> {
+    let hook_name = format!("${name}::get");
+    call_guarded_property_magic_method(
+        eg,
+        object,
+        name,
+        PROPERTY_GUARD_GET,
+        &hook_name,
+        &[],
+    )
+}
+
 /// Reuse PHP object string conversion from internal handlers.
 pub(crate) fn call_object_string_conversion(
     eg: &mut ExecutorGlobals,

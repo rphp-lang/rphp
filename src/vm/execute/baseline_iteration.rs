@@ -649,36 +649,57 @@ fn set_foreach_object_entry(array: &mut PhpArray, name: &str, value: Value) {
 
 fn materialize_foreach_object(
     value: &Value,
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-) -> Value {
-    let object = value
+) -> Result<Value, VmError> {
+    let (class_id, dynamic_len) = value
         .as_object()
+        .map(|object| {
+            (
+                object.class_id,
+                object
+                    .dynamic_properties
+                    .as_ref()
+                    .map_or(0, |properties| properties.len()),
+            )
+        })
         .expect("object foreach materialization requires an object");
     let caller_class = get_caller_class(frame, eg);
-    let dynamic_len = object
-        .dynamic_properties
-        .as_ref()
-        .map_or(0, |properties| properties.len());
-    let mut array = PhpArray::with_hash_capacity(object.property_values.len() + dynamic_len);
+    let slots = eg.visible_instance_property_slots(class_id, caller_class.as_deref());
+    let mut array = PhpArray::with_hash_capacity(slots.len() + dynamic_len);
     let mut declared_names = std::collections::HashSet::new();
-    for slot in eg.visible_instance_property_slots(object.class_id, caller_class.as_deref()) {
-        let property = &object.property_values[slot];
-        if property.is_undef() {
-            continue;
-        }
+    for slot in slots {
         let definition = eg
-            .instance_property_definition(object.class_id, slot)
-            .expect("visible property slot must retain its definition");
+            .instance_property_definition(class_id, slot)
+            .expect("visible property slot must retain its definition")
+            .clone();
         declared_names.insert(definition.name.clone());
-        set_foreach_object_entry(&mut array, &definition.name, property.clone());
-    }
-    object.for_each_dynamic_property(|name, property| {
-        if !property.is_undef() && !declared_names.contains(name) {
-            set_foreach_object_entry(&mut array, name, property.clone());
+        let property = if definition.has_get_hook {
+            call_object_property_get_hook(eg, value, &definition.name)?
+                .map(|value| value.dereferenced().clone())
+        } else {
+            value.as_object().and_then(|object| {
+                object
+                    .get_property_slot(slot)
+                    .filter(|property| !property.is_undef())
+                    .cloned()
+            })
+        };
+        if eg.exception.is_some() {
+            return Ok(Value::array(array));
         }
-    });
-    Value::array(array)
+        if let Some(property) = property {
+            set_foreach_object_entry(&mut array, &definition.name, property);
+        }
+    }
+    if let Some(object) = value.as_object() {
+        object.for_each_dynamic_property(|name, property| {
+            if !property.is_undef() && !declared_names.contains(name) {
+                set_foreach_object_entry(&mut array, name, property.clone());
+            }
+        });
+    }
+    Ok(Value::array(array))
 }
 
 fn promote_foreach_property_reference(property: &mut Value) -> Value {
@@ -984,11 +1005,15 @@ fn op_foreach_init<'a>(
                 .flatten()
         });
         let object_values = if iterator_values.is_none() && arr_val.as_object().is_some() {
-            Some(if by_reference {
+            let materialized = if by_reference {
                 arr_val.clone()
             } else {
-                materialize_foreach_object(arr_val, eg, frame)
-            })
+                materialize_foreach_object(arr_val, eg, frame)?
+            };
+            if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+                return Ok(control);
+            }
+            Some(materialized)
         } else {
             None
         };

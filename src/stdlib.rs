@@ -7948,7 +7948,11 @@ fn fn_json_encode(
     if eg.exception.is_some() {
         ret!(rv, Value::bool(false));
     }
-    ret!(rv, Value::string(json_encode_value(&value)));
+    let encoded = json_encode_value(&value, eg)?;
+    if eg.exception.is_some() {
+        ret!(rv, Value::bool(false));
+    }
+    ret!(rv, Value::string(encoded));
 }
 
 fn fn_json_decode(
@@ -9836,8 +9840,8 @@ fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
 
 /// Simple JSON encoder
 /// Convert a PHP Value to serde_json::Value for encoding.
-fn value_to_json(val: &Value) -> serde_json::Value {
-    match val.value_type() {
+fn value_to_json(val: &Value, eg: &mut ExecutorGlobals) -> Result<serde_json::Value, VmError> {
+    Ok(match val.value_type() {
         ValueType::Null | ValueType::Undef => serde_json::Value::Null,
         ValueType::True => serde_json::Value::Bool(true),
         ValueType::False => serde_json::Value::Bool(false),
@@ -9862,7 +9866,11 @@ fn value_to_json(val: &Value) -> serde_json::Value {
                 .enumerate()
                 .all(|(i, (k, _))| matches!(k, ArrayKey::Int(n) if n == i as i64));
             if is_list {
-                serde_json::Value::Array(arr.values().map(value_to_json).collect())
+                let mut values = Vec::with_capacity(arr.len());
+                for value in arr.values() {
+                    values.push(value_to_json(value, eg)?);
+                }
+                serde_json::Value::Array(values)
             } else {
                 let mut map = serde_json::Map::new();
                 for (k, v) in arr.iter() {
@@ -9870,28 +9878,61 @@ fn value_to_json(val: &Value) -> serde_json::Value {
                         ArrayKey::Int(n) => n.to_string(),
                         ArrayKey::String(s) => s,
                     };
-                    map.insert(key, value_to_json(v));
+                    map.insert(key, value_to_json(v, eg)?);
                 }
                 serde_json::Value::Object(map)
             }
         }
         ValueType::Object => {
-            if let Some(obj) = val.as_object() {
-                let mut map = serde_json::Map::new();
-                obj.for_each_property(|key, value| {
-                    map.insert(key.to_string(), value_to_json(value));
-                });
-                serde_json::Value::Object(map)
-            } else {
-                serde_json::Value::Null
+            let Some(class_id) = val.as_object().map(|object| object.class_id) else {
+                return Ok(serde_json::Value::Null);
+            };
+            let slots = eg.visible_instance_property_slots(class_id, None);
+            let mut properties = Vec::with_capacity(slots.len());
+            let mut declared_names = std::collections::HashSet::new();
+            for slot in slots {
+                let definition = eg
+                    .instance_property_definition(class_id, slot)
+                    .expect("visible JSON property slot must retain its definition")
+                    .clone();
+                declared_names.insert(definition.name.clone());
+                let property = if definition.has_get_hook {
+                    crate::vm::execute::call_object_property_get_hook(eg, val, &definition.name)?
+                        .map(|value| value.dereferenced().clone())
+                } else {
+                    val.as_object().and_then(|object| {
+                        object
+                            .get_property_slot(slot)
+                            .filter(|property| !property.is_undef())
+                            .cloned()
+                    })
+                };
+                if eg.exception.is_some() {
+                    return Ok(serde_json::Value::Null);
+                }
+                if let Some(property) = property {
+                    properties.push((definition.name, property));
+                }
             }
+            if let Some(object) = val.as_object() {
+                object.for_each_dynamic_property(|name, property| {
+                    if !property.is_undef() && !declared_names.contains(name) {
+                        properties.push((name.to_string(), property.clone()));
+                    }
+                });
+            }
+            let mut map = serde_json::Map::new();
+            for (key, value) in properties {
+                map.insert(key, value_to_json(&value, eg)?);
+            }
+            serde_json::Value::Object(map)
         }
         _ => serde_json::Value::Null,
-    }
+    })
 }
 
-fn json_encode_value(val: &Value) -> String {
-    serde_json::to_string(&value_to_json(val)).unwrap_or_else(|_| "null".to_string())
+fn json_encode_value(val: &Value, eg: &mut ExecutorGlobals) -> Result<String, VmError> {
+    Ok(serde_json::to_string(&value_to_json(val, eg)?).unwrap_or_else(|_| "null".to_string()))
 }
 
 pub(crate) fn json_decode_string(s: &str, assoc: bool) -> Value {

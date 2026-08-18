@@ -1247,6 +1247,43 @@ echo serialize($proxy), "\n";
 }
 
 #[test]
+fn lazy_object_enumeration_observes_backed_and_virtual_property_getters() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[AllowDynamicProperties]
+class LazyProjection {
+    public int $base;
+    public int $backed {
+        get { return $this->backed; }
+        set(int $value) { $this->backed = $value; }
+    }
+    public int $virtual {
+        get { return $this->base + 2; }
+    }
+}
+$reflection = new ReflectionClass(LazyProjection::class);
+$object = $reflection->newLazyGhost(function ($object) {
+    echo "initialize\n";
+    $object->base = 1;
+    $object->backed = 2;
+    $object->dynamic = 4;
+});
+echo json_encode($object), "\n";
+foreach ($object as $name => $value) {
+    echo $name, ':', $value, "\n";
+}
+"#,
+        ),
+        concat!(
+            "initialize\n",
+            "{\"backed\":2,\"base\":1,\"dynamic\":4,\"virtual\":3}\n",
+            "base:1\nbacked:2\nvirtual:3\ndynamic:4\n"
+        )
+    );
+}
+
+#[test]
 fn lazy_proxy_magic_guards_follow_shell_and_real_instance_recursion() {
     assert_eq!(
         run_php(
