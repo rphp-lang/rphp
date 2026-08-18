@@ -1232,6 +1232,33 @@ statement sequence, and the additional work is confined to source-unit
 lexing/parsing and compile-time diagnostics. Heredoc scan-ahead warning order
 and unrelated runtime string behavior remain explicit non-claims.
 
+Document strings now recognize lone `CR`, `LF` and `CRLF` as PHP line
+boundaries while preserving the original bytes and flexible indentation.
+Simple unbraced interpolation accepts literal, negative, identifier and
+variable array indexes, including non-canonical numeric-string keys, while a
+quoted index fails during parsing with its source location. A heredoc start
+adjacent to an already complete value retains its own parse token instead of
+becoming synthetic call parentheses, and source-unit parse failures use PHP's
+255 exit status. Overflowing three-digit octal escapes keep their low byte and
+emit source-ordered compile warnings before nested `${expr}` deprecations and
+runtime diagnostics.
+
+The 65-case `Zend/tests/heredoc_nowdoc` slice now has 61 passes, no ordinary
+failures and four explicit unsupported CLI-INI cases. A final release rerun of
+all 5,599 pinned PHP 8.5.6 cases reaches 2,811 passes, 2,437 ordinary failures,
+110 skips, one XFAIL and 240 unsupported cases, with zero timeouts and zero
+crashes. The exact pass-set delta is +8/-0 and has no remaining-failure stage
+movement: the four formerly failing heredoc cases plus `Zend/tests/bug72918.phpt`,
+`Zend/tests/numeric_strings/neg_num_string.phpt`,
+`Zend/tests/oct_overflow_char.phpt` and `tests/lang/bug21820.phpt`. Runtime is
+reached by 4,563 of 5,248 attempted cases (86.947%). All five Cargo feature
+configurations, formatting, unsafe-policy, all-feature/all-target, Composer S0,
+all four Symfony S1 and warmed-kernel S2 gates pass on AMD64. No runtime
+performance gate applies: ordinary valid string bytecode and VM dispatch are
+unchanged, and the new work is confined to lexing, parsing, compile diagnostics
+and CLI parse termination. The four unsupported focused cases still require
+the named highlighting, multibyte and encoding INI capabilities.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact

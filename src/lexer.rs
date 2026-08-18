@@ -155,16 +155,31 @@ pub enum Token {
     ShiftRight,       // >>
     DotDotDot(usize), // ... (variadic / spread) with source line
     CompileError(String, usize),
+    CompileWarning(String, usize),
     CompileDeprecation(String, usize),
     ParseError(String, usize),
     Eof,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeferredCompileDiagnosticKind {
+    Warning,
+    Deprecation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeferredCompileDiagnostic {
+    kind: DeferredCompileDiagnosticKind,
+    message: String,
+    line: usize,
 }
 
 enum StringPart {
     Literal(String),
     Variable(String),
     PropertyAccess(String, String, bool, usize), // var_name, property_name, nullsafe, source line
-    ArrayAccess(String, String),                 // var_name, index (string or integer literal)
+    ArrayAccess(String, String, usize), // var_name, index (string or integer literal), line
+    DynamicArrayAccess(String, String, usize), // var_name, index variable, line
     Expression(Vec<Token>),
     DynamicVariable(Vec<Token>, usize),
 }
@@ -173,7 +188,7 @@ pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
     deferred_compile_errors: Vec<(String, usize)>,
-    deferred_compile_deprecations: Vec<(String, usize)>,
+    deferred_compile_diagnostics: Vec<DeferredCompileDiagnostic>,
     pending_attributes: Vec<Token>,
 }
 
@@ -226,7 +241,7 @@ impl<'a> Lexer<'a> {
             src: source.as_bytes(),
             pos: 0,
             deferred_compile_errors: Vec::new(),
-            deferred_compile_deprecations: Vec::new(),
+            deferred_compile_diagnostics: Vec::new(),
             pending_attributes: Vec::new(),
         }
     }
@@ -250,9 +265,16 @@ impl<'a> Lexer<'a> {
 
             if self.pos >= self.src.len() {
                 tokens.extend(
-                    self.deferred_compile_deprecations
+                    self.deferred_compile_diagnostics
                         .drain(..)
-                        .map(|(message, line)| Token::CompileDeprecation(message, line)),
+                        .map(|diagnostic| match diagnostic.kind {
+                            DeferredCompileDiagnosticKind::Warning => {
+                                Token::CompileWarning(diagnostic.message, diagnostic.line)
+                            }
+                            DeferredCompileDiagnosticKind::Deprecation => {
+                                Token::CompileDeprecation(diagnostic.message, diagnostic.line)
+                            }
+                        }),
                 );
                 tokens.extend(
                     self.deferred_compile_errors
@@ -299,10 +321,20 @@ impl<'a> Lexer<'a> {
                 }
                 b'<' => {
                     if self.starts_with(b"<<<") {
+                        if Self::is_value_token(tokens.last()) {
+                            let line = self.source_line_at(self.pos);
+                            let display = self.document_start_display();
+                            tokens.push(Token::ParseError(
+                                format!("syntax error, unexpected heredoc start \"{display}\""),
+                                line,
+                            ));
+                            self.pos = self.src.len();
+                            continue;
+                        }
                         match self.read_document_string() {
                             Ok(interpolated) => {
-                                self.deferred_compile_deprecations
-                                    .extend(interpolated.deprecations);
+                                self.deferred_compile_diagnostics
+                                    .extend(interpolated.diagnostics);
                                 Self::emit_string_parts(&mut tokens, &interpolated.parts);
                             }
                             Err(error) => {
@@ -452,10 +484,18 @@ impl<'a> Lexer<'a> {
                     tokens.push(Token::StringLiteral(s));
                 }
                 b'"' => {
-                    let interpolated = self.read_double_quoted_string()?;
-                    self.deferred_compile_deprecations
-                        .extend(interpolated.deprecations);
-                    Self::emit_string_parts(&mut tokens, &interpolated.parts);
+                    let line = self.source_line_at(self.pos);
+                    match self.read_double_quoted_string() {
+                        Ok(interpolated) => {
+                            self.deferred_compile_diagnostics
+                                .extend(interpolated.diagnostics);
+                            Self::emit_string_parts(&mut tokens, &interpolated.parts);
+                        }
+                        Err(message) => {
+                            tokens.push(Token::ParseError(message, line));
+                            self.pos = self.src.len();
+                        }
+                    }
                 }
                 b'-' => {
                     if self.peek_next() == Some(b'>') {
@@ -1561,6 +1601,94 @@ mod tests {
                 Token::StringLiteral("${".into()),
                 Token::Semicolon,
                 Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn document_strings_accept_all_php_line_endings() {
+        let tokens = Lexer::new("<?php echo <<<DOC\r  first\r\r  second\r  DOC;")
+            .tokenize()
+            .unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                echo(1),
+                Token::StringLiteral("first\r\rsecond".into()),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn quoted_simple_interpolation_offsets_are_parse_errors() {
+        let tokens = Lexer::new("<?php\necho <<<DOC\n$items['name']\nDOC;")
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.contains(&Token::ParseError(
+            "syntax error, unexpected string content \"\", expecting \"-\" or identifier or variable or number"
+                .into(),
+            3,
+        )));
+
+        let tokens = Lexer::new("<?php\necho \"$items['name']\";")
+            .tokenize()
+            .unwrap();
+        assert!(tokens.contains(&Token::ParseError(
+            "syntax error, unexpected string content \"\", expecting \"-\" or identifier or variable or number"
+                .into(),
+            2,
+        )));
+    }
+
+    #[test]
+    fn adjacent_values_preserve_the_document_start_parse_error() {
+        let tokens = Lexer::new("<?php\n$value = factory<<<\"DOC\"\nbody\nDOC;")
+            .tokenize()
+            .unwrap();
+
+        assert!(tokens.contains(&Token::ParseError(
+            "syntax error, unexpected heredoc start \"<<<\"DOC\"".into(),
+            2,
+        )));
+    }
+
+    #[test]
+    fn overflowing_octal_escapes_precede_interpolation_deprecations() {
+        let tokens = Lexer::new("<?php\necho <<<DOC\n\\400\n${\"\\400\"}\nDOC;")
+            .tokenize()
+            .unwrap();
+        let diagnostics: Vec<_> = tokens
+            .iter()
+            .filter(|token| {
+                matches!(
+                    token,
+                    Token::CompileWarning(..) | Token::CompileDeprecation(..)
+                )
+            })
+            .cloned()
+            .collect();
+
+        assert_eq!(
+            diagnostics,
+            vec![
+                Token::CompileWarning(
+                    "Octal escape sequence overflow \\400 is greater than \\377".into(),
+                    3,
+                ),
+                Token::CompileWarning(
+                    "Octal escape sequence overflow \\400 is greater than \\377".into(),
+                    4,
+                ),
+                Token::CompileDeprecation(
+                    "Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead"
+                        .into(),
+                    3,
+                ),
             ]
         );
     }

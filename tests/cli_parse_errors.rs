@@ -44,3 +44,14 @@ fn user_parse_error_subclasses_keep_the_uncaught_throwable_envelope() {
         "\nFatal error: Uncaught CustomParseError: x in Standard input code:3\nStack trace:\n#0 {main}\n  thrown in Standard input code on line 3\n"
     );
 }
+
+#[test]
+fn source_unit_parse_errors_use_php_failure_status() {
+    let (status, stderr) = run_stdin("<?php\n$value = factory<<<DOC\nbody\nDOC;\n");
+
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Parse error: syntax error, unexpected heredoc start \"<<<DOC\" in Standard input code on line 2\n"
+    );
+}

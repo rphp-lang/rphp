@@ -191,7 +191,7 @@ fn main() {
 
     let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|e| {
         eprintln!("Parse error: {}", e);
-        std::process::exit(1);
+        std::process::exit(255);
     });
 
     let stmts = Parser::new(tokens)
@@ -211,7 +211,7 @@ fn main() {
                 std::process::exit(255);
             }
             eprintln!("Parse error: {}", e);
-            std::process::exit(1);
+            std::process::exit(255);
         });
 
     let result = Compiler::new()

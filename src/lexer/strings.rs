@@ -1,10 +1,13 @@
-use super::{Lexer, StringPart, Token, decode_php_source};
+use super::{
+    DeferredCompileDiagnostic, DeferredCompileDiagnosticKind, Lexer, StringPart, Token,
+    decode_php_source,
+};
 
 const MAX_NESTED_DOCUMENT_DEPTH: usize = 256;
 
 pub(super) struct InterpolatedString {
     pub(super) parts: Vec<StringPart>,
-    pub(super) deprecations: Vec<(String, usize)>,
+    pub(super) diagnostics: Vec<DeferredCompileDiagnostic>,
 }
 
 pub(super) struct DocumentStringError {
@@ -131,7 +134,7 @@ impl<'a> Lexer<'a> {
         }
         match self.src.get(self.pos..) {
             Some(rest) if rest.starts_with(b"\r\n") => self.pos += 2,
-            Some(rest) if rest.starts_with(b"\n") => self.pos += 1,
+            Some(rest) if rest.starts_with(b"\n") || rest.starts_with(b"\r") => self.pos += 1,
             _ => {
                 return Err(DocumentStringError::new(
                     "Heredoc identifier must be followed by a line break",
@@ -170,6 +173,8 @@ impl<'a> Lexer<'a> {
             if content_end > content_start && self.src[content_end - 1] == b'\r' {
                 content_end -= 1;
             }
+        } else if content_end > content_start && self.src[content_end - 1] == b'\r' {
+            content_end -= 1;
         }
         let content = Self::strip_document_indentation(
             &self.src[content_start..content_end],
@@ -184,7 +189,7 @@ impl<'a> Lexer<'a> {
             })?;
             return Ok(InterpolatedString {
                 parts: vec![StringPart::Literal(literal)],
-                deprecations: Vec::new(),
+                diagnostics: Vec::new(),
             });
         }
         Self::interpolate_string_content(&content, content_start_line, 1)
@@ -205,16 +210,7 @@ impl<'a> Lexer<'a> {
         let mut quote = None;
 
         while line_start <= source.len() {
-            let newline = source[line_start..]
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .map(|offset| line_start + offset);
-            let line_end = newline.unwrap_or(source.len());
-            let logical_end = if line_end > line_start && source[line_end - 1] == b'\r' {
-                line_end - 1
-            } else {
-                line_end
-            };
+            let (logical_end, next_line_start) = Self::document_line_bounds(source, line_start);
             let mut marker_start = line_start;
             while marker_start < logical_end && matches!(source[marker_start], b' ' | b'\t') {
                 marker_start += 1;
@@ -228,8 +224,8 @@ impl<'a> Lexer<'a> {
                 });
             }
             if !scan_interpolation {
-                match newline {
-                    Some(newline) => line_start = newline + 1,
+                match next_line_start {
+                    Some(next_line_start) => line_start = next_line_start,
                     None => break,
                 }
                 continue;
@@ -237,7 +233,7 @@ impl<'a> Lexer<'a> {
 
             let mut cursor = line_start;
             let mut active_logical_end = logical_end;
-            let mut active_newline = newline;
+            let mut active_next_line_start = next_line_start;
             loop {
                 if cursor >= active_logical_end {
                     break;
@@ -282,17 +278,8 @@ impl<'a> Lexer<'a> {
                     )
                 {
                     line_start = nested_end.line_start;
-                    active_newline = source[line_start..]
-                        .iter()
-                        .position(|byte| *byte == b'\n')
-                        .map(|offset| line_start + offset);
-                    let nested_line_end = active_newline.unwrap_or(source.len());
-                    active_logical_end =
-                        if nested_line_end > line_start && source[nested_line_end - 1] == b'\r' {
-                            nested_line_end - 1
-                        } else {
-                            nested_line_end
-                        };
+                    (active_logical_end, active_next_line_start) =
+                        Self::document_line_bounds(source, line_start);
                     cursor = nested_end.marker_start + nested_label.len();
                     continue;
                 }
@@ -311,8 +298,8 @@ impl<'a> Lexer<'a> {
                 cursor += 1;
             }
 
-            match active_newline {
-                Some(newline) => line_start = newline + 1,
+            match active_next_line_start {
+                Some(next_line_start) => line_start = next_line_start,
                 None => break,
             }
         }
@@ -362,11 +349,27 @@ impl<'a> Lexer<'a> {
         }
         if source.get(cursor..cursor + 2) == Some(b"\r\n") {
             Some((label, cursor + 2, quote == Some(b'\'')))
-        } else if source.get(cursor) == Some(&b'\n') {
+        } else if matches!(source.get(cursor), Some(b'\n' | b'\r')) {
             Some((label, cursor + 1, quote == Some(b'\'')))
         } else {
             None
         }
+    }
+
+    fn document_line_bounds(source: &[u8], line_start: usize) -> (usize, Option<usize>) {
+        let Some(offset) = source[line_start..]
+            .iter()
+            .position(|byte| matches!(byte, b'\r' | b'\n'))
+        else {
+            return (source.len(), None);
+        };
+        let line_end = line_start + offset;
+        let terminator_width = if source.get(line_end..line_end + 2) == Some(b"\r\n") {
+            2
+        } else {
+            1
+        };
+        (line_end, Some(line_end + terminator_width))
     }
 
     fn strip_document_indentation(
@@ -384,16 +387,7 @@ impl<'a> Lexer<'a> {
         let mut line_number = content_start_line;
 
         loop {
-            let newline = content[cursor..]
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .map(|offset| cursor + offset);
-            let line_end = newline.unwrap_or(content.len());
-            let logical_end = if line_end > cursor && content[line_end - 1] == b'\r' {
-                line_end - 1
-            } else {
-                line_end
-            };
+            let (logical_end, next_line_start) = Self::document_line_bounds(content, cursor);
             let line = &content[cursor..logical_end];
             let whitespace_only = line.iter().all(|byte| matches!(byte, b' ' | b'\t'));
             let leading_whitespace = line
@@ -433,26 +427,57 @@ impl<'a> Lexer<'a> {
             }
 
             output.extend_from_slice(&line[removable..]);
-            if logical_end != line_end {
-                output.push(b'\r');
+            match next_line_start {
+                Some(next_line_start) => {
+                    output.extend_from_slice(&content[logical_end..next_line_start]);
+                    cursor = next_line_start;
+                    line_number += 1;
+                }
+                None => break,
             }
-            if newline.is_some() {
-                output.push(b'\n');
-            } else {
-                break;
-            }
-            cursor = line_end + 1;
-            line_number += 1;
         }
 
         Ok(output)
     }
 
-    fn source_line_at(&self, position: usize) -> usize {
-        1 + self.src[..position.min(self.src.len())]
-            .iter()
-            .filter(|byte| **byte == b'\n')
-            .count()
+    pub(super) fn source_line_at(&self, position: usize) -> usize {
+        1 + Self::count_logical_line_breaks(&self.src[..position.min(self.src.len())])
+    }
+
+    fn count_logical_line_breaks(content: &[u8]) -> usize {
+        let mut count = 0;
+        let mut cursor = 0;
+        while cursor < content.len() {
+            match content[cursor] {
+                b'\r' => {
+                    count += 1;
+                    cursor += usize::from(content.get(cursor + 1) == Some(&b'\n')) + 1;
+                }
+                b'\n' => {
+                    count += 1;
+                    cursor += 1;
+                }
+                _ => cursor += 1,
+            }
+        }
+        count
+    }
+
+    pub(super) fn document_start_display(&self) -> String {
+        let start = self.pos;
+        let mut cursor = start + 3;
+        if matches!(self.src.get(cursor), Some(b'\'' | b'"')) {
+            cursor += 1;
+        }
+        while self
+            .src
+            .get(cursor)
+            .copied()
+            .is_some_and(Self::is_identifier_continue)
+        {
+            cursor += 1;
+        }
+        decode_php_source(&self.src[start..cursor])
     }
 
     fn interpolate_string_content(
@@ -461,12 +486,13 @@ impl<'a> Lexer<'a> {
         heredoc_line_adjustment: usize,
     ) -> Result<InterpolatedString, String> {
         let mut parts = Vec::new();
-        let mut deprecations = Vec::new();
+        let mut diagnostics = Vec::new();
         let mut current = String::new();
         let mut pos = 0;
 
         while pos < content.len() {
             if content[pos] == b'\\' && pos + 1 < content.len() {
+                let escape_start = pos;
                 pos += 1;
                 match content[pos] {
                     b'0'..=b'7' => {
@@ -483,6 +509,18 @@ impl<'a> Lexer<'a> {
                             value = value * 8 + u16::from(content[pos] - b'0');
                             pos += 1;
                             digits += 1;
+                        }
+                        if value > 0xff {
+                            let escape = decode_php_source(&content[escape_start..pos]);
+                            let line = source_line
+                                + Self::count_logical_line_breaks(&content[..escape_start]);
+                            diagnostics.push(DeferredCompileDiagnostic {
+                                kind: DeferredCompileDiagnosticKind::Warning,
+                                message: format!(
+                                    "Octal escape sequence overflow {escape} is greater than \\377"
+                                ),
+                                line,
+                            });
                         }
                         current.push(char::from((value & 0xff) as u8));
                     }
@@ -566,11 +604,8 @@ impl<'a> Lexer<'a> {
                     if !current.is_empty() {
                         parts.push(StringPart::Literal(std::mem::take(&mut current)));
                     }
-                    let expression_line = source_line
-                        + content[..variable_offset]
-                            .iter()
-                            .filter(|byte| **byte == b'\n')
-                            .count();
+                    let expression_line =
+                        source_line + Self::count_logical_line_breaks(&content[..variable_offset]);
                     let deprecation_line = expression_line.saturating_sub(heredoc_line_adjustment);
                     let expression_start = pos + 2;
                     let expression_end =
@@ -590,20 +625,23 @@ impl<'a> Lexer<'a> {
                             })?
                             .to_string();
                         parts.push(StringPart::Variable(name));
-                        deprecations.push((
-                            "Using ${var} in strings is deprecated, use {$var} instead".to_string(),
-                            deprecation_line,
-                        ));
+                        diagnostics.push(DeferredCompileDiagnostic {
+                            kind: DeferredCompileDiagnosticKind::Deprecation,
+                            message: "Using ${var} in strings is deprecated, use {$var} instead"
+                                .to_string(),
+                            line: deprecation_line,
+                        });
                     } else {
-                        let (tokens, nested_deprecations) =
+                        let (tokens, nested_diagnostics) =
                             Self::tokenize_interpolation_expression(expression, expression_line)?;
                         parts.push(StringPart::DynamicVariable(tokens, expression_line));
-                        deprecations.push((
-                            "Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead"
+                        diagnostics.extend(nested_diagnostics);
+                        diagnostics.push(DeferredCompileDiagnostic {
+                            kind: DeferredCompileDiagnosticKind::Deprecation,
+                            message: "Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead"
                                 .to_string(),
-                            deprecation_line,
-                        ));
-                        deprecations.extend(nested_deprecations);
+                            line: deprecation_line,
+                        });
                     }
                     pos = expression_end + 1;
                 } else if Self::is_identifier_start(next) {
@@ -612,6 +650,67 @@ impl<'a> Lexer<'a> {
                     }
                     pos += 1;
                     let name = Self::read_content_identifier(content, &mut pos)?;
+                    let interpolation_line =
+                        source_line + Self::count_logical_line_breaks(&content[..variable_offset]);
+                    if content.get(pos) == Some(&b'[') {
+                        pos += 1;
+                        let index = match content.get(pos).copied() {
+                            Some(b'-') => {
+                                let index_start = pos;
+                                pos += 1;
+                                let digits_start = pos;
+                                while content
+                                    .get(pos)
+                                    .copied()
+                                    .is_some_and(Self::is_identifier_continue)
+                                {
+                                    pos += 1;
+                                }
+                                if pos == digits_start || !content[digits_start].is_ascii_digit() {
+                                    return Err(Self::simple_offset_parse_error());
+                                }
+                                (false, decode_php_source(&content[index_start..pos]))
+                            }
+                            Some(byte) if byte.is_ascii_digit() => {
+                                let index_start = pos;
+                                while content
+                                    .get(pos)
+                                    .copied()
+                                    .is_some_and(Self::is_identifier_continue)
+                                {
+                                    pos += 1;
+                                }
+                                (false, decode_php_source(&content[index_start..pos]))
+                            }
+                            Some(b'$')
+                                if content
+                                    .get(pos + 1)
+                                    .copied()
+                                    .is_some_and(Self::is_identifier_start) =>
+                            {
+                                pos += 1;
+                                (true, Self::read_content_identifier(content, &mut pos)?)
+                            }
+                            Some(byte) if Self::is_identifier_start(byte) => {
+                                (false, Self::read_content_identifier(content, &mut pos)?)
+                            }
+                            _ => return Err(Self::simple_offset_parse_error()),
+                        };
+                        if content.get(pos) != Some(&b']') {
+                            return Err(Self::simple_offset_parse_error());
+                        }
+                        pos += 1;
+                        if index.0 {
+                            parts.push(StringPart::DynamicArrayAccess(
+                                name,
+                                index.1,
+                                interpolation_line,
+                            ));
+                        } else {
+                            parts.push(StringPart::ArrayAccess(name, index.1, interpolation_line));
+                        }
+                        continue;
+                    }
                     let (nullsafe, operator_len) = if content.get(pos..pos + 3) == Some(b"?->") {
                         (true, 3)
                     } else if content.get(pos..pos + 2) == Some(b"->") {
@@ -626,16 +725,11 @@ impl<'a> Lexer<'a> {
                     {
                         pos += operator_len;
                         let property = Self::read_content_identifier(content, &mut pos)?;
-                        let property_line = source_line
-                            + content[..variable_offset]
-                                .iter()
-                                .filter(|byte| **byte == b'\n')
-                                .count();
                         parts.push(StringPart::PropertyAccess(
                             name,
                             property,
                             nullsafe,
-                            property_line,
+                            interpolation_line,
                         ));
                     } else {
                         parts.push(StringPart::Variable(name));
@@ -666,22 +760,19 @@ impl<'a> Lexer<'a> {
                     if content.get(pos) == Some(&b'}') {
                         pos += 1;
                     }
-                    parts.push(StringPart::ArrayAccess(name, index));
+                    parts.push(StringPart::ArrayAccess(name, index, 0));
                 } else if content.get(pos) == Some(&b'}') {
                     pos += 1;
                     parts.push(StringPart::Variable(name));
                 } else {
                     let expression_end = Self::complex_interpolation_end(content, pos)?;
-                    let expression_line = source_line
-                        + content[..expression_start]
-                            .iter()
-                            .filter(|byte| **byte == b'\n')
-                            .count();
-                    let (tokens, nested_deprecations) = Self::tokenize_interpolation_expression(
+                    let expression_line =
+                        source_line + Self::count_logical_line_breaks(&content[..expression_start]);
+                    let (tokens, nested_diagnostics) = Self::tokenize_interpolation_expression(
                         &content[expression_start..expression_end],
                         expression_line,
                     )?;
-                    deprecations.extend(nested_deprecations);
+                    diagnostics.extend(nested_diagnostics);
                     pos = expression_end + 1;
                     parts.push(StringPart::Expression(tokens));
                 }
@@ -693,10 +784,12 @@ impl<'a> Lexer<'a> {
         if !current.is_empty() || parts.is_empty() {
             parts.push(StringPart::Literal(current));
         }
-        Ok(InterpolatedString {
-            parts,
-            deprecations,
-        })
+        Ok(InterpolatedString { parts, diagnostics })
+    }
+
+    fn simple_offset_parse_error() -> String {
+        "syntax error, unexpected string content \"\", expecting \"-\" or identifier or variable or number"
+            .to_string()
     }
 
     fn complex_interpolation_end(content: &[u8], mut pos: usize) -> Result<usize, String> {
@@ -733,7 +826,7 @@ impl<'a> Lexer<'a> {
     fn tokenize_interpolation_expression(
         expression: &[u8],
         source_line: usize,
-    ) -> Result<(Vec<Token>, Vec<(String, usize)>), String> {
+    ) -> Result<(Vec<Token>, Vec<DeferredCompileDiagnostic>), String> {
         let decoded = decode_php_source(expression);
         let line_prefix = "\n".repeat(source_line.saturating_sub(1));
         let source = format!("<?php {line_prefix}{decoded}");
@@ -743,19 +836,30 @@ impl<'a> Lexer<'a> {
         }
         tokens.remove(0);
         tokens.pop();
-        let mut deprecations = Vec::new();
-        tokens.retain(|token| {
-            if let Token::CompileDeprecation(message, line) = token {
-                deprecations.push((message.clone(), *line));
+        let mut diagnostics = Vec::new();
+        tokens.retain(|token| match token {
+            Token::CompileWarning(message, line) => {
+                diagnostics.push(DeferredCompileDiagnostic {
+                    kind: DeferredCompileDiagnosticKind::Warning,
+                    message: message.clone(),
+                    line: *line,
+                });
                 false
-            } else {
-                true
             }
+            Token::CompileDeprecation(message, line) => {
+                diagnostics.push(DeferredCompileDiagnostic {
+                    kind: DeferredCompileDiagnosticKind::Deprecation,
+                    message: message.clone(),
+                    line: *line,
+                });
+                false
+            }
+            _ => true,
         });
         if tokens.is_empty() {
             return Err("Empty complex string interpolation".into());
         }
-        Ok((tokens, deprecations))
+        Ok((tokens, diagnostics))
     }
 
     fn read_content_identifier(content: &[u8], pos: &mut usize) -> Result<String, String> {
@@ -830,11 +934,18 @@ impl<'a> Lexer<'a> {
                     Self::emit_property_access_tokens(tokens, name, property, *nullsafe, *line);
                     tokens.push(Token::RParen);
                 }
-                StringPart::ArrayAccess(name, index) => {
+                StringPart::ArrayAccess(name, index, line) => {
                     tokens.push(Token::LParen(0));
                     tokens.push(Token::StringLiteral(String::new()));
                     tokens.push(Token::Dot);
-                    Self::emit_array_access_tokens(tokens, name, index);
+                    Self::emit_array_access_tokens(tokens, name, index, *line);
+                    tokens.push(Token::RParen);
+                }
+                StringPart::DynamicArrayAccess(name, index, line) => {
+                    tokens.push(Token::LParen(0));
+                    tokens.push(Token::StringLiteral(String::new()));
+                    tokens.push(Token::Dot);
+                    Self::emit_dynamic_array_access_tokens(tokens, name, index, *line);
                     tokens.push(Token::RParen);
                 }
                 StringPart::Expression(expression) => {
@@ -868,8 +979,11 @@ impl<'a> Lexer<'a> {
                 StringPart::PropertyAccess(name, property, nullsafe, line) => {
                     Self::emit_property_access_tokens(tokens, name, property, *nullsafe, *line);
                 }
-                StringPart::ArrayAccess(name, index) => {
-                    Self::emit_array_access_tokens(tokens, name, index);
+                StringPart::ArrayAccess(name, index, line) => {
+                    Self::emit_array_access_tokens(tokens, name, index, *line);
+                }
+                StringPart::DynamicArrayAccess(name, index, line) => {
+                    Self::emit_dynamic_array_access_tokens(tokens, name, index, *line);
                 }
                 StringPart::Expression(expression) => {
                     tokens.push(Token::LParen(0));
@@ -911,10 +1025,10 @@ impl<'a> Lexer<'a> {
         tokens.push(Token::RBrace);
     }
 
-    fn emit_array_access_tokens(tokens: &mut Vec<Token>, name: &str, index: &str) {
-        tokens.push(Token::Variable(name.to_string(), 0));
-        tokens.push(Token::LBracket(0));
-        if let Ok(index) = index.parse::<i64>() {
+    fn emit_array_access_tokens(tokens: &mut Vec<Token>, name: &str, index: &str, line: usize) {
+        tokens.push(Token::Variable(name.to_string(), line));
+        tokens.push(Token::LBracket(line));
+        if let Some(index) = Self::canonical_integer_string(index) {
             tokens.push(Token::Integer(index));
         } else {
             let key = if (index.starts_with('\'') && index.ends_with('\''))
@@ -926,6 +1040,31 @@ impl<'a> Lexer<'a> {
             };
             tokens.push(Token::StringLiteral(key.to_string()));
         }
+        tokens.push(Token::RBracket);
+    }
+
+    fn canonical_integer_string(index: &str) -> Option<i64> {
+        let bytes = index.as_bytes();
+        let digits = bytes.strip_prefix(b"-").unwrap_or(bytes);
+        if digits.is_empty()
+            || !digits.iter().all(u8::is_ascii_digit)
+            || (digits.len() > 1 && digits[0] == b'0')
+            || (bytes.starts_with(b"-") && digits == b"0")
+        {
+            return None;
+        }
+        index.parse().ok()
+    }
+
+    fn emit_dynamic_array_access_tokens(
+        tokens: &mut Vec<Token>,
+        name: &str,
+        index: &str,
+        line: usize,
+    ) {
+        tokens.push(Token::Variable(name.to_string(), line));
+        tokens.push(Token::LBracket(line));
+        tokens.push(Token::Variable(index.to_string(), line));
         tokens.push(Token::RBracket);
     }
 }

@@ -551,12 +551,14 @@ use super::{
 };
 use crate::vm::function::{CallStrategy, ParamTypeHint, UserFunction};
 
-/// One declaration-time deprecation emitted before the compiled unit runs.
+/// One declaration-time warning or deprecation emitted before the compiled
+/// unit runs. The existing collection name is retained for API stability.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompileDeprecation {
     pub message: String,
     pub file: String,
     pub line: usize,
+    pub warning: bool,
 }
 
 /// A fatal compilation error together with diagnostics emitted before it.
@@ -3289,14 +3291,22 @@ impl Compiler {
         // elimination or any other lowering can hide it or surface a later
         // runtime-oriented diagnostic first.
         for statement in stmts {
-            if let Stmt::ExprStmt(Expr::CompileDeprecation { message, line }) = statement {
-                self.compile_deprecations
-                    .borrow_mut()
-                    .push(CompileDeprecation {
-                        message: message.clone(),
-                        file: self.source_file.clone(),
-                        line: *line,
-                    });
+            if let Stmt::ExprStmt(expression) = statement {
+                let diagnostic = match expression {
+                    Expr::CompileWarning { message, line } => Some((message, *line, true)),
+                    Expr::CompileDeprecation { message, line } => Some((message, *line, false)),
+                    _ => None,
+                };
+                if let Some((message, line, warning)) = diagnostic {
+                    self.compile_deprecations
+                        .borrow_mut()
+                        .push(CompileDeprecation {
+                            message: message.clone(),
+                            file: self.source_file.clone(),
+                            line,
+                            warning,
+                        });
+                }
             }
         }
         if let Some((message, line)) = stmts.iter().find_map(|statement| match statement {
@@ -4252,6 +4262,7 @@ impl Compiler {
                         ),
                         file: func_compiler.source_file.clone(),
                         line: param.line,
+                        warning: false,
                     });
                 hint = ParamTypeHint::Nullable(Box::new(hint));
             }
@@ -4271,6 +4282,7 @@ impl Compiler {
                         ),
                         file: func_compiler.source_file.clone(),
                         line: param.line,
+                        warning: false,
                     });
             }
             type_hints.push(hint);
@@ -5618,6 +5630,10 @@ impl Compiler {
             }
             Expr::CompileError { message, line } => {
                 self.deferred_error = Some(self.goto_error(message, *line));
+                let null = self.add_literal(Value::null());
+                (null, OpType::Const)
+            }
+            Expr::CompileWarning { .. } => {
                 let null = self.add_literal(Value::null());
                 (null, OpType::Const)
             }

@@ -490,6 +490,22 @@ fn standalone_document_string_errors_use_the_same_source_diagnostic() {
 }
 
 #[test]
+fn document_start_errors_win_over_synthetic_call_parentheses() {
+    let tokens = Lexer::new("<?php\n$value = factory<<<DOC\nbody\nDOC;")
+        .tokenize()
+        .unwrap();
+    let error = Parser::new(tokens)
+        .with_source_name("/fixture/adjacent-document.php")
+        .parse()
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        "syntax error, unexpected heredoc start \"<<<DOC\" in /fixture/adjacent-document.php on line 2"
+    );
+}
+
+#[test]
 fn source_less_parser_keeps_structural_unexpected_identifier_errors() {
     let tokens = Lexer::new("<?php 100_;").tokenize().unwrap();
 

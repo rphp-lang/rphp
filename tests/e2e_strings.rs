@@ -265,6 +265,59 @@ echo <<<OUT
 }
 
 #[test]
+fn simple_array_interpolation_accepts_php_index_forms() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = [
+    'word' => 'alpha',
+    0 => 'zero',
+    '-0' => 'negative-zero',
+    '00' => 'leading-zero',
+    '0x0' => 'hex-shaped',
+    '-0x0' => 'negative-hex-shaped',
+    '9223372036854775808' => 'overflow',
+];
+$index = 'word';
+echo "$values[word]|$values[0]|$values[$index]\n";
+echo "$values[-0]|$values[00]|$values[0x0]|$values[-0x0]|$values[9223372036854775808]\n";
+echo <<<DOC
+$values[word]|$values[0]|$values[$index]
+DOC;
+"#,
+        ),
+        concat!(
+            "alpha|zero|alpha\n",
+            "negative-zero|leading-zero|hex-shaped|negative-hex-shaped|overflow\n",
+            "alpha|zero|alpha",
+        )
+    );
+}
+
+#[test]
+fn heredoc_octal_overflow_diagnostics_keep_compile_order() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+echo <<<DOC
+outer=\400
+inner=${"\400"}
+DOC;
+"#,
+            "/virtual/heredoc-octal.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nWarning: Octal escape sequence overflow \\400 is greater than \\377 in /virtual/heredoc-octal.php on line 3\n",
+            "\nWarning: Octal escape sequence overflow \\400 is greater than \\377 in /virtual/heredoc-octal.php on line 4\n",
+            "\nDeprecated: Using ${expr} (variable variables) in strings is deprecated, use {${expr}} instead in /virtual/heredoc-octal.php on line 3\n",
+            "\nWarning: Undefined variable $\0 in /virtual/heredoc-octal.php on line 4\n",
+            "outer=\0\ninner=",
+        )
+    );
+}
+
+#[test]
 fn standalone_compound_statements_share_the_surrounding_scope() {
     assert_eq!(
         run_php("<?php { $value = 'inside'; } echo $value;"),

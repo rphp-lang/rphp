@@ -181,6 +181,10 @@ impl Parser {
                 self.compile_error(message, line);
                 Ok(Stmt::Noop)
             }
+            Token::CompileWarning(message, line) => {
+                self.advance();
+                Ok(Stmt::ExprStmt(Expr::CompileWarning { message, line }))
+            }
             Token::CompileDeprecation(message, line) => {
                 self.advance();
                 Ok(Stmt::ExprStmt(Expr::CompileDeprecation { message, line }))

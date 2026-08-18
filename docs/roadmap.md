@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,803/5,599 with zero timeouts and zero crashes after recursive document boundaries, deprecated `${var}`/`${expr}` semantics and standalone compound blocks added seven exact passes without a lost pass. The focused heredoc/nowdoc slice is 57/65; scan-ahead warnings, remaining runtime string behavior, attribute metadata, unknown INI directives and `disable_functions` remain explicit gaps. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,811/5,599 with zero timeouts and zero crashes after PHP line-ending, simple interpolation-index, document-boundary and octal compile-warning contracts added eight exact passes without a lost pass. The focused heredoc/nowdoc slice has 61 passes, no ordinary failures and four named unsupported CLI-INI cases; remaining runtime string behavior, attribute metadata, unknown INI directives and `disable_functions` remain explicit gaps. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

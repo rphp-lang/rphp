@@ -760,12 +760,22 @@ impl ExecutorGlobals {
         diagnostics: &[crate::compiler::compile::CompileDeprecation],
     ) {
         for diagnostic in diagnostics {
-            self.record_last_error(8192, &diagnostic.message, &diagnostic.file, diagnostic.line);
-            if self.error_reporting & 8192 != 0 {
+            let (level, label) = if diagnostic.warning {
+                (2, "Warning")
+            } else {
+                (8192, "Deprecated")
+            };
+            self.record_last_error(
+                level,
+                &diagnostic.message,
+                &diagnostic.file,
+                diagnostic.line,
+            );
+            if self.error_reporting & level != 0 {
                 self.write_output(
                     format!(
-                        "\nDeprecated: {} in {} on line {}\n",
-                        diagnostic.message, diagnostic.file, diagnostic.line
+                        "\n{label}: {} in {} on line {}\n",
+                        diagnostic.message, diagnostic.file, diagnostic.line,
                     )
                     .as_bytes(),
                 );

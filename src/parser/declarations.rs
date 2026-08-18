@@ -1791,6 +1791,7 @@ impl Parser {
             | Expr::Null
             | Expr::Globals { .. }
             | Expr::CompileError { .. }
+            | Expr::CompileWarning { .. }
             | Expr::CompileDeprecation { .. }
             | Expr::Constant(_)
             | Expr::MagicConstant { .. } => {}

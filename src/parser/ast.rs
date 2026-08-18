@@ -20,6 +20,7 @@ impl ListTarget {
                 | Expr::DynamicVariable { line, .. }
                 | Expr::Globals { line }
                 | Expr::CompileError { line, .. }
+                | Expr::CompileWarning { line, .. }
                 | Expr::CompileDeprecation { line, .. }
                 | Expr::ArrayAccess { line, .. }
                 | Expr::PropertyAccess { line, .. }
@@ -158,6 +159,9 @@ pub enum Expr {
     /// lexer appends these markers at source-unit scope so dead code cannot
     /// suppress PHP's compile-time deprecation.
     CompileDeprecation { message: String, line: usize },
+    /// A source-unit warning discovered while lexing. Like deprecations, this
+    /// remains visible even when the containing expression is unreachable.
+    CompileWarning { message: String, line: usize },
     BinaryOp {
         op: BinOp,
         left: Box<Expr>,
@@ -584,6 +588,7 @@ impl Expr {
             | Expr::Variable { .. }
             | Expr::Globals { .. }
             | Expr::CompileError { .. }
+            | Expr::CompileWarning { .. }
             | Expr::CompileDeprecation { .. }
             | Expr::PostInc { .. }
             | Expr::PostDec { .. }
