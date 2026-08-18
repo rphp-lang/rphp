@@ -2997,14 +2997,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::DoFcall => {
                 // Execute the pending call
-                let mut call = unsafe { (*frame).call };
-                debug_assert!(!call.is_null());
+                let mut call;
                 // Restore the caller's previous pending call, then detach the
                 // activation before it becomes an executing frame. Leaving
                 // that predecessor in the callee makes a later nested call
                 // treat a caller-owned (and possibly already popped) frame as
                 // its own pending call chain.
+                // SAFETY: `frame` is the active VM frame and its pending-call
+                // pointer names a live activation owned by one of the VM
+                // stacks until this DoFcall path either enters or discards it.
                 unsafe {
+                    call = (*frame).call;
+                    debug_assert!(!call.is_null());
                     let previous_pending_call = (*call).call;
                     (*frame).call = previous_pending_call;
                     (*call).call = std::ptr::null_mut();
@@ -3014,16 +3018,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // compact activation. On success it never acquires body CVs or
                 // TMPs; on any guard failure it becomes the ordinary ABI frame
                 // and continues through the unchanged DoFcall implementation.
-                if unsafe { (*call).deferred_scalar_call } {
-                    call = unsafe {
-                        resolve_deferred_scalar_call(
-                            eg,
-                            frame,
-                            call,
-                            opline,
-                            opline_ptr,
-                        )
-                    };
+                // SAFETY: `call` is the live activation validated above;
+                // deferred resolution either materializes that same call on
+                // the main stack or consumes it and returns null.
+                let resolved_deferred_call = unsafe {
+                    (*call).deferred_scalar_call.then(|| {
+                        resolve_deferred_scalar_call(eg, frame, call, opline, opline_ptr)
+                    })
+                };
+                if let Some(resolved) = resolved_deferred_call {
+                    call = resolved;
                     if call.is_null() {
                         continue 'vm;
                     }
@@ -3031,6 +3035,41 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let suppressed_call = opline._pad & CALL_FLAG_ERROR_SUPPRESS != 0;
                 if suppressed_call {
                     eg.begin_error_suppression(call as usize);
+                }
+                // SAFETY: a non-null resolved pending activation always owns a
+                // registered FunctionCommon for the duration of DoFcall.
+                let func_common_fast = unsafe { &*(*call).func };
+                if func_common_fast.plan.has_deprecated_attribute() {
+                    let reported = report_deprecated_user_call(
+                        eg,
+                        frame,
+                        func_common_fast as *const FunctionCommon,
+                        Some(call as usize),
+                    );
+                    if let Err(error) = reported {
+                        if suppressed_call {
+                            eg.end_error_suppression(call as usize);
+                        }
+                        discard_pending_vm_call_frame(eg, call);
+                        return Err(error);
+                    }
+                    if let Some(exception) = eg.exception.take() {
+                        if suppressed_call {
+                            eg.end_error_suppression(call as usize);
+                        }
+                        discard_pending_vm_call_frame(eg, call);
+                        match throw_in_frame(eg, frame, exception) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue 'vm;
+                            }
+                            ThrowResult::Unhandled(exception) => {
+                                eg.exception = Some(exception);
+                                return Ok(());
+                            }
+                        }
+                    }
                 }
                 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
                 let generic_member_contract =
@@ -3052,8 +3091,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // Preconditions guaranteed at compile time: fixed arity, no by-ref,
                 // no variadics, no generator, no globals, no type hints, no return type.
                 // Runtime: only check fn_type + plan + no pending edge cases.
-                let func_common_fast = unsafe { &*(*call).func };
-
                 // A compiler-proven pure binary recurrence can preserve the
                 // PHP depth-first evaluation order with compact integer
                 // activations. The already-created root frame supplies the
@@ -5526,6 +5563,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // setup. This removes one more baseline dispatch from
                         // the ordinary `$object->method(...)` protocol.
                         if !has_active_generic_contract
+                            && !common.plan.has_deprecated_attribute()
                             && ic.method_fusion_eligible()
                             && bound == num_args as usize
                         {

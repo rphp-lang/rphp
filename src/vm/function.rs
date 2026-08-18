@@ -1351,6 +1351,7 @@ impl CallPlan {
     const BORROW_THIS: u8 = 1;
     const LATE_STATIC_SCOPE: u8 = 1 << 1;
     const EMBEDDED_LATE_STATIC_SCOPE: u8 = 1 << 2;
+    const DEPRECATED_ATTRIBUTE: u8 = 1 << 3;
 
     /// `$this` may be copied into a nested method frame without incrementing
     /// its Rc. The caller owns the object for the entire synchronous call and
@@ -1385,6 +1386,20 @@ impl CallPlan {
     pub fn set_has_embedded_late_static_scope(&mut self, enabled: bool) {
         self.flags = (self.flags & !Self::EMBEDDED_LATE_STATIC_SCOPE)
             | u8::from(enabled) * Self::EMBEDDED_LATE_STATIC_SCOPE;
+    }
+
+    /// The declaration carries PHP's built-in `#[Deprecated]` attribute.
+    /// Keeping this cold semantic marker in the existing plan byte lets call
+    /// sites reject frame-free execution without widening FunctionCommon.
+    #[inline(always)]
+    pub fn has_deprecated_attribute(&self) -> bool {
+        self.flags & Self::DEPRECATED_ATTRIBUTE != 0
+    }
+
+    #[inline]
+    pub fn set_has_deprecated_attribute(&mut self, enabled: bool) {
+        self.flags = (self.flags & !Self::DEPRECATED_ATTRIBUTE)
+            | u8::from(enabled) * Self::DEPRECATED_ATTRIBUTE;
     }
 
     pub const fn without_flags(
@@ -1452,7 +1467,7 @@ impl FunctionCommon {
     /// `void`; property mutator plans use it only at unused-result sites.
     #[inline(always)]
     pub fn supports_scalar_long_plan(&self) -> bool {
-        if self.sig.returns_reference {
+        if self.sig.returns_reference || self.plan.has_deprecated_attribute() {
             return false;
         }
         if self.plan.call.supports_scalar_long_plan() {
@@ -1481,6 +1496,7 @@ impl FunctionCommon {
     #[inline(always)]
     pub fn supports_scalar_double_plan(&self) -> bool {
         !self.sig.returns_reference
+            && !self.plan.has_deprecated_attribute()
             && self.plan.call.is_compact_user_call()
             && self.sig.ref_args == 0
             && self.sig.param_type_hints.iter().all(|hint| {
@@ -1508,6 +1524,7 @@ impl FunctionCommon {
     #[inline]
     pub fn can_promote_to_hot(&self) -> bool {
         self.fn_type == FunctionType::User
+            && !self.plan.has_deprecated_attribute()
             && self.plan.call.is_compact_user_call()
             && !self.sig.is_variadic
             && self.sig.ref_args == 0
@@ -1591,6 +1608,40 @@ pub struct UserFunction {
     /// unchanged.
     pub attributes: Vec<AttributeDefinition>,
     pub parameter_attributes: Vec<Vec<AttributeDefinition>>,
+}
+
+impl UserFunction {
+    /// Publish declaration attributes together with the call-plan marker that
+    /// keeps `#[Deprecated]` observable across every optimized entry point.
+    pub fn set_attributes(&mut self, attributes: Vec<AttributeDefinition>) {
+        let deprecated = attributes
+            .iter()
+            .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"));
+        self.common.plan.set_has_deprecated_attribute(deprecated);
+        self.attributes = attributes;
+        if deprecated {
+            // A semantic diagnostic must happen once per attempted call,
+            // before ordinary argument validation. Frame-free body plans can
+            // bypass that boundary, so deprecated declarations deliberately
+            // remain on the canonical call protocol.
+            self.common.plan.call = CallStrategy::Full;
+            self.common.hot_status.set(HotStatus::Cold);
+            self.long_property_plan = None;
+            self.property_getter_plan = None;
+            self.property_init_plan = None;
+            self.binary_long_recursion_plan = None;
+            self.scalar_long_plan = None;
+            self.scalar_double_plan = None;
+            self.composed_scalar_double_plan = None;
+            self.object_long_plan = None;
+            self.object_array_plan = None;
+            self.scalar_string_plan = None;
+            self.composed_scalar_long_plan = None;
+            self.composed_typed_long_plan = None;
+            #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
+            self.set_indirect_scalar_long_plan(None);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -5754,7 +5754,8 @@ pub fn finalize_user_method(
 
     let common = &function.common;
     let scalar_strategy = common.sig.declared_scalar_call_strategy();
-    let can_use_fast_scalar = !common.sig.returns_reference
+    let can_use_fast_scalar = !common.plan.has_deprecated_attribute()
+        && !common.sig.returns_reference
         && scalar_strategy.is_some()
         && !common.plan.needs_late_static_scope()
         && !common.sig.is_variadic
@@ -5770,21 +5771,27 @@ pub fn finalize_user_method(
         function.common.plan.call = scalar_strategy.unwrap();
     }
 
-    function.long_property_plan = build_long_property_method_plan(&function);
-    function.property_getter_plan = build_property_getter_method_plan(&function);
-    function.property_init_plan = build_property_init_method_plan(&function);
-    function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, method_name);
-    function.scalar_long_plan = build_scalar_long_function_plan(&function);
-    function.scalar_double_plan = build_scalar_double_function_plan(&function);
-    function.composed_scalar_double_plan = build_composed_scalar_double_function_plan(&function);
-    function.object_long_plan = build_object_long_function_plan(&function);
-    function.object_array_plan = build_object_array_function_plan(&function);
-    function.scalar_string_plan = build_scalar_string_function_plan(&function);
-    function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
-    function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
+    if !function.common.plan.has_deprecated_attribute() {
+        function.long_property_plan = build_long_property_method_plan(&function);
+        function.property_getter_plan = build_property_getter_method_plan(&function);
+        function.property_init_plan = build_property_init_method_plan(&function);
+        function.binary_long_recursion_plan =
+            build_binary_long_recursion_plan(&function, method_name);
+        function.scalar_long_plan = build_scalar_long_function_plan(&function);
+        function.scalar_double_plan = build_scalar_double_function_plan(&function);
+        function.composed_scalar_double_plan =
+            build_composed_scalar_double_function_plan(&function);
+        function.object_long_plan = build_object_long_function_plan(&function);
+        function.object_array_plan = build_object_array_function_plan(&function);
+        function.scalar_string_plan = build_scalar_string_function_plan(&function);
+        function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
+        function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
+    }
     #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
     {
-        let indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
+        let indirect_scalar_long_plan = (!function.common.plan.has_deprecated_attribute())
+            .then(|| build_indirect_scalar_long_function_plan(&function))
+            .flatten();
         function.set_indirect_scalar_long_plan(indirect_scalar_long_plan);
     }
 
@@ -5843,6 +5850,7 @@ pub fn clone_trait_method_with_static_storage(
     plan.set_borrow_this(source.common.plan.borrow_this());
     plan.set_needs_late_static_scope(source.common.plan.needs_late_static_scope());
     plan.set_has_embedded_late_static_scope(source.common.plan.has_embedded_late_static_scope());
+    plan.set_has_deprecated_attribute(source.common.plan.has_deprecated_attribute());
     let function = UserFunction {
         common: FunctionCommon {
             fn_type: FunctionType::User,

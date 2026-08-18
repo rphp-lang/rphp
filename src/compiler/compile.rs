@@ -3728,6 +3728,14 @@ impl Compiler {
         )
     }
 
+    fn deprecated_attribute_line(&self, attributes: &[Attribute]) -> Option<usize> {
+        attributes.iter().find_map(|attribute| {
+            self.resolve_name(&attribute.name)
+                .eq_ignore_ascii_case("Deprecated")
+                .then_some(attribute.line)
+        })
+    }
+
     fn compile_attributes_in_scope(
         &self,
         attributes: &[Attribute],
@@ -7573,13 +7581,13 @@ impl Compiler {
                     cp.return_type_hint,
                     *returns_by_ref,
                 );
-                user_func.attributes = self.compile_attributes_in_scope_mode(
+                user_func.set_attributes(self.compile_attributes_in_scope_mode(
                     attributes,
                     2,
                     self.lexical_static_class.as_deref(),
                     self.lexical_static_parent.as_deref(),
                     true,
-                );
+                ));
                 user_func.parameter_attributes = params
                     .iter()
                     .map(|parameter| {

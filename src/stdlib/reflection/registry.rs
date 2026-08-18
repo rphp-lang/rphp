@@ -28,7 +28,7 @@ use super::{
     class_is_user_defined, class_mark_lazy_object_as_initialized,
     class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
     class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_to_string, constant_construct,
-    constant_get_value, function_construct, function_get_closure,
+    constant_get_value, deprecated_construct, function_construct, function_get_closure,
     function_get_closure_called_class, function_get_closure_this,
     function_get_number_of_parameters, function_get_number_of_required_parameters,
     function_get_parameters, function_get_return_type, function_get_tentative_return_type,
@@ -342,6 +342,80 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .common
         .sig
         .param_type_hints = vec![ParamTypeHint::Int];
+
+    eg.register_class(ClassDef {
+        name: "Deprecated".to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: true,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        properties: ["message", "since"]
+            .into_iter()
+            .map(|name| {
+                PropertyDefinition::declared_with_set_visibility(
+                    name.to_string(),
+                    None,
+                    Visibility::Public,
+                    Some(Visibility::Protected),
+                    "Deprecated".to_string(),
+                    ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+                    true,
+                    false,
+                )
+            })
+            .collect(),
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec!["message".to_string(), "since".to_string()],
+        methods: vec![],
+        abstract_methods: vec![],
+        class_id: 0,
+        // PHP exposes the marker as Attribute::TARGET_CLASS |
+        // TARGET_FUNCTION | TARGET_METHOD | TARGET_CLASS_CONSTANT |
+        // TARGET_CONSTANT. Core applies the narrower declaration rules.
+        attributes: vec![AttributeDefinition {
+            name: "Attribute".to_string(),
+            arguments: vec![AttributeArgument {
+                name: None,
+                value: Ok(Value::long(87)),
+                deferred_expression: None,
+            }],
+            evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
+            target: 1,
+            source_file: String::new(),
+            source_line: 0,
+            strict_types: false,
+        }],
+    })
+    .unwrap();
+    register_method!(
+        "Deprecated",
+        "__construct",
+        deprecated_construct,
+        3,
+        0,
+        ["message", "since"]
+    );
+    functions
+        .last_mut()
+        .expect("Deprecated constructor was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+    ];
     register_reflection_class_with_interfaces(
         eg,
         "ReflectionFunctionAbstract",

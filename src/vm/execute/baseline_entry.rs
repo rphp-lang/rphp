@@ -642,11 +642,26 @@ where
     I: Iterator<Item = Value>,
 {
     let saved_execute_data = eg.current_execute_data.get();
+    // SAFETY: the detached-call boundary receives a resolved registered
+    // function descriptor that remains live for the synchronous invocation.
+    let (user_callee, signature, function_type) = unsafe {
+        (
+            ((*func_ptr).fn_type == FunctionType::User)
+                .then(|| &*(func_ptr as *const UserFunction)),
+            &(*func_ptr).sig,
+            (*func_ptr).fn_type,
+        )
+    };
+    if user_callee.is_some_and(|user| user.common.plan.has_deprecated_attribute()) {
+        report_deprecated_user_call(eg, saved_execute_data, func_ptr, None)?;
+        if eg.exception.is_some() {
+            return Ok((Value::null(), None));
+        }
+    }
     // Detached callback entries (Iterator, ArrayAccess, array_* callbacks, ...)
     // bypass DoFcall. Publish the suspended caller's current global-scope CVs
     // before a user callback that may execute `global $name`; otherwise the
     // callback can bind to an older ExecutorGlobals snapshot.
-    let user_callee = unsafe { ((*func_ptr).fn_type == FunctionType::User).then(|| &*(func_ptr as *const UserFunction)) };
     if let Some(user) = user_callee
         && user.op_array.may_access_globals
         && !saved_execute_data.is_null()
@@ -665,9 +680,6 @@ where
             }
         }
     }
-    // SAFETY: the detached-call boundary receives a resolved registered
-    // function descriptor that remains live for the synchronous invocation.
-    let (signature, function_type) = unsafe { (&(*func_ptr).sig, (*func_ptr).fn_type) };
     let this_offset = signature.this_offset as usize;
     let positional_public_num_args = num_args.saturating_sub(this_offset + capture_count);
     let public_num_args = positional_public_num_args
@@ -784,19 +796,23 @@ where
                 true,
             );
             let function = Function::from_common_ptr(func_ptr);
-            if function.fn_type() == FunctionType::User {
+            let location = if function.fn_type() == FunctionType::User {
                 let op_array = &function.as_user().op_array;
-                if let Some(line) = op_array.declaration_line()
-                    && !op_array.source_file.is_empty()
-                    && let Some(mut object) = throwable.as_object_mut()
-                {
-                    object.set_property(
-                        "file",
-                        Value::shared_string(op_array.source_file.clone()),
-                    );
-                    object.set_property("line", Value::long(line as i64));
-                    object.set_property("trace", Value::array(trace));
-                }
+                op_array
+                    .declaration_line()
+                    .filter(|_| !op_array.source_file.is_empty())
+                    .map(|line| (op_array.source_file.to_string(), line))
+            } else {
+                trace_origin
+                    .as_ref()
+                    .map(|(file, line, _)| (file.clone(), *line))
+            };
+            if let Some((file, line)) = location
+                && let Some(mut object) = throwable.as_object_mut()
+            {
+                object.set_property("file", Value::string(file));
+                object.set_property("line", Value::long(line as i64));
+                object.set_property("trace", Value::array(trace));
             }
             eg.discard_detached_trace_caller(frame as usize);
             cleanup_frame_slots(frame);

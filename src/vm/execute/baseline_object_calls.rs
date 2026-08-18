@@ -2419,6 +2419,38 @@ fn op_assign_obj_prop<'a>(
                     force_dynamic = true;
                 } else if !own_private && !caller_has_own {
                     if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                        let storage_key = crate::runtime::resolve_property_key(
+                            eg,
+                            &php_obj.class_name,
+                            &name,
+                            Some(&defining_class),
+                        );
+                        let initialized_readonly = php_obj
+                            .property_slot(&storage_key)
+                            .and_then(|slot| {
+                                eg.instance_property_definition(php_obj.class_id, slot)
+                                    .map(|definition| (slot, definition.is_readonly))
+                            })
+                            .is_some_and(|(slot, readonly)| {
+                                readonly
+                                    && php_obj
+                                        .get_property_slot(slot)
+                                        .is_some_and(|value| !value.is_undef())
+                            });
+                        if initialized_readonly {
+                            let action = if opline._pad & ASSIGN_OBJ_MODIFY != 0
+                                && assigned.value_type() == ValueType::Array
+                            {
+                                "indirectly modify"
+                            } else {
+                                "modify"
+                            };
+                            let message = format!(
+                                "Cannot {action} readonly property {defining_class}::${name}"
+                            );
+                            drop(php_obj);
+                            return Ok(object_property_throw(eg, frame, "Error", message));
+                        }
                         let has_setter = eg
                             .find_function(&format!(
                                 "{}::__set",

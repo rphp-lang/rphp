@@ -594,6 +594,22 @@ put common exact float-to-string conversion at a 1.012 median and 1.044 p90
 candidate/control ratio with identical checksums, below the five-percent
 ceiling.
 
+The `deprecated-callable` checkpoint reaches 2,923 passes with 2,374 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+PHP 8.5's built-in `Deprecated` metadata, readonly constructor contract,
+declaration validation and attempted-call diagnostics now cover ordinary and
+magic functions, methods, closures, constructors and destructors. Runtime
+attribute arguments, strict coercion, handlers, suppression and source origins
+reuse the canonical attribute/diagnostic machinery. Twenty-one failures become
+exact passes with no lost pass or other status/stage movement; constants,
+trait-use diagnostics, exception-handler lifecycle, adjacent Reflection and
+Random extension dependencies remain outside this checkpoint. All five feature
+configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. Twenty-one alternating AMD64 release
+pairs keep the ordinary five-million-call control at +2.14% by independent
+medians and +1.55% by the paired-ratio median, with identical checksums and both
+below the five-percent ceiling.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

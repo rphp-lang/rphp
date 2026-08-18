@@ -930,6 +930,50 @@ fn attribute_construct(
     Ok(())
 }
 
+fn deprecated_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let message = with_argument(ed, 1, |value| {
+        if value.is_undef() {
+            Value::null()
+        } else {
+            value.clone()
+        }
+    });
+    let since = with_argument(ed, 2, |value| {
+        if value.is_undef() {
+            Value::null()
+        } else {
+            value.clone()
+        }
+    });
+    with_argument(ed, 0, |receiver| {
+        if let Some(mut object) = receiver.as_object_mut() {
+            // The built-in readonly properties have no declaration default.
+            // A normal NewObj invocation and a reflected object created
+            // without its constructor therefore both enter here with Undef
+            // slots. After the first successful constructor call, even an
+            // omitted nullable argument initializes the slot to Null and a
+            // later explicit __construct() call must respect readonly state.
+            if object
+                .get_property("message")
+                .is_some_and(|value| !value.is_undef())
+            {
+                eg.exception = Some(make_error_value(
+                    "Error",
+                    "Cannot modify readonly property Deprecated::$message",
+                ));
+                return;
+            }
+            object.set_property("message", message);
+            object.set_property("since", since);
+        }
+    });
+    Ok(())
+}
+
 fn attribute_get_name(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -1038,7 +1082,20 @@ fn attribute_new_instance(
         ));
         return Ok(());
     };
-    let Some(arguments) = evaluate_attribute_arguments(&definition, eg)? else {
+    instantiate_attribute_definition(ed, rv, &definition, repeated, eg)
+}
+
+/// Instantiate one already-resolved attribute at its declaration site.
+/// Built-in semantic attributes use the same constructor normalization,
+/// strictness and throwable-origin path as ReflectionAttribute::newInstance().
+pub(crate) fn instantiate_attribute_definition(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    definition: &AttributeDefinition,
+    repeated: bool,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(arguments) = evaluate_attribute_arguments(definition, eg)? else {
         return Ok(());
     };
     let name = definition.name.clone();
@@ -1240,10 +1297,15 @@ fn attribute_new_instance(
             }
             crate::vm::execute::CallArgumentPreparation::Invalid => {
                 let parameter = parameter_names.get(index).map_or("unknown", String::as_str);
+                let call_site = if common.fn_type == FunctionType::Internal {
+                    String::new()
+                } else {
+                    format!(", called in {source_file} on line {source_line}")
+                };
                 let error = make_error_value(
                     "TypeError",
                     &format!(
-                        "{name}::__construct(): Argument #{} (${parameter}) must be of type {}, {} given, called in {source_file} on line {source_line}",
+                        "{name}::__construct(): Argument #{} (${parameter}) must be of type {}, {} given{call_site}",
                         index + 1,
                         parameter_hints[index].diagnostic_display_name(),
                         normalized[index].diagnostic_type_name()

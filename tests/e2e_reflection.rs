@@ -1,5 +1,5 @@
 mod common;
-use common::{run_php, run_php_with_source_context};
+use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
 fn reflection_class_get_name_returns_the_declared_qualified_name() {
@@ -191,6 +191,148 @@ fn attribute_marker_constructs_flags_and_validates_reflected_declarations() {
         ),
         "127|Attribute:1|Attribute::__construct(): Argument #1 ($flags) must be of type int, string given|Invalid attribute flags specified"
     );
+}
+
+#[test]
+fn deprecated_attribute_reports_callable_names_messages_and_suppression() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$handler = function ($level, $message) {
+    echo $level, ':', $message, '|';
+    return true;
+};
+set_error_handler($handler);
+
+#[Deprecated('use current', since: '8.5')]
+function legacy_call($value) { echo "function:$value|"; }
+
+class DeprecatedCallProbe {
+    #[Deprecated('use run')]
+    public function old() { echo "method|"; }
+
+    #[Deprecated('use direct')]
+    public function __call($name, $arguments) { echo "magic:$name|"; }
+}
+
+legacy_call(1);
+restore_error_handler();
+@legacy_call(2);
+set_error_handler($handler);
+$probe = new DeprecatedCallProbe();
+$probe->old();
+$probe->missing();
+"#,
+        ),
+        concat!(
+            "16384:Function legacy_call() is deprecated since 8.5, use current|",
+            "function:1|function:2|",
+            "16384:Method DeprecatedCallProbe::old() is deprecated, use run|method|",
+            "16384:Method DeprecatedCallProbe::missing() is deprecated, use direct|magic:missing|",
+        )
+    );
+}
+
+#[test]
+fn deprecated_attribute_validates_at_call_time_and_thrown_handlers_abort_the_body() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+
+#[Deprecated(1234)]
+function invalid_deprecation() { echo 'invalid-body|'; }
+
+try {
+    invalid_deprecation();
+} catch (TypeError $error) {
+    echo $error->getMessage(), '|';
+}
+
+set_error_handler(function ($level, $message) {
+    throw new Exception($message);
+});
+
+#[Deprecated('stop before entry')]
+function aborted_deprecation() { echo 'aborted-body'; }
+
+try {
+    aborted_deprecation();
+} catch (Exception $error) {
+    echo 'caught:', $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "Deprecated::__construct(): Argument #1 ($message) must be of type ?string, int given|",
+            "caught:Function aborted_deprecation() is deprecated, stop before entry",
+        )
+    );
+}
+
+#[test]
+fn deprecated_builtin_preserves_readonly_and_constructorless_initialization_contracts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$deprecated = new Deprecated('first', since: '8.5');
+echo $deprecated->message, ':', $deprecated->since, '|';
+try {
+    $deprecated->__construct('again');
+} catch (Error $error) {
+    echo $error->getMessage(), '|';
+}
+
+$uninitialized = (new ReflectionClass(Deprecated::class))->newInstanceWithoutConstructor();
+$uninitialized->__construct('late');
+echo $uninitialized->message, ':', (int) (new ReflectionProperty(Deprecated::class, 'message'))->isReadOnly(), '|';
+$marker = (new ReflectionClass(Deprecated::class))->getAttributes()[0]->newInstance();
+echo get_class($marker), ':', $marker->flags;
+"#,
+        ),
+        concat!(
+            "first:8.5|",
+            "Cannot modify readonly property Deprecated::$message|",
+            "late:1|Attribute:87",
+        )
+    );
+}
+
+#[test]
+fn deprecated_attribute_resolves_deferred_constants_when_the_callable_is_invoked() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+define('DEFERRED_DEPRECATION_MESSAGE', 'resolved later');
+set_error_handler(function ($level, $message) {
+    echo $message;
+    return true;
+});
+
+#[Deprecated(DEFERRED_DEPRECATION_MESSAGE)]
+function deferred_deprecation() {}
+
+deferred_deprecation();
+"#,
+        ),
+        "Function deferred_deprecation() is deprecated, resolved later"
+    );
+}
+
+#[test]
+fn deprecated_attribute_rejects_non_trait_class_like_targets_during_compilation() {
+    for (kind, declaration) in [
+        ("class", "class ForbiddenDeprecatedClass {}"),
+        ("interface", "interface ForbiddenDeprecatedInterface {}"),
+        ("enum", "enum ForbiddenDeprecatedEnum {}"),
+    ] {
+        let source = format!("<?php #[Deprecated] {declaration}");
+        let error = run_php_expect_error(&source).to_string();
+        assert!(
+            error.contains(&format!("Cannot apply #[\\Deprecated] to {kind}")),
+            "unexpected {kind} diagnostic: {error}"
+        );
+    }
 }
 
 #[test]

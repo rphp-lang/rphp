@@ -510,6 +510,16 @@ fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.vm_stack.pop_call_frame(call);
 }
 
+/// Release a pending ordinary call that cannot enter its body.
+#[cold]
+fn discard_pending_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
+    // SAFETY: callers pass the live pending frame detached from its owning
+    // ExecuteData. Its compiler-sized slots remain allocated until the
+    // immediately following VM-stack pop.
+    unsafe { cleanup_frame_slots(call) };
+    pop_vm_call_frame(eg, call);
+}
+
 /// Append one dynamically resolved `__invoke` receiver to the packed internal
 /// stack stored in the pre-existing ExecutorGlobals side-state slot.
 #[cold]
@@ -571,6 +581,21 @@ fn push_pending_magic_call(eg: &mut ExecutorGlobals, call_key: usize, method: Va
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn take_pending_magic_call(eg: &mut ExecutorGlobals, call_key: usize) -> Option<Value> {
     take_pending_invoke_this(eg, call_key | PENDING_MAGIC_CALL_TAG)
+}
+
+#[cold]
+fn pending_magic_call_name(eg: &ExecutorGlobals, call_key: usize) -> Option<String> {
+    let tagged_key = call_key | PENDING_MAGIC_CALL_TAG;
+    let stack = eg.pending_invoke_this.as_ref()?.as_array()?;
+    let key_index = stack.len().checked_sub(2)?;
+    (stack.get_value_at(key_index)?.as_long()? as usize == tagged_key)
+        .then(|| {
+            stack
+                .get_value_at(key_index + 1)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .flatten()
 }
 
 /// Initialize the sparse argument ABI on the first named send. Keeping this

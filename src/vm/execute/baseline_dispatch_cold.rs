@@ -155,6 +155,147 @@ fn report_php_deprecation(
     )
 }
 
+/// Materialize PHP's built-in `#[Deprecated]` attribute and report the
+/// declaration-specific E_USER_DEPRECATED diagnostic before call validation.
+/// Attribute arguments may depend on runtime constants, so this stays on the
+/// cold attempted-call boundary rather than being folded into declaration
+/// registration.
+#[cold]
+fn report_deprecated_user_call(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+    function: *const FunctionCommon,
+    call_key: Option<usize>,
+) -> Result<(), VmError> {
+    if function.is_null() {
+        return Ok(());
+    }
+    // SAFETY: both entry paths pass a registered function descriptor whose
+    // storage outlives the synchronous diagnostic attempt.
+    let descriptor = unsafe { Function::from_common_ptr(function) };
+    if descriptor.fn_type() != FunctionType::User {
+        return Ok(());
+    }
+    let Some((definition, repeated)) = descriptor.dispatch(
+        |user| {
+            let mut definitions = user
+                .attributes
+                .iter()
+                .filter(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"));
+            definitions
+                .next()
+                .cloned()
+                .map(|definition| (definition, definitions.next().is_some()))
+        },
+        |_| None,
+    ) else {
+        return Ok(());
+    };
+
+    let mut instance = Value::undef();
+    crate::stdlib::reflection::instantiate_attribute_definition(
+        caller,
+        &mut instance,
+        &definition,
+        repeated,
+        eg,
+    )?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+
+    let (message, since) = instance
+        .as_object()
+        .map(|object| {
+            let message = object
+                .get_property("message")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let since = object
+                .get_property("since")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            (message, since)
+        })
+        .unwrap_or((None, None));
+    let mut name = displayed_function_name(eg, function);
+    if let Some(method) = call_key.and_then(|key| pending_magic_call_name(eg, key))
+        && let Some((class, implementation)) = name.rsplit_once("::")
+        && matches!(implementation.to_ascii_lowercase().as_str(), "__call" | "__callstatic")
+    {
+        name = format!("{class}::{method}");
+    }
+    let noun = if name.contains("{closure") || !name.contains("::") {
+        "Function"
+    } else {
+        "Method"
+    };
+    let mut diagnostic = format!("{noun} {name}() is deprecated");
+    if let Some(since) = since {
+        diagnostic.push_str(" since ");
+        diagnostic.push_str(&since);
+    }
+    if let Some(message) = message {
+        diagnostic.push_str(", ");
+        diagnostic.push_str(&message);
+    }
+
+    // Detached callbacks may suspend an internal handler. Walk to the nearest
+    // user frame so ordinary array/callback calls retain their PHP call site.
+    let mut source_frame = caller;
+    // SAFETY: `caller` and every predecessor are live synchronous frames.
+    // Registered function metadata outlives them, and a non-null opline is
+    // dereferenced only after its index is proven inside that user op-array.
+    unsafe {
+        while !source_frame.is_null() {
+            let source_function = (*source_frame).func;
+            if !source_function.is_null() && (*source_function).fn_type == FunctionType::User {
+                let source_user = &*(source_function as *const UserFunction);
+                let source_op_array = &source_user.op_array;
+                let source_opline = (*source_frame).opline;
+                if !source_opline.is_null() {
+                    let index = source_opline.offset_from(source_op_array.instructions.as_ptr());
+                    if index >= 0 && (index as usize) < source_op_array.instructions.len() {
+                        return report_php_diagnostic(
+                            eg,
+                            source_frame,
+                            source_op_array,
+                            &*source_opline,
+                            &diagnostic,
+                            16_384,
+                            "Deprecated",
+                            false,
+                        );
+                    }
+                }
+            }
+            source_frame = (*source_frame).prev_execute_data;
+        }
+    }
+
+    let file = "Unknown";
+    let line = 0;
+    let handled = crate::stdlib::dispatch_php_error(
+        eg,
+        caller,
+        16_384,
+        &diagnostic,
+        file,
+        line,
+    )?;
+    if !handled {
+        eg.record_last_error(16_384, &diagnostic, file, line);
+    }
+    if !handled && eg.error_reporting & 16_384 != 0 {
+        eg.write_output(
+            format!("\nDeprecated: {diagnostic} in {file} on line {line}\n").as_bytes(),
+        );
+    }
+    Ok(())
+}
+
 fn scalar_dynamic_variable_name(value: &Value) -> Result<String, VmError> {
     Ok(match value.value_type() {
         ValueType::Undef | ValueType::Null | ValueType::False => String::new(),

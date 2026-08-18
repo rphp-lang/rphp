@@ -2012,7 +2012,7 @@ impl Compiler {
                     cp.return_type_hint,
                     *returns_by_ref,
                 );
-                user_func.attributes = self.compile_attributes(attributes, 2);
+                user_func.set_attributes(self.compile_attributes(attributes, 2));
                 user_func.parameter_attributes = params
                     .iter()
                     .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
@@ -3341,6 +3341,12 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_class = self.resolve_name(name);
+                if let Some(line) = self.deprecated_attribute_line(attributes) {
+                    return Err(self.goto_error(
+                        &format!("Cannot apply #[\\Deprecated] to class {resolved_class}"),
+                        line,
+                    ));
+                }
                 let resolved_parent = parent.as_ref().map(|p| self.resolve_name(&p.name));
                 if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
                     && (!generic_params.is_empty()
@@ -3739,12 +3745,12 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
-                    user_func.attributes = self.compile_attributes_in_scope(
+                    user_func.set_attributes(self.compile_attributes_in_scope(
                         &method.attributes,
                         4,
                         Some(&resolved_class),
                         resolved_parent.as_deref(),
-                    );
+                    ));
                     user_func.parameter_attributes = method
                         .params
                         .iter()
@@ -4120,6 +4126,12 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_iface = self.resolve_name(name);
+                if let Some(line) = self.deprecated_attribute_line(attributes) {
+                    return Err(self.goto_error(
+                        &format!("Cannot apply #[\\Deprecated] to interface {resolved_iface}"),
+                        line,
+                    ));
+                }
                 if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
                     && (!generic_params.is_empty()
                         || !extends.is_empty()
@@ -4250,12 +4262,12 @@ impl Compiler {
                         cp.return_type_hint,
                         method.returns_by_ref,
                     );
-                    user_func.attributes = self.compile_attributes_in_scope(
+                    user_func.set_attributes(self.compile_attributes_in_scope(
                         &method.attributes,
                         4,
                         Some(&resolved_iface),
                         None,
-                    );
+                    ));
                     user_func.parameter_attributes = method
                         .params
                         .iter()
@@ -4511,13 +4523,13 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
-                    user_func.attributes = self.compile_attributes_in_scope_mode(
+                    user_func.set_attributes(self.compile_attributes_in_scope_mode(
                         &method.attributes,
                         4,
                         Some(&resolved_trait),
                         None,
                         true,
-                    );
+                    ));
                     user_func.parameter_attributes = method
                         .params
                         .iter()
@@ -4745,6 +4757,12 @@ impl Compiler {
                 methods,
             } => {
                 let resolved_enum = self.resolve_name(name);
+                if let Some(line) = self.deprecated_attribute_line(attributes) {
+                    return Err(self.goto_error(
+                        &format!("Cannot apply #[\\Deprecated] to enum {resolved_enum}"),
+                        line,
+                    ));
+                }
                 // Compile enum as a class. Each case becomes a static property
                 // holding a singleton object with `name` (and optionally `value`) properties.
                 let is_backed = backing_type.is_some();
@@ -5069,7 +5087,7 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
-                    user_func.attributes = self.compile_attributes(&method.attributes, 4);
+                    user_func.set_attributes(self.compile_attributes(&method.attributes, 4));
                     user_func.parameter_attributes = method
                         .params
                         .iter()
