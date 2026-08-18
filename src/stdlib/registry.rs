@@ -5,6 +5,7 @@
 //! reference metadata.
 
 use super::filesystem::*;
+use super::strings::*;
 use super::*;
 
 // ============================================================================
