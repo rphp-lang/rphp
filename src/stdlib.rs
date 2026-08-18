@@ -950,6 +950,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "divisor"
     );
     reg!("fmod", fn_fmod, 2, 2, "x", "y");
+    reg!("fdiv", fn_fdiv, 2, 2, "num1", "num2");
     reg!("log", fn_log, 1, 1, "num");
     reg!("log10", fn_log10, 1, 1, "num");
     reg!("log2", fn_log2, 1, 1, "num");
@@ -7706,6 +7707,12 @@ fn fn_fmod(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     ret!(rv, Value::double(a % b));
 }
 
+fn fn_fdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let numerator = arg_float!(ed, 0);
+    let denominator = arg_float!(ed, 1);
+    ret!(rv, Value::double(numerator / denominator));
+}
+
 fn fn_log(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).ln()));
 }
@@ -9327,7 +9334,19 @@ fn var_dump_value_inner(
         ValueType::True => format!("{}bool(true)\n", prefix),
         ValueType::False => format!("{}bool(false)\n", prefix),
         ValueType::Long => format!("{}int({})\n", prefix, val.as_long().unwrap()),
-        ValueType::Double => format!("{}float({})\n", prefix, val.as_double().unwrap()),
+        ValueType::Double => {
+            let number = val.as_double().unwrap();
+            let display = if number.is_nan() {
+                "NAN".to_string()
+            } else if number == f64::INFINITY {
+                "INF".to_string()
+            } else if number == f64::NEG_INFINITY {
+                "-INF".to_string()
+            } else {
+                number.to_string()
+            };
+            format!("{prefix}float({display})\n")
+        }
         ValueType::String => {
             let s = val.as_str().unwrap();
             format!("{}string({}) \"{}\"\n", prefix, s.len(), s)

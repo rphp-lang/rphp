@@ -290,6 +290,30 @@ fn test_fmod() {
 }
 
 #[test]
+fn test_fdiv_preserves_ieee_754_results() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(fdiv(7, 2));
+var_dump(fdiv(1.0, 0.0));
+var_dump(fdiv(-1.0, 0.0));
+var_dump(fdiv(1.0, -0.0));
+var_dump(fdiv(0.0, 0.0));
+var_dump(fdiv(-0.0, INF));
+var_dump(fdiv(num2: 2, num1: "7.5"));
+try {
+    fdiv(1);
+} catch (ArgumentCountError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#
+        ),
+        "float(3.5)\nfloat(INF)\nfloat(-INF)\nfloat(-INF)\nfloat(NAN)\nfloat(-0)\n\
+float(3.75)\nfdiv() expects exactly 2 arguments, 1 given\n"
+    );
+}
+
+#[test]
 fn test_log_fn() {
     // Natural log of e^1 = 1
     assert_eq!(run_php(r#"<?php echo round(log(2.718281828), 0);"#), "1");

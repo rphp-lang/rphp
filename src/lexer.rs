@@ -915,14 +915,9 @@ impl<'a> Lexer<'a> {
         }
         self.consume_numeric_digits(|byte| byte.is_ascii_digit());
         let mut is_float = false;
-        // Check for decimal point followed by digit → float
-        if self.pos < self.src.len()
-            && self.src[self.pos] == b'.'
-            && self
-                .src
-                .get(self.pos + 1)
-                .map_or(false, |c| c.is_ascii_digit())
-        {
+        // PHP permits an empty fractional part, so both `1.5` and `1.` are
+        // floating-point literals.
+        if self.pos < self.src.len() && self.src[self.pos] == b'.' {
             is_float = true;
             self.pos += 1; // skip '.'
             self.consume_numeric_digits(|byte| byte.is_ascii_digit());
@@ -1282,6 +1277,14 @@ mod tests {
                 Token::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn float_literal_may_have_an_empty_fractional_part() {
+        let tokens = Lexer::new("<?php echo 10.; echo -0.;").tokenize().unwrap();
+
+        assert!(tokens.contains(&Token::Float(10.0)));
+        assert!(tokens.contains(&Token::Float(-0.0)));
     }
 
     #[test]

@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is 2,704/5,599 with zero timeouts and zero crashes after making deep and shared `yield from` trees stack-safe, live and exception-compatible. The focused lazy-object frontier is 207/223 after unifying object property-name conversion, with internal classes, weak references, cycle collection and broader shutdown ordering still visible. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint remains 2,704/5,599 with zero timeouts and zero crashes; the separately gated standard-library `fdiv()` test now passes without losing an exact contract-corpus pass. The focused lazy-object frontier is 207/223 after unifying object property-name conversion, with internal classes, weak references, cycle collection and broader shutdown ordering still visible. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

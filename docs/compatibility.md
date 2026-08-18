@@ -1056,6 +1056,28 @@ blocks against a ceiling of 1,623. The 200-pair order-balanced direct generator
 resume control measures a candidate/parent delta of -2.158%, within the +1%
 regression ceiling; no speedup is claimed.
 
+IEEE-754 floating-point division is now available through `fdiv()`, including
+signed zero, infinity, NaN, weak numeric operands, named arguments and the
+ordinary internal-function arity diagnostic. PHP floating-point literals may
+have an empty fractional part such as `10.`, and `var_dump()` uses PHP's
+uppercase `INF`, `-INF` and `NAN` spellings. The pinned
+`ext/standard/tests/math/fdiv.phpt` capability test moves from a front-end
+failure to an exact pass. The 23 attempted Zend cases that were blocked by the
+missing function now reach their separate conversion, `settype()` or comparison
+differences instead of being hidden behind an undefined-function error.
+
+Because the separately gated extension test is outside the 5,599-case contract
+corpus, the complete release rerun intentionally retains the exact 2,704-pass
+set: 2,704 passes, 2,504 ordinary failures, 110 skips, one XFAIL and 280
+unsupported cases, with zero timeouts, zero crashes and an exact +0/-0 pass-set
+delta. All remaining failure-stage movements were inspected. All five Cargo
+feature configurations, formatting, unsafe-policy, all-feature/all-target,
+Composer S0, all four Symfony S1 and warmed-kernel S2 gates pass on AMD64; the
+stdlib registration-capacity test also confirms that the additional builtin
+does not rehash the fixed function registry. No runtime performance gate applies:
+the lexer work is compile-time, `fdiv()` is a new opt-in call, and the output
+formatting change is confined to explicit `var_dump()`.
+
 The matching PHP 8.5.6 CLI oracle produces 5,440 passes, zero ordinary
 failures, 153 skips, one XFAIL, five unsupported SAPI sections, zero timeouts
 and zero crashes. The source archive checksum, build configuration, exact
