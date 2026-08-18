@@ -194,7 +194,10 @@ fn format_throwable_chain(eg: &ExecutorGlobals, thrown: &Value, uncaught: bool) 
             rendered.push(':');
             rendered.push_str(&line.to_string());
             rendered.push_str("\nStack trace:\n");
-            rendered.push_str(&crate::vm::trace::format_throwable_trace(&trace));
+            rendered.push_str(&crate::vm::trace::format_throwable_trace(
+                &trace,
+                crate::stdlib::exception_string_param_max_len(eg),
+            ));
         }
     }
     if uncaught && let Some((file, line)) = final_location {

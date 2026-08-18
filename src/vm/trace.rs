@@ -9,7 +9,27 @@ fn displayed_trace_class_name(class: &str) -> &str {
         .map_or(class, |_| "class@anonymous")
 }
 
-fn append_trace_argument(output: &mut String, value: &Value) {
+fn append_exception_string_argument(output: &mut String, value: &str, string_max_len: usize) {
+    output.push('\'');
+    for byte in value.as_bytes().iter().take(string_max_len) {
+        match byte {
+            b'\\' => output.push_str("\\\\"),
+            b'\n' => output.push_str("\\n"),
+            b'\r' => output.push_str("\\r"),
+            b'\t' => output.push_str("\\t"),
+            0x20..=0x7e => output.push(*byte as char),
+            _ => {
+                let _ = write!(output, "\\x{byte:02X}");
+            }
+        }
+    }
+    if value.len() > string_max_len {
+        output.push_str("...");
+    }
+    output.push('\'');
+}
+
+fn append_trace_argument(output: &mut String, value: &Value, string_max_len: usize) {
     let value = value.dereferenced();
     match value.value_type() {
         ValueType::Undef | ValueType::Null => output.push_str("NULL"),
@@ -34,23 +54,7 @@ fn append_trace_argument(output: &mut String, value: &Value) {
         }
         ValueType::String => {
             let value = value.as_str().unwrap();
-            output.push('\'');
-            for byte in value.as_bytes().iter().take(15) {
-                match byte {
-                    b'\\' => output.push_str("\\\\"),
-                    b'\n' => output.push_str("\\n"),
-                    b'\r' => output.push_str("\\r"),
-                    b'\t' => output.push_str("\\t"),
-                    0x20..=0x7e => output.push(*byte as char),
-                    _ => {
-                        let _ = write!(output, "\\x{byte:02X}");
-                    }
-                }
-            }
-            if value.len() > 15 {
-                output.push_str("...");
-            }
-            output.push('\'');
+            append_exception_string_argument(output, value, string_max_len);
         }
         ValueType::Array => output.push_str("Array"),
         ValueType::Object => {
@@ -70,7 +74,7 @@ fn append_trace_argument(output: &mut String, value: &Value) {
 
 /// Render the shared PHP call-frame shape, with the caller deciding whether
 /// the Throwable-only `{main}` sentinel belongs in the result.
-fn format_trace(trace: &PhpArray, append_main: bool) -> String {
+fn format_trace(trace: &PhpArray, append_main: bool, string_max_len: usize) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     for (_, value) in trace.iter() {
@@ -111,7 +115,7 @@ fn format_trace(trace: &PhpArray, append_main: bool) -> String {
                 if argument_index != 0 {
                     output.push_str(", ");
                 }
-                append_trace_argument(&mut output, argument);
+                append_trace_argument(&mut output, argument, string_max_len);
             }
         }
         output.push(')');
@@ -131,12 +135,18 @@ fn format_trace(trace: &PhpArray, append_main: bool) -> String {
 /// Render the live trace printed by `debug_print_backtrace()`. Unlike a
 /// Throwable string, this contains only actual frames and ends each with a
 /// newline; calling it directly from the main script therefore prints nothing.
-pub(crate) fn format_debug_print_backtrace(trace: &PhpArray) -> String {
-    format_trace(trace, false)
+pub(crate) fn format_debug_print_backtrace(trace: &PhpArray, string_max_len: usize) -> String {
+    format_trace(trace, false, string_max_len)
 }
 
 /// Render a stored Throwable trace. The final `{main}` sentinel is not part of
 /// `getTrace()` itself but is always appended to Zend's string representation.
-pub(crate) fn format_throwable_trace(trace: &PhpArray) -> String {
-    format_trace(trace, true)
+pub(crate) fn format_throwable_trace(trace: &PhpArray, string_max_len: usize) -> String {
+    format_trace(trace, true, string_max_len)
+}
+
+pub(crate) fn format_exception_string_argument(value: &str, string_max_len: usize) -> String {
+    let mut output = String::new();
+    append_exception_string_argument(&mut output, value, string_max_len);
+    output
 }

@@ -6,7 +6,8 @@
 # passes.
 
 runtime-cli:INI
-  RPHP accepts assert.exception, zend.assertions and error_reporting through
+  RPHP accepts assert.exception, zend.assertions, error_reporting,
+  zend.exception_ignore_args and zend.exception_string_param_max_len through
   repeated CLI -d definitions and exposes their request-local state. It does
   not yet accept arbitrary per-process INI settings. Tests with a non-empty INI
   section outside that admitted subset are classified unsupported.

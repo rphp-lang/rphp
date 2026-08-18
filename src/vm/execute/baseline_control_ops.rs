@@ -683,14 +683,26 @@ fn op_throw<'a>(
     };
     if opline._pad & THROW_FLAG_UNHANDLED_MATCH != 0 {
         let value = val.dereferenced();
-        let detail = match value.value_type() {
-            ValueType::Null | ValueType::Undef => "NULL".to_string(),
-            ValueType::False => "false".to_string(),
-            ValueType::True => "true".to_string(),
-            ValueType::Long => value.as_long().unwrap().to_string(),
-            ValueType::Double => format_unhandled_match_float(value.as_double().unwrap()),
-            ValueType::String => format!("'{}'", value.as_str().unwrap()),
-            _ => format!("of type {}", value.diagnostic_type_name()),
+        let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+            .as_deref()
+            .is_some_and(crate::stdlib::ini_boolean);
+        let string_max_len = crate::stdlib::exception_string_param_max_len(eg);
+        let detail = if ignore_arguments {
+            format!("of type {}", value.diagnostic_type_name())
+        } else {
+            match value.value_type() {
+                ValueType::Null | ValueType::Undef => "NULL".to_string(),
+                ValueType::False => "false".to_string(),
+                ValueType::True => "true".to_string(),
+                ValueType::Long => value.as_long().unwrap().to_string(),
+                ValueType::Double => format_unhandled_match_float(value.as_double().unwrap()),
+                ValueType::String if string_max_len == 0 => "of type string".to_string(),
+                ValueType::String => crate::vm::trace::format_exception_string_argument(
+                    value.as_str().unwrap(),
+                    string_max_len,
+                ),
+                _ => format!("of type {}", value.diagnostic_type_name()),
+            }
         };
         let error = make_error_value(
             "UnhandledMatchError",

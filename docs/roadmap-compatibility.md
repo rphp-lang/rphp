@@ -569,6 +569,17 @@ startup and explicit INI parsing paths, so no execution-path performance gate
 applies. All five feature configurations, all-target, unsafe, Composer S0,
 four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass.
 
+The `exception-ini-presentation` checkpoint reaches 2,883 passes with 2,400
+failures, 110 skips, one XFAIL, 205 unsupported cases, zero timeouts and zero
+crashes. Startup `zend.exception_ignore_args` and
+`zend.exception_string_param_max_len` now govern stored Throwable traces, live
+backtrace rendering and unmatched `match` diagnostics through one escaping and
+byte-limit contract. Three unsupported cases and two existing output failures
+become exact passes for a +5/-0 pass-set delta. The change is confined to cold
+startup and diagnostic formatting paths, so no execution-path performance gate
+applies. All five feature configurations, all-target, unsafe, Composer S0,
+four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

@@ -1689,7 +1689,7 @@ fn fn_throwable_get_trace(
 fn fn_throwable_get_trace_as_string(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let trace = arg!(ed, 0)
         .as_object()
@@ -1698,7 +1698,10 @@ fn fn_throwable_get_trace_as_string(
         .unwrap_or_else(PhpArray::new);
     ret!(
         rv,
-        Value::string(crate::vm::trace::format_throwable_trace(&trace))
+        Value::string(crate::vm::trace::format_throwable_trace(
+            &trace,
+            exception_string_param_max_len(eg),
+        ))
     );
 }
 
@@ -9188,7 +9191,8 @@ fn fn_debug_print_backtrace(
     // SAFETY: the internal activation and its synchronous predecessor chain
     // remain live until this handler returns.
     let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg, false) };
-    let output = crate::vm::trace::format_debug_print_backtrace(&trace);
+    let output =
+        crate::vm::trace::format_debug_print_backtrace(&trace, exception_string_param_max_len(eg));
     eg.write_output(output.as_bytes());
     ret!(rv, Value::null());
 }
@@ -15190,6 +15194,17 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, published);
             }
+            "zend.exception_ignore_args" => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, normalize_ini_boolean_value(value));
+            }
+            "zend.exception_string_param_max_len" => {
+                let published = normalize_exception_string_param_max_len(value);
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, published);
+            }
             _ => {}
         }
     }
@@ -15204,6 +15219,24 @@ fn normalize_error_reporting_ini(value: &str) -> (String, i64) {
         "true" | "on" | "yes" => ("1".to_string(), 1),
         "false" | "off" | "no" | "none" | "" => (String::new(), 0),
         _ => (value.to_string(), 0),
+    }
+}
+
+fn normalize_ini_boolean_value(value: &str) -> String {
+    let value = value.trim();
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "on" | "yes" => "1".to_string(),
+        "false" | "off" | "no" | "none" => String::new(),
+        _ => value.to_string(),
+    }
+}
+
+fn normalize_exception_string_param_max_len(value: &str) -> String {
+    let value = normalize_ini_boolean_value(value);
+    match value.parse::<i64>() {
+        Ok(length) if (0..=1_000_000).contains(&length) => length.to_string(),
+        Ok(_) => "15".to_string(),
+        Err(_) => value,
     }
 }
 
@@ -15257,10 +15290,18 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
 }
 
 pub(crate) fn ini_boolean(value: &str) -> bool {
-    !matches!(
-        value.to_ascii_lowercase().as_str(),
-        "" | "0" | "off" | "no" | "false" | "none"
-    )
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "on" | "yes" => true,
+        "" | "false" | "off" | "no" | "none" => false,
+        value => value.parse::<i64>().is_ok_and(|value| value != 0),
+    }
+}
+
+pub(crate) fn exception_string_param_max_len(eg: &ExecutorGlobals) -> usize {
+    ini_default(eg, "zend.exception_string_param_max_len")
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value <= 1_000_000)
+        .unwrap_or(0)
 }
 
 fn fn_ini_set(

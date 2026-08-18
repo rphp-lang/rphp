@@ -9,11 +9,24 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,878 pass, 2,402 fail, 110 skip, one is an upstream XFAIL,
-208 are unsupported, and none time out or crash. The headline pass rate is
-54.508%; 4,582 of 5,280 attempted cases reach runtime (86.780%). Relative to
-the preceding 2,864-pass checkpoint, the exact pass-set delta is +14/-0. The
+`tests/lang` cases, 2,883 pass, 2,400 fail, 110 skip, one is an upstream XFAIL,
+205 are unsupported, and none time out or crash. The headline pass rate is
+54.571%; 4,585 of 5,283 attempted cases reach runtime (86.788%). Relative to
+the preceding 2,878-pass checkpoint, the exact pass-set delta is +5/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
+
+Startup `zend.exception_ignore_args` and
+`zend.exception_string_param_max_len` now control both immutable Throwable
+traces and live diagnostic rendering. Throwable strings, uncaught chains,
+`debug_print_backtrace()` and unmatched `match` diagnostics share the selected
+byte limit and escaping contract; zero reports string match subjects by type,
+while ignore-args reports every unmatched subject by type and omits stored call
+arguments. Boolean INI values accept canonical names and numeric truth values
+without treating arbitrary text as true. Three previously unsupported cases
+and two existing output failures become exact passes, with no lost pass, moved
+remaining failure stage, timeout or crash. All five Cargo configurations,
+all-feature/all-target, formatting and unsafe gates pass, as do Composer S0,
+all four Symfony S1 gates, warmed-kernel S2 and cold-build S3 against PHP 8.5.
 
 Repeated CLI `-d error_reporting=...` definitions now initialize the same
 request-local diagnostic mask exposed by `error_reporting()` and `ini_get()`.
