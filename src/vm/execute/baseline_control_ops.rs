@@ -17,6 +17,29 @@ fn include_parse_error(
     message: String,
 ) -> IncludeFileOutcome {
     let error = make_error_value("ParseError", &message);
+    include_parse_error_value(eg, caller_present, error)
+}
+
+fn include_parse_error_at(
+    eg: &mut ExecutorGlobals,
+    caller_present: bool,
+    message: &str,
+    source_file: &str,
+    line: usize,
+) -> IncludeFileOutcome {
+    let error = make_error_value("ParseError", message);
+    if let Some(mut object) = error.as_object_mut() {
+        object.set_property("file", Value::string(source_file));
+        object.set_property("line", Value::long(line as i64));
+    }
+    include_parse_error_value(eg, caller_present, error)
+}
+
+fn include_parse_error_value(
+    eg: &mut ExecutorGlobals,
+    caller_present: bool,
+    error: Value,
+) -> IncludeFileOutcome {
     if caller_present {
         IncludeFileOutcome::Thrown(error)
     } else {
@@ -127,6 +150,20 @@ fn execute_source_unit(
     {
         Ok(statements) => statements,
         Err(error) => {
+            if error.starts_with("syntax error,") {
+                let location = format!(" in {canonical} on line ");
+                if let Some((message, line)) = error.rsplit_once(&location)
+                    && let Ok(line) = line.parse::<usize>()
+                {
+                    return Ok(include_parse_error_at(
+                        eg,
+                        caller.is_some(),
+                        message,
+                        &canonical,
+                        line,
+                    ));
+                }
+            }
             let error = if error.starts_with("memory exhausted in ") {
                 format!("Parse error: {error}")
             } else {

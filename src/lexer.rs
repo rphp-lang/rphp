@@ -865,46 +865,43 @@ impl<'a> Lexer<'a> {
         // Check for 0x (hex), 0b (binary), 0o (octal) prefixes
         if self.src[self.pos] == b'0' && self.pos + 1 < self.src.len() {
             match self.src[self.pos + 1] {
-                b'x' | b'X' => {
+                b'x' | b'X'
+                    if self
+                        .src
+                        .get(self.pos + 2)
+                        .is_some_and(u8::is_ascii_hexdigit) =>
+                {
                     self.pos += 2; // skip 0x
                     let hex_start = self.pos;
                     self.consume_numeric_digits(|byte| byte.is_ascii_hexdigit());
-                    if self.pos == hex_start {
-                        return Err(format!(
-                            "Expected hex digits after 0x at position {}",
-                            start
-                        ));
-                    }
                     let s = decode_numeric_literal(&self.src[hex_start..self.pos]);
                     let n = i64::from_str_radix(&s, 16)
                         .map_err(|_| format!("Invalid hex literal at position {}", start))?;
                     return Ok(Token::Integer(n));
                 }
-                b'b' | b'B' => {
+                b'b' | b'B'
+                    if self
+                        .src
+                        .get(self.pos + 2)
+                        .is_some_and(|byte| matches!(byte, b'0' | b'1')) =>
+                {
                     self.pos += 2; // skip 0b
                     let bin_start = self.pos;
                     self.consume_numeric_digits(|byte| matches!(byte, b'0' | b'1'));
-                    if self.pos == bin_start {
-                        return Err(format!(
-                            "Expected binary digits after 0b at position {}",
-                            start
-                        ));
-                    }
                     let s = decode_numeric_literal(&self.src[bin_start..self.pos]);
                     let n = i64::from_str_radix(&s, 2)
                         .map_err(|_| format!("Invalid binary literal at position {}", start))?;
                     return Ok(Token::Integer(n));
                 }
-                b'o' | b'O' => {
+                b'o' | b'O'
+                    if self
+                        .src
+                        .get(self.pos + 2)
+                        .is_some_and(|byte| matches!(byte, b'0'..=b'7')) =>
+                {
                     self.pos += 2; // skip 0o
                     let octal_start = self.pos;
                     self.consume_numeric_digits(|byte| matches!(byte, b'0'..=b'7'));
-                    if self.pos == octal_start {
-                        return Err(format!(
-                            "Expected octal digits after 0o at position {}",
-                            start
-                        ));
-                    }
                     let literal = decode_numeric_literal(&self.src[octal_start..self.pos]);
                     let number = i64::from_str_radix(&literal, 8)
                         .map_err(|_| format!("Invalid octal literal at position {}", start))?;
@@ -1465,7 +1462,28 @@ mod tests {
 
         assert!(tokens.contains(&Token::Integer(511)));
         assert!(tokens.contains(&Token::Integer(16)));
-        assert!(Lexer::new("<?php echo 0o8;").tokenize().is_err());
+    }
+
+    #[test]
+    fn malformed_prefixed_integers_leave_the_prefix_as_an_identifier() {
+        let tokens = Lexer::new("<?php 0x_1; 0b2; 0o8;").tokenize().unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Integer(0),
+                Token::Identifier("x_1".into(), 1),
+                Token::Semicolon,
+                Token::Integer(0),
+                Token::Identifier("b2".into(), 1),
+                Token::Semicolon,
+                Token::Integer(0),
+                Token::Identifier("o8".into(), 1),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
     }
 
     #[test]

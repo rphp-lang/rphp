@@ -468,6 +468,30 @@ try {{
 }
 
 #[test]
+fn numeric_separator_parse_error_from_include_preserves_php_origin_metadata() {
+    let (_dir, path) = write_temp_php("numeric-separator.php", "<?php\n100_;");
+    let canonical = std::fs::canonicalize(&path)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let source = format!(
+        r#"<?php
+try {{
+    include '{}';
+}} catch (CompileError $error) {{
+    echo get_class($error), '|', $error->getMessage(), '|', $error->getFile(), '|', $error->getLine();
+}}
+"#,
+        path
+    );
+
+    assert_eq!(
+        run_php(&source),
+        format!("ParseError|syntax error, unexpected identifier \"_\"|{canonical}|2")
+    );
+}
+
+#[test]
 fn excessive_syntax_nesting_in_an_included_file_is_catchable() {
     let nested = format!(
         "<?php\nfunction shelter() {{ return {}0{}; }}",

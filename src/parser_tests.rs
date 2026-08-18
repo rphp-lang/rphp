@@ -426,6 +426,48 @@ fn positional_source_argument_after_unpack_is_a_compile_time_error() {
 }
 
 #[test]
+fn malformed_numeric_separators_report_the_source_identifier_and_line() {
+    let cases = [
+        ("100_", "_"),
+        ("10__0", "__0"),
+        ("100_.0", "_"),
+        ("100._0", "_0"),
+        ("0x_0123", "x_0123"),
+        ("0b_0101", "b_0101"),
+        ("1_e2", "_e2"),
+        ("1e_2", "e_2"),
+        ("0x0__F", "__F"),
+        ("0b0__1", "__1"),
+    ];
+
+    for (literal, identifier) in cases {
+        let source = format!("<?php\n{literal};");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let error = Parser::new(tokens)
+            .with_source_name("/fixture/numeric-separator.php")
+            .parse()
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            format!(
+                "syntax error, unexpected identifier \"{identifier}\" in /fixture/numeric-separator.php on line 2"
+            )
+        );
+    }
+}
+
+#[test]
+fn source_less_parser_keeps_structural_unexpected_identifier_errors() {
+    let tokens = Lexer::new("<?php 100_;").tokenize().unwrap();
+
+    assert_eq!(
+        Parser::new(tokens).parse().unwrap_err(),
+        "Expected Semicolon, got Identifier(\"_\", 1)"
+    );
+}
+
+#[test]
 fn source_unpack_after_named_argument_is_a_compile_time_error() {
     let tokens = Lexer::new("<?php dispatch(mode: 'safe', ...$batch);")
         .tokenize()

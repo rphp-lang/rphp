@@ -218,6 +218,13 @@ impl Parser {
         let tok = self.advance();
         if std::mem::discriminant(&tok) == std::mem::discriminant(expected) {
             Ok(())
+        } else if let Token::Identifier(name, line) = &tok
+            && self.source_name.is_some()
+        {
+            Err(self.source_error(
+                &format!("syntax error, unexpected identifier \"{name}\""),
+                *line,
+            ))
         } else {
             Err(format!("Expected {:?}, got {:?}", expected, tok))
         }
