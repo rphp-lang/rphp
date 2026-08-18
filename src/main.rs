@@ -234,6 +234,8 @@ fn main() {
     stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
     eg.generic_metadata = result.generic_metadata;
     eg.constant_attributes = result.constant_attributes;
+    eg.constant_expressions = result.constant_expressions;
+    eg.refresh_constant_deprecation_metadata_presence();
     let emitted_compile_deprecations = !result.deprecations.is_empty();
     eg.emit_compile_deprecations(&result.deprecations);
     if let Some(executed_file) = executed_file {

@@ -31,6 +31,7 @@ pub enum Token {
         line: usize,
     }, // foreach
     As,              // as
+    Insteadof,       // insteadof (trait precedence adaptation)
     Isset,           // isset
     Empty,           // empty
     Unset,           // unset
@@ -692,6 +693,7 @@ impl<'a> Lexer<'a> {
                         "array" => tokens.push(Token::ArrayKw),
                         "foreach" => tokens.push(Token::Foreach { line }),
                         "as" => tokens.push(Token::As),
+                        "insteadof" => tokens.push(Token::Insteadof),
                         "isset" => tokens.push(Token::Isset),
                         "empty" => tokens.push(Token::Empty),
                         "unset" => tokens.push(Token::Unset),

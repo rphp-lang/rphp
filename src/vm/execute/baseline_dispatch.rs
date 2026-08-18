@@ -5816,6 +5816,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::FetchConst => {
                 op_fetch_const(eg, frame, op_array, opline)?;
+                resume_pending_exception!();
             }
 
             OpCode::BindDefaultParam => {
@@ -6446,6 +6447,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::EndCloneWith => op_end_clone_with(eg, frame),
+
+            OpCode::ReportDeprecatedTraitUses => {
+                op_report_deprecated_trait_uses(eg, frame, op_array, opline)?;
+                resume_pending_exception!();
+            }
 
             OpCode::CreateClosure => {
                 op_create_closure(eg, frame, op_array, opline);

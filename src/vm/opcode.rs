@@ -237,6 +237,9 @@ pub enum OpCode {
     AssertCheck = 168,
     /// Close the frame-local readonly update window after clone-with.
     EndCloneWith = 169,
+    /// Report Deprecated attributes on traits directly used by one class-like
+    /// declaration at that declaration's runtime source position.
+    ReportDeprecatedTraitUses = 170,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

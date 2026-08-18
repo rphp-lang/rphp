@@ -9,10 +9,10 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 2,923 pass, 2,374 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 2,955 pass, 2,342 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-55.182%; 4,596 of 5,297 attempted cases reach runtime (86.766%). Relative to
-the preceding 2,902-pass checkpoint, the exact pass-set delta is +21/-0. The
+55.786%; 4,620 of 5,297 attempted cases reach runtime (87.219%). Relative to
+the preceding 2,923-pass checkpoint, the exact pass-set delta is +32/-0. The
 initial PHP 8.5 corpus continues to have no process hazard.
 
 PHP 8.5's final internal `Deprecated` attribute now exposes its nullable
@@ -24,18 +24,28 @@ runtime constants, strict coercion, requested magic names, error handlers and
 `@` suppression share the ordinary attribute and diagnostic paths. Class,
 interface and enum applications stop at PHP's compile-time validation, while
 direct construction and constructorless Reflection initialization preserve the
-built-in readonly lifecycle. The complete 47-case PHP 8.5 `Deprecated`
-attribute directory now has 21 exact passes; the remaining constant-access,
-trait-use, exception-handler, Reflection and Random-dependent cases remain
-explicit gaps. The full corpus changes only those 21 failures to passes. All
-five Cargo configurations, all-feature/all-target, formatting and the exact
-unsafe ratchet pass, as do Composer S0, all four Symfony S1 gates, warmed-kernel
-S2 and cold-build S3. On AMD64, 21 alternating disabled-JIT/quick-loop release
-pairs over the five-million-iteration ordinary-call control retain checksum
-`37500007500000`; baseline p10/median/p90 is 0.356413/0.358575/0.365649 seconds
-and candidate is 0.361431/0.366242/0.371562 seconds. The +2.14% independent
-median movement and +1.55% paired-ratio median remain below the five-percent
-regression ceiling.
+built-in readonly lifecycle. Global constants, class constants and enum cases
+now diagnose direct, dynamic and dependency-expression reads in PHP order,
+including deferred values, recursive messages and throwing handlers. Direct
+deprecated-trait composition reports at the declaration's runtime position;
+nested composition, case-insensitive lookup and `insteadof` exclusions share
+the ordinary trait linker, while direct trait-constant access remains illegal
+and `defined()` stays silent. The complete 47-case PHP 8.5 `Deprecated`
+attribute directory now has 43 exact passes. The four remaining cases are the
+two exception-handler entry diagnostics, deprecated callable metadata copied
+through `Closure::fromCallable()`, and the Random enum argument type check.
+The full corpus gains 32 exact passes without losing one; adjacent gains cover
+trait conflict semantics, constant-expression boundaries and typed class
+constant diagnostics. All five Cargo configurations, all-feature/all-target,
+formatting and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and warmed-kernel S2. On AMD64, 20 alternating release pairs
+with JIT and quick loops disabled retain checksum `60000000` for both
+20-million-read controls. The balanced candidate/baseline movement is +1.680%
+for ordinary global constants (paired-ratio p10/p90 -2.688%/+4.216%) and
++1.852% for ordinary class constants (p10/p90 -0.070%/+3.387%), both below the
+five-percent regression ceiling. Opcode-local negative metadata caching and
+class-constant cache tags keep the use-site diagnostics off ordinary reads;
+includes invalidate warmed global-constant decisions by generation.
 
 CLI `-d precision=...`, `ini_get()` and mutable `ini_set()` now share a
 request-local significant-digit setting. Float conversion uses PHP 8.5 fixed

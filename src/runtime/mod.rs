@@ -317,6 +317,17 @@ pub struct ExecutorGlobals {
     pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
     /// Reflection-only metadata for source-level global constants.
     pub constant_attributes: HashMap<String, Vec<crate::vm::function::AttributeDefinition>>,
+    /// Cold dependency expressions used only when one constant read may need
+    /// to diagnose deprecated constants referenced by its declaration value.
+    pub constant_expressions: HashMap<String, crate::compiler::compile::ConstantExpressionMetadata>,
+    /// Invalidates opcode-local negative Deprecated caches when an include
+    /// contributes additional source-level constant metadata.
+    pub(crate) constant_deprecation_generation: u32,
+    /// Request-wide fast rejection for programs with no constant whose use can
+    /// emit a Deprecated diagnostic. Includes may turn it on but never off.
+    pub(crate) constant_deprecation_metadata_present: bool,
+    /// Recursion guard for self-referential Deprecated messages and aliases.
+    pub(crate) deprecated_symbol_stack: Vec<String>,
     /// Parsed and compiled regular expressions shared by all preg_* calls for
     /// the lifetime of this executor.
     pub regex_cache: crate::regex::RegexCache,
@@ -977,6 +988,10 @@ impl ExecutorGlobals {
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             constant_attributes: HashMap::new(),
+            constant_expressions: HashMap::new(),
+            constant_deprecation_generation: 1,
+            constant_deprecation_metadata_present: false,
+            deprecated_symbol_stack: Vec::new(),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             finally_exceptions: HashMap::new(),
@@ -1073,6 +1088,10 @@ impl ExecutorGlobals {
             generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             constant_attributes: HashMap::new(),
+            constant_expressions: HashMap::new(),
+            constant_deprecation_generation: 1,
+            constant_deprecation_metadata_present: false,
+            deprecated_symbol_stack: Vec::new(),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             finally_exceptions: HashMap::new(),
@@ -2400,7 +2419,17 @@ impl ExecutorGlobals {
         let mut composed_trait_property_names = std::collections::HashSet::new();
         let mut composed_static_trait_names = std::collections::HashSet::new();
         for trait_name in &trait_names {
-            if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
+            let trait_definition =
+                self.class_table
+                    .get(trait_name.as_str())
+                    .cloned()
+                    .or_else(|| {
+                        self.class_table
+                            .iter()
+                            .find(|(registered, _)| registered.eq_ignore_ascii_case(trait_name))
+                            .map(|(_, definition)| std::rc::Rc::clone(definition))
+                    });
+            if let Some(trait_def) = trait_definition {
                 if class_def.is_enum {
                     let declaration_location = class_def
                         .source_file
@@ -2458,6 +2487,16 @@ impl ExecutorGlobals {
                     .function_table
                     .iter()
                     .filter(|(k, _)| k.starts_with(&trait_prefix))
+                    .filter(|(key, _)| {
+                        let method_name = &key[trait_prefix.len()..];
+                        !class_def.trait_precedences.iter().any(|precedence| {
+                            precedence.method.eq_ignore_ascii_case(method_name)
+                                && precedence
+                                    .instead_of
+                                    .iter()
+                                    .any(|excluded| excluded.eq_ignore_ascii_case(trait_name))
+                        })
+                    })
                     .map(|(k, v)| {
                         let method_name = &k[trait_prefix.len()..];
                         let is_static =
@@ -3818,6 +3857,39 @@ impl ExecutorGlobals {
         }
         // Built-in PHP constants (shared source of truth)
         crate::builtin_constant(name)
+    }
+
+    /// Whether reading this source constant can emit a Deprecated diagnostic.
+    /// Kept cold behind an opcode-local generation cache so ordinary constant
+    /// loops do not repeat metadata hash lookups.
+    pub(crate) fn constant_requires_deprecated_use_check(&self, name: &str) -> bool {
+        self.constant_expressions.contains_key(name)
+            || self
+                .constant_attributes
+                .get(name)
+                .is_some_and(|attributes| {
+                    attributes
+                        .iter()
+                        .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"))
+                })
+    }
+
+    pub(crate) fn bump_constant_deprecation_generation(&mut self) {
+        self.constant_deprecation_generation = self.constant_deprecation_generation.wrapping_add(1);
+        if self.constant_deprecation_generation == 0 {
+            self.constant_deprecation_generation = 1;
+        }
+    }
+
+    pub fn refresh_constant_deprecation_metadata_presence(&mut self) {
+        if !self.constant_deprecation_metadata_present {
+            self.constant_deprecation_metadata_present = !self.constant_expressions.is_empty()
+                || self.constant_attributes.values().any(|attributes| {
+                    attributes
+                        .iter()
+                        .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"))
+                });
+        }
     }
 
     /// Check if an implementation's return type is compatible with (covariant to) an interface's

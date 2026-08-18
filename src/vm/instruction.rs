@@ -470,6 +470,7 @@ impl InlineCache {
     const METHOD_LINKED_GENERIC_LONG_CONTRACT: u32 = 16;
     const CALLBACK_PIPELINE_METADATA_ARMED: u32 = 1 << 31;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
+    const DEPRECATED_ENUM_CASE: *const FunctionCommon = 1usize as *const FunctionCommon;
     const GENERIC_CLASS_SCOPE: u32 = 1 << 31;
 
     pub fn empty() -> Self {
@@ -542,6 +543,26 @@ impl InlineCache {
         self.func = std::ptr::null();
         self.class_id = class_id;
         self.prop_info = ((slot as u32) << 2) | flags;
+    }
+
+    /// Enum-case fetches use property flag 2. Their otherwise-idle function
+    /// word records whether the cached case needs the cold Deprecated path.
+    #[inline(always)]
+    pub fn enum_case_requires_deprecated_use_check(&self) -> bool {
+        self.property_flags() == 2 && self.func == Self::DEPRECATED_ENUM_CASE
+    }
+
+    #[inline]
+    pub fn set_enum_case(
+        &mut self,
+        class_id: u32,
+        storage_slot: usize,
+        requires_deprecated_use_check: bool,
+    ) {
+        self.set_property(class_id, storage_slot, 2);
+        if requires_deprecated_use_check {
+            self.func = Self::DEPRECATED_ENUM_CASE;
+        }
     }
 
     /// A typed static write may reuse the canonical storage slot but cannot

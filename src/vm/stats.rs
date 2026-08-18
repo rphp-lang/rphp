@@ -774,6 +774,7 @@ mod inner {
             167 => Some("ValidateCloneWith"),
             168 => Some("AssertCheck"),
             169 => Some("EndCloneWith"),
+            170 => Some("ReportDeprecatedTraitUses"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),

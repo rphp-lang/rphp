@@ -961,6 +961,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("pi", fn_pi, 0, 0);
     reg!("rand", fn_rand, 2, 0, "min", "max");
     reg!("mt_rand", fn_rand, 2, 0, "min", "max");
+    reg!("random_int", fn_random_int, 2, 2, "min", "max");
 
     // --- Output ---
     reg_var!("var_dump", fn_var_dump, 1, "value");
@@ -2675,6 +2676,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![],
         static_properties: vec![],
         constants: vec![],
@@ -2757,6 +2759,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![],
         static_properties: vec![],
         constants: vec![],
@@ -2786,6 +2789,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![
             PropertyDefinition::new(
                 "message".to_string(),
@@ -2849,6 +2853,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             allow_dynamic_properties: false,
             uses: vec![],
             trait_aliases: vec![],
+            trait_precedences: vec![],
             properties: vec![],
             static_properties: vec![],
             constants: vec![],
@@ -2878,6 +2883,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![PropertyDefinition::new(
             "severity".to_string(),
             Some(Value::long(1)),
@@ -2912,6 +2918,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![
             PropertyDefinition::new(
                 "message".to_string(),
@@ -2972,6 +2979,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             allow_dynamic_properties: false,
             uses: vec![],
             trait_aliases: vec![],
+            trait_precedences: vec![],
             properties: vec![],
             static_properties: vec![],
             constants: vec![],
@@ -3002,6 +3010,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![],
         static_properties: vec![],
         constants: vec![],
@@ -3031,6 +3040,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![],
         static_properties: vec![],
         constants: vec![],
@@ -3060,6 +3070,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![],
         static_properties: vec![],
         constants: vec![],
@@ -3089,6 +3100,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![],
         static_properties: vec![],
         constants: vec![],
@@ -3118,6 +3130,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         allow_dynamic_properties: false,
         uses: vec![],
         trait_aliases: vec![],
+        trait_precedences: vec![],
         properties: vec![],
         static_properties: vec![],
         constants: vec![],
@@ -3215,6 +3228,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             allow_dynamic_properties: name.eq_ignore_ascii_case("stdClass"),
             uses: vec![],
             trait_aliases: vec![],
+            trait_precedences: vec![],
             properties: vec![],
             static_properties: vec![],
             constants: vec![],
@@ -3487,7 +3501,11 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         attributes: Vec::new(),
         name: name.to_string(),
         value: Value::long(value),
+        source_file: String::new(),
         evaluation_error: None,
+        source_expression: None,
+        evaluation_scope: None,
+        value_is_deferred: false,
         visibility: Visibility::Public,
         declaring_class: "SplPriorityQueue".to_string(),
         type_hint: ParamTypeHint::Int,
@@ -7946,6 +7964,51 @@ fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     ret!(rv, Value::long(val));
 }
 
+fn fn_random_int(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let min = arg_long!(ed, 0);
+    let max = arg_long!(ed, 1);
+    if min > max {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "random_int(): Argument #1 ($min) must be less than or equal to argument #2 ($max)",
+        ));
+        return Ok(());
+    }
+
+    let range = (max as i128 - min as i128 + 1) as u128;
+    let sample_space = 1u128 << 64;
+    let accepted = sample_space - sample_space % range;
+    let mut source = match std::fs::File::open("/dev/urandom") {
+        Ok(source) => source,
+        Err(_) => {
+            eg.exception = Some(crate::value::make_error_value(
+                "RuntimeException",
+                "random_int(): Unable to read from the system random source",
+            ));
+            return Ok(());
+        }
+    };
+    loop {
+        let mut bytes = [0u8; 8];
+        if source.read_exact(&mut bytes).is_err() {
+            eg.exception = Some(crate::value::make_error_value(
+                "RuntimeException",
+                "random_int(): Unable to read from the system random source",
+            ));
+            return Ok(());
+        }
+        let sample = u64::from_ne_bytes(bytes) as u128;
+        if sample < accepted {
+            let value = min as i128 + (sample % range) as i128;
+            ret!(rv, Value::long(value as i64));
+        }
+    }
+}
+
 // ============================================================================
 // Output functions
 // ============================================================================
@@ -8140,6 +8203,21 @@ fn fn_defined(
         )?;
     }
     let name = arg_str!(ed, 0);
+    if let Some((class_name, constant_name)) = name.split_once("::") {
+        let exists = eg.find_class(class_name).is_some_and(|class| {
+            !class.is_trait
+                && (class
+                    .constants
+                    .iter()
+                    .any(|definition| definition.name == constant_name)
+                    || (class.is_enum
+                        && class
+                            .static_properties
+                            .iter()
+                            .any(|case| case.name == constant_name)))
+        });
+        ret!(rv, Value::bool(exists));
+    }
     ret!(rv, Value::bool(eg.find_constant(&name).is_some()));
 }
 
@@ -8150,7 +8228,102 @@ fn fn_constant(
 ) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     if let Some(value) = eg.find_constant(&name) {
+        let (file, line) = internal_call_source(ed);
+        let use_site = reflection::DeprecatedUseSite {
+            frame: ed,
+            file,
+            line,
+        };
+        reflection::report_deprecated_global_constant_use(&name, &use_site, eg)?;
+        if eg.exception.is_some() {
+            ret!(rv, Value::null());
+        }
         ret!(rv, value);
+    }
+    if let Some((class_name, constant_name)) = name.split_once("::") {
+        let resolved = eg.find_class(class_name).map(|class| {
+            let trait_constant = class.is_trait
+                && class
+                    .constants
+                    .iter()
+                    .any(|definition| definition.name == constant_name);
+            let definition = (!class.is_trait)
+                .then(|| {
+                    class
+                        .constants
+                        .iter()
+                        .find(|definition| definition.name == constant_name)
+                        .cloned()
+                })
+                .flatten();
+            let case = (definition.is_none() && class.is_enum)
+                .then(|| {
+                    class
+                        .static_properties
+                        .iter()
+                        .enumerate()
+                        .find(|(_, case)| case.name == constant_name)
+                        .map(|(index, case)| (index, case.clone()))
+                })
+                .flatten();
+            (
+                class.name.clone(),
+                class.class_id,
+                trait_constant,
+                definition,
+                case,
+            )
+        });
+        if let Some((display_class, class_id, trait_constant, definition, case)) = resolved {
+            if trait_constant {
+                eg.exception = Some(crate::value::make_error_value(
+                    "Error",
+                    &format!(
+                        "Cannot access trait constant {display_class}::{constant_name} directly"
+                    ),
+                ));
+                ret!(rv, Value::null());
+            }
+            let (file, line) = internal_call_source(ed);
+            let use_site = reflection::DeprecatedUseSite {
+                frame: ed,
+                file,
+                line,
+            };
+            if let Some(definition) = definition {
+                reflection::report_deprecated_class_constant_use(
+                    &display_class,
+                    &definition,
+                    &use_site,
+                    eg,
+                )?;
+                if eg.exception.is_some() {
+                    ret!(rv, Value::null());
+                }
+                let value = if definition.value_is_deferred {
+                    let Some(value) =
+                        reflection::evaluate_deferred_class_constant_value(&definition, eg)?
+                    else {
+                        ret!(rv, Value::null());
+                    };
+                    value
+                } else {
+                    definition.value
+                };
+                ret!(rv, value);
+            }
+            if let Some((case_index, case)) = case {
+                reflection::report_deprecated_enum_case_use(&display_class, &case, &use_site, eg)?;
+                if eg.exception.is_some() {
+                    ret!(rv, Value::null());
+                }
+                if let Some(storage_slot) = eg.static_property_storage_slot(class_id, case_index)
+                    && let Some(value) = eg.static_property_value(storage_slot).cloned()
+                {
+                    ret!(rv, value);
+                }
+            }
+        }
     }
     eg.exception = Some(crate::value::make_error_value(
         "Error",

@@ -320,6 +320,131 @@ deferred_deprecation();
 }
 
 #[test]
+fn deprecated_constants_report_direct_dynamic_and_dependency_reads() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $level, ':', $message, '|';
+    return true;
+});
+
+#[Deprecated('replace prefix')]
+const LEGACY_PREFIX = 'A';
+const COMPOSED_VALUE = LEGACY_PREFIX . 'B';
+
+#[Deprecated(LEGACY_PREFIX, since: '8.5')]
+const LEGACY_VALUE = 7;
+
+class DeprecatedConstantProbe {
+    #[Deprecated('replace member')]
+    public const LEGACY = 'X';
+    public const COMPOSED = self::LEGACY . 'Y';
+}
+
+echo COMPOSED_VALUE, '|';
+echo LEGACY_VALUE, '|';
+echo (int) defined('LEGACY_VALUE'), '|';
+echo DeprecatedConstantProbe::COMPOSED, '|';
+echo constant('DeprecatedConstantProbe::LEGACY');
+"#,
+        ),
+        concat!(
+            "16384:Constant LEGACY_PREFIX is deprecated, replace prefix|AB|",
+            "16384:Constant LEGACY_PREFIX is deprecated, replace prefix|",
+            "16384:Constant LEGACY_VALUE is deprecated since 8.5, A|7|1|",
+            "16384:Constant DeprecatedConstantProbe::LEGACY is deprecated, replace member|XY|",
+            "16384:Constant DeprecatedConstantProbe::LEGACY is deprecated, replace member|X",
+        )
+    );
+}
+
+#[test]
+fn deprecated_traits_report_at_direct_use_and_honor_precedence() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $message, '|';
+    return true;
+});
+
+#[Deprecated('retire left', since: '8.5')]
+trait LegacyLeft {
+    public function select() { return 'left'; }
+}
+
+#[Deprecated('retire right')]
+trait LegacyRight {
+    public function select() { return 'right'; }
+}
+
+trait LegacyComposite {
+    use LegacyLeft;
+}
+
+class DeprecatedTraitConsumer {
+    use Legacyleft, LegacyRight {
+        LegacyLeft::select insteadof LegacyRight;
+    }
+}
+
+trait PlainConstantTrait { public const VALUE = 1; }
+
+echo (new DeprecatedTraitConsumer())->select(), '|';
+echo (int) defined('PlainConstantTrait::VALUE'), '|';
+try {
+    constant('PlainConstantTrait::VALUE');
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "Trait LegacyLeft used by LegacyComposite is deprecated since 8.5, retire left|",
+            "Trait LegacyLeft used by DeprecatedTraitConsumer is deprecated since 8.5, retire left|",
+            "Trait LegacyRight used by DeprecatedTraitConsumer is deprecated, retire right|",
+            "left|0|Cannot access trait constant PlainConstantTrait::VALUE directly",
+        )
+    );
+}
+
+#[test]
+fn deprecated_enum_case_and_runtime_class_constant_keep_their_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $message, '|';
+    return true;
+});
+
+define('RUNTIME_SUFFIX', random_int(1, 2) === 1 ? 'a' : 'b');
+
+enum DeprecatedCaseProbe {
+    #[Deprecated('use Current')]
+    case Legacy;
+    case Current;
+}
+
+class DeferredConstantProbe {
+    #[Deprecated]
+    public const VALUE = self::class . '-' . RUNTIME_SUFFIX;
+}
+
+echo DeprecatedCaseProbe::Legacy->name, '|';
+$value = DeferredConstantProbe::VALUE;
+echo (int) ($value === 'DeferredConstantProbe-' . RUNTIME_SUFFIX);
+"#,
+        ),
+        concat!(
+            "Enum case DeprecatedCaseProbe::Legacy is deprecated, use Current|Legacy|",
+            "Constant DeferredConstantProbe::VALUE is deprecated|1",
+        )
+    );
+}
+
+#[test]
 fn deprecated_attribute_rejects_non_trait_class_like_targets_during_compilation() {
     for (kind, declaration) in [
         ("class", "class ForbiddenDeprecatedClass {}"),

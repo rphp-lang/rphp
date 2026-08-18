@@ -754,6 +754,14 @@ pub struct TraitAlias {
     pub visibility: Option<Visibility>,
 }
 
+/// One `TraitA::method insteadof TraitB, TraitC` precedence rule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitPrecedence {
+    pub trait_name: String,
+    pub method: String,
+    pub instead_of: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Noop,
@@ -883,6 +891,7 @@ pub enum Stmt {
         methods: Vec<ClassMethod>,
         uses: Vec<GenericAncestor>, // trait names from `use Foo<T>, Bar<U>;`
         trait_aliases: Vec<TraitAlias>,
+        trait_precedences: Vec<TraitPrecedence>,
         generic_params: Vec<GenericParameter>,
     },
     Interface {
@@ -895,6 +904,7 @@ pub enum Stmt {
         generic_params: Vec<GenericParameter>,
     },
     Trait {
+        line: usize,
         attributes: Vec<Attribute>,
         name: String,
         properties: Vec<ClassProperty>,
@@ -902,6 +912,7 @@ pub enum Stmt {
         methods: Vec<ClassMethod>,
         uses: Vec<GenericAncestor>,
         trait_aliases: Vec<TraitAlias>,
+        trait_precedences: Vec<TraitPrecedence>,
         generic_params: Vec<GenericParameter>,
     },
     AssignProp {
@@ -966,7 +977,7 @@ pub enum Stmt {
         implements: Vec<GenericAncestor>,
         uses: Vec<GenericAncestor>,
         trait_aliases: Vec<TraitAlias>,
-        cases: Vec<(String, Option<Expr>)>, // (case_name, optional_value)
+        cases: Vec<EnumCase>,
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
     },
@@ -1161,6 +1172,13 @@ pub struct ClassConstant {
     pub value: Expr,
     pub type_hint: Option<TypeHint>,
     pub is_final: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumCase {
+    pub attributes: Vec<Attribute>,
+    pub name: String,
+    pub value: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

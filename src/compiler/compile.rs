@@ -591,8 +591,19 @@ pub struct CompileResult {
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
     pub constant_attributes: HashMap<String, Vec<AttributeDefinition>>,
+    pub constant_expressions: HashMap<String, ConstantExpressionMetadata>,
     pub generic_metadata: GenericMetadata,
     pub deprecations: Vec<CompileDeprecation>,
+}
+
+/// Cold source expression retained only for constants whose value references
+/// another symbol. PHP diagnoses deprecated dependencies when the containing
+/// constant is read, even when its scalar value was folded during compilation.
+#[derive(Clone, Debug)]
+pub struct ConstantExpressionMetadata {
+    pub expression: Expr,
+    pub evaluation_scope: Rc<AttributeEvaluationScope>,
+    pub source_file: String,
 }
 
 impl CompileResult {
@@ -2035,10 +2046,119 @@ fn normalize_typed_declaration_default(value: Value, hint: &ParamTypeHint) -> Op
     }
 }
 
+fn constant_expression_references_symbol(expression: &Expr) -> bool {
+    match expression {
+        Expr::Constant(_)
+        | Expr::ClassConstant { .. }
+        | Expr::DynamicClassConstant { .. }
+        | Expr::DynamicNamedClassConstant { .. } => true,
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => {
+            constant_expression_references_symbol(left)
+                || constant_expression_references_symbol(right)
+        }
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot(inner)
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => constant_expression_references_symbol(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            constant_expression_references_symbol(condition)
+                || constant_expression_references_symbol(then_expr)
+                || constant_expression_references_symbol(else_expr)
+        }
+        Expr::ArrayLiteral(elements) => elements.iter().any(|element| {
+            element
+                .key
+                .as_ref()
+                .is_some_and(constant_expression_references_symbol)
+                || constant_expression_references_symbol(&element.value)
+        }),
+        Expr::ArrayAccess { array, index, .. } => {
+            constant_expression_references_symbol(array)
+                || constant_expression_references_symbol(index)
+        }
+        _ => false,
+    }
+}
+
+/// Runtime materialization is reserved for PHP constant-expression forms that
+/// this evaluator can reproduce after a define() or external class becomes
+/// available. An unavailable symbol must not postpone an otherwise invalid
+/// operation such as a function call from compile time to first use.
+fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
+    match expression {
+        Expr::Integer(_)
+        | Expr::Float(_)
+        | Expr::StringLiteral(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Constant(_)
+        | Expr::ClassConstant { .. } => true,
+        Expr::MagicConstant { name, .. } => ["__LINE__", "__FILE__", "__DIR__", "__CLASS__"]
+            .iter()
+            .any(|supported| name.eq_ignore_ascii_case(supported)),
+        Expr::DynamicNamedClassConstant { constant, .. } => {
+            deferred_constant_expression_is_supported(constant)
+        }
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => {
+            deferred_constant_expression_is_supported(class)
+                && deferred_constant_expression_is_supported(constant)
+        }
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => {
+            deferred_constant_expression_is_supported(left)
+                && deferred_constant_expression_is_supported(right)
+        }
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot(inner) => deferred_constant_expression_is_supported(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            deferred_constant_expression_is_supported(condition)
+                && deferred_constant_expression_is_supported(then_expr)
+                && deferred_constant_expression_is_supported(else_expr)
+        }
+        Expr::ArrayLiteral(elements) => elements.iter().all(|element| {
+            element
+                .key
+                .as_ref()
+                .is_none_or(deferred_constant_expression_is_supported)
+                && deferred_constant_expression_is_supported(&element.value)
+        }),
+        Expr::ArrayAccess { array, index, .. } => {
+            deferred_constant_expression_is_supported(array)
+                && deferred_constant_expression_is_supported(index)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ClassConstantDefinition {
     pub name: String,
     pub value: Value,
+    /// Source unit retained only for deferred magic-constant evaluation and
+    /// use-site dependency diagnostics.
+    pub source_file: String,
+    /// Source expression retained only when dependency diagnostics or a
+    /// runtime-defined constant prevent complete eager materialization.
+    pub source_expression: Option<Box<Expr>>,
+    pub evaluation_scope: Option<Rc<AttributeEvaluationScope>>,
+    pub value_is_deferred: bool,
     /// PHP resolves class-constant dependency graphs lazily. A declaration
     /// cycle therefore links successfully and raises Error only when the
     /// affected constant is read.
@@ -2050,12 +2170,34 @@ pub struct ClassConstantDefinition {
     pub attributes: Vec<AttributeDefinition>,
 }
 
+impl ClassConstantDefinition {
+    /// Ordinary class-constant reads stay on the established cache fast path.
+    /// Only declarations with a direct Deprecated marker, a dependency
+    /// expression, or a deferred value need the cold use-site reporter.
+    #[inline]
+    pub(crate) fn requires_deprecated_use_check(&self) -> bool {
+        self.value_is_deferred
+            || self.source_expression.is_some()
+            || self
+                .attributes
+                .iter()
+                .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TraitMethodAlias {
     pub trait_name: Option<String>,
     pub method: String,
     pub alias: Option<String>,
     pub visibility: Option<Visibility>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitMethodPrecedence {
+    pub trait_name: String,
+    pub method: String,
+    pub instead_of: Vec<String>,
 }
 
 pub struct ClassDef {
@@ -2077,6 +2219,7 @@ pub struct ClassDef {
     pub is_enum: bool,
     pub uses: Vec<String>, // trait names from `use Foo, Bar;`
     pub trait_aliases: Vec<TraitMethodAlias>,
+    pub trait_precedences: Vec<TraitMethodPrecedence>,
     /// Instance-property declarations in deterministic layout order.
     pub properties: Vec<PropertyDefinition>,
     /// Static properties remain outside every object layout. Mutable static
@@ -2201,6 +2344,7 @@ pub struct Compiler {
     /// Source-unit constant attributes are shared by nested compilers and
     /// published into one cold executor side table after compilation.
     constant_attributes: Rc<RefCell<HashMap<String, Vec<AttributeDefinition>>>>,
+    constant_expressions: Rc<RefCell<HashMap<String, ConstantExpressionMetadata>>>,
     /// Cold declaration metadata. Finalized into one interned side table after
     /// compilation; never embedded in a function, frame, object or Value.
     generic_declarations: Vec<PendingGenericDeclaration>,
@@ -2412,6 +2556,7 @@ impl Compiler {
             try_entries: Vec::new(),
             class_defs: Vec::new(),
             constant_attributes: Rc::new(RefCell::new(HashMap::new())),
+            constant_expressions: Rc::new(RefCell::new(HashMap::new())),
             generic_declarations: Vec::new(),
             generic_inheritances: Vec::new(),
             generic_use_sites: Rc::new(RefCell::new(Vec::new())),
@@ -2556,6 +2701,7 @@ impl Compiler {
         child.generic_use_sites = Rc::clone(&self.generic_use_sites);
         child.compile_deprecations = Rc::clone(&self.compile_deprecations);
         child.constant_attributes = Rc::clone(&self.constant_attributes);
+        child.constant_expressions = Rc::clone(&self.constant_expressions);
         // Nested op arrays still compile in the same file scope. Keeping this
         // context here prevents methods and closures from silently losing
         // namespace aliases or strict-types semantics when their bytecode is
@@ -3495,6 +3641,7 @@ impl Compiler {
             functions: self.functions,
             class_defs: self.class_defs,
             constant_attributes: self.constant_attributes.borrow().clone(),
+            constant_expressions: self.constant_expressions.borrow().clone(),
             generic_metadata,
             deprecations: self.compile_deprecations.borrow().clone(),
         })
@@ -3758,10 +3905,8 @@ impl Compiler {
         target: i64,
         lexical_class: Option<&str>,
         lexical_parent: Option<&str>,
-        dynamic_scope: bool,
+        _dynamic_scope: bool,
     ) -> Vec<AttributeDefinition> {
-        let runtime_scope = dynamic_scope
-            || lexical_class.is_some_and(|class| class.starts_with("class@anonymous#"));
         let evaluation_scope = Rc::new(AttributeEvaluationScope {
             namespace: self.current_namespace.clone(),
             class_imports: self.use_map.clone(),
@@ -3805,8 +3950,12 @@ impl Compiler {
                         let value = self.eval_const_expr_in_source(expression, &known);
                         AttributeArgument {
                             name,
-                            deferred_expression: (runtime_scope || value.is_err())
-                                .then(|| Box::new(expression.clone())),
+                            // Attribute arguments are instantiated only on
+                            // cold semantic/Reflection paths. Retaining their
+                            // source expression lets PHP 8.5 diagnose a
+                            // deprecated constant used as another symbol's
+                            // deprecation message, including self references.
+                            deferred_expression: Some(Box::new(expression.clone())),
                             value,
                         }
                     })
@@ -7883,6 +8032,7 @@ impl Compiler {
                     methods: methods.clone(),
                     uses: uses.clone(),
                     trait_aliases: trait_aliases.clone(),
+                    trait_precedences: Vec::new(),
                     generic_params: Vec::new(),
                 };
                 if let Err(error) = self.compile_stmt(&declaration) {

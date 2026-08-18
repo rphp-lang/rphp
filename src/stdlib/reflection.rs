@@ -15,8 +15,7 @@ use std::rc::Rc;
 use ancestry::reflected_arguments;
 use functions::reflection_function_target;
 
-use crate::compiler::compile::Compiler;
-use crate::compiler::compile::PropertyDefinition;
+use crate::compiler::compile::{ClassConstantDefinition, Compiler, PropertyDefinition};
 use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities};
 use crate::parser::{Expr, Visibility};
 use crate::runtime::{ExecutorGlobals, LazyObjectStrategy};
@@ -797,14 +796,445 @@ fn evaluate_deferred_attribute_expression(
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct DeprecatedUseSite {
+    pub frame: *mut ExecuteData,
+    pub file: String,
+    pub line: usize,
+}
+
+fn deprecated_attribute(attributes: &[AttributeDefinition]) -> Option<(AttributeDefinition, bool)> {
+    let mut definitions = attributes
+        .iter()
+        .filter(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"));
+    definitions
+        .next()
+        .cloned()
+        .map(|definition| (definition, definitions.next().is_some()))
+}
+
+fn emit_deprecated_symbol_diagnostic(
+    attributes: &[AttributeDefinition],
+    diagnostic_prefix: &str,
+    use_site: &DeprecatedUseSite,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((definition, repeated)) = deprecated_attribute(attributes) else {
+        return Ok(());
+    };
+    let mut instance = Value::undef();
+    instantiate_attribute_definition_at_use(
+        use_site.frame,
+        &mut instance,
+        &definition,
+        repeated,
+        eg,
+        Some(use_site),
+    )?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    let (message, since) = instance
+        .as_object()
+        .map(|object| {
+            let message = object
+                .get_property("message")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let since = object
+                .get_property("since")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            (message, since)
+        })
+        .unwrap_or((None, None));
+    let mut diagnostic = format!("{diagnostic_prefix} is deprecated");
+    if let Some(since) = since {
+        diagnostic.push_str(" since ");
+        diagnostic.push_str(&since);
+    }
+    if let Some(message) = message {
+        diagnostic.push_str(", ");
+        diagnostic.push_str(&message);
+    }
+    let handled = crate::stdlib::dispatch_php_error(
+        eg,
+        use_site.frame,
+        16_384,
+        &diagnostic,
+        &use_site.file,
+        use_site.line,
+    )?;
+    if !handled {
+        eg.record_last_error(16_384, &diagnostic, &use_site.file, use_site.line);
+    }
+    if !handled && eg.error_reporting & 16_384 != 0 {
+        eg.write_output(
+            format!(
+                "\nDeprecated: {diagnostic} in {} on line {}\n",
+                use_site.file, use_site.line
+            )
+            .as_bytes(),
+        );
+    }
+    Ok(())
+}
+
+fn guarded_deprecated_symbol(
+    identity: String,
+    eg: &mut ExecutorGlobals,
+    report: impl FnOnce(&mut ExecutorGlobals) -> Result<(), VmError>,
+) -> Result<(), VmError> {
+    if eg
+        .deprecated_symbol_stack
+        .iter()
+        .any(|active| active.eq_ignore_ascii_case(&identity))
+    {
+        return Ok(());
+    }
+    eg.deprecated_symbol_stack.push(identity);
+    let result = report(eg);
+    eg.deprecated_symbol_stack.pop();
+    result
+}
+
+pub(crate) fn report_deprecated_global_constant_use(
+    name: &str,
+    use_site: &DeprecatedUseSite,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let attributes = eg
+        .constant_attributes
+        .get(name)
+        .cloned()
+        .unwrap_or_default();
+    let expression = eg.constant_expressions.get(name).cloned();
+    if attributes.is_empty() && expression.is_none() {
+        return Ok(());
+    }
+    let identity = format!("constant:{name}");
+    guarded_deprecated_symbol(identity, eg, |eg| {
+        if let Some(expression) = &expression {
+            report_deprecated_expression_references(
+                &expression.expression,
+                &expression.evaluation_scope,
+                &expression.source_file,
+                use_site,
+                eg,
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        emit_deprecated_symbol_diagnostic(&attributes, &format!("Constant {name}"), use_site, eg)
+    })
+}
+
+pub(crate) fn report_deprecated_class_constant_use(
+    display_class: &str,
+    definition: &ClassConstantDefinition,
+    use_site: &DeprecatedUseSite,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let identity = format!(
+        "class-constant:{}::{}",
+        definition.declaring_class, definition.name
+    );
+    let definition = definition.clone();
+    guarded_deprecated_symbol(identity, eg, |eg| {
+        if let (Some(expression), Some(scope)) =
+            (&definition.source_expression, &definition.evaluation_scope)
+        {
+            report_deprecated_expression_references(
+                expression,
+                scope,
+                &definition.source_file,
+                use_site,
+                eg,
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        emit_deprecated_symbol_diagnostic(
+            &definition.attributes,
+            &format!("Constant {display_class}::{}", definition.name),
+            use_site,
+            eg,
+        )
+    })
+}
+
+pub(crate) fn report_deprecated_enum_case_use(
+    class_name: &str,
+    case: &PropertyDefinition,
+    use_site: &DeprecatedUseSite,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let attributes = case.attributes.clone();
+    let case_name = case.name.clone();
+    guarded_deprecated_symbol(format!("enum-case:{class_name}::{case_name}"), eg, |eg| {
+        emit_deprecated_symbol_diagnostic(
+            &attributes,
+            &format!("Enum case {class_name}::{case_name}"),
+            use_site,
+            eg,
+        )
+    })
+}
+
+pub(crate) fn report_deprecated_trait_use(
+    trait_name: &str,
+    consumer_name: &str,
+    attributes: &[AttributeDefinition],
+    use_site: &DeprecatedUseSite,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let attributes = attributes.to_vec();
+    guarded_deprecated_symbol(format!("trait:{trait_name}"), eg, |eg| {
+        emit_deprecated_symbol_diagnostic(
+            &attributes,
+            &format!("Trait {trait_name} used by {consumer_name}"),
+            use_site,
+            eg,
+        )
+    })
+}
+
+pub(crate) fn evaluate_deferred_class_constant_value(
+    definition: &ClassConstantDefinition,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<Value>, VmError> {
+    let (Some(expression), Some(scope)) =
+        (&definition.source_expression, &definition.evaluation_scope)
+    else {
+        return Ok(Some(definition.value.clone()));
+    };
+    match evaluate_deferred_attribute_expression(expression, scope, &definition.source_file, eg) {
+        Ok(value) => Ok(Some(value)),
+        Err(DeferredAttributeError::Message(error)) => {
+            eg.exception = Some(make_error_value("Error", &error));
+            Ok(None)
+        }
+        Err(DeferredAttributeError::Vm(error)) => Err(error),
+    }
+}
+
+fn report_deprecated_expression_references(
+    expression: &Expr,
+    scope: &AttributeEvaluationScope,
+    source_file: &str,
+    use_site: &DeprecatedUseSite,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    match expression {
+        Expr::Constant(name) => {
+            let (primary, fallback) = resolve_attribute_constant_name(name, scope);
+            let resolved = if eg.find_constant(&primary).is_some() {
+                Some(primary)
+            } else {
+                fallback.filter(|name| eg.find_constant(name).is_some())
+            };
+            if let Some(name) = resolved {
+                report_deprecated_global_constant_use(&name, use_site, eg)?;
+            }
+        }
+        Expr::ClassConstant {
+            class_name,
+            constant,
+        } => {
+            let class_name = resolve_attribute_class_name(class_name, scope);
+            let resolved = eg.find_class(&class_name).map(|class| {
+                let definition = class
+                    .constants
+                    .iter()
+                    .find(|definition| definition.name == *constant)
+                    .cloned();
+                let case = (definition.is_none() && class.is_enum)
+                    .then(|| {
+                        class
+                            .static_properties
+                            .iter()
+                            .find(|case| case.name == *constant)
+                            .cloned()
+                    })
+                    .flatten();
+                (class.name.clone(), definition, case)
+            });
+            if let Some((class_name, definition, case)) = resolved {
+                if let Some(definition) = definition {
+                    report_deprecated_class_constant_use(&class_name, &definition, use_site, eg)?;
+                } else if let Some(case) = case {
+                    report_deprecated_enum_case_use(&class_name, &case, use_site, eg)?;
+                }
+            }
+        }
+        Expr::DynamicNamedClassConstant {
+            class_name,
+            constant,
+        } => {
+            let value = evaluate_deferred_attribute_expression(constant, scope, source_file, eg);
+            if let Ok(value) = value
+                && let Some(constant) = value.as_str()
+            {
+                report_deprecated_expression_references(
+                    &Expr::ClassConstant {
+                        class_name: class_name.clone(),
+                        constant: constant.to_string(),
+                    },
+                    scope,
+                    source_file,
+                    use_site,
+                    eg,
+                )?;
+            }
+        }
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => {
+            let class = evaluate_deferred_attribute_expression(class, scope, source_file, eg);
+            let constant = evaluate_deferred_attribute_expression(constant, scope, source_file, eg);
+            if let (Ok(class), Ok(constant)) = (class, constant)
+                && let (Some(class), Some(constant)) = (class.as_str(), constant.as_str())
+            {
+                let dynamic_scope = AttributeEvaluationScope {
+                    namespace: None,
+                    class_imports: HashMap::new(),
+                    constant_imports: HashMap::new(),
+                    lexical_class: scope.lexical_class.clone(),
+                    lexical_parent: scope.lexical_parent.clone(),
+                    source_directory: scope.source_directory.clone(),
+                };
+                report_deprecated_expression_references(
+                    &Expr::ClassConstant {
+                        class_name: class.to_string(),
+                        constant: constant.to_string(),
+                    },
+                    &dynamic_scope,
+                    source_file,
+                    use_site,
+                    eg,
+                )?;
+            }
+        }
+        Expr::BinaryOp { op, left, right } => {
+            report_deprecated_expression_references(left, scope, source_file, use_site, eg)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            let skip_right = match op {
+                crate::parser::BinOp::And => {
+                    evaluate_deferred_attribute_expression(left, scope, source_file, eg)
+                        .is_ok_and(|value| !value.is_truthy())
+                }
+                crate::parser::BinOp::Or => {
+                    evaluate_deferred_attribute_expression(left, scope, source_file, eg)
+                        .is_ok_and(|value| value.is_truthy())
+                }
+                _ => false,
+            };
+            if !skip_right {
+                report_deprecated_expression_references(right, scope, source_file, use_site, eg)?;
+            }
+        }
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot(inner)
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => {
+            report_deprecated_expression_references(inner, scope, source_file, use_site, eg)?;
+        }
+        Expr::Elvis { left, right } | Expr::NullCoalesce { left, right } => {
+            report_deprecated_expression_references(left, scope, source_file, use_site, eg)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            let left_value =
+                evaluate_deferred_attribute_expression(left, scope, source_file, eg).ok();
+            let skip_right = match expression {
+                Expr::Elvis { .. } => left_value.is_some_and(|value| value.is_truthy()),
+                Expr::NullCoalesce { .. } => {
+                    left_value.is_some_and(|value| value.value_type() != ValueType::Null)
+                }
+                _ => unreachable!(),
+            };
+            if !skip_right {
+                report_deprecated_expression_references(right, scope, source_file, use_site, eg)?;
+            }
+        }
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            report_deprecated_expression_references(condition, scope, source_file, use_site, eg)?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            let selected =
+                evaluate_deferred_attribute_expression(condition, scope, source_file, eg)
+                    .ok()
+                    .is_some_and(|value| value.is_truthy());
+            report_deprecated_expression_references(
+                if selected { then_expr } else { else_expr },
+                scope,
+                source_file,
+                use_site,
+                eg,
+            )?;
+        }
+        Expr::ArrayLiteral(elements) => {
+            for element in elements {
+                if let Some(key) = &element.key {
+                    report_deprecated_expression_references(key, scope, source_file, use_site, eg)?;
+                }
+                report_deprecated_expression_references(
+                    &element.value,
+                    scope,
+                    source_file,
+                    use_site,
+                    eg,
+                )?;
+                if eg.exception.is_some() {
+                    break;
+                }
+            }
+        }
+        Expr::ArrayAccess { array, index, .. } => {
+            report_deprecated_expression_references(array, scope, source_file, use_site, eg)?;
+            if eg.exception.is_none() {
+                report_deprecated_expression_references(index, scope, source_file, use_site, eg)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn evaluate_attribute_arguments(
     definition: &AttributeDefinition,
     eg: &mut ExecutorGlobals,
+    deprecated_use_site: Option<&DeprecatedUseSite>,
 ) -> Result<Option<Value>, VmError> {
     let mut arguments = PhpArray::with_packed_capacity(definition.arguments.len());
     for argument in &definition.arguments {
         let value = match (&argument.value, &argument.deferred_expression) {
             (_, Some(expression)) => {
+                if let Some(use_site) = deprecated_use_site {
+                    report_deprecated_expression_references(
+                        expression,
+                        &definition.evaluation_scope,
+                        &definition.source_file,
+                        use_site,
+                        eg,
+                    )?;
+                    if eg.exception.is_some() {
+                        return Ok(None);
+                    }
+                }
                 match evaluate_deferred_attribute_expression(
                     expression,
                     &definition.evaluation_scope,
@@ -1001,7 +1431,7 @@ fn attribute_get_arguments(
     let Some(definition) = definition else {
         return return_value(rv, Value::array(PhpArray::new()));
     };
-    let Some(arguments) = evaluate_attribute_arguments(&definition, eg)? else {
+    let Some(arguments) = evaluate_attribute_arguments(&definition, eg, None)? else {
         return Ok(());
     };
     return_value(rv, arguments)
@@ -1095,7 +1525,18 @@ pub(crate) fn instantiate_attribute_definition(
     repeated: bool,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(arguments) = evaluate_attribute_arguments(definition, eg)? else {
+    instantiate_attribute_definition_at_use(ed, rv, definition, repeated, eg, None)
+}
+
+fn instantiate_attribute_definition_at_use(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    definition: &AttributeDefinition,
+    repeated: bool,
+    eg: &mut ExecutorGlobals,
+    deprecated_use_site: Option<&DeprecatedUseSite>,
+) -> Result<(), VmError> {
+    let Some(arguments) = evaluate_attribute_arguments(definition, eg, deprecated_use_site)? else {
         return Ok(());
     };
     let name = definition.name.clone();
@@ -1125,7 +1566,7 @@ pub(crate) fn instantiate_attribute_definition(
         ));
         return Ok(());
     };
-    let Some(marker_arguments) = evaluate_attribute_arguments(&marker, eg)? else {
+    let Some(marker_arguments) = evaluate_attribute_arguments(&marker, eg, None)? else {
         return Ok(());
     };
     let marker_flag = marker_arguments

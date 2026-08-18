@@ -357,6 +357,28 @@ try {
     );
 }
 
+#[test]
+fn random_int_uses_inclusive_bounds_and_validates_range_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$valid = true;
+for ($i = 0; $i < 64; $i++) {
+    $value = random_int(-2, 2);
+    $valid = $valid && $value >= -2 && $value <= 2;
+}
+echo (int) $valid, '|', random_int(PHP_INT_MIN, PHP_INT_MIN), '|';
+try {
+    random_int(2, 1);
+} catch (ValueError $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "1|-9223372036854775808|random_int(): Argument #1 ($min) must be less than or equal to argument #2 ($max)"
+    );
+}
+
 // === Math functions ===
 #[test]
 fn test_intdiv() {

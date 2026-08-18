@@ -227,6 +227,10 @@ fn execute_source_unit(
     eg.emit_compile_deprecations(&compile_result.deprecations);
     eg.constant_attributes
         .extend(std::mem::take(&mut compile_result.constant_attributes));
+    eg.constant_expressions
+        .extend(std::mem::take(&mut compile_result.constant_expressions));
+    eg.refresh_constant_deprecation_metadata_presence();
+    eg.bump_constant_deprecation_generation();
 
     // Includes are separate compilation units, but both generic runtimes and
     // Reflection consume one executor-wide interned metadata graph. Merge the

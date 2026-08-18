@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-08-15
+Status: active coordination map, 2026-08-18
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,923/5,599 (55.182%) with zero timeouts and zero crashes. PHP 8.5's built-in `Deprecated` callable diagnostics, metadata, readonly lifecycle and invalid declaration targets add 21 exact passes without losing one; ordinary call overhead remains below the five-percent performance ceiling. Trait-use and constant deprecations are the next adjacent slice, while remaining INI directives, `disable_functions` and broader exception-handler lifecycle stay explicit gaps. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 2,955/5,599 (55.786%) with zero timeouts and zero crashes. PHP 8.5 `Deprecated` diagnostics now cover callable invocation, global/class constants, enum cases and direct trait composition; the exact adjacent delta is +32/-0 and the complete attribute directory is 43/47. Exception-handler entry, callable-to-Closure metadata propagation, the Random enum dependency, remaining INI directives and `disable_functions` are explicit next gaps. Ordinary constant controls remain below the five-percent performance ceiling. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

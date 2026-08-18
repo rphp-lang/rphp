@@ -610,6 +610,20 @@ pairs keep the ordinary five-million-call control at +2.14% by independent
 medians and +1.55% by the paired-ratio median, with identical checksums and both
 below the five-percent ceiling.
 
+The `deprecated-symbols` checkpoint reaches 2,955 passes with 2,342 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+PHP 8.5 Deprecated diagnostics now cover global and class constants, enum cases
+and direct trait composition, including dependency-expression ordering,
+deferred values, throwing handlers, recursive messages, nested traits and
+`insteadof` exclusions. The exact full-corpus delta is +32/-0 and the focused
+Deprecated symbol cluster is 21/21; the complete Deprecated directory is now
+43/47. Exception-handler entry, callable-to-Closure metadata propagation and
+the Random enum type-validation dependency remain explicit gaps. All five
+feature configurations, all-target, unsafe, Composer S0, four Symfony S1 gates
+and warmed-kernel S2 pass. Twenty alternating disabled-JIT/quick-loop AMD64
+release pairs put ordinary global-constant reads at +1.680% and class-constant
+reads at +1.852%, below their five-percent ceiling with identical checksums.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

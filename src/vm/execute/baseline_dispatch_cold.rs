@@ -126,6 +126,27 @@ fn report_php_diagnostic(
     Ok(())
 }
 
+fn deprecated_use_site(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> crate::stdlib::reflection::DeprecatedUseSite {
+    let instruction_index = op_array
+        .instructions
+        .iter()
+        .position(|instruction| std::ptr::eq(instruction, opline))
+        .expect("active deprecated-use instruction belongs to its op array");
+    crate::stdlib::reflection::DeprecatedUseSite {
+        frame,
+        file: if op_array.source_file.is_empty() {
+            op_array.name.clone()
+        } else {
+            op_array.source_file.to_string()
+        },
+        line: op_array.source_line(instruction_index).unwrap_or(0),
+    }
+}
+
 fn report_php_notice(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -2192,7 +2213,11 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         return Ok(ColdResult::Done);
     }
 
-    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 1 {
+    let cached_constant_flags = cache.property_flags();
+    if class_id != 0
+        && cache.class_id == class_id
+        && matches!(cached_constant_flags, 1 | 3)
+    {
         let class = eg
             .class_by_id(class_id)
             .expect("cached class constant owner must stay registered");
@@ -2201,11 +2226,90 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             .get(cache.property_slot())
             .expect("cached class constant index must stay valid");
         if !dynamic_name || definition.name == constant {
-            set_result(definition.value.clone());
+            if cached_constant_flags == 1 {
+                set_result(definition.value.clone());
+                return Ok(ColdResult::Done);
+            }
+            let definition = definition.clone();
+            let display_class = class.name.clone();
+            let use_site = deprecated_use_site(frame, op_array, opline);
+            crate::stdlib::reflection::report_deprecated_class_constant_use(
+                &display_class,
+                &definition,
+                &use_site,
+                eg,
+            )?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+            let value = if definition.value_is_deferred {
+                let Some(value) =
+                    crate::stdlib::reflection::evaluate_deferred_class_constant_value(
+                        &definition,
+                        eg,
+                    )?
+                else {
+                    let exception = eg
+                        .exception
+                        .take()
+                        .expect("deferred class constant failure sets an exception");
+                    return Ok(match throw_in_frame(eg, frame, exception) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
+                        }
+                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                    });
+                };
+                value
+            } else {
+                definition.value.clone()
+            };
+            set_result(value);
             return Ok(ColdResult::Done);
         }
     }
-    if !dynamic_name && class_id != 0 && cache.class_id == class_id && cache.property_flags() == 2 {
+    if !dynamic_name && class_id != 0 && cache.class_id == class_id && cached_constant_flags == 2 {
+        if cache.enum_case_requires_deprecated_use_check() {
+            let resolved_case = eg.class_by_id(class_id).and_then(|class| {
+                class
+                    .static_properties
+                    .iter()
+                    .enumerate()
+                    .find(|(index, _)| {
+                        eg.static_property_storage_slot(class_id, *index)
+                            == Some(cache.property_slot())
+                    })
+                    .map(|(_, case)| (class.name.clone(), case.clone()))
+            });
+            let Some((class_name, case)) = resolved_case else {
+                return Ok(static_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    "Cached enum case metadata is unavailable".to_string(),
+                ));
+            };
+            let use_site = deprecated_use_site(frame, op_array, opline);
+            crate::stdlib::reflection::report_deprecated_enum_case_use(
+                &class_name,
+                &case,
+                &use_site,
+                eg,
+            )?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        }
         let stored = eg
             .static_property_value(cache.property_slot())
             .expect("cached enum-case storage slot must stay valid");
@@ -2230,11 +2334,34 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 .position(|case| case.name == constant)
             && let Some(storage_slot) = eg.static_property_storage_slot(class_id, case_index)
         {
+            let case = class.static_properties[case_index].clone();
+            let class_name = class.name.clone();
+            let requires_deprecated_use_check = case
+                .attributes
+                .iter()
+                .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"));
+            if requires_deprecated_use_check {
+                let use_site = deprecated_use_site(frame, op_array, opline);
+                crate::stdlib::reflection::report_deprecated_enum_case_use(
+                    &class_name,
+                    &case,
+                    &use_site,
+                    eg,
+                )?;
+                if let Some(exception) = eg.exception.take() {
+                    return Ok(match throw_in_frame(eg, frame, exception) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
+                        }
+                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                    });
+                }
+            }
             let stored = eg
                 .static_property_value(storage_slot)
                 .expect("resolved enum-case storage slot must stay valid");
             let value = clone_static_property_value(stored);
-            cache.set_property(class_id, storage_slot, 2);
+            cache.set_enum_case(class_id, storage_slot, requires_deprecated_use_check);
             set_result(value);
             return Ok(ColdResult::Done);
         }
@@ -2274,8 +2401,49 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             message.clone(),
         ));
     }
-    let value = definition.value.clone();
-    cache.set_property(class_id, constant_index, 1);
+    if !definition.requires_deprecated_use_check() {
+        let value = definition.value.clone();
+        cache.set_property(class_id, constant_index, 1);
+        set_result(value);
+        return Ok(ColdResult::Done);
+    }
+    let definition = definition.clone();
+    let use_site = deprecated_use_site(frame, op_array, opline);
+    crate::stdlib::reflection::report_deprecated_class_constant_use(
+        &display_class,
+        &definition,
+        &use_site,
+        eg,
+    )?;
+    if let Some(exception) = eg.exception.take() {
+        return Ok(match throw_in_frame(eg, frame, exception) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
+    let value = if definition.value_is_deferred {
+        let Some(value) = crate::stdlib::reflection::evaluate_deferred_class_constant_value(
+            &definition,
+            eg,
+        )? else {
+            let exception = eg
+                .exception
+                .take()
+                .expect("deferred class constant failure sets an exception");
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        };
+        value
+    } else {
+        definition.value.clone()
+    };
+    cache.set_property(class_id, constant_index, 3);
     set_result(value);
     Ok(ColdResult::Done)
 }
@@ -3243,10 +3411,14 @@ fn op_fetch_const(
     opline: &Instruction,
 ) -> Result<(), VmError> {
     if opline.extended_value == 1 {
-        let name_val =
-            unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-        let value_val =
-            unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+        // SAFETY: both compiler-emitted operands belong to the live frame and
+        // remain immutable while define() clones their name and value.
+        let (name_val, value_val) = unsafe {
+            (
+                &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+                &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
+            )
+        };
         let name = name_val.as_str().unwrap_or("").to_string();
         eg.define_constant(&name, value_val.clone())
             .map_err(VmError::Fatal)?;
@@ -3261,12 +3433,103 @@ fn op_fetch_const(
             let fallback = unsafe {
                 &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
             };
-            value = eg.find_constant(fallback.as_str().unwrap_or(""));
+            let fallback = fallback.as_str().unwrap_or("");
+            value = eg.find_constant(fallback);
         }
         let value =
             value.ok_or_else(|| VmError::Fatal(format!("Undefined constant \"{}\"", name)))?;
+        if eg.constant_deprecation_metadata_present {
+            // SAFETY: `opline` belongs to this op-array and its same-index
+            // cache entry remains stable for single-threaded opcode execution.
+            let cache = unsafe {
+                let ip = (opline as *const Instruction)
+                    .offset_from(op_array.instructions.as_ptr()) as usize;
+                &mut *(op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache)
+            };
+            let generation = eg.constant_deprecation_generation;
+            let requires_deprecated_use_check = if cache.class_id == generation {
+                cache.property_flags() == 2
+            } else {
+                let requires_deprecated_use_check = eg.constant_requires_deprecated_use_check(name)
+                    || (opline.extended_value == 2
+                        && op_array
+                            .literals()
+                            .get(opline.op2 as usize)
+                            .and_then(Value::as_str)
+                            .is_some_and(|fallback| {
+                                eg.constant_requires_deprecated_use_check(fallback)
+                            }));
+                cache.set_property(
+                    generation,
+                    0,
+                    if requires_deprecated_use_check { 2 } else { 1 },
+                );
+                requires_deprecated_use_check
+            };
+            if requires_deprecated_use_check {
+                let resolved_name = if eg.find_constant(name).is_some() {
+                    name
+                } else {
+                    op_array
+                        .literals()
+                        .get(opline.op2 as usize)
+                        .and_then(Value::as_str)
+                        .unwrap_or(name)
+                };
+                let use_site = deprecated_use_site(frame, op_array, opline);
+                crate::stdlib::reflection::report_deprecated_global_constant_use(
+                    resolved_name,
+                    &use_site,
+                    eg,
+                )?;
+            }
+        }
         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
         unsafe { frame_result_set(frame, result_ptr, opline.result_type, value) };
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn op_report_deprecated_trait_uses(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let consumer = op_array
+        .literals()
+        .get(opline.op1 as usize)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let uses = eg.find_class(&consumer).map_or_else(Vec::new, |class| {
+        class
+            .uses
+            .iter()
+            .filter_map(|trait_name| {
+                eg.find_class(trait_name).map(|trait_definition| {
+                    (trait_definition.name.clone(), trait_definition.attributes.clone())
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    if uses.is_empty() {
+        return Ok(());
+    }
+    let use_site = deprecated_use_site(frame, op_array, opline);
+    for (trait_name, attributes) in uses {
+        crate::stdlib::reflection::report_deprecated_trait_use(
+            &trait_name,
+            &consumer,
+            &attributes,
+            &use_site,
+            eg,
+        )?;
+        if eg.exception.is_some() {
+            break;
+        }
     }
     Ok(())
 }

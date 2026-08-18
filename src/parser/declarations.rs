@@ -686,6 +686,7 @@ impl Parser {
         let mut methods = Vec::new();
         let mut uses = Vec::new();
         let mut trait_aliases = Vec::new();
+        let mut trait_precedences = Vec::new();
 
         let prev_in_class = self.in_class_body;
         self.in_class_body = true;
@@ -717,6 +718,28 @@ impl Parser {
                         } else {
                             (None, first)
                         };
+                        if self.peek() == Token::Insteadof {
+                            self.advance();
+                            let Some(trait_name) = trait_name else {
+                                return Err("Trait precedence requires an explicit trait name".into());
+                            };
+                            let mut instead_of = Vec::new();
+                            loop {
+                                instead_of.push(self.parse_qualified_name()?);
+                                if self.peek() == Token::Comma {
+                                    self.advance();
+                                } else {
+                                    break;
+                                }
+                            }
+                            self.expect(&Token::Semicolon)?;
+                            trait_precedences.push(TraitPrecedence {
+                                trait_name,
+                                method,
+                                instead_of,
+                            });
+                            continue;
+                        }
                         self.expect(&Token::As)?;
                         let visibility = match self.peek() {
                             Token::Public => Some(Visibility::Public),
@@ -839,6 +862,7 @@ impl Parser {
             methods,
             uses,
             trait_aliases,
+            trait_precedences,
             generic_params,
         })
     }
@@ -846,8 +870,8 @@ impl Parser {
     /// Parse trait declaration
     fn parse_trait(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'trait'
-        let name = match self.advance() {
-            Token::Identifier(n, _) => n,
+        let (name, line) = match self.advance() {
+            Token::Identifier(n, line) => (n, line),
             other => return Err(format!("Expected trait name, got {:?}", other)),
         };
         let generic_params = self.parse_generic_parameters()?;
@@ -859,6 +883,7 @@ impl Parser {
         let mut methods = Vec::new();
         let mut uses = Vec::new();
         let mut trait_aliases = Vec::new();
+        let mut trait_precedences = Vec::new();
 
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
@@ -886,6 +911,28 @@ impl Parser {
                         } else {
                             (None, first)
                         };
+                        if self.peek() == Token::Insteadof {
+                            self.advance();
+                            let Some(trait_name) = trait_name else {
+                                return Err("Trait precedence requires an explicit trait name".into());
+                            };
+                            let mut instead_of = Vec::new();
+                            loop {
+                                instead_of.push(self.parse_qualified_name()?);
+                                if self.peek() == Token::Comma {
+                                    self.advance();
+                                } else {
+                                    break;
+                                }
+                            }
+                            self.expect(&Token::Semicolon)?;
+                            trait_precedences.push(TraitPrecedence {
+                                trait_name,
+                                method,
+                                instead_of,
+                            });
+                            continue;
+                        }
                         self.expect(&Token::As)?;
                         let visibility = match self.peek() {
                             Token::Public => Some(Visibility::Public),
@@ -980,6 +1027,7 @@ impl Parser {
         self.pop_generic_scope();
 
         Ok(Stmt::Trait {
+            line,
             attributes: Vec::new(),
             name,
             properties,
@@ -987,6 +1035,7 @@ impl Parser {
             methods,
             uses,
             trait_aliases,
+            trait_precedences,
             generic_params,
         })
     }
@@ -1215,7 +1264,11 @@ impl Parser {
                     None
                 };
                 self.expect(&Token::Semicolon)?;
-                cases.push((case_name, value));
+                cases.push(EnumCase {
+                    attributes,
+                    name: case_name,
+                    value,
+                });
             } else {
                 // Method in enum
                 let modifiers = self.parse_member_modifiers();

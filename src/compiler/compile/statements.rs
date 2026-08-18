@@ -3196,6 +3196,23 @@ impl Compiler {
                 self.constant_attributes
                     .borrow_mut()
                     .insert(declaration_name.clone(), reflected_attributes.clone());
+                if constant_expression_references_symbol(value) {
+                    self.constant_expressions.borrow_mut().insert(
+                        declaration_name.clone(),
+                        ConstantExpressionMetadata {
+                            expression: value.clone(),
+                            evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope {
+                                namespace: self.current_namespace.clone(),
+                                class_imports: self.use_map.clone(),
+                                constant_imports: self.constant_use_map.clone(),
+                                lexical_class: None,
+                                lexical_parent: None,
+                                source_directory: self.source_directory.clone(),
+                            }),
+                            source_file: self.source_file.clone(),
+                        },
+                    );
+                }
                 let compile_time = self
                     .eval_const_expr_in_source(value, &self.known_constants)
                     .ok();
@@ -3335,6 +3352,7 @@ impl Compiler {
                 allow_dynamic_properties,
                 uses,
                 trait_aliases,
+                trait_precedences,
                 properties,
                 constants,
                 methods,
@@ -4079,6 +4097,18 @@ impl Compiler {
                         visibility: adaptation.visibility,
                     })
                     .collect();
+                let resolved_trait_precedences = trait_precedences
+                    .iter()
+                    .map(|precedence| TraitMethodPrecedence {
+                        trait_name: self.resolve_name(&precedence.trait_name),
+                        method: precedence.method.clone(),
+                        instead_of: precedence
+                            .instead_of
+                            .iter()
+                            .map(|name| self.resolve_name(name))
+                            .collect(),
+                    })
+                    .collect();
                 self.class_defs.push(ClassDef {
                     attributes: self.compile_attributes_in_scope(
                         attributes,
@@ -4086,7 +4116,7 @@ impl Compiler {
                         Some(&resolved_class),
                         resolved_parent.as_deref(),
                     ),
-                    name: resolved_class,
+                    name: resolved_class.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
                     declaration_line: *class_line,
@@ -4101,6 +4131,7 @@ impl Compiler {
                     is_enum: false,
                     uses: resolved_uses,
                     trait_aliases: resolved_trait_aliases,
+                    trait_precedences: resolved_trait_precedences,
                     properties: compiled_props,
                     static_properties: compiled_static_props,
                     constants: compiled_constants,
@@ -4115,6 +4146,9 @@ impl Compiler {
                         .collect(),
                     class_id: 0,
                 });
+                if !uses.is_empty() && !resolved_class.starts_with("class@anonymous#") {
+                    self.emit_deprecated_trait_uses(&resolved_class, *class_line);
+                }
             }
             Stmt::Interface {
                 attributes,
@@ -4373,6 +4407,7 @@ impl Compiler {
                     is_enum: false,
                     uses: vec![],
                     trait_aliases: vec![],
+                    trait_precedences: vec![],
                     properties: compiled_properties,
                     static_properties: vec![],
                     constants: compiled_constants,
@@ -4385,6 +4420,7 @@ impl Compiler {
                 });
             }
             Stmt::Trait {
+                line: trait_line,
                 attributes,
                 name,
                 properties,
@@ -4392,6 +4428,7 @@ impl Compiler {
                 methods,
                 uses,
                 trait_aliases,
+                trait_precedences,
                 generic_params,
             } => {
                 let resolved_trait = self.resolve_name(name);
@@ -4712,12 +4749,24 @@ impl Compiler {
                         visibility: adaptation.visibility,
                     })
                     .collect();
+                let resolved_trait_precedences = trait_precedences
+                    .iter()
+                    .map(|precedence| TraitMethodPrecedence {
+                        trait_name: self.resolve_name(&precedence.trait_name),
+                        method: precedence.method.clone(),
+                        instead_of: precedence
+                            .instead_of
+                            .iter()
+                            .map(|name| self.resolve_name(name))
+                            .collect(),
+                    })
+                    .collect();
                 self.class_defs.push(ClassDef {
                     attributes: self.compile_attributes(attributes, 1),
-                    name: resolved_trait,
+                    name: resolved_trait.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
-                    declaration_line: 0,
+                    declaration_line: *trait_line,
                     parent: None,
                     implements: vec![],
                     is_interface: false,
@@ -4729,6 +4778,7 @@ impl Compiler {
                     is_enum: false,
                     uses: resolved_uses,
                     trait_aliases: resolved_trait_aliases,
+                    trait_precedences: resolved_trait_precedences,
                     properties: compiled_props,
                     static_properties: compiled_static_props,
                     constants: compiled_constants,
@@ -4743,6 +4793,9 @@ impl Compiler {
                         .collect(),
                     class_id: 0,
                 });
+                if !uses.is_empty() {
+                    self.emit_deprecated_trait_uses(&resolved_trait, *trait_line);
+                }
             }
             Stmt::Enum {
                 line: enum_line,
@@ -4840,11 +4893,11 @@ impl Compiler {
                         expr: Some(Expr::ArrayLiteral(
                             cases
                                 .iter()
-                                .map(|(case, _)| crate::parser::ArrayElement {
+                                .map(|case| crate::parser::ArrayElement {
                                     key: None,
                                     value: Expr::ClassConstant {
                                         class_name: "self".to_string(),
-                                        constant: case.clone(),
+                                        constant: case.name.clone(),
                                     },
                                     unpack: false,
                                     unpack_line: None,
@@ -4874,8 +4927,8 @@ impl Compiler {
                     let lookup_body = |fallback: Stmt| {
                         let mut body = cases
                             .iter()
-                            .filter_map(|(case, backing_value)| {
-                                backing_value.as_ref().map(|backing_value| Stmt::If {
+                            .filter_map(|case| {
+                                case.value.as_ref().map(|backing_value| Stmt::If {
                                     condition: Expr::BinaryOp {
                                         op: BinOp::Identical,
                                         left: Box::new(Expr::Variable {
@@ -4887,7 +4940,7 @@ impl Compiler {
                                     then_body: vec![Stmt::Return {
                                         expr: Some(Expr::ClassConstant {
                                             class_name: "self".to_string(),
-                                            constant: case.clone(),
+                                            constant: case.name.clone(),
                                         }),
                                         line: 0,
                                     }],
@@ -5108,7 +5161,9 @@ impl Compiler {
                 // with a default value that is a PhpObject with name/value fields.
                 // Static properties (cases) are stored as class properties with is_enum_case flag.
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
-                for (case_name, case_value) in cases {
+                for case in cases {
+                    let case_name = &case.name;
+                    let case_value = &case.value;
                     use crate::value::{PhpArray, PhpObject};
                     let mut props = std::collections::HashMap::new();
                     props.insert("name".to_string(), Value::string(case_name.clone()));
@@ -5133,12 +5188,19 @@ impl Compiler {
                         self.known_constants
                             .insert(format!("{}::{}", name, case_name), obj.clone());
                     }
-                    compiled_props.push(PropertyDefinition::new(
+                    let mut definition = PropertyDefinition::new(
                         case_name.clone(),
                         Some(obj),
                         Visibility::Public,
                         name.clone(),
-                    ));
+                    );
+                    definition.attributes = self.compile_attributes_in_scope(
+                        &case.attributes,
+                        16,
+                        Some(&resolved_enum),
+                        None,
+                    );
+                    compiled_props.push(definition);
                 }
 
                 let compiled_constants =
@@ -5183,7 +5245,7 @@ impl Compiler {
                     .collect();
                 self.class_defs.push(ClassDef {
                     attributes: self.compile_attributes(attributes, 1),
-                    name: resolved_enum,
+                    name: resolved_enum.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
                     declaration_line: *enum_line,
@@ -5198,6 +5260,7 @@ impl Compiler {
                     is_enum: true,
                     uses: resolved_uses,
                     trait_aliases: resolved_trait_aliases,
+                    trait_precedences: vec![],
                     properties: enum_properties,
                     static_properties: compiled_props,
                     constants: compiled_constants,
@@ -5208,6 +5271,9 @@ impl Compiler {
                     abstract_methods: vec![],
                     class_id: 0,
                 });
+                if !uses.is_empty() {
+                    self.emit_deprecated_trait_uses(&resolved_enum, *enum_line);
+                }
             }
         }
         // Expression compilation can discover a nested declaration error
@@ -5217,6 +5283,14 @@ impl Compiler {
             return Err(err);
         }
         Ok(())
+    }
+
+    fn emit_deprecated_trait_uses(&mut self, consumer: &str, line: usize) {
+        let consumer = self.add_literal(Value::string(consumer.to_string()));
+        let mut instruction = Instruction::new(OpCode::ReportDeprecatedTraitUses);
+        instruction.op1 = consumer;
+        instruction.op1_type = OpType::Const;
+        self.push_instruction_at_line(instruction, line);
     }
 
     fn compile_class_constants(
@@ -5255,6 +5329,7 @@ impl Compiler {
 
         let mut values = vec![None; constants.len()];
         let mut evaluation_errors = vec![None; constants.len()];
+        let mut deferred_values = vec![false; constants.len()];
         let mut remaining = constants.len();
         while remaining != 0 {
             let mut progressed = false;
@@ -5291,34 +5366,38 @@ impl Compiler {
                     let reason = self
                         .eval_const_expr_in_source(&constant.value, &known)
                         .expect_err("unresolved class constant expression");
-                    let Some(reference) = reason
+                    let reference = reason
                         .strip_prefix("class constant ")
-                        .and_then(|reason| reason.strip_suffix(unavailable_suffix))
-                    else {
-                        return Err(format!(
-                            "Cannot use non-constant expression as value for class constant {}::{}: {}",
-                            owner, constant.name, reason
-                        ));
-                    };
-                    let Some((scope, target)) = reference.split_once("::") else {
-                        return Err(format!(
-                            "Cannot use non-constant expression as value for class constant {}::{}: {}",
-                            owner, constant.name, reason
-                        ));
-                    };
-                    if !(scope.eq_ignore_ascii_case("self")
-                        || scope.eq_ignore_ascii_case(owner))
-                        || !unresolved_names.contains(target)
+                        .and_then(|reason| reason.strip_suffix(unavailable_suffix));
+                    if let Some(reference) = reference
+                        && let Some((scope, target)) = reference.split_once("::")
+                        && (scope.eq_ignore_ascii_case("self")
+                            || scope.eq_ignore_ascii_case(owner))
+                        && unresolved_names.contains(target)
                     {
+                        lazy_errors.push((
+                            index,
+                            format!("Cannot declare self-referencing constant {reference}"),
+                        ));
+                    } else if deferred_constant_expression_is_supported(&constant.value)
+                        && (reference.is_some()
+                            || (reason.starts_with("expression Constant(\"")
+                                && reason.ends_with(
+                                    "\") is not a compile-time constant",
+                                )))
+                    {
+                        // PHP 8.5 permits a class-constant expression to depend
+                        // on a global constant published by an earlier runtime
+                        // define(). Retain that rare expression for first-use
+                        // materialization instead of rejecting the class.
+                        deferred_values[index] = true;
+                        remaining -= 1;
+                    } else {
                         return Err(format!(
                             "Cannot use non-constant expression as value for class constant {}::{}: {}",
                             owner, constant.name, reason
                         ));
                     }
-                    lazy_errors.push((
-                        index,
-                        format!("Cannot declare self-referencing constant {reference}"),
-                    ));
                 }
                 for (index, error) in lazy_errors {
                     evaluation_errors[index] = Some(error);
@@ -5330,13 +5409,14 @@ impl Compiler {
         constants
             .iter()
             .zip(values.into_iter().zip(evaluation_errors))
-            .map(|(constant, (value, evaluation_error))| {
+            .enumerate()
+            .map(|(index, (constant, (value, evaluation_error)))| {
                 let type_hint = self.resolve_declared_property_type_hint(
                     self.convert_type_hint(&constant.type_hint),
                     owner,
                     parent,
                 );
-                let value = if evaluation_error.is_some() {
+                let value = if evaluation_error.is_some() || deferred_values[index] {
                     Value::null()
                 } else {
                     let value = value.expect("resolved class constant");
@@ -5351,6 +5431,18 @@ impl Compiler {
                         )
                     })?
                 };
+                let retain_expression = deferred_values[index]
+                    || constant_expression_references_symbol(&constant.value);
+                let evaluation_scope = retain_expression.then(|| {
+                    std::rc::Rc::new(AttributeEvaluationScope {
+                        namespace: self.current_namespace.clone(),
+                        class_imports: self.use_map.clone(),
+                        constant_imports: self.constant_use_map.clone(),
+                        lexical_class: Some(owner.to_string()),
+                        lexical_parent: parent.map(str::to_owned),
+                        source_directory: self.source_directory.clone(),
+                    })
+                });
                 Ok(ClassConstantDefinition {
                     attributes: self.compile_attributes_in_scope(
                         &constant.attributes,
@@ -5360,6 +5452,11 @@ impl Compiler {
                     ),
                     name: constant.name.clone(),
                     value,
+                    source_file: self.source_file.clone(),
+                    source_expression: retain_expression
+                        .then(|| Box::new(constant.value.clone())),
+                    evaluation_scope,
+                    value_is_deferred: deferred_values[index],
                     evaluation_error,
                     visibility: constant.visibility,
                     declaring_class: owner.to_string(),

@@ -1306,9 +1306,68 @@ fn included_property_default_resolves_an_imported_class_constant() {
 }
 
 #[test]
+fn included_deprecated_constant_invalidates_a_warm_namespace_fallback_cache() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "rphp-included-deprecated-constant-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("deprecated.php"),
+        "<?php namespace Fixture; #[\\Deprecated('use current')] const MARKER = 'included';",
+    )
+    .unwrap();
+    let main = directory.join("main.php");
+    let source = r#"<?php
+namespace Fixture;
+set_error_handler(function($level, $message) { echo "$level:$message|"; });
+define('MARKER', 'fallback');
+function readMarker() { echo MARKER, '|'; }
+readMarker();
+require __DIR__ . '/deprecated.php';
+readMarker();
+"#;
+    let out =
+        run_php_with_source_context(source, main.to_str().unwrap(), directory.to_str().unwrap());
+    std::fs::remove_dir_all(directory).unwrap();
+    assert_eq!(
+        out,
+        "fallback|16384:Constant Fixture\\MARKER is deprecated, use current|included|"
+    );
+}
+
+#[test]
 fn grouped_global_constants_are_defined_left_to_right() {
     assert_eq!(
         run_php("<?php const FIRST = 2, SECOND = FIRST + 3, THIRD = SECOND * 2; echo THIRD;"),
         "10"
+    );
+}
+
+#[test]
+fn invalid_class_constant_operation_is_not_deferred_by_an_unknown_constant() {
+    let error = run_php_expect_error(
+        "<?php class InvalidDeferredConstant { public const VALUE = UNKNOWN_CONSTANT + strlen('x'); }",
+    )
+    .to_string();
+    assert!(
+        error.contains("Cannot use non-constant expression as value for class constant"),
+        "unexpected class-constant diagnostic: {error}"
+    );
+}
+
+#[test]
+fn deferred_class_constant_retains_its_source_file_magic_constant() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php define('RUNTIME_PART', '-ready'); class DeferredSource { public const VALUE = __FILE__ . RUNTIME_PART; } echo DeferredSource::VALUE;",
+            "/virtual/deferred-source.php",
+            "/virtual",
+        ),
+        "/virtual/deferred-source.php-ready"
     );
 }
