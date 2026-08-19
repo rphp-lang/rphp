@@ -9,11 +9,47 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,232 pass, 2,065 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,239 pass, 2,058 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-61.016% and the whole-corpus rate is 57.725%; 4,610 of 5,297 attempted cases
-reach runtime (87.030%). Relative to exact base `a022a0c5`, the pass-set delta
-is +19/-0: all 3,213 prior passes remain exact.
+61.148% and the whole-corpus rate is 57.850%; 4,610 of 5,297 attempted cases
+reach runtime (87.030%). Relative to exact base `0f84ee36`, the pass-set delta
+is +7/-0: all 3,232 prior passes remain exact.
+
+Enum cases now use PHP 8.5's dedicated `E:<length>:"Class:Case";` serialization
+form. Serialization proves the value against the request's registered enum-case
+singletons, preserves repeated object identity through `r:N;`, and never treats
+an ordinary object with a matching class or `name` property as a case.
+Unserialization autoloads class names, resolves the canonical singleton even
+when `allowed_classes` is false, keeps case names case-sensitive and preserves
+identity through nested arrays and repeated references.
+
+Malformed enum names, missing classes, non-enum classes, ordinary enum constants
+and undefined cases now emit PHP's exercised warning text and byte offset through
+the normal error-handler path before returning false. Four original E2E tests
+cover unit and backed cases, repeated references, disabled class admission,
+autoload, class/case casing, semantic diagnostics and malformed lengths. The
+152-case `Zend/tests/enum` slice rises from 71 to 78 exact passes: the two
+serialization and five unserialization wire/diagnostic cases become exact, with
+no other status or failure-stage movement in the full corpus.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. The change is
+confined to explicitly invoked serialization, unserialization and their warning
+path; no hot executor, value layout or object layout changed, so no runtime
+performance regression lane applies.
+
+Exact enum `debug_zval_dump()` formatting and refcounts, SplObjectStorage's
+custom serialized representation, general trailing-data handling, Reflection
+and the remaining enum declaration/readonly contracts stay outside this
+checkpoint.
+
+The preceding `cycle-collector-core` checkpoint is documented below. It reached
+3,232 passes with 2,065 failures, 114 skips, one XFAIL, 187 unsupported cases,
+zero timeouts and zero crashes. Relative to exact base `a022a0c5`, its pass-set
+delta was +19/-0 with all 3,213 prior passes retained.
 
 `gc_collect_cycles()` now performs explicit request-local collection for
 unreachable cycles composed of ordinary objects, arrays, Closures and owned

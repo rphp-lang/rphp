@@ -853,6 +853,25 @@ collection, complete `gc_status()` telemetry, generator/Fiber/resource cycle
 breadth, WeakMap indexing, exact root-color ordering after transient weak
 upgrades and compound-Echo temporary lifetime remain separate checkpoints.
 
+The `enum-serialization-core` checkpoint reaches 3,239 passes with 2,058
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Registered enum singletons now serialize with PHP 8.5's dedicated
+`E:<length>:"Class:Case";` form, preserve repeated references, autoload during
+unserialization and remain admissible when ordinary classes are disabled.
+Case names stay exact while class lookup stays case-insensitive. Missing-colon,
+missing-class, non-enum, ordinary-constant, undefined-case and malformed-length
+failures use the exercised warning text, error-handler path and byte offsets.
+The 152-case enum slice rises from 71 to 78 exact passes and the full-corpus
+delta from exact base `0f84ee36` is +7/-0, with all 3,232 prior passes retained
+and no other status or failure-stage movement. Four original E2E tests, all five
+feature configurations, all-target, formatting, unsafe policy, Composer S0,
+four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass. The change is
+confined to explicitly invoked serialization/unserialization and diagnostics,
+with no hot-path or layout change, so no performance regression lane applies.
+Exact enum `debug_zval_dump()` refcounts, SplObjectStorage's custom wire format,
+generic trailing-data handling, Reflection and remaining enum declaration or
+readonly contracts remain separate checkpoints.
+
 The `fiber-bailout-shutdown` checkpoint reaches 3,186 passes with 2,111
 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
 crashes. A lazy request-local FIFO retains validated shutdown callbacks,

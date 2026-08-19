@@ -84,6 +84,34 @@ fn sleeping_object_properties(
     properties
 }
 
+/// Return the canonical declaration and case names only for a registered enum
+/// singleton. Matching the object against request-local static case storage
+/// avoids serializing an unrelated object that merely carries an enum class
+/// name or a `name` property.
+fn enum_case_names(value: &Value, eg: &ExecutorGlobals) -> Option<(String, String)> {
+    let identity = value.object_identity()?;
+    let object = value.as_object()?;
+    let class_name = object.class_name.to_string();
+    drop(object);
+    let class = eg.find_class(&class_name)?;
+    if !class.is_enum {
+        return None;
+    }
+    let display_class = class.name.clone();
+    let class_id = class.class_id;
+    for (case_index, case) in class.static_properties.iter().enumerate() {
+        let storage_slot = eg.static_property_storage_slot(class_id, case_index)?;
+        if eg
+            .static_property_value(storage_slot)
+            .and_then(Value::object_identity)
+            == Some(identity)
+        {
+            return Some((display_class, case.name.clone()));
+        }
+    }
+    None
+}
+
 fn serialize_value(
     value: &Value,
     output: &mut String,
@@ -196,6 +224,16 @@ fn serialize_value(
             }
             state.objects.insert(identity, reference);
 
+            if let Some((class_name, case_name)) = enum_case_names(hook_receiver, eg) {
+                let serialized_name = format!("{class_name}:{case_name}");
+                output.push_str("E:");
+                output.push_str(&serialized_name.len().to_string());
+                output.push_str(":\"");
+                output.push_str(&serialized_name);
+                output.push_str("\";");
+                return Ok(());
+            }
+
             let object = hook_receiver
                 .as_object()
                 .expect("object value lost its payload");
@@ -290,6 +328,12 @@ struct Parser<'a> {
     position: usize,
     next_reference: usize,
     references: HashMap<usize, Value>,
+    enum_diagnostic: Option<EnumDiagnostic>,
+}
+
+struct EnumDiagnostic {
+    message: Option<String>,
+    offset: usize,
 }
 
 enum AllowedClasses {
@@ -424,6 +468,85 @@ impl<'a> Parser<'a> {
             }
             _ => Err(()),
         }
+    }
+
+    fn reject_enum<T>(&mut self, message: Option<String>, offset: usize) -> Result<T, ()> {
+        self.enum_diagnostic = Some(EnumDiagnostic { message, offset });
+        Err(())
+    }
+
+    fn enum_value(&mut self, eg: &mut ExecutorGlobals) -> Result<Value, ()> {
+        let start = self.position.saturating_sub(1);
+        let serialized_name = (|| {
+            self.expect(b':')?;
+            let length = usize::try_from(self.integer(b':')?).map_err(|_| ())?;
+            self.expect(b'"')?;
+            let end = self.position.checked_add(length).ok_or(())?;
+            let bytes = self.input.get(self.position..end).ok_or(())?;
+            self.position = end;
+            self.expect(b'"')?;
+            self.expect(b';')?;
+            std::str::from_utf8(bytes)
+                .map(str::to_owned)
+                .map_err(|_| ())
+        })();
+        let serialized_name = match serialized_name {
+            Ok(serialized_name) => serialized_name,
+            Err(()) => {
+                return self.reject_enum(None, self.position.saturating_sub(1));
+            }
+        };
+        let Some((input_class, case_name)) = serialized_name.split_once(':') else {
+            return self.reject_enum(
+                Some(format!(
+                    "Invalid enum name '{serialized_name}' (missing colon)"
+                )),
+                start,
+            );
+        };
+
+        if eg.find_class(input_class).is_none() {
+            crate::stdlib::autoload::ensure_symbol_loaded(eg, input_class).map_err(|_| ())?;
+            if eg.exception.is_some() {
+                return Err(());
+            }
+        }
+        let Some(class) = eg.find_class(input_class) else {
+            return self.reject_enum(Some(format!("Class '{input_class}' not found")), start);
+        };
+        if !class.is_enum {
+            return self.reject_enum(Some(format!("Class '{input_class}' is not an enum")), start);
+        }
+        let class_id = class.class_id;
+        let constant_exists = class
+            .constants
+            .iter()
+            .any(|constant| constant.name == case_name);
+        let case_index = class
+            .static_properties
+            .iter()
+            .position(|case| case.name == case_name);
+        let Some(case_index) = case_index else {
+            let message = if constant_exists {
+                format!("{input_class}::{case_name} is not an enum case")
+            } else {
+                format!("Undefined constant {input_class}::{case_name}")
+            };
+            return self.reject_enum(Some(message), self.position);
+        };
+        let Some(storage_slot) = eg.static_property_storage_slot(class_id, case_index) else {
+            return self.reject_enum(
+                Some(format!("Undefined constant {input_class}::{case_name}")),
+                self.position,
+            );
+        };
+        let Some(case) = eg.static_property_value(storage_slot).cloned() else {
+            return self.reject_enum(
+                Some(format!("Undefined constant {input_class}::{case_name}")),
+                self.position,
+            );
+        };
+        Ok(case)
     }
 
     fn value(
@@ -579,6 +702,7 @@ impl<'a> Parser<'a> {
                 }
                 Err(())
             }
+            b'E' => self.enum_value(eg),
             b'r' | b'R' => {
                 self.expect(b':')?;
                 let target = usize::try_from(self.integer(b';')?).map_err(|_| ())?;
@@ -638,9 +762,36 @@ pub(super) fn unserialize(
         position: 0,
         next_reference: 1,
         references: HashMap::new(),
+        enum_diagnostic: None,
     };
     match parser.value(eg, &allowed_classes) {
         Ok(value) if parser.position == parser.input.len() => return_value(rv, value),
-        _ => return_value(rv, Value::bool(false)),
+        _ => {
+            if let Some(diagnostic) = parser.enum_diagnostic {
+                if let Some(message) = diagnostic.message {
+                    super::report_internal_diagnostic(
+                        eg,
+                        ed,
+                        2,
+                        "Warning",
+                        &format!("unserialize(): {message}"),
+                    )?;
+                }
+                if eg.exception.is_none() {
+                    super::report_internal_diagnostic(
+                        eg,
+                        ed,
+                        2,
+                        "Warning",
+                        &format!(
+                            "unserialize(): Error at offset {} of {} bytes",
+                            diagnostic.offset,
+                            parser.input.len()
+                        ),
+                    )?;
+                }
+            }
+            return_value(rv, Value::bool(false))
+        }
     }
 }
