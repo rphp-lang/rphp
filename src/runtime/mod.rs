@@ -19,6 +19,10 @@ use crate::vm::virtual_aggregate_cache::{
     RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS, ResolvedVirtualAggregateCacheEntry,
 };
 
+pub(crate) mod fiber;
+#[path = "coroutine/state.rs"]
+pub(crate) mod suspended;
+
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[path = "generic_contracts.rs"]
 mod generic_contracts;
@@ -383,6 +387,9 @@ pub struct ExecutorGlobals {
     /// Sparse canonical spellings for built-ins whose public name is not the
     /// lowercase lookup key. Most internal functions need no entry.
     internal_function_display_names: Option<Box<HashMap<*const FunctionCommon, String>>>,
+    /// Internal static methods share the hidden class-call slot used by the
+    /// method ABI, so staticness cannot be inferred from `this_offset` alone.
+    internal_static_methods: Option<Box<std::collections::HashSet<*const FunctionCommon>>>,
     /// Output buffer — collected output for testing, or stdout
     output: std::cell::RefCell<Box<dyn Write>>,
     output_buffers: std::cell::RefCell<Vec<OutputBuffer>>,
@@ -400,6 +407,9 @@ pub struct ExecutorGlobals {
     pub(crate) function_arguments: HashMap<usize, Vec<crate::value::Value>>,
     /// Active generator being executed (set during resume, used by Yield opcode)
     pub active_generator: Option<crate::vm::generator::GeneratorRef>,
+    /// PHP Fiber contexts allocate alternate VM stacks only after the first
+    /// Fiber object is constructed. Ordinary requests retain one null pointer.
+    fiber_runtime: Option<Box<fiber::FiberRuntime>>,
     /// Global variables — shared across function calls via `global $x;`
     pub globals: HashMap<String, crate::value::Value>,
     /// Names created only through `$$name`/`${expr}` have no compiler-owned CV
@@ -952,8 +962,8 @@ impl ExecutorGlobals {
         self.function_table.reserve(512);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
-        self.class_by_id.reserve(73);
-        self.static_property_slots_by_class.reserve(73);
+        self.class_by_id.reserve(75);
+        self.static_property_slots_by_class.reserve(75);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
@@ -1025,6 +1035,7 @@ impl ExecutorGlobals {
             exception_handler_stack: Vec::new(),
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
+            internal_static_methods: None,
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
             output_buffers: std::cell::RefCell::new(Vec::new()),
@@ -1032,6 +1043,7 @@ impl ExecutorGlobals {
             pending_closure_captures: HashMap::new(),
             function_arguments: HashMap::new(),
             active_generator: None,
+            fiber_runtime: None,
             globals: HashMap::new(),
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
@@ -1128,6 +1140,7 @@ impl ExecutorGlobals {
             exception_handler_stack: Vec::new(),
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
+            internal_static_methods: None,
 
             output: std::cell::RefCell::new(output),
             output_buffers: std::cell::RefCell::new(Vec::new()),
@@ -1135,6 +1148,7 @@ impl ExecutorGlobals {
             pending_closure_captures: HashMap::new(),
             function_arguments: HashMap::new(),
             active_generator: None,
+            fiber_runtime: None,
             globals: HashMap::new(),
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
@@ -1162,6 +1176,78 @@ impl ExecutorGlobals {
             reflection_attributes: None,
             reflection_parameters: None,
         }
+    }
+
+    fn fiber_runtime_ptr(&mut self) -> *mut fiber::FiberRuntime {
+        self.fiber_runtime
+            .get_or_insert_with(|| Box::new(fiber::FiberRuntime::new()))
+            .as_mut()
+    }
+
+    pub(crate) fn register_fiber_object(
+        &mut self,
+        receiver: &Value,
+        callback: crate::stdlib::ResolvedCallback,
+    ) -> bool {
+        let Some(identity) = receiver.object_identity() else {
+            return false;
+        };
+        let Some(object) = receiver.object_weak() else {
+            return false;
+        };
+        self.fiber_runtime
+            .get_or_insert_with(|| Box::new(fiber::FiberRuntime::new()))
+            .register(identity, object, callback)
+    }
+
+    pub(crate) fn fiber_status(&self, identity: usize) -> Option<fiber::FiberStatus> {
+        self.fiber_runtime
+            .as_deref()
+            .and_then(|runtime| runtime.status(identity))
+    }
+
+    pub(crate) fn current_fiber(&self) -> Option<Value> {
+        self.fiber_runtime
+            .as_deref()
+            .and_then(fiber::FiberRuntime::current)
+    }
+
+    pub(crate) fn has_active_fiber(&self) -> bool {
+        self.fiber_runtime
+            .as_deref()
+            .is_some_and(fiber::FiberRuntime::has_active)
+    }
+
+    pub(crate) fn fiber_returned(&self, identity: usize) -> Result<Value, fiber::FiberReturnState> {
+        self.fiber_runtime
+            .as_deref()
+            .ok_or(fiber::FiberReturnState::NotStarted)?
+            .returned(identity)
+    }
+
+    pub(crate) fn run_fiber(
+        &mut self,
+        identity: usize,
+        input: fiber::FiberInput,
+        logical_caller: *mut ExecuteData,
+    ) -> Result<fiber::FiberRunOutcome, crate::vm::execute::VmError> {
+        let runtime = self.fiber_runtime_ptr();
+        // The registry is boxed and every context is pinned. Fiber VM re-entry
+        // may mutate the registry through nested Fiber calls without moving
+        // either allocation.
+        fiber::FiberRuntime::run(runtime, self, identity, input, logical_caller)
+    }
+
+    pub(crate) fn suspend_fiber(
+        &mut self,
+        frame: *mut ExecuteData,
+        return_value: *mut Value,
+        value: Value,
+    ) -> Result<(), crate::vm::execute::VmError> {
+        let runtime = self.fiber_runtime_ptr();
+        // The active Fiber and its pinned context remain live until the
+        // suspension sidecar unwinds to run_fiber().
+        fiber::FiberRuntime::suspend(runtime, frame, return_value, value)
     }
 
     pub(crate) fn dynamic_scope_owner(&self, frame: usize) -> usize {
@@ -1214,6 +1300,18 @@ impl ExecutorGlobals {
                 .get_or_insert_with(|| Box::new(HashMap::new()))
                 .insert(function, name);
         }
+    }
+
+    pub(crate) fn register_internal_static_method(&mut self, function: *const FunctionCommon) {
+        self.internal_static_methods
+            .get_or_insert_with(|| Box::new(std::collections::HashSet::new()))
+            .insert(function);
+    }
+
+    pub(crate) fn internal_method_is_static(&self, function: *const FunctionCommon) -> bool {
+        self.internal_static_methods
+            .as_deref()
+            .is_some_and(|methods| methods.contains(&function))
     }
 
     pub(crate) fn internal_function_display_name(

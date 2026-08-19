@@ -600,7 +600,12 @@ fn test_e2e_explode_implode_round_trip() {
 
 #[test]
 fn test_e2e_str_repeat() {
-    assert_eq!(run_php("<?php echo str_repeat('ab', 3);"), "ababab");
+    assert_eq!(
+        run_php(
+            "<?php echo str_repeat('ab', 3), '|'; try { str_repeat('x', -1); } catch (ValueError $error) { echo $error->getMessage(); } echo '|', str_repeat('', PHP_INT_MAX);"
+        ),
+        "ababab|str_repeat(): Argument #2 ($times) must be greater than or equal to 0|"
+    );
 }
 
 #[test]

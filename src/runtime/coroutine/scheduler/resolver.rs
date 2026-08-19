@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::CoroutineScheduler;
 use super::io::{ConnectCompletion, ConnectOutcome, ConnectWaiter, IoSet, RESOLVER_WAKE_TASK};
-use crate::runtime::coroutine::state::{CoroutineStatus, WaitReason};
+use crate::runtime::suspended::{CoroutineStatus, WaitReason};
 use crate::value::Value;
 use crate::vm::execute::{VmError, write_coroutine_result};
 use crate::vm::frame::ExecuteData;

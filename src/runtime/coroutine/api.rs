@@ -14,10 +14,10 @@ use self::io::{
 use std::time::Duration;
 
 use super::scheduler::CoroutineScheduler;
-use super::state::{CoroutineEntry, cleanup_frame_chain, initialize_value_slot};
 use super::{ScopeRegistration, SuspendKind, scheduler_ptr};
 use crate::compiler::make_internal_function;
 use crate::runtime::ExecutorGlobals;
+use crate::runtime::suspended::{CoroutineEntry, cleanup_frame_chain, initialize_value_slot};
 use crate::value::Value;
 use crate::vm::execute::{VmError, execute_coroutine_frame};
 use crate::vm::frame::ExecuteData;

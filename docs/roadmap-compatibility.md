@@ -804,6 +804,24 @@ empty-request startup at -0.671% independently and -0.681% paired, while the
 ordinary-call control is +0.259% independently and +0.277% paired. Exact output
 is retained and every median remains below the five-percent ceiling.
 
+The `fiber-core-lifecycle` checkpoint reaches 3,149 passes with 2,148 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+Pinned alternate VM stacks implement construction, start, suspend, resume,
+throw, return, current identity, status and nested logical backtraces for user
+callbacks. The complete `Zend/tests/fibers` directory rises from zero to 39
+exact passes and the full corpus delta is +39/-0; 29 remaining Fiber failures
+advance from runtime to output without unrelated stage movement. GC cycles,
+shutdown/forced close, generator/internal/magic callback roots, generator
+crossings, ticks, signals and exact OOM cleanup remain named boundaries. All
+five feature configurations, all-target, unsafe, Composer S0, four Symfony S1
+gates, warmed-kernel S2 and cold-build S3 pass. CPU-pinned release controls put
+empty-request startup at +1.001% independently and +1.222% paired, ordinary
+calls at -0.649% and -0.673%, and `str_repeat()` at +1.090% and +1.079%; exact
+outputs are retained and every regression median stays below the five-percent
+ceiling. The newly admitted 20,000-cycle Fiber path retains PHP 8.5.6's exact
+checksum and records a 0.014491-second candidate median versus PHP's 0.005082
+seconds as explicit optimization debt rather than a regression claim.
+
 The `trait-constant-composition` checkpoint reaches 3,110 passes with 2,187
 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
 crashes. Trait constants now preserve PHP 8.5 value/type/visibility/finality

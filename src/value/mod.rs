@@ -4424,6 +4424,19 @@ impl Value {
         }
     }
 
+    /// Reconstitute a PHP object value from an existing strong owner without
+    /// allocating a second object or changing its request-local identity.
+    #[inline]
+    pub(crate) fn from_object_owner(object: Rc<RefCell<PhpObject>>) -> Self {
+        Self {
+            data: ValueData {
+                ptr: Rc::into_raw(object) as *mut u8,
+            },
+            type_info: ValueType::Object as u32,
+            _not_send: PhantomData,
+        }
+    }
+
     /// Create a closure value from a PhpClosure.
     /// Clone = Rc refcount bump; binding creates a distinct payload and identity.
     #[inline]

@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "coroutines"), allow(dead_code))]
+
 use std::collections::HashMap;
 use std::marker::PhantomPinned;
 
@@ -85,7 +87,7 @@ pub(super) struct CoroutineExecutionState {
 }
 
 impl CoroutineExecutionState {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             stacks: None,
             current_execute_data: std::ptr::null_mut(),

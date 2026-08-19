@@ -1251,6 +1251,20 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         }};
     }
 
+    // Internal static methods use the same hidden CV 0 ABI as instance
+    // methods, so retain their dispatch kind in request-owned metadata.
+    macro_rules! reg_static_method {
+        ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![$($pnames.to_string()),*]));
+            let ptr = &f.common as *const FunctionCommon;
+            let full_name = format!("{}::{}", $class, $method).to_lowercase();
+            eg.function_table.insert(full_name, ptr);
+            eg.method_declaring_class.insert(ptr, $class.to_string());
+            eg.register_internal_static_method(ptr);
+            funcs.push(f);
+        }};
+    }
+
     // Throwable — proper interface (PHP 8 compatible)
     eg.register_class(ClassDef {
         attributes: Vec::new(),
@@ -1716,6 +1730,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         );
     }
 
+    funcs.extend(super::fiber::register(eg));
     funcs.extend(reflection::register(eg));
 
     funcs.extend(register_value_error(eg));
@@ -1760,7 +1775,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         .unwrap();
     // Static methods still reserve the canonical hidden method slot at CV 0;
     // explicit Closure::bind arguments begin at CV 1.
-    reg_method!(
+    reg_static_method!(
         "Closure",
         "bind",
         fn_closure_bind,
@@ -1779,7 +1794,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         "newThis",
         "newScope"
     );
-    reg_method!(
+    reg_static_method!(
         "Closure",
         "fromCallable",
         fn_closure_from_callable,

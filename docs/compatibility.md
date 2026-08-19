@@ -9,18 +9,68 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,110 pass, 2,187 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,149 pass, 2,148 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-58.712% and the whole-corpus rate is 55.546%; 4,610 of 5,297 attempted cases
-reach runtime (87.030%). Relative to the preceding 3,070-pass checkpoint, the
-exact pass-set delta is +40/-0. The initial PHP 8.5 corpus continues to have no
+59.449% and the whole-corpus rate is 56.242%; 4,610 of 5,297 attempted cases
+reach runtime (87.030%). Relative to the preceding 3,110-pass checkpoint, the
+exact pass-set delta is +39/-0. The initial PHP 8.5 corpus continues to have no
 process hazard.
 
-Trait constants now compose with PHP 8.5's exact value, declared-type,
-visibility and finality compatibility rules. Compatible definitions retain
-their attributes and values; Reflection reports a constant declared directly
-on a trait as belonging to that trait and its composed projection as belonging
-to the consuming class. `ReflectionClass::getConstant()` and
+The final internal `Fiber` and `FiberError` classes now cover PHP 8.5's core
+lifecycle: construction, start arguments, nested current identity, suspension,
+resume values, injected exceptions, termination, status queries and return
+values. Each Fiber owns a pinned alternate VM stack and suspended frame state;
+nested execution swaps the request stack sidecars together and preserves a
+logical caller for exact backtraces. Callback arguments use internal-dispatch
+weak coercion, and failed initialization terminates the Fiber with PHP's
+catchable `TypeError` or `ArgumentCountError` contract.
+
+All 39 exact passes in the complete 110-case `Zend/tests/fibers` directory are
+new, and no previous corpus pass is lost. Another 29 Fiber cases advance from
+an early runtime failure to a later output comparison. GC cycles, destruction
+and forced close during shutdown, generator/internal/magic callback roots,
+generator crossings, ticks, signals and exact OOM cleanup remain explicit
+boundaries. Generator-root suspension is rejected with a catchable
+`FiberError` instead of retaining a popped frame. Fallible, exponentially
+copied `str_repeat()` storage also prevents a Rust allocation abort reached by
+Fiber bailout tests while preserving PHP 8.5's negative-count `ValueError`.
+
+All five Cargo configurations, all-feature/all-target, formatting and the
+exact unsafe ratchet pass; the production inventory is 1,623 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6.
+
+The exact base `d30234a5` and final release candidate were compared on one
+pinned Ryzen 9 7950X CPU in `performance` mode without removing outliers.
+Thirty-two balanced ABBA/BAAB pairs of 150 empty-output requests measured
+baseline p10/median/p90 0.360475/0.365265/0.370457 seconds and candidate
+0.366586/0.368921/0.377094 seconds: +1.001% by independent medians and +1.222%
+by the paired-ratio median, whose p10/p90 is -0.889%/+2.965%. A separate
+32-pair `bench_calls.php` control retained checksum `37500007500000` and
+measured baseline 0.376982/0.378334/0.383635 seconds versus candidate
+0.372740/0.375880/0.381867 seconds: -0.649% independently and -0.673% paired,
+with paired p10/p90 -1.676%/+1.228%. A 32-pair 300-million-byte
+`str_repeat()` control retained output `300000000` and measured baseline
+0.006122/0.006192/0.006297 seconds versus candidate
+0.006164/0.006259/0.006348 seconds: +1.090% independently and +1.079% paired,
+with paired p10/p90 -0.428%/+1.781%. Every regression median remains below the
+five-percent ceiling.
+
+The new 20,000-cycle Fiber switch workload has no RPHP baseline opponent. Nine
+paired release observations retained exact output `199990000|200010000` against
+PHP 8.5.6 and measured candidate p10/median/p90
+0.014328/0.014491/0.015791 seconds versus PHP
+0.004783/0.005082/0.005189 seconds. This roughly 2.85x PHP median is recorded as
+an optimization baseline for the newly admitted semantic path, not a general
+PHP/RPHP performance claim or a regression against the Fiber-less base.
+
+The preceding checkpoint made trait constants compose with PHP 8.5's exact
+value, declared-type, visibility and finality compatibility rules. Compatible
+definitions retain their attributes and values; Reflection reports a constant
+declared directly on a trait as belonging to that trait and its composed
+projection as belonging to the consuming class.
+`ReflectionClass::getConstant()` and
 `ReflectionClassConstant::getDeclaringClass()` expose those values and origins.
 Direct trait-constant access remains illegal and now retains the fetch file and
 line, while incompatible composition and inherited-final diagnostics name the

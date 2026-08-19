@@ -172,6 +172,7 @@ macro_rules! ret {
 }
 
 mod builtin_classes;
+mod fiber;
 mod filesystem;
 mod strings;
 
@@ -2738,11 +2739,41 @@ fn fn_implode(
 fn fn_str_repeat(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    let times = arg_long!(ed, 1).max(0) as usize;
-    ret!(rv, Value::string(s.repeat(times)));
+    let times = arg_long!(ed, 1);
+    if times < 0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "str_repeat(): Argument #2 ($times) must be greater than or equal to 0",
+        ));
+        ret!(rv, Value::null());
+    }
+    let times = times as usize;
+    let total_bytes = s.len().checked_mul(times).ok_or_else(|| {
+        VmError::Fatal("Allowed memory size exhausted while repeating string".to_string())
+    })?;
+    let mut repeated = Vec::new();
+    repeated.try_reserve_exact(total_bytes).map_err(|_| {
+        VmError::Fatal(format!(
+            "Allowed memory size exhausted (tried to allocate {total_bytes} bytes)"
+        ))
+    })?;
+    if total_bytes != 0 {
+        repeated.extend_from_slice(s.as_bytes());
+        while repeated.len() < total_bytes {
+            let remaining = total_bytes - repeated.len();
+            let copy_len = repeated.len().min(remaining);
+            repeated.extend_from_within(..copy_len);
+        }
+    }
+    // SAFETY: `s` is UTF-8 and the buffer consists exclusively of complete
+    // copies of its bytes. Both the current length and the remaining length
+    // are multiples of `s.len()`, so the final partial doubling cannot split
+    // a code point.
+    let result = unsafe { String::from_utf8_unchecked(repeated) };
+    ret!(rv, Value::string(result));
 }
 
 fn fn_substr_count(
@@ -6070,9 +6101,10 @@ pub(crate) unsafe fn collect_debug_backtrace(
         } else if let Some((class, method)) = name.rsplit_once("::") {
             entry.set_str("function", Value::string(method.to_string()));
             entry.set_str("class", Value::string(class.to_string()));
-            let is_instance = !eg
-                .find_method_info(class, method)
-                .is_some_and(|(_, is_static, _)| is_static);
+            let is_instance = !eg.internal_method_is_static((*frame).func)
+                && !eg
+                    .find_method_info(class, method)
+                    .is_some_and(|(_, is_static, _)| is_static);
             if include_object && is_instance {
                 let object = (*frame).cv(0).dereferenced();
                 if object.as_object().is_some() {
@@ -7799,9 +7831,12 @@ fn find_method_in_class_hierarchy<'a>(
                 .declaring_class_of(function)
                 .is_some_and(|declaring| declaring.eq_ignore_ascii_case(&class.name))
         {
+            // SAFETY: request function-table entries retain immutable
+            // FunctionCommon metadata for the complete callback lookup.
             return Some((
                 Visibility::Public,
-                unsafe { (*function).sig.this_offset == 0 },
+                eg.internal_method_is_static(function)
+                    || unsafe { (*function).sig.this_offset == 0 },
                 function,
                 class.name.as_str(),
             ));
@@ -7937,6 +7972,18 @@ impl ResolvedCallback {
     #[inline]
     fn signature(&self) -> &crate::vm::function::SignatureInfo {
         unsafe { &(*self.func_ptr).sig }
+    }
+
+    pub(crate) fn supports_suspended_root(&self) -> bool {
+        // SAFETY: callback pointers are request-owned immutable descriptors;
+        // the discriminant is checked before reading the UserFunction tail.
+        unsafe {
+            (*self.func_ptr).fn_type == FunctionType::User
+                && !(*(self.func_ptr as *const crate::vm::function::UserFunction))
+                    .op_array
+                    .is_generator
+                && !self.is_magic_call
+        }
     }
 
     #[inline]

@@ -1,6 +1,6 @@
 use super::CoroutineScheduler;
 use crate::runtime::ExecutorGlobals;
-use crate::runtime::coroutine::state::{CoroutineStatus, WaitReason};
+use crate::runtime::suspended::{CoroutineStatus, WaitReason};
 
 impl CoroutineScheduler {
     pub(in crate::runtime::coroutine) fn finish_scope(&mut self, eg: &mut ExecutorGlobals) {

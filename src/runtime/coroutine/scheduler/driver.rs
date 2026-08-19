@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use super::CoroutineScheduler;
 #[cfg(unix)]
 use super::io::IoDirection;
-use crate::runtime::coroutine::state::{CoroutineStatus, WaitReason};
+use crate::runtime::suspended::{CoroutineStatus, WaitReason};
 use crate::vm::execute::VmError;
 
 impl CoroutineScheduler {

@@ -6,7 +6,7 @@ use crate::compiler::compile::Compiler;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::runtime::ExecutorGlobals;
-use crate::runtime::coroutine::state::CoroutineEntry;
+use crate::runtime::suspended::CoroutineEntry;
 use crate::value::Value;
 use crate::vm::function::FunctionCommon;
 

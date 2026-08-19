@@ -24,11 +24,11 @@ use self::io::{AcceptOutcome, IoDirection, IoReady, IoSet, ReadOutcome, WriteOut
 use self::readiness::Readiness;
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 use self::resolver::ResolverSet;
-use super::state::{
+use crate::runtime::ExecutorGlobals;
+use crate::runtime::suspended::{
     CoroutineContext, CoroutineEntry, CoroutineStackPool, CoroutineStatus, WaitReason,
     initialize_entry_frame,
 };
-use crate::runtime::ExecutorGlobals;
 use crate::value::Value;
 use crate::vm::execute::{VmError, execute_coroutine_frame, write_coroutine_result};
 

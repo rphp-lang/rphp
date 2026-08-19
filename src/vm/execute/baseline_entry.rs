@@ -1670,7 +1670,6 @@ fn materialize_generator_frame(
 ) -> (*mut ExecuteData, *mut ExecuteData) {
     gen_ref.borrow_mut().state = crate::vm::generator::GeneratorState::Running;
     let func_ptr = gen_ref.borrow().func;
-    let user = unsafe { &*(func_ptr as *const UserFunction) };
     let saved_execute_data = eg.current_execute_data.get();
     let frame = eg.vm_stack.push_call_frame(
         func_ptr,
@@ -1688,6 +1687,7 @@ fn materialize_generator_frame(
     // frame; every restored CV/TMP index comes from its retained snapshot and
     // ip_offset belongs to the same immutable generator op-array.
     unsafe {
+        let user = &*(func_ptr as *const UserFunction);
         (*frame).return_value = std::ptr::null_mut();
         for (i, value) in gen_data.cv_values.iter().enumerate() {
             let slot = (*frame).cv_mut(i as u32);
@@ -1717,13 +1717,18 @@ fn restore_yield_send_value(
     if gen_data.ip_offset == 0 {
         return;
     }
-    let user = unsafe { &*(gen_data.func as *const UserFunction) };
-    let yield_instruction = &user.op_array.instructions[gen_data.ip_offset - 1];
-    if yield_instruction.opcode == crate::vm::opcode::OpCode::Yield
-        && yield_instruction.result_type != OpType::Unused
-    {
-        let slot = unsafe { (*frame).slot_mut(yield_instruction.result as u32) };
-        unsafe { frame_restore_slot(frame, slot as *mut Value, send_value) };
+    // SAFETY: materialize_generator_frame created this live frame from the
+    // same retained function and ip_offset snapshot. A yielding result slot
+    // is therefore inside its compiler-sized TMP envelope.
+    unsafe {
+        let user = &*(gen_data.func as *const UserFunction);
+        let yield_instruction = &user.op_array.instructions[gen_data.ip_offset - 1];
+        if yield_instruction.opcode == crate::vm::opcode::OpCode::Yield
+            && yield_instruction.result_type != OpType::Unused
+        {
+            let slot = (*frame).slot_mut(yield_instruction.result as u32);
+            frame_restore_slot(frame, slot as *mut Value, send_value);
+        }
     }
 }
 
@@ -1733,11 +1738,15 @@ fn restore_yield_from_result(
     value: Value,
 ) {
     let gen_data = gen_ref.borrow();
-    let user = unsafe { &*(gen_data.func as *const UserFunction) };
-    let yield_from_instruction = &user.op_array.instructions[gen_data.ip_offset - 1];
-    if yield_from_instruction.result_type != OpType::Unused {
-        let slot = unsafe { (*frame).slot_mut(gen_data.yield_from_result_slot) };
-        unsafe { frame_restore_slot(frame, slot as *mut Value, value) };
+    // SAFETY: the retained yield-from instruction and result-slot index came
+    // from this generator's immutable function and compiler-sized live frame.
+    unsafe {
+        let user = &*(gen_data.func as *const UserFunction);
+        let yield_from_instruction = &user.op_array.instructions[gen_data.ip_offset - 1];
+        if yield_from_instruction.result_type != OpType::Unused {
+            let slot = (*frame).slot_mut(gen_data.yield_from_result_slot);
+            frame_restore_slot(frame, slot as *mut Value, value);
+        }
     }
 }
 
@@ -2099,7 +2108,6 @@ fn discard_generator_generic_context(eg: &mut ExecutorGlobals, frame: *mut Execu
 /// cooperative suspension from completion before it can clean or recycle the
 /// frame chain. Keeping this wrapper feature-gated leaves the ordinary entry
 /// point and dispatch loop unchanged in non-coroutine builds.
-#[cfg(feature = "coroutines")]
 pub(crate) fn execute_coroutine_frame(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -2108,6 +2116,9 @@ pub(crate) fn execute_coroutine_frame(
     let mut entry = frame;
     loop {
         execute_ex(eg, entry)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
         if entry == boundary {
             return Ok(());
         }
@@ -2120,7 +2131,6 @@ pub(crate) fn execute_coroutine_frame(
 
 /// Publish a value into the suspended caller's result slot while preserving
 /// the canonical heap-slot bitmap used by frame cleanup.
-#[cfg(feature = "coroutines")]
 pub(crate) unsafe fn write_coroutine_result(
     frame: *mut ExecuteData,
     return_value: *mut Value,
@@ -2129,5 +2139,182 @@ pub(crate) unsafe fn write_coroutine_result(
     if !return_value.is_null() {
         assert!(!frame.is_null());
         unsafe { frame_slot_set(frame, return_value, value) };
+    }
+}
+
+/// Materialize the root activation owned by a suspended user callback. Fiber
+/// and the opt-in coroutine runtime execute on detached VM stacks, so they
+/// cannot use the ordinary caller-owned Send/DoFcall frame protocol.
+pub(crate) fn initialize_suspended_callback_frame(
+    eg: &mut ExecutorGlobals,
+    callback: &crate::stdlib::ResolvedCallback,
+    arguments: &[Value],
+    return_value: *mut Value,
+    logical_caller: *mut ExecuteData,
+) -> Result<*mut ExecuteData, VmError> {
+    // SAFETY: resolved callback descriptors and their immutable function
+    // metadata are request-owned. The newly allocated compiler-sized frame
+    // stays live on the active alternate VM stack until its Fiber owner
+    // completes or explicitly cleans the initialization error path.
+    unsafe {
+    let common = &*callback.func_ptr;
+    if common.fn_type != FunctionType::User {
+        return Err(VmError::Fatal(
+            "Suspended internal callbacks are not implemented".to_string(),
+        ));
+    }
+    let user = &*(callback.func_ptr as *const UserFunction);
+    if user.op_array.is_generator {
+        return Err(VmError::Fatal(
+            "Generator callbacks cannot be used as suspended roots".to_string(),
+        ));
+    }
+
+    let public_num_args = arguments.len();
+    let sequential = callback.prepend_args.len() + public_num_args;
+    let capture_destination = common.sig.parameter_cv_count() as usize;
+    let storage_num_args = sequential.max(capture_destination + callback.use_vars.len());
+    let frame = eg.vm_stack.push_call_frame(
+        callback.func_ptr,
+        storage_num_args as u32,
+        public_num_args as u32,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
+
+    // SAFETY: push_call_frame allocated every compiler-declared CV/TMP plus
+    // the exact detached argument/capture envelope computed above.
+    {
+        (*frame).return_value = return_value;
+        (*frame).opline = user.op_array.instructions.as_ptr();
+        for index in 0..storage_num_args {
+            callback_arg_init(frame, index, Value::undef());
+        }
+        for (index, value) in callback
+            .prepend_args
+            .iter()
+            .chain(arguments)
+            .enumerate()
+        {
+            frame_slot_set(frame, (*frame).cv_mut(index as u32), value.clone());
+        }
+        for (index, value) in callback.use_vars.iter().enumerate() {
+            frame_slot_set(
+                frame,
+                (*frame).cv_mut((capture_destination + index) as u32),
+                value.clone_closure_capture(),
+            );
+        }
+        initialize_bound_this_frame(frame, callback.func_ptr, callback.bound_this.clone());
+    }
+    if callback.called_scope_class_id != 0 {
+        publish_late_static_call_class_id(eg, frame, callback.called_scope_class_id);
+    }
+    if let Some(storage) = callback.closure_static_vars.clone() {
+        eg.publish_closure_static_vars(frame as usize, storage);
+    }
+    eg.function_arguments
+        .insert(frame as usize, arguments.to_vec());
+    eg.publish_detached_trace_caller(frame as usize, logical_caller as usize);
+    eg.publish_detached_trace_origin(frame as usize, "Unknown".to_string(), 0);
+    eg.current_execute_data.set(frame);
+
+    // Fiber callbacks are dispatched by the engine, so their public
+    // arguments use PHP's weak-call coercion even when Fiber::start() was
+    // written in a strict-types compilation unit.
+    let callee_class = eg.declaring_class_of(callback.func_ptr).map(str::to_string);
+    let mut argument_error = None;
+    for (index, hint) in common.sig.param_type_hints.iter().enumerate() {
+        if matches!(hint, ParamTypeHint::None) || index >= public_num_args {
+            continue;
+        }
+        let cv_index = common.sig.param_cv_index(index as u32);
+        let value = (*frame).cv(cv_index).dereferenced().clone();
+        match prepare_call_argument(&value, hint, eg, false, callee_class.as_deref())? {
+            CallArgumentPreparation::Exact => {}
+            CallArgumentPreparation::Coerced(prepared) => {
+                let slot = (*frame).cv_mut(cv_index) as *mut Value;
+                if (*slot).is_reference() {
+                    slot_set((*slot).as_ref_ptr(), prepared);
+                } else {
+                    frame_slot_set(frame, slot, prepared);
+                }
+            },
+            CallArgumentPreparation::Invalid => {
+                let parameter = common
+                    .sig
+                    .param_names
+                    .get(index)
+                    .map(String::as_str)
+                    .unwrap_or("unknown");
+                argument_error = Some(make_error_value(
+                    "TypeError",
+                    &format!(
+                        "{}(): Argument #{} (${parameter}) must be of type {}, {} given",
+                        displayed_function_name(eg, callback.func_ptr),
+                        index + 1,
+                        hint.diagnostic_display_name(),
+                        declared_type_error_value_name(&value)
+                    ),
+                ));
+                break;
+            }
+        }
+    }
+    if argument_error.is_none() && public_num_args < common.sig.required_num_args as usize {
+        let required = common.sig.required_num_args;
+        let relation = if common.sig.public_arity() > required {
+            "at least"
+        } else {
+            "exactly"
+        };
+        argument_error = Some(make_error_value(
+            "ArgumentCountError",
+            &format!(
+                "Too few arguments to function {}(), {public_num_args} passed and {relation} {required} expected",
+                displayed_function_name(eg, callback.func_ptr)
+            ),
+        ));
+    }
+    if let Some(error) = argument_error {
+        let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+            .as_deref()
+            .is_some_and(crate::stdlib::ini_boolean);
+        let trace_options = if ignore_arguments { 2 } else { 0 };
+        let trace = crate::stdlib::collect_debug_backtrace(frame, trace_options, 0, eg, true);
+        if let Some(mut object) = error.as_object_mut()
+            && let Some(line) = user.op_array.declaration_line()
+            && !user.op_array.source_file.is_empty()
+        {
+            object.set_property(
+                "file",
+                Value::shared_string(user.op_array.source_file.clone()),
+            );
+            object.set_property("line", Value::long(line as i64));
+            object.set_property("trace", Value::array(trace));
+        }
+        eg.exception = Some(error);
+    }
+    Ok(frame)
+    }
+}
+
+/// Inject `Fiber::throw()` at the suspended call boundary and return the frame
+/// from which canonical execution should continue. An unhandled throwable is
+/// left in ExecutorGlobals for the owning Fiber method to propagate.
+pub(crate) fn inject_suspended_exception(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    exception: Value,
+) -> Option<*mut ExecuteData> {
+    match throw_in_frame(eg, frame, exception) {
+        ThrowResult::Handled(new_frame, _) => {
+            eg.current_execute_data.set(new_frame);
+            Some(new_frame)
+        }
+        ThrowResult::Unhandled(exception) => {
+            eg.exception = Some(exception);
+            None
+        }
     }
 }

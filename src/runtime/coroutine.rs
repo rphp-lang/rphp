@@ -7,7 +7,6 @@
 
 mod api;
 mod scheduler;
-mod state;
 
 use std::cell::Cell;
 
