@@ -299,6 +299,7 @@ fn internal_class(name: &str, parent: Option<&str>) -> ClassDef {
         readonly_props: Vec::new(),
         methods: Vec::new(),
         abstract_methods: Vec::new(),
+        enum_backing_error: None,
         class_id: 0,
     }
 }

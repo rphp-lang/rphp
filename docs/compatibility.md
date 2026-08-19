@@ -9,11 +9,55 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,272 pass, 2,025 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,276 pass, 2,021 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-61.771% and the whole-corpus rate is 58.439%; 4,617 of 5,297 attempted cases
-reach runtime (87.163%). Relative to exact base `86a51f12`, the pass-set delta
-is +12/-0: all 3,260 prior passes remain exact.
+61.846% and the whole-corpus rate is 58.510%; 4,617 of 5,297 attempted cases
+reach runtime (87.163%). Relative to exact base `7fc23567`, the pass-set delta
+is +4/-0: all 3,272 prior passes remain exact.
+
+Backed enums now retain a compiler-proven duplicate-value or backing-type
+diagnostic without publishing it at declaration time. An ordinary read of any
+declared enum constant and a correctly typed `from()` or `tryFrom()` call build
+the logical backing table and throw the exact `Error` or `TypeError`. A failed
+build is not cached, so later reads repeat the same first declaration-order
+diagnostic. Invalidly typed lookup arguments still fail before the deferred
+table contract and use the internal enum-method wording.
+
+PHP's narrower lazy boundaries remain intact: `cases()`, declaration without
+use, arbitrary enum methods, `Enum::class`, undefined constants and enum cases
+materialized inside constant expressions do not build the backing table. A
+dedicated class-constant instruction flag preserves that last distinction for
+parameter defaults while ordinary case and declared-constant reads retain the
+validator. Valid enums add no backing check to warmed constant-cache hits, and
+the invalid metadata is boxed so every other class carries only one nullable
+word.
+
+Two original E2E tests cover int/string duplicates, mismatched values,
+declaration and method laziness, `cases()` and constant-expression bypasses,
+declared constants, repeatability, argument ordering and internal arity text.
+The 152-case `Zend/tests/enum` slice rises from 106 to 110 exact passes. The
+four full-corpus gains are `backed-duplicate-int.phpt`,
+`backed-duplicate-string.phpt`, `backed-mismatch.phpt` and the adjacent
+`backed-from-invalid-type.phpt`; no other status or failure category changes.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. CPU-pinned
+32-pair release controls measured balanced order-specific median ratios of
++0.810% for 150 empty requests, +1.087% for ordinary property work and -1.356%
+for ordinary array work. Outputs are exact, no outliers were removed and every
+decision median remains below the five-percent regression ceiling; the noisier
+property paired p10/p90 range is -1.739%/+6.144%.
+
+Broader `from()`/`tryFrom()` coercion edges, deliberate backing-hash collision
+cases, Reflection and SplObjectStorage remain separate checkpoints.
+
+The preceding `enum-property-contracts` checkpoint reached 3,272 passes with
+2,025 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Relative to exact base `86a51f12`, its pass-set delta was +12/-0
+with all 3,260 prior passes retained.
 
 Enum cases now enforce the complete exercised PHP 8.5 property-mutation
 contract. Their declared `name` and backed `value` properties reject direct,

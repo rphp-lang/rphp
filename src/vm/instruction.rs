@@ -143,6 +143,11 @@ pub const CLASS_CONST_DYNAMIC_NAME: u16 = 1 << 2;
 /// while a runtime value equal to `"class"` has PHP's pseudo-constant meaning.
 pub const CLASS_CONST_COMPILE_TIME_NAME: u16 = 1 << 3;
 
+/// Class-constant fetch emitted while materializing a constant expression.
+/// PHP resolves an enum case in this context without building the backed-enum
+/// lookup table, unlike an ordinary source-level `Enum::Case` read.
+pub const CLASS_CONST_CONSTANT_EXPRESSION: u16 = 1 << 4;
+
 /// `FetchObjR` used only to reach the terminal operand of `isset()`. A null or
 /// scalar intermediate produces null without the ordinary read diagnostic.
 pub const FETCH_OBJ_SILENT: u16 = 1;

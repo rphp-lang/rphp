@@ -4377,6 +4377,7 @@ impl Compiler {
                         .filter(|method| method.is_abstract)
                         .map(|method| method.name.clone())
                         .collect(),
+                    enum_backing_error: None,
                     class_id: 0,
                 });
                 if resolved_class.starts_with("class@anonymous#") {
@@ -4687,6 +4688,7 @@ impl Compiler {
                     readonly_props: vec![],
                     methods: compiled_methods,
                     abstract_methods: methods.iter().map(|method| method.name.clone()).collect(),
+                    enum_backing_error: None,
                     class_id: 0,
                 });
                 self.class_declaration_keys.push(None);
@@ -5089,6 +5091,7 @@ impl Compiler {
                         .filter(|method| method.is_abstract)
                         .map(|method| method.name.clone())
                         .collect(),
+                    enum_backing_error: None,
                     class_id: 0,
                 });
                 self.class_declaration_keys.push(None);
@@ -5278,6 +5281,71 @@ impl Compiler {
                     resolved_implements.push("BackedEnum".to_string());
                 }
 
+                // Backing expressions are constants, but PHP defers their
+                // table-wide type/uniqueness contract until an ordinary
+                // declared-constant read or from()/tryFrom() needs the lookup
+                // table. Evaluate once now and retain only the diagnostic;
+                // publication remains lazy.
+                let compiled_case_values = cases
+                    .iter()
+                    .map(|case| {
+                        case.value
+                            .as_ref()
+                            .map(|expr| {
+                                self.eval_const_expr_in_source(expr, &self.known_constants)
+                                    .map_err(|error| {
+                                        format!(
+                                            "Cannot use non-constant expression as enum case value for {}::{}: {}",
+                                            name, case.name, error
+                                        )
+                                    })
+                            })
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                let mut enum_backing_error = None;
+                if let Some(backing_type) = backing_type {
+                    let expected = if matches!(backing_type, TypeHint::Int) {
+                        "int"
+                    } else {
+                        "string"
+                    };
+                    let mut seen_ints = std::collections::HashMap::<i64, String>::new();
+                    let mut seen_strings =
+                        std::collections::HashMap::<String, String>::new();
+                    for (case, value) in cases.iter().zip(&compiled_case_values) {
+                        let value = value
+                            .as_ref()
+                            .expect("backed enum cases were checked for missing values");
+                        if value.type_name() != expected {
+                            enum_backing_error = Some(
+                                crate::compiler::compile::EnumBackingValidationError::type_mismatch(
+                                    value.type_name(),
+                                    expected,
+                                ),
+                            );
+                            break;
+                        }
+                        let duplicate = if let Some(value) = value.as_long() {
+                            seen_ints.insert(value, case.name.clone())
+                        } else if let Some(value) = value.as_str() {
+                            seen_strings.insert(value.to_string(), case.name.clone())
+                        } else {
+                            None
+                        };
+                        if let Some(first) = duplicate {
+                            enum_backing_error = Some(
+                                crate::compiler::compile::EnumBackingValidationError::duplicate(
+                                    &resolved_enum,
+                                    &first,
+                                    &case.name,
+                                ),
+                            );
+                            break;
+                        }
+                    }
+                }
+
                 if methods
                     .iter()
                     .any(|method| method.name.eq_ignore_ascii_case("cases"))
@@ -5327,8 +5395,23 @@ impl Compiler {
                         }
                     }
 
+                    let backing_validation_throw = enum_backing_error.as_ref().map(|error| {
+                        Stmt::Throw {
+                            expr: Expr::New {
+                                class_name: error.exception_class().to_string(),
+                                args: vec![crate::parser::CallArg::Positional(
+                                    Expr::StringLiteral(error.message().to_string()),
+                                )],
+                                generic_args: vec![],
+                                line: 0,
+                                call_line: 0,
+                            },
+                            line: 0,
+                        }
+                    });
                     let lookup_body = |fallback: Stmt| {
-                        let mut body = cases
+                        let mut body = backing_validation_throw.iter().cloned().collect::<Vec<_>>();
+                        body.extend(cases
                             .iter()
                             .filter_map(|case| {
                                 case.value.as_ref().map(|backing_value| Stmt::If {
@@ -5351,7 +5434,7 @@ impl Compiler {
                                     else_body: vec![],
                                 })
                             })
-                            .collect::<Vec<_>>();
+                            .collect::<Vec<_>>());
                         body.push(fallback);
                         body
                     };
@@ -5586,18 +5669,14 @@ impl Compiler {
                 // with a default value that is a PhpObject with name/value fields.
                 // Static properties (cases) are stored as class properties with is_enum_case flag.
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
-                for case in cases {
+                for (case, case_value) in cases.iter().zip(compiled_case_values) {
                     self.validate_override_target(&case.attributes, "class constant", false)?;
                     let case_name = &case.name;
-                    let case_value = &case.value;
                     use crate::value::{PhpArray, PhpObject};
                     let mut props = std::collections::HashMap::new();
                     props.insert("name".to_string(), Value::string(case_name.clone()));
                     if is_backed {
-                        if let Some(expr) = case_value {
-                            let val = self.eval_const_expr_in_source(expr, &self.known_constants).map_err(|e| {
-                                format!("Cannot use non-constant expression as enum case value for {}::{}: {}", name, case_name, e)
-                            })?;
+                        if let Some(val) = case_value {
                             props.insert("value".to_string(), val);
                         }
                     }
@@ -5696,6 +5775,7 @@ impl Compiler {
                     methods: compiled_methods,
                     abstract_methods: vec![],
                     class_id: 0,
+                    enum_backing_error: enum_backing_error.map(Box::new),
                 });
                 let declaration_key =
                     self.emit_named_class_declaration(&resolved_enum, *enum_line);

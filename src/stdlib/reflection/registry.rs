@@ -169,6 +169,7 @@ fn register_reflection_class_kind(
         readonly_props: vec![],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
     })
     .unwrap();
@@ -200,6 +201,7 @@ fn register_reflection_interface(eg: &mut ExecutorGlobals, name: &str) {
         readonly_props: vec![],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
     })
     .unwrap();
@@ -244,6 +246,7 @@ fn register_generic_variance(eg: &mut ExecutorGlobals) {
         readonly_props: vec![],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
     })
     .unwrap();
@@ -318,6 +321,7 @@ fn register_property_hook_type(eg: &mut ExecutorGlobals) {
         readonly_props: vec!["name".to_string(), "value".to_string()],
         methods: Vec::new(),
         abstract_methods: Vec::new(),
+        enum_backing_error: None,
         class_id: 0,
     })
     .expect("PropertyHookType registration is unique");
@@ -483,6 +487,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         readonly_props: vec![],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
         attributes: vec![AttributeDefinition {
             name: "Attribute".to_string(),
@@ -538,6 +543,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         readonly_props: vec![],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
         attributes: vec![AttributeDefinition {
             name: "Attribute".to_string(),
@@ -594,6 +600,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         readonly_props: vec!["message".to_string(), "since".to_string()],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
         // PHP exposes the marker as Attribute::TARGET_CLASS |
         // TARGET_FUNCTION | TARGET_METHOD | TARGET_CLASS_CONSTANT |
@@ -663,6 +670,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         readonly_props: vec!["message".to_string()],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
         attributes: vec![AttributeDefinition {
             name: "Attribute".to_string(),
@@ -739,6 +747,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         readonly_props: vec![],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
     })
     .unwrap();
@@ -859,6 +868,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         readonly_props: vec![],
         methods: vec![],
         abstract_methods: vec![],
+        enum_backing_error: None,
         class_id: 0,
     })
     .unwrap();

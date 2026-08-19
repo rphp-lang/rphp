@@ -68,6 +68,72 @@ fn enum_case_values_follow_the_backing_shape_at_declaration_time() {
 }
 
 #[test]
+fn invalid_backed_enum_tables_are_lazy_repeatable_and_skip_cases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function capture_enum_error($operation): void {
+    try {
+        $operation();
+    } catch (Throwable $error) {
+        echo get_class($error), ': ', $error->getMessage(), "\n";
+    }
+}
+
+enum ReusedNumber: int {
+    case First = 7;
+    case Second = 7;
+    const MARKER = 99;
+    public static function announce(): void { echo "loaded\n"; }
+}
+
+echo count(ReusedNumber::cases()), "\n";
+ReusedNumber::announce();
+function enum_default($case = ReusedNumber::First): void { echo $case->name, "\n"; }
+enum_default();
+capture_enum_error(fn() => ReusedNumber::MARKER);
+capture_enum_error(fn() => ReusedNumber::First);
+capture_enum_error(fn() => ReusedNumber::First);
+capture_enum_error(fn() => ReusedNumber::from(99));
+capture_enum_error(fn() => ReusedNumber::tryFrom('wrong-kind'));
+
+enum ReusedText: string {
+    case Early = 'shared';
+    case Middle = 'other';
+    case Late = 'shared';
+}
+capture_enum_error(fn() => ReusedText::Late);
+capture_enum_error(fn() => ReusedText::tryFrom('absent'));
+
+enum WrongKind: int { case Text = 'value'; }
+echo count(WrongKind::cases()), "\n";
+capture_enum_error(fn() => WrongKind::Text);
+capture_enum_error(fn() => WrongKind::from(99));
+capture_enum_error(fn() => WrongKind::from('wrong-kind'));
+"#,
+        ),
+        "2\nloaded\nFirst\nError: Duplicate value in enum ReusedNumber for cases First and Second\nError: Duplicate value in enum ReusedNumber for cases First and Second\nError: Duplicate value in enum ReusedNumber for cases First and Second\nError: Duplicate value in enum ReusedNumber for cases First and Second\nTypeError: ReusedNumber::tryFrom(): Argument #1 ($value) must be of type int, string given\nError: Duplicate value in enum ReusedText for cases Early and Late\nError: Duplicate value in enum ReusedText for cases Early and Late\n1\nTypeError: Enum case type string does not match enum backing type int\nTypeError: Enum case type string does not match enum backing type int\nTypeError: WrongKind::from(): Argument #1 ($value) must be of type int, string given\n"
+    );
+}
+
+#[test]
+fn synthesized_enum_methods_keep_internal_arity_diagnostics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum Signal: int { case Ready = 1; }
+try {
+    Signal::from();
+} catch (ArgumentCountError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        "Signal::from() expects exactly 1 argument, 0 given\n"
+    );
+}
+
+#[test]
 fn enum_property_syntax_reaches_the_php_declaration_diagnostic() {
     for source in [
         "<?php enum Invalid { public $value; }",

@@ -2216,6 +2216,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     let dynamic_owner = opline._pad & CLASS_CONST_DYNAMIC_OWNER != 0;
     let dynamic_name = opline._pad & CLASS_CONST_DYNAMIC_NAME != 0;
     let compile_time_name = opline._pad & CLASS_CONST_COMPILE_TIME_NAME != 0;
+    let constant_expression = opline._pad & CLASS_CONST_CONSTANT_EXPRESSION != 0;
     let raw_class = class_value.as_str().unwrap_or("");
     let constant = constant_value.as_str();
 
@@ -2435,6 +2436,23 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 .position(|case| case.name == constant)
             && let Some(storage_slot) = eg.static_property_storage_slot(class_id, case_index)
         {
+            let called_from_cases = op_array.name.rsplit_once("::").is_some_and(
+                |(owner, method)| {
+                    owner.eq_ignore_ascii_case(&class.name)
+                        && method.eq_ignore_ascii_case("cases")
+                },
+            );
+            if !called_from_cases
+                && !constant_expression
+                && let Some(error) = class.enum_backing_error.as_ref()
+            {
+                return Ok(static_property_throw(
+                    eg,
+                    frame,
+                    error.exception_class(),
+                    error.message().to_string(),
+                ));
+            }
             let case = class.static_properties[case_index].clone();
             let class_name = class.name.clone();
             let requires_deprecated_use_check = case
@@ -2473,6 +2491,21 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             format!("Undefined constant {}::{}", display_class, constant),
         ));
     };
+    // Fetching any declared constant from a backed enum makes Zend update the
+    // class constants and build the backing lookup table. Undefined constants
+    // and `Enum::class` return earlier; constant-expression materialization is
+    // the intentional per-constant bypass mirrored above for enum cases.
+    if class.is_enum
+        && !constant_expression
+        && let Some(error) = class.enum_backing_error.as_ref()
+    {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            error.exception_class(),
+            error.message().to_string(),
+        ));
+    }
     let caller = get_caller_class(frame, eg);
     if !eg.check_visibility(
         caller.as_deref(),

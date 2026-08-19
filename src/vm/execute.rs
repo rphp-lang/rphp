@@ -32,19 +32,19 @@ use super::instruction::{
     CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE,
     CALL_FLAG_OBJECT_ARRAY_CONSUMERS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
     CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
-    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
-    CLONE_OBJ_WITH_PROPERTIES, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS,
-    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
-    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS,
-    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
-    INSTANCEOF_DYNAMIC_STATIC_SCOPE, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE,
-    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
-    NEW_FLAG_VIRTUAL_DECLARED_READS, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
-    OBJ_PROP_REFERENCE_BIND, OpType, REFERENCE_RESULT_INTERNAL,
-    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
-    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
-    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_NAME,
+    CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY,
+    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
+    FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
+    FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, Instruction,
+    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, NEW_FLAG_DYNAMIC_CLASS_NAME,
+    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_VIRTUAL_DECLARED_READS,
+    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OBJ_PROP_REFERENCE_BIND, OpType,
+    REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS,
+    SEND_FLAG_NONREFERENCEABLE, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
+    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use super::opcode::OpCode;
 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
@@ -2193,6 +2193,29 @@ pub(crate) fn displayed_function_name(
     }
 }
 
+/// Enum engine methods are compiled to ordinary op-arrays today, but their
+/// public argument failures use PHP's internal-method diagnostic wording.
+/// Source enums cannot redeclare these reserved names, so the owner/name pair
+/// is an unambiguous cold-call marker without widening FunctionCommon.
+fn is_synthesized_enum_method(eg: &ExecutorGlobals, function: *const FunctionCommon) -> bool {
+    let Some(class_name) = eg.declaring_class_of(function) else {
+        return false;
+    };
+    if !eg
+        .find_class(class_name)
+        .is_some_and(|definition| definition.is_enum)
+    {
+        return false;
+    }
+    registered_function_name(eg, function)
+        .rsplit_once("::")
+        .is_some_and(|(_, method)| {
+            method.eq_ignore_ascii_case("cases")
+                || method.eq_ignore_ascii_case("from")
+                || method.eq_ignore_ascii_case("tryFrom")
+        })
+}
+
 fn too_few_arguments_error(
     eg: &ExecutorGlobals,
     function: *const FunctionCommon,
@@ -2203,7 +2226,9 @@ fn too_few_arguments_error(
 ) -> Value {
     let name = displayed_function_name(eg, function);
     let required = common.sig.required_num_args;
-    let relation = if common.fn_type == FunctionType::Internal {
+    let internal_diagnostic =
+        common.fn_type == FunctionType::Internal || is_synthesized_enum_method(eg, function);
+    let relation = if internal_diagnostic {
         if common.sig.is_variadic || common.sig.public_arity() > required {
             "at least"
         } else {
@@ -2214,7 +2239,7 @@ fn too_few_arguments_error(
     } else {
         "exactly"
     };
-    let message = if common.fn_type == FunctionType::Internal {
+    let message = if internal_diagnostic {
         let noun = if required == 1 {
             "argument"
         } else {
@@ -2263,7 +2288,7 @@ fn argument_type_error(
         hint.diagnostic_display_name(),
         declared_type_error_value_name(value)
     );
-    if common.fn_type == FunctionType::User {
+    if common.fn_type == FunctionType::User && !is_synthesized_enum_method(eg, function) {
         let instruction_index = caller_op_array
             .instructions
             .iter()
@@ -2528,7 +2553,9 @@ fn execute_full_call<'a>(
             }
             if let Some(err) = type_error {
                 let function = Function::from_common_ptr((*call).func);
-                if function.fn_type() == FunctionType::User {
+                if function.fn_type() == FunctionType::User
+                    && !is_synthesized_enum_method(eg, (*call).func)
+                {
                     let callee_op_array = &function.as_user().op_array;
                     if let Some(declaration_line) = callee_op_array.declaration_line()
                         && !callee_op_array.source_file.is_empty()
