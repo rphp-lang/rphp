@@ -435,10 +435,11 @@ pub struct ExecutorGlobals {
     /// physical predecessor stays null so `Return` exits the detached
     /// executor, while live backtraces can still cross the callback boundary.
     detached_trace_callers: Option<Box<HashMap<usize, usize>>>,
-    /// Optional synthetic call sites for engine-created callbacks. Attribute
-    /// constructors are reported at the attribute declaration rather than at
-    /// the later ReflectionAttribute::newInstance() invocation.
-    detached_trace_origins: Option<Box<HashMap<usize, (String, usize)>>>,
+    /// Optional synthetic call sites for engine-created callbacks and source
+    /// units. Attribute constructors retain their declaration origin; eval
+    /// additionally publishes its logical frame name without widening the hot
+    /// call-frame layout.
+    detached_trace_origins: Option<Box<HashMap<usize, (String, usize, Option<String>)>>>,
     /// A discarded `call_user_func*()` result applies to the resolved callback,
     /// whose engine-created detached frame otherwise has an ordinary return
     /// slot. The wrapper publishes this one synchronous bit until the user
@@ -1418,14 +1419,34 @@ impl ExecutorGlobals {
     ) {
         self.detached_trace_origins
             .get_or_insert_with(|| Box::new(HashMap::new()))
-            .insert(frame, (file, line));
+            .insert(frame, (file, line, None));
+    }
+
+    #[cold]
+    pub(crate) fn publish_synthetic_trace_frame(
+        &mut self,
+        frame: usize,
+        file: String,
+        line: usize,
+        function: String,
+    ) {
+        self.detached_trace_origins
+            .get_or_insert_with(|| Box::new(HashMap::new()))
+            .insert(frame, (file, line, Some(function)));
     }
 
     pub(crate) fn detached_trace_origin(&self, frame: usize) -> Option<(&str, usize)> {
         self.detached_trace_origins
             .as_deref()
             .and_then(|origins| origins.get(&frame))
-            .map(|(file, line)| (file.as_str(), *line))
+            .map(|(file, line, _)| (file.as_str(), *line))
+    }
+
+    pub(crate) fn detached_trace_function(&self, frame: usize) -> Option<&str> {
+        self.detached_trace_origins
+            .as_deref()
+            .and_then(|origins| origins.get(&frame))
+            .and_then(|(_, _, function)| function.as_deref())
     }
 
     pub(crate) fn discard_detached_trace_caller(&mut self, frame: usize) {

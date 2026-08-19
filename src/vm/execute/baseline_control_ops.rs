@@ -228,6 +228,7 @@ fn execute_source_unit(
     implicit_return: Value,
     record_included: bool,
     caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
+    synthetic_trace_origin: Option<(String, usize)>,
 ) -> Result<IncludeFileOutcome, VmError> {
     let tokens = match crate::lexer::Lexer::new(&source).tokenize() {
         Ok(tokens) => tokens,
@@ -491,6 +492,15 @@ fn execute_source_unit(
         if called_class_id != 0 {
             publish_late_static_call_class_id(eg, inc_frame, called_class_id);
         }
+        if let Some((file, line)) = synthetic_trace_origin.as_ref() {
+            eg.publish_detached_trace_caller(inc_frame as usize, caller_frame as usize);
+            eg.publish_synthetic_trace_frame(
+                inc_frame as usize,
+                file.clone(),
+                *line,
+                "eval".to_string(),
+            );
+        }
     }
     if caller.is_some() {
         for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
@@ -520,6 +530,9 @@ fn execute_source_unit(
     }
 
     eg.current_execute_data.set(prev_ed);
+    if synthetic_trace_origin.is_some() {
+        eg.discard_detached_trace_caller(inc_frame as usize);
+    }
     unsafe { cleanup_frame_slots(inc_frame) };
     pop_vm_call_frame(eg, inc_frame);
 
@@ -581,6 +594,7 @@ pub(crate) fn execute_included_file(
         Value::long(1),
         true,
         caller,
+        None,
     )
 }
 
@@ -590,6 +604,7 @@ fn execute_eval_source(
     source: &str,
     source_name: String,
     caller: (*mut ExecuteData, &crate::compiler::OpArray),
+    trace_origin: (String, usize),
 ) -> Result<IncludeFileOutcome, VmError> {
     execute_source_unit(
         eg,
@@ -599,6 +614,7 @@ fn execute_eval_source(
         Value::null(),
         false,
         Some(caller),
+        Some(trace_origin),
     )
 }
 
@@ -641,7 +657,8 @@ fn op_eval<'a>(
         source_file,
         opline.extended_value
     );
-    match execute_eval_source(eg, &source, source_name, (frame, op_array))? {
+    let trace_origin = (source_file.to_string(), opline.extended_value as usize);
+    match execute_eval_source(eg, &source, source_name, (frame, op_array), trace_origin)? {
         IncludeFileOutcome::Executed(value) => {
             write_include_result(frame, opline, value);
             Ok(ColdResult::Done)

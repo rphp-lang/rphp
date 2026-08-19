@@ -153,6 +153,44 @@ echo '|', $outer;
 }
 
 #[test]
+fn eval_backtrace_links_synthetic_source_frames() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function show_eval_trace($label) {
+    echo $label, "\n";
+    foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+        echo $frame['file'], ':', $frame['line'], ':', $frame['function'], "\n";
+    }
+}
+eval("show_eval_trace('inline');");
+eval("eval(\"show_eval_trace('nested');\");");
+function capture_eval_trace() { return new Exception(); }
+$exception = eval('return capture_eval_trace();');
+echo "stored\n";
+foreach ($exception->getTrace() as $frame) {
+    echo $frame['file'], ':', $frame['line'], ':', $frame['function'], "\n";
+}
+"#,
+            "/app/eval-trace.php",
+            "/app",
+        ),
+        concat!(
+            "inline\n",
+            "/app/eval-trace.php(8) : eval()'d code:1:show_eval_trace\n",
+            "/app/eval-trace.php:8:eval\n",
+            "nested\n",
+            "/app/eval-trace.php(9) : eval()'d code(1) : eval()'d code:1:show_eval_trace\n",
+            "/app/eval-trace.php(9) : eval()'d code:1:eval\n",
+            "/app/eval-trace.php:9:eval\n",
+            "stored\n",
+            "/app/eval-trace.php(11) : eval()'d code:1:capture_eval_trace\n",
+            "/app/eval-trace.php:11:eval\n",
+        )
+    );
+}
+
+#[test]
 fn eval_scope_preserves_reference_assignment_unset_and_rebinding() {
     assert_eq!(
         run_php(

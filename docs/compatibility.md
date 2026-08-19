@@ -9,6 +9,46 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,388 pass, 1,909 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+63.961% and the whole-corpus rate is 60.511%; 4,636 of 5,297 attempted cases
+reach runtime (87.521%). Relative to exact base `293709cc`, the pass-set delta
+is +1/-0: all 3,387 prior passes remain passes.
+
+Successfully compiled `eval()` source units now retain a cold logical link to
+their caller plus an exact synthetic `eval` frame name and origin. Live
+`debug_backtrace()` and `debug_print_backtrace()` output and stored Throwable
+traces therefore include inline and recursively nested eval frames without
+turning the synchronous eval activation into a normal return-through call
+frame. Synthetic frames omit an argument array, and their side metadata is
+discarded before the eval activation is released. The hot call-frame layout
+and the existing optional side-state pointer layout are unchanged.
+
+One original E2E regression covers live and stored traces across inline and
+nested eval. `Zend/tests/backtrace/bug_debug_backtrace.phpt` becomes exact; the
+complete 21-case backtrace slice loses no pass. Two full-corpus runs reproduce
+the same counts, classifications and pass set, with no other status or failure-
+stage movement.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and exact unsafe ratchet pass, as do Composer S0, all four Symfony S1
+component gates and warmed-kernel S2. The production inventory remains 1,618
+unsafe blocks and 289 unsafe functions. A CPU-pinned release comparison of
+2,000 eval compile/execute cycles used two warm-ups per binary and 32 balanced
+order pairs without outlier removal. It retained checksum `2000` and measured
++0.981% independently and +1.722% paired, with paired p10/p90
+-0.438%/+3.373%; both medians remain below the five-percent regression ceiling.
+
+This checkpoint does not claim exact source origins when the eval argument
+begins on a later physical line: today's literal tokens do not yet retain that
+argument line, so `sensitive_parameter_eval_call.phpt` now has the required
+synthetic frame but remains one line early. `bug73156.phpt` separately still
+needs an eval write to a magic-call argument array to update the trace snapshot.
+Eval parse/compile failures and unrelated trait, generator or include backtrace
+differences also remain separate compatibility work.
+
+The preceding SensitiveParameter checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,387 pass, 1,910 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 63.942% and the whole-corpus rate is 60.493%; 4,636 of 5,297 attempted cases

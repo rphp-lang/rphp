@@ -6177,7 +6177,11 @@ pub(crate) unsafe fn collect_debug_backtrace(
         if function.fn_type() == FunctionType::Undef {
             break;
         }
-        let name = crate::vm::execute::displayed_function_name(eg, (*frame).func);
+        let synthetic_frame = eg.detached_trace_function(frame as usize);
+        let name = synthetic_frame.map_or_else(
+            || crate::vm::execute::displayed_function_name(eg, (*frame).func),
+            str::to_string,
+        );
         if name.is_empty() {
             break;
         }
@@ -6257,7 +6261,7 @@ pub(crate) unsafe fn collect_debug_backtrace(
         } else {
             entry.set_str("function", Value::string(name));
         }
-        if include_arguments {
+        if include_arguments && synthetic_frame.is_none() {
             let count = (*frame).num_args;
             let mut arguments = PhpArray::with_packed_capacity(count as usize);
             for index in 0..count {
