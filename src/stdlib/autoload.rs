@@ -454,12 +454,21 @@ pub(crate) fn fn_class_alias(
             Err(VmError::Fatal(message))
         }
         Err(crate::runtime::ClassAliasRegistrationError::NameConflict) => {
+            let previous_declaration = eg
+                .find_class(&original)
+                .and_then(|definition| {
+                    definition.source_file.as_ref().map(|file| {
+                        format!(
+                            " (previously declared in {file}:{})",
+                            definition.declaration_line
+                        )
+                    })
+                })
+                .unwrap_or_default();
             report_class_alias_warning(
                 ed,
                 eg,
-                &format!(
-                    "Cannot declare {declaration_kind} {alias}, because the name is already in use"
-                ),
+                &format!("Cannot redeclare {declaration_kind} {alias}{previous_declaration}"),
             )?;
             ret!(rv, Value::bool(false));
         }

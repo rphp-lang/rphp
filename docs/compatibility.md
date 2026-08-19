@@ -9,11 +9,55 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,429 pass, 1,868 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,433 pass, 1,864 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-64.735% and the whole-corpus rate is 61.243%; 4,624 of 5,297 attempted cases
-reach runtime (87.295%). Relative to exact base `459f8481`, the pass-set delta
-is +4/-0: all 3,425 prior passes remain passes.
+64.810% and the whole-corpus rate is 61.315%; 4,624 of 5,297 attempted cases
+reach runtime (87.295%). Relative to exact base `6592be1b`, the pass-set delta
+is +4/-0: all 3,429 prior passes remain passes.
+
+Name conflicts reached through `class_alias()` now emit PHP 8.5's canonical
+`Cannot redeclare <kind> <alias>` warning. The kind comes from the symbol being
+aliased and the alias preserves the caller's spelling. For a user-defined
+source, the parenthetical origin is that source symbol's declaration—not the
+conflicting target declaration. Internal sources have no userland declaration
+origin, so the parenthetical is omitted even when their requested alias
+collides with a user-defined symbol.
+
+The implementation reads the existing `ClassDef` source file and declaration
+line only after the alias registry reports `NameConflict`. Successful alias
+publication, duplicate-interface validation and ordinary class lookup are
+unchanged. An original E2E test covers class and interface source kinds, user
+declaration origins, internal-origin omission, error-handler arguments and
+false returns; the existing alias-identity regression now locks the canonical
+uncaught warning too.
+
+The complete 27-case `class_alias` directory plus
+`gh15976/alias-names.phpt` rises from 21 to 25 passes. `class_alias_002.phpt`,
+`class_alias_004.phpt`, `class_alias_010.phpt` and `class_alias_019.phpt` make
+the same fail/output-to-pass transitions in the full corpus, with no other
+status or category movement. Two final manifests are byte-for-byte identical
+with SHA-256
+`1f4a846f322d9f9216f38e860e34c214f3ee890c6a67f1ec7b7f256ea0f9c6d2`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.6 warmed-kernel S2 and cold-build S3. The
+production inventory remains 1,619 unsafe blocks and 289 unsafe functions. No
+performance or layout gate applies: the successful path is instructionally
+unchanged and the added diagnostic lookup runs only after the cold registry
+conflict result.
+
+This checkpoint does not claim the remaining `get_class()` deprecation output
+in `class_alias_017.phpt`, the `memory_limit`-dependent unsupported alias case
+or broader PHP syntax and runtime compatibility.
+
+The preceding internal-class-alias checkpoint was pinned to php-src 8.5.6
+commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and `tests/lang`
+cases, 3,429 pass, 1,868 fail, 114 skip, one is an upstream XFAIL, 187 are
+unsupported, and none time out or crash. The headline pass rate is 64.735%
+and the whole-corpus rate is 61.243%; 4,624 of 5,297 attempted cases reach
+runtime (87.295%). Relative to exact base `459f8481`, the pass-set delta is
++4/-0: all 3,425 prior passes remain passes.
 
 `class_alias()` now accepts internal classes and interfaces under the same
 PHP 8.5 contract as user-defined class-like symbols. Original lookup and

@@ -1094,6 +1094,28 @@ value, object or ordinary lookup paths. Five unrelated output-different
 `class_alias` cases and one `memory_limit` capability case remain explicit
 follow-up work.
 
+The `class-alias-collision-origin` checkpoint reaches 3,433 passes with 1,864
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Alias name conflicts now use PHP 8.5's `Cannot redeclare` warning,
+preserve the original class/interface/trait/enum kind and caller alias spelling,
+and append the aliased user symbol's declaration file and line. Internal
+sources omit that parenthetical because they have no userland origin. The
+existing `ClassDef` metadata is read only after the established registry
+returns `NameConflict`; successful publication and ordinary lookup are
+unchanged. Original E2E coverage exercises user class/interface origins,
+internal omission, handler arguments and false returns. The complete 27-case
+alias slice rises from 21 to 25 passes, and the full-corpus delta from
+`6592be1b` is +4/-0: `class_alias_002.phpt`, `class_alias_004.phpt`,
+`class_alias_010.phpt` and `class_alias_019.phpt` become exact with every prior
+pass and all other categories unchanged. Two final manifests are
+byte-for-byte identical. All five feature configurations, all-target,
+formatting, unsafe
+policy, Composer S0, four Symfony S1 gates and exact PHP 8.5.6 S2/S3 pass. No
+performance or layout gate applies because the successful alias path is
+unchanged and the new lookup is confined to the cold conflict diagnostic.
+`class_alias_017.phpt` and the `memory_limit` capability case remain explicit
+follow-up work.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

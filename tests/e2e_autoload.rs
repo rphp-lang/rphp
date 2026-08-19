@@ -572,8 +572,37 @@ var_dump(class_alias('OriginalClass', 'aliasclass'));
             "bool(true)\n",
             "method|bool(true)\n",
             "bool(true)\n",
-            "\nWarning: Cannot declare class aliasclass, because the name is already in use in /fixture/class-alias.php on line 14\n",
+            "\nWarning: Cannot redeclare class aliasclass (previously declared in /fixture/class-alias.php:2) in /fixture/class-alias.php on line 14\n",
             "bool(false)\n"
+        )
+    );
+}
+
+#[test]
+fn class_alias_collision_warnings_use_the_source_kind_and_declaration_origin() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+set_error_handler(function($level, $message, $file, $line) {
+    echo $level, ':', $message, ':', $file, ':', $line, "\n";
+});
+class UserCollisionSource {}
+interface InterfaceCollisionSource {}
+class ExistingCollisionTarget {}
+var_dump(class_alias(UserCollisionSource::class, 'ExistingCollisionTarget'));
+var_dump(class_alias(InterfaceCollisionSource::class, 'ExistingCollisionTarget'));
+var_dump(class_alias(stdClass::class, 'ExistingCollisionTarget'));
+"#,
+            "/virtual/class-alias-collision.php",
+            "/virtual",
+        ),
+        concat!(
+            "2:Cannot redeclare class ExistingCollisionTarget (previously declared in /virtual/class-alias-collision.php:5):/virtual/class-alias-collision.php:8\n",
+            "bool(false)\n",
+            "2:Cannot redeclare interface ExistingCollisionTarget (previously declared in /virtual/class-alias-collision.php:6):/virtual/class-alias-collision.php:9\n",
+            "bool(false)\n",
+            "2:Cannot redeclare class ExistingCollisionTarget:/virtual/class-alias-collision.php:10\n",
+            "bool(false)\n",
         )
     );
 }
