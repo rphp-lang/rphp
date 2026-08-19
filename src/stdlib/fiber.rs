@@ -232,6 +232,10 @@ fn fiber_suspend(
         fiber_error(eg, "Cannot suspend outside of a fiber");
         return Ok(());
     }
+    if eg.active_fiber_is_force_closing() {
+        fiber_error(eg, "Cannot suspend in a force-closed fiber");
+        return Ok(());
+    }
     // Generator advancement currently owns a detached VM frame through a
     // synchronous Rust handler. Letting the Fiber unwind that handler would
     // retain a pointer to a frame the generator cleanup has already popped.

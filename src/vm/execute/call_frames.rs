@@ -97,9 +97,10 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
 fn run_final_object_destructor_tree(
     eg: &mut ExecutorGlobals,
     owner: Value,
-    expected_references: usize,
+    mut expected_references: usize,
     release_references: Option<&HashMap<usize, usize>>,
     detach_lazy_state: bool,
+    logical_caller: *mut ExecuteData,
 ) -> Result<bool, VmError> {
     if owner.object_strong_count() != Some(expected_references) {
         return Ok(false);
@@ -115,6 +116,22 @@ fn run_final_object_destructor_tree(
         .map(|state| (true, state.proxy_instance.clone()))
         .unwrap_or((false, None));
     let mut ran_destructor = false;
+    let fiber_identity = owner
+        .object_identity()
+        .filter(|identity| eg.has_fiber_context(*identity));
+
+    if let Some(identity) = fiber_identity {
+        let owned_references = eg.fiber_owned_object_references(identity);
+        eg.force_close_fiber_object(identity, logical_caller)?;
+        expected_references = expected_references.saturating_sub(owned_references);
+        ran_destructor = true;
+        if eg.exception.is_some() {
+            if owner.object_strong_count() == Some(expected_references) {
+                eg.release_fiber_object(identity);
+            }
+            return Ok(true);
+        }
+    }
 
     if let Some(instance) = proxy_instance {
         let released_elsewhere = instance
@@ -132,6 +149,7 @@ fn run_final_object_destructor_tree(
                 expected,
                 release_references,
                 detach_lazy_state,
+                logical_caller,
             )?;
             if eg.exception.is_some() {
                 if detach_lazy_state {
@@ -204,6 +222,7 @@ fn run_final_object_destructor_tree(
             expected,
             release_references,
             detach_lazy_state,
+            logical_caller,
         )?;
         if eg.exception.is_some() {
             break;
@@ -211,6 +230,9 @@ fn run_final_object_destructor_tree(
     }
     if detach_lazy_state {
         eg.take_lazy_object_state(&owner);
+    }
+    if let Some(identity) = fiber_identity {
+        eg.release_fiber_object(identity);
     }
     Ok(ran_destructor)
 }
@@ -240,7 +262,14 @@ fn run_frame_destructors(
         } else {
             (0..total).collect()
         };
-        let root_frame = (*frame).prev_execute_data.is_null();
+        let op_array = (*frame).op_array();
+        let root_frame = (*frame).prev_execute_data.is_null()
+            && (op_array.name == "<main>" || op_array.name == *op_array.source_file);
+        let logical_caller = if root_frame {
+            frame
+        } else {
+            eg.trace_caller(frame as usize, (*frame).prev_execute_data)
+        };
         let mut counts = HashMap::<usize, usize>::new();
         for &index in &candidate_indices {
             let value = &*base.add(index);
@@ -309,6 +338,7 @@ fn run_frame_destructors(
                     frame_references + 1,
                     Some(&counts),
                     false,
+                    logical_caller,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -326,6 +356,7 @@ fn run_frame_destructors(
 pub(crate) struct PreparedValueDestructor {
     owner: Value,
     replaced_references: usize,
+    fiber_owned_references: usize,
 }
 
 /// Retain an object whose final PHP handle is about to be replaced.
@@ -354,10 +385,16 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     let Some(object) = value.as_object() else {
         return None;
     };
-    if value.object_strong_count() != Some(replaced_references) {
+    let fiber_owned_references = value
+        .object_identity()
+        .map_or(0, |identity| eg.fiber_owned_object_references(identity));
+    if value.object_strong_count() != Some(replaced_references + fiber_owned_references) {
         return None;
     }
     let requires_vm_release = eg.lazy_object_state(value).is_some()
+        || value
+            .object_identity()
+            .is_some_and(|identity| eg.has_fiber_context(identity))
         || eg.find_method_info(&object.class_name, "__destruct").is_some()
         || {
             let mut nested_object = false;
@@ -370,6 +407,7 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     requires_vm_release.then(|| PreparedValueDestructor {
         owner: value.clone(),
         replaced_references,
+        fiber_owned_references,
     })
 }
 
@@ -384,10 +422,18 @@ pub(crate) fn run_prepared_value_destructor(
     let Some(references) = release.owner.object_strong_count() else {
         return Ok(());
     };
-    if references > release.replaced_references + 1 {
+    if references > release.replaced_references + release.fiber_owned_references + 1 {
         return Ok(());
     }
-    let _ = run_final_object_destructor_tree(eg, release.owner, references, None, true)?;
+    let logical_caller = eg.current_execute_data.get();
+    let _ = run_final_object_destructor_tree(
+        eg,
+        release.owner,
+        references,
+        None,
+        true,
+        logical_caller,
+    )?;
     Ok(())
 }
 
@@ -458,6 +504,7 @@ fn release_statement_temps(
                     range_references + 1,
                     Some(&object_counts),
                     false,
+                    frame,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -1236,13 +1283,24 @@ fn throw_in_frame<'a>(
                 .offset_from(sf_op_array.instructions.as_ptr()) as u32
         };
 
-        let mut matched_entry: Option<&crate::compiler::compile::TryEntry> = None;
-        for entry in &sf_op_array.try_entries {
-            if current_ip >= entry.try_start && current_ip < entry.try_end {
-                matched_entry = Some(entry);
-                break;
-            }
-        }
+        // A non-Throwable Fiber-exit sentinel deliberately bypasses ordinary
+        // catches. Continue through catch-only inner regions and select the
+        // innermost enclosing region that can actually handle the value or
+        // execute a finally block.
+        let matched_entry = sf_op_array
+            .try_entries
+            .iter()
+            .filter(|entry| current_ip >= entry.try_start && current_ip < entry.try_end)
+            .filter(|entry| {
+                entry.finally_start != 0xFFFFFFFF
+                    || entry
+                        .catches
+                        .iter()
+                        .any(|catch| exception_matches_catch(&thrown, &catch.types, eg))
+            })
+            // Nested entries are appended before their enclosing entry by
+            // the compiler, including when they share the same try_start.
+            .next();
 
         if let Some(entry) = matched_entry {
             let matched_catch = entry

@@ -1229,6 +1229,50 @@ impl ExecutorGlobals {
             .is_some_and(fiber::FiberRuntime::has_active)
     }
 
+    pub(crate) fn active_fiber_is_force_closing(&self) -> bool {
+        self.fiber_runtime
+            .as_deref()
+            .is_some_and(fiber::FiberRuntime::active_is_force_closing)
+    }
+
+    pub(crate) fn has_fiber_context(&self, identity: usize) -> bool {
+        self.fiber_runtime
+            .as_deref()
+            .is_some_and(|runtime| runtime.contains(identity))
+    }
+
+    pub(crate) fn fiber_owned_object_references(&self, identity: usize) -> usize {
+        self.fiber_runtime
+            .as_deref()
+            .map_or(0, |runtime| runtime.owned_object_references(identity))
+    }
+
+    pub(crate) fn force_close_fiber_object(
+        &mut self,
+        identity: usize,
+        logical_caller: *mut ExecuteData,
+    ) -> Result<(), crate::vm::execute::VmError> {
+        let Some(runtime) = self.fiber_runtime.as_deref_mut() else {
+            return Ok(());
+        };
+        if runtime.status(identity) != Some(fiber::FiberStatus::Suspended) {
+            return Ok(());
+        }
+        let runtime = runtime as *mut fiber::FiberRuntime;
+        if let Some(exception) =
+            fiber::FiberRuntime::force_close(runtime, self, identity, logical_caller)?
+        {
+            self.exception = Some(exception);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn release_fiber_object(&mut self, identity: usize) {
+        if let Some(runtime) = self.fiber_runtime.as_deref_mut() {
+            runtime.release(identity);
+        }
+    }
+
     pub(crate) fn fiber_returned(&self, identity: usize) -> Result<Value, fiber::FiberReturnState> {
         self.fiber_runtime
             .as_deref()

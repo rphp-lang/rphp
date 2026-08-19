@@ -1998,7 +1998,7 @@ fn execute_resumed_generator_frame(
         );
     }
 
-    cleanup_detached_generator_frames(eg, frame);
+    cleanup_detached_frame_chain(eg, frame, false)?;
     eg.current_execute_data.set(saved_execute_data);
     eg.active_generator = saved_active;
     if let Err(error) = result {
@@ -2053,10 +2053,39 @@ fn close_failed_generator(gen_ref: &crate::vm::generator::GeneratorRef) {
 /// A detached generator owns every frame above and including `root`. Normal
 /// yield/return leaves the root allocated; an unhandled exception can also
 /// leave nested callees above it. Reclaim the complete chain exactly once.
-fn cleanup_detached_generator_frames(eg: &mut ExecutorGlobals, root: *mut ExecuteData) {
+/// Release every live activation owned by one detached VM stack.
+///
+/// Fiber completion additionally runs PHP object destructors before each
+/// frame is retired. Keep an already escaping exception outside destructor
+/// dispatch so a destructor failure can replace it without making the old
+/// exception visible to user code during `__destruct()`.
+pub(crate) fn cleanup_detached_frame_chain(
+    eg: &mut ExecutorGlobals,
+    root: *mut ExecuteData,
+    run_destructors: bool,
+) -> Result<(), VmError> {
+    let mut pending_exception = eg.exception.take();
+    let mut cleanup_error = None;
     let mut frame = eg.current_execute_data.get();
     while !frame.is_null() {
         let previous = unsafe { (*frame).prev_execute_data };
+        if run_destructors {
+            loop {
+                if let Err(error) = run_frame_destructors(eg, frame) {
+                    cleanup_error = Some(error);
+                }
+                let Some(exception) = eg.exception.take() else {
+                    break;
+                };
+                if let Some(previous) = pending_exception.as_ref() {
+                    append_replaced_exception(&exception, previous, eg);
+                }
+                pending_exception = Some(exception);
+                if cleanup_error.is_some() {
+                    break;
+                }
+            }
+        }
         eg.current_execute_data.set(previous);
         discard_generator_generic_context(eg, frame);
         unsafe {
@@ -2068,6 +2097,12 @@ fn cleanup_detached_generator_frames(eg: &mut ExecutorGlobals, root: *mut Execut
             break;
         }
         frame = previous;
+    }
+    eg.exception = pending_exception;
+    if let Some(error) = cleanup_error {
+        Err(error)
+    } else {
+        Ok(())
     }
 }
 

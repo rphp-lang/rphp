@@ -11,12 +11,12 @@ use std::rc::Weak;
 use super::ExecutorGlobals;
 use super::suspended::{CoroutineExecutionState, CoroutineStackPool};
 use crate::stdlib::ResolvedCallback;
-use crate::value::{PhpObject, Value};
+use crate::value::{PhpObject, Value, make_error_value};
 use crate::vm::execute::{
-    VmError, execute_coroutine_frame, initialize_suspended_callback_frame,
-    inject_suspended_exception, write_coroutine_result,
+    VmError, cleanup_detached_frame_chain, execute_coroutine_frame,
+    initialize_suspended_callback_frame, inject_suspended_exception, write_coroutine_result,
 };
-use crate::vm::frame::ExecuteData;
+use crate::vm::frame::{CALL_FRAME_SLOTS, ExecuteData};
 use crate::vm::function::FunctionType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,7 @@ pub(crate) enum FiberInput {
     Start(Vec<Value>),
     Resume(Value),
     Throw(Value),
+    ForceClose(Value),
 }
 
 pub(crate) struct FiberRunOutcome {
@@ -58,6 +59,8 @@ struct FiberContext {
     status: FiberStatus,
     result: Value,
     threw: bool,
+    force_closing: bool,
+    owned_object_references: usize,
     boundary_execute_data: *mut ExecuteData,
     suspension: Option<FiberSuspension>,
     _pinned: std::marker::PhantomPinned,
@@ -72,6 +75,8 @@ impl FiberContext {
             status: FiberStatus::Created,
             result: Value::null(),
             threw: false,
+            force_closing: false,
+            owned_object_references: 0,
             boundary_execute_data: std::ptr::null_mut(),
             suspension: None,
             _pinned: std::marker::PhantomPinned,
@@ -122,6 +127,27 @@ impl FiberRuntime {
         !self.active.is_empty()
     }
 
+    pub(crate) fn contains(&self, identity: usize) -> bool {
+        self.contexts.contains_key(&identity)
+    }
+
+    pub(crate) fn active_is_force_closing(&self) -> bool {
+        self.active
+            .last()
+            .and_then(|identity| self.contexts.get(identity))
+            .is_some_and(|context| context.force_closing)
+    }
+
+    pub(crate) fn owned_object_references(&self, identity: usize) -> usize {
+        self.contexts
+            .get(&identity)
+            .map_or(0, |context| context.owned_object_references)
+    }
+
+    pub(crate) fn release(&mut self, identity: usize) {
+        self.contexts.remove(&identity);
+    }
+
     pub(crate) fn returned(&self, identity: usize) -> Result<Value, FiberReturnState> {
         let Some(context) = self.contexts.get(&identity) else {
             return Err(FiberReturnState::NotStarted);
@@ -156,6 +182,11 @@ impl FiberRuntime {
                 .get_mut(&identity)
                 .expect("active Fiber context must remain registered");
             let context = context.as_mut().get_unchecked_mut();
+            if context.force_closing {
+                return Err(VmError::Fatal(
+                    "Cannot suspend in a force-closed fiber".to_string(),
+                ));
+            }
             let frame = (*internal_frame).prev_execute_data;
             if frame.is_null() {
                 return Err(VmError::Fatal(
@@ -210,6 +241,7 @@ impl FiberRuntime {
             };
 
             let is_start = matches!(&input, FiberInput::Start(_));
+            let is_force_close = matches!(&input, FiberInput::ForceClose(_));
             let trace_callsite = {
                 let caller =
                     (!logical_caller.is_null()).then(|| (*logical_caller).prev_execute_data);
@@ -282,6 +314,11 @@ impl FiberRuntime {
                         inject_suspended_exception(eg, suspension.frame, exception)
                             .unwrap_or(suspension.frame)
                     }
+                    FiberInput::ForceClose(exit) => {
+                        (*context).force_closing = true;
+                        inject_suspended_exception(eg, suspension.frame, exit)
+                            .unwrap_or(suspension.frame)
+                    }
                     FiberInput::Start(_) => unreachable!(),
                 }
             };
@@ -299,6 +336,53 @@ impl FiberRuntime {
             } else {
                 execute_coroutine_frame(eg, entry, boundary)
             };
+            if (*context).suspension.is_some() {
+                // The suspended stack may itself retain the Fiber object (the
+                // common Fiber::getCurrent() pattern). Cache those internal
+                // handles while this already-proven raw stack traversal is
+                // active, so the cold last-reference planner can distinguish
+                // a self-owned cycle from an unrelated external alias.
+                let mut owned_references =
+                    usize::from((*context).suspension.as_ref().is_some_and(|suspension| {
+                        suspension.value.object_identity() == Some(identity)
+                    }));
+                let mut scan_frame = eg.current_execute_data.get();
+                while !scan_frame.is_null() {
+                    let mut scan_activation = scan_frame;
+                    loop {
+                        let total =
+                            ((*scan_activation).num_cvs + (*scan_activation).num_temps) as usize;
+                        let slots = (scan_activation as *const Value).add(CALL_FRAME_SLOTS);
+                        if total <= 64 {
+                            let bitmap = (*scan_activation).owned_heap_bitmap();
+                            for index in 0..total {
+                                if bitmap & (1_u64 << index) != 0
+                                    && (*slots.add(index)).object_identity() == Some(identity)
+                                {
+                                    owned_references += 1;
+                                }
+                            }
+                        } else {
+                            for index in 0..total {
+                                if (*slots.add(index)).object_identity() == Some(identity) {
+                                    owned_references += 1;
+                                }
+                            }
+                        }
+                        scan_activation = (*scan_activation).call;
+                        if scan_activation.is_null() {
+                            break;
+                        }
+                    }
+                    scan_frame = (*scan_frame).prev_execute_data;
+                }
+                (*context).owned_object_references = owned_references;
+            }
+            let cleanup = if (*context).suspension.is_none() {
+                cleanup_detached_frame_chain(eg, boundary, true)
+            } else {
+                Ok(())
+            };
             let active = (&mut *runtime).active.pop();
             assert_eq!(active, Some(identity));
             eg.discard_detached_trace_caller(boundary as usize);
@@ -308,6 +392,7 @@ impl FiberRuntime {
             }
 
             if let Some(suspension) = (*context).suspension.as_ref() {
+                assert!(!is_force_close, "force-closed Fiber must not suspend again");
                 assert!(
                     matches!(&execution, Err(VmError::Fatal(message)) if message.is_empty()),
                     "Fiber suspension signal must be consumed at its owning boundary"
@@ -320,9 +405,11 @@ impl FiberRuntime {
             }
 
             let execution_error = execution.err();
+            let cleanup_error = cleanup.err();
             let failure = (*context).state.exception.take();
             (*context).threw = failure.is_some();
             (*context).status = FiberStatus::Terminated;
+            (*context).owned_object_references = 0;
             (*context).state.cleanup_frames();
             (*context).boundary_execute_data = std::ptr::null_mut();
             let stacks = (*context)
@@ -334,10 +421,36 @@ impl FiberRuntime {
             if let Some(error) = execution_error {
                 return Err(error);
             }
+            if let Some(error) = cleanup_error {
+                return Err(error);
+            }
             Ok(FiberRunOutcome {
                 value: Value::null(),
                 failure,
             })
         }
+    }
+
+    /// Resume a suspended Fiber with an internal, uncatchable exit object.
+    /// A user exception raised by `finally` replaces that sentinel and is
+    /// returned to the ordinary destructor boundary.
+    pub(crate) fn force_close(
+        runtime: *mut Self,
+        eg: &mut ExecutorGlobals,
+        identity: usize,
+        logical_caller: *mut ExecuteData,
+    ) -> Result<Option<Value>, VmError> {
+        let exit = make_error_value("\0RPHPFiberExit", "");
+        let exit_identity = exit.object_identity();
+        let outcome = Self::run(
+            runtime,
+            eg,
+            identity,
+            FiberInput::ForceClose(exit),
+            logical_caller,
+        )?;
+        Ok(outcome
+            .failure
+            .filter(|failure| failure.object_identity() != exit_identity))
     }
 }

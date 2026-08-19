@@ -186,3 +186,101 @@ echo "main-end:", error_reporting(), "\n";
         )
     );
 }
+
+#[test]
+fn force_close_bypasses_catches_runs_finally_and_rejects_resuspension() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$fiber = new Fiber(function (): void {
+    try {
+        try {
+            echo "body\n";
+            Fiber::suspend();
+        } catch (Throwable $error) {
+            echo "exit-caught\n";
+        }
+    } finally {
+        echo "finally\n";
+        try {
+            Fiber::suspend();
+        } catch (FiberError $error) {
+            echo $error->getMessage(), "\n";
+        }
+    }
+    echo "unreached\n";
+});
+
+$fiber->start();
+unset($fiber);
+echo "done\n";
+"#,
+        ),
+        concat!(
+            "body\n",
+            "finally\n",
+            "Cannot suspend in a force-closed fiber\n",
+            "done\n",
+        )
+    );
+}
+
+#[test]
+fn final_external_fiber_release_cleans_self_owned_stack_objects() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FiberLocalDestructor {
+    public function __destruct() {
+        echo "local-destructor\n";
+    }
+}
+
+$fiber = new Fiber(function (): void {
+    $local = new FiberLocalDestructor();
+    $self = Fiber::getCurrent();
+    Fiber::suspend();
+});
+$fiber->start();
+echo "before-release\n";
+$fiber = null;
+gc_collect_cycles();
+echo "after-release\n";
+"#,
+        ),
+        "before-release\nlocal-destructor\nafter-release\n"
+    );
+}
+
+#[test]
+fn force_close_chains_multiple_finally_exceptions_in_release_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$make = function (string $message): Fiber {
+    $fiber = new Fiber(function () use ($message): void {
+        try {
+            Fiber::suspend();
+        } finally {
+            throw new Exception($message);
+        }
+    });
+    $fiber->start();
+    return $fiber;
+};
+$outer = new Fiber(function () use ($make): void {
+    $first = $make('first');
+    $second = $make('second');
+    Fiber::suspend();
+});
+$outer->start();
+try {
+    unset($outer);
+} catch (Exception $error) {
+    echo $error->getMessage(), '|', $error->getPrevious()?->getMessage(), "\n";
+}
+"#,
+        ),
+        "second|first\n"
+    );
+}

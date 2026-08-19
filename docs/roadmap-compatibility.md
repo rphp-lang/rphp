@@ -804,6 +804,23 @@ empty-request startup at -0.671% independently and -0.681% paired, while the
 ordinary-call control is +0.259% independently and +0.277% paired. Exact output
 is retained and every median remains below the five-percent ceiling.
 
+The `fiber-force-close` checkpoint reaches 3,170 passes with 2,127 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+Last external Fiber release now delivers an uncatchable internal exit through
+nested `finally` regions, rejects re-suspension with the exact `FiberError`,
+runs stack-local object destructors, preserves multiple replacement exceptions
+and request-shutdown traces, and accounts for Fiber self references retained by
+detached frames. Eight `gh9735` cases, `invocable-class.phpt`, five direct and
+shutdown force-close diagnostics, and four unfinished-Fiber `finally` cases
+become exact; the Fiber directory reaches 59/110 and the full corpus delta is
++18/-0 with no other movement. All five feature configurations, all-target,
+unsafe, Composer S0, four Symfony S1 gates, warmed-kernel S2 and cold-build S3
+pass. CPU-pinned 32-pair release A/B medians put 20,000 Fiber switches at
+-0.114% independently and +0.023% paired, with paired p10/p90
+-1.916%/+2.475% and exact output. General cycle collection, destructor Fibers,
+generator/internal crossings, signals, ticks and bailout/OOM cleanup remain
+separate checkpoints.
+
 The `fiber-error-state` checkpoint reaches 3,152 passes with 2,145 failures,
 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
 Detached Fiber/coroutine state now owns `error_reporting` and active `@`

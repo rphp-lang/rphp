@@ -9,6 +9,49 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,170 pass, 2,127 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+59.845% and the whole-corpus rate is 56.617%; 4,610 of 5,297 attempted cases
+reach runtime (87.030%). Relative to the preceding 3,152-pass checkpoint, the
+exact pass-set delta is +18/-0 with no other status or failure-category
+movement.
+
+Releasing the last external handle of a suspended Fiber now resumes its pinned
+stack with an internal exit value that ordinary `catch` clauses cannot observe.
+The exit crosses nested catches, executes every `finally`, rejects another
+`Fiber::suspend()` with PHP 8.5's exact `FiberError`, and is suppressed only
+after the detached frame chain has been retired. A user exception raised by
+cleanup replaces the internal exit; multiple cleanup exceptions retain PHP's
+`previous` order and logical shutdown trace.
+
+Detached frame retirement runs PHP object destructors before releasing each
+activation. Suspended stacks cache direct handles to their owning Fiber, so a
+last external assignment or unset can distinguish Fiber-owned self references
+from unrelated aliases and close the cycle without placing PHP calls in
+`Value::drop`. Eight `gh9735` stack-lifetime cases, the invocable callback case,
+five direct/shutdown force-close diagnostics and four unfinished-Fiber
+`finally` cases become exact. The complete 110-case `Zend/tests/fibers`
+directory rises from 41 to 59 passes. General Zend cycle collection, destructor
+Fibers that themselves suspend, generator/internal callback crossings, ticks,
+signals and bailout/OOM cleanup remain separate boundaries.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,623 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6.
+
+The exact base `272e41cc` and final release candidate were compared on one
+pinned Ryzen 9 7950X CPU in `performance` mode without removing outliers.
+Thirty-two balanced ABBA/BAAB pairs of the 20,000-cycle Fiber switch workload
+retained output `199990000|200010000` and measured baseline p10/median/p90
+0.015200/0.015318/0.015545 seconds versus candidate
+0.015134/0.015300/0.015747 seconds: -0.114% by independent medians and +0.023%
+by the paired-ratio median, whose p10/p90 is -1.916%/+2.475%. Both medians
+remain below the five-percent regression ceiling.
+
+The preceding `fiber-error-state` checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,152 pass, 2,145 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 59.505% and the whole-corpus rate is 56.296%; 4,610 of 5,297 attempted cases
