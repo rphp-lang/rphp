@@ -2261,6 +2261,59 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
     }
 }
 
+/// Only a missing global/class symbol may postpone a property default to
+/// first object construction. Other constant-expression failures remain
+/// compile-time diagnostics even when the expression happens to mention a
+/// symbol elsewhere.
+fn constant_expression_dependency_is_unavailable(reason: &str) -> bool {
+    reason
+        .strip_prefix("class constant ")
+        .is_some_and(|reason| reason.ends_with(" is not available in this constant expression"))
+        || (reason.starts_with("expression Constant(\"")
+            && reason.ends_with("\") is not a compile-time constant"))
+}
+
+#[derive(Debug, Clone)]
+pub struct DeferredPropertyDefault {
+    pub property_name: String,
+    pub declaring_class: String,
+    pub property_index: usize,
+    pub expression: Box<Expr>,
+    pub evaluation_scope: Rc<AttributeEvaluationScope>,
+    pub source_file: String,
+    pub source_line: usize,
+}
+
+#[derive(Debug)]
+pub struct DeferredInstancePropertyDefaults {
+    entries: Rc<Vec<DeferredPropertyDefault>>,
+    resolved: RefCell<Option<Rc<[Value]>>>,
+}
+
+impl DeferredInstancePropertyDefaults {
+    pub(crate) fn new(entries: Vec<DeferredPropertyDefault>) -> Self {
+        Self {
+            entries: Rc::new(entries),
+            resolved: RefCell::new(None),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn entries(&self) -> Rc<Vec<DeferredPropertyDefault>> {
+        Rc::clone(&self.entries)
+    }
+
+    #[inline]
+    pub(crate) fn resolved(&self) -> Option<Rc<[Value]>> {
+        self.resolved.borrow().clone()
+    }
+
+    #[inline]
+    pub(crate) fn cache_resolved(&self, defaults: Rc<[Value]>) {
+        *self.resolved.borrow_mut() = Some(defaults);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ClassConstantDefinition {
     pub name: String,
@@ -2399,6 +2452,12 @@ pub struct ClassDef {
     /// Cold, compiler-proven invalid backed-enum table. The boxed sidecar keeps
     /// valid and non-enum class metadata to one nullable word.
     pub enum_backing_error: Option<Box<EnumBackingValidationError>>,
+    /// Cold first-use metadata for instance defaults that depend on a global
+    /// or class symbol unavailable while this source unit was compiled. The
+    /// boxed sidecar leaves ordinary class metadata at one nullable word and
+    /// keeps PropertyDefinition plus the immutable fast allocation template
+    /// unchanged.
+    pub deferred_instance_defaults: Option<Box<DeferredInstancePropertyDefaults>>,
 }
 
 impl ClassDef {

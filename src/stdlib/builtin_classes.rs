@@ -1195,6 +1195,7 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1293,6 +1294,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1355,6 +1357,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1389,6 +1392,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             methods: vec![],
             abstract_methods: vec![],
             enum_backing_error: None,
+            deferred_instance_defaults: None,
             class_id: 0,
         })
         .unwrap();
@@ -1425,6 +1429,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1487,6 +1492,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1518,6 +1524,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             methods: vec![],
             abstract_methods: vec![],
             enum_backing_error: None,
+            deferred_instance_defaults: None,
             class_id: 0,
         })
         .unwrap();
@@ -1550,6 +1557,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1581,6 +1589,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1612,6 +1621,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1643,6 +1653,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1674,6 +1685,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         methods: vec![],
         abstract_methods: vec![],
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .unwrap();
@@ -1774,6 +1786,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             methods: vec![],
             abstract_methods: vec![],
             enum_backing_error: None,
+            deferred_instance_defaults: None,
             class_id: 0,
         };
 

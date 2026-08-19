@@ -4048,6 +4048,7 @@ impl Compiler {
                 // Evaluate property defaults (constant expressions only)
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
+                let mut deferred_instance_defaults = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
                     self.validate_override_target(&prop.attributes, "property", true)?;
@@ -4152,10 +4153,48 @@ impl Compiler {
                         &resolved_class,
                         resolved_parent.as_deref(),
                     );
+                    let mut default_is_deferred = false;
                     let default = match &prop.default {
-                        Some(expr) => Some(self.eval_const_expr_in_source_with_property(expr, &property_constants, Some(&prop.name)).map_err(|e| {
-                            format!("Cannot use non-constant expression as default value for property {}::${}: {}", name, prop.name, e)
-                        })?),
+                        Some(expr) => match self.eval_const_expr_in_source_with_property(
+                            expr,
+                            &property_constants,
+                            Some(&prop.name),
+                        ) {
+                            Ok(value) => Some(value),
+                            Err(reason)
+                                if !prop.is_static
+                                    && deferred_constant_expression_is_supported(expr)
+                                    && constant_expression_dependency_is_unavailable(&reason) =>
+                            {
+                                default_is_deferred = true;
+                                deferred_instance_defaults.push(DeferredPropertyDefault {
+                                    property_name: prop.name.clone(),
+                                    declaring_class: resolved_class.clone(),
+                                    property_index: 0,
+                                    expression: Box::new(expr.clone()),
+                                    evaluation_scope: std::rc::Rc::new(
+                                        AttributeEvaluationScope {
+                                            namespace: self.current_namespace.clone(),
+                                            class_imports: self.use_map.clone(),
+                                            constant_imports: self.constant_use_map.clone(),
+                                            lexical_class: Some(resolved_class.clone()),
+                                            lexical_parent: resolved_parent.clone(),
+                                            lexical_property: Some(prop.name.clone()),
+                                            source_directory: self.source_directory.clone(),
+                                        },
+                                    ),
+                                    source_file: self.source_file.clone(),
+                                    source_line: prop.line,
+                                });
+                                None
+                            }
+                            Err(reason) => {
+                                return Err(format!(
+                                    "Cannot use non-constant expression as default value for property {}::${}: {}",
+                                    name, prop.name, reason
+                                ));
+                            }
+                        },
                         None => None,
                     };
                     let default = default
@@ -4190,6 +4229,9 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, *class_line)
                     .with_reflection_order(prop.line);
+                    if default_is_deferred {
+                        definition.set_has_default(true);
+                    }
                     definition.attributes = self.compile_attributes_in_scope_with_property(
                         &prop.attributes,
                         8,
@@ -4383,6 +4425,13 @@ impl Compiler {
                         .map(|method| method.name.clone())
                         .collect(),
                     enum_backing_error: None,
+                    deferred_instance_defaults: (!deferred_instance_defaults.is_empty()).then(
+                        || {
+                            Box::new(DeferredInstancePropertyDefaults::new(
+                                deferred_instance_defaults,
+                            ))
+                        },
+                    ),
                     class_id: 0,
                 });
                 if resolved_class.starts_with("class@anonymous#") {
@@ -4694,6 +4743,7 @@ impl Compiler {
                     methods: compiled_methods,
                     abstract_methods: methods.iter().map(|method| method.name.clone()).collect(),
                     enum_backing_error: None,
+                    deferred_instance_defaults: None,
                     class_id: 0,
                 });
                 self.class_declaration_keys.push(None);
@@ -4896,6 +4946,7 @@ impl Compiler {
 
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
+                let mut deferred_instance_defaults = Vec::new();
                 for prop in properties {
                     self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
@@ -4961,10 +5012,48 @@ impl Compiler {
                         None,
                     )?;
                     let type_hint = self.convert_type_hint(&prop.type_hint);
+                    let mut default_is_deferred = false;
                     let default = match &prop.default {
-                        Some(expr) => Some(self.eval_const_expr_in_source_with_property(expr, &self.known_constants, Some(&prop.name)).map_err(|e| {
-                            format!("Cannot use non-constant expression as default value for trait property {}::${}: {}", name, prop.name, e)
-                        })?),
+                        Some(expr) => match self.eval_const_expr_in_source_with_property(
+                            expr,
+                            &self.known_constants,
+                            Some(&prop.name),
+                        ) {
+                            Ok(value) => Some(value),
+                            Err(reason)
+                                if !prop.is_static
+                                    && deferred_constant_expression_is_supported(expr)
+                                    && constant_expression_dependency_is_unavailable(&reason) =>
+                            {
+                                default_is_deferred = true;
+                                deferred_instance_defaults.push(DeferredPropertyDefault {
+                                    property_name: prop.name.clone(),
+                                    declaring_class: resolved_trait.clone(),
+                                    property_index: 0,
+                                    expression: Box::new(expr.clone()),
+                                    evaluation_scope: std::rc::Rc::new(
+                                        AttributeEvaluationScope {
+                                            namespace: self.current_namespace.clone(),
+                                            class_imports: self.use_map.clone(),
+                                            constant_imports: self.constant_use_map.clone(),
+                                            lexical_class: Some(resolved_trait.clone()),
+                                            lexical_parent: None,
+                                            lexical_property: Some(prop.name.clone()),
+                                            source_directory: self.source_directory.clone(),
+                                        },
+                                    ),
+                                    source_file: self.source_file.clone(),
+                                    source_line: prop.line,
+                                });
+                                None
+                            }
+                            Err(reason) => {
+                                return Err(format!(
+                                    "Cannot use non-constant expression as default value for trait property {}::${}: {}",
+                                    name, prop.name, reason
+                                ));
+                            }
+                        },
                         None => None,
                     };
                     let default = default
@@ -4996,6 +5085,9 @@ impl Compiler {
                     )
                     .with_source_location(&self.source_file, prop.line)
                     .with_reflection_order(prop.line);
+                    if default_is_deferred {
+                        definition.set_has_default(true);
+                    }
                     definition.attributes = self.compile_attributes_in_scope_with_property(
                         &prop.attributes,
                         8,
@@ -5102,6 +5194,13 @@ impl Compiler {
                         .map(|method| method.name.clone())
                         .collect(),
                     enum_backing_error: None,
+                    deferred_instance_defaults: (!deferred_instance_defaults.is_empty()).then(
+                        || {
+                            Box::new(DeferredInstancePropertyDefaults::new(
+                                deferred_instance_defaults,
+                            ))
+                        },
+                    ),
                     class_id: 0,
                 });
                 self.class_declaration_keys.push(None);
@@ -5786,6 +5885,7 @@ impl Compiler {
                     abstract_methods: vec![],
                     class_id: 0,
                     enum_backing_error: enum_backing_error.map(Box::new),
+                    deferred_instance_defaults: None,
                 });
                 let declaration_key =
                     self.emit_named_class_declaration(&resolved_enum, *enum_line);

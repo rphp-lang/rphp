@@ -9,11 +9,58 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,323 pass, 1,974 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,334 pass, 1,963 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-62.734% and the whole-corpus rate is 59.350%; 4,621 of 5,297 attempted cases
-reach runtime (87.238%). Relative to exact base `89df791f`, the pass-set delta
-is +7/-0: all 3,316 prior passes remain exact.
+62.941% and the whole-corpus rate is 59.546%; 4,636 of 5,297 attempted cases
+reach runtime (87.521%). Relative to exact base `c83ec45d`, the pass-set delta
+is +11/-0: all 3,323 prior passes remain exact.
+
+An instance property default whose otherwise supported constant expression
+depends on a global or class symbol unavailable while its source unit is
+compiled now remains linked until the class is first instantiated. Runtime
+materialization preserves namespace/import and `self`/`parent`/trait-consumer
+scope, evaluates inherited defaults before child declarations, applies the
+strict typed-property assignment contract and publishes one request-local
+immutable template only after the complete class succeeds. A failure remains
+catchable and retryable rather than poisoning or partially caching the class.
+
+Ordinary classes retain their established property template and allocation
+path behind one absent cold-sidecar branch; `PropertyDefinition`, object layout
+and `Value` are unchanged. Deferred errors retain the property-expression file
+and line plus PHP's synthetic `[constant expression]` trace frame. Trait
+composition compares a direct global constant that an earlier include or
+`define()` has published, while shadowed parent defaults disappear before
+materialization. Boolean and null indexes in the shared deferred array
+evaluator now use PHP's canonical integer/empty-string keys.
+
+Four original E2E tests cover parent-before-child autoload order and repeated
+object initialization, repeated typed failures, equal global and consumer-relative
+trait defaults, a shadowed invalid parent default and an invalid expression
+that must remain a compile error. Eleven full-corpus cases become exact passes:
+`bug30702.phpt`, `bug69676_3.phpt`, `bug69832.phpt`,
+`update_consts_shadowed_private_prop.phpt`, `oss-fuzz-474613951.phpt`,
+`update_constants_virtual_prop.phpt`, `bug74922b.phpt`, `bug74922c.phpt`,
+`typed_properties_021.phpt`, `typed_properties_022.phpt` and
+`typed_properties_058.phpt`. There are no lost passes, timeout or crash.
+`gh10709_2.phpt`, `gh10709_3.phpt`, `gh8176.phpt` and
+`lazy_objects/oss_fuzz_71407.phpt` advance from compile rejection to their
+independent output mismatches and remain explicit failures.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. CPU-pinned release comparisons against the exact parent
+used four warmups and 32 balanced order pairs without outlier removal. Batches
+of 150 empty `-r` processes measured +0.634%, while the established declared-
+object lifecycle control measured +0.729%; outputs were exact and both medians
+remain below the five-percent regression ceiling. Deferred static-property
+storage, closures/first-class callables, enum-property fetch, object concat
+conversion and the independent nested-declaration/lazy-object/output gaps are
+not claimed by this checkpoint.
+
+The preceding `typed-property-default-diagnostics` checkpoint reached 3,323
+passes with 1,974 failures, 114 skips, one XFAIL, 187 unsupported cases, zero
+timeouts and zero crashes. Relative to exact base `89df791f`, its pass-set
+delta was +7/-0 with all 3,316 prior passes retained.
 
 An invalid literal default for a typed property now fails during compilation
 with PHP 8.5's exact declaration diagnostic and property source line. Non-null

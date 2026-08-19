@@ -355,6 +355,148 @@ fn new_object_validation_error<'a>(
     }
 }
 
+#[cold]
+fn attach_constant_expression_origin(
+    throwable: &Value,
+    definition: &crate::compiler::compile::DeferredPropertyDefault,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+) {
+    let already_stamped = throwable.as_object().is_some_and(|object| {
+        object
+            .get_property("file")
+            .and_then(Value::as_str)
+            .is_some_and(|file| !file.is_empty())
+            && object.contains_property("trace")
+    });
+    if already_stamped || definition.source_file.is_empty() {
+        return;
+    }
+    attach_throwable_origin(throwable, eg, frame, op_array, ip);
+    let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+        .as_deref()
+        .is_some_and(crate::stdlib::ini_boolean);
+    let caller_trace = throwable
+        .as_object()
+        .and_then(|object| object.get_property("trace").cloned())
+        .and_then(|trace| trace.as_array().cloned())
+        .unwrap_or_else(PhpArray::new);
+    let mut trace = PhpArray::new();
+    let mut constant_expression = PhpArray::new();
+    if !op_array.source_file.is_empty() {
+        constant_expression.set_str(
+            "file",
+            Value::shared_string(op_array.source_file.clone()),
+        );
+    }
+    if let Some(line) = op_array.source_line(ip) {
+        constant_expression.set_str("line", Value::long(line as i64));
+    }
+    constant_expression.set_str("function", Value::string("[constant expression]"));
+    if !ignore_arguments {
+        constant_expression.set_str("args", Value::array(PhpArray::new()));
+    }
+    trace.push(Value::array(constant_expression));
+    for (_, entry) in caller_trace.iter() {
+        trace.push(entry.clone());
+    }
+    if let Some(mut object) = throwable.as_object_mut() {
+        object.set_property("file", Value::string(definition.source_file.clone()));
+        object.set_property("line", Value::long(definition.source_line as i64));
+        object.set_property("trace", Value::array(trace));
+    }
+}
+
+#[cold]
+fn materialize_deferred_instance_defaults(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    class_id: u32,
+) -> Result<Option<std::rc::Rc<[Value]>>, VmError> {
+    let Some((entries, base_defaults, class_name)) = eg.class_by_id(class_id).and_then(|class| {
+        class.deferred_instance_defaults.as_ref().map(|deferred| {
+            (
+                deferred.entries(),
+                class.property_defaults.clone(),
+                class.name.clone(),
+            )
+        })
+    }) else {
+        return Ok(None);
+    };
+    if let Some(resolved) = eg
+        .class_by_id(class_id)
+        .and_then(|class| class.deferred_instance_defaults.as_ref())
+        .and_then(|deferred| deferred.resolved())
+    {
+        return Ok(Some(resolved));
+    }
+
+    let mut defaults = base_defaults.as_ref().to_vec();
+    for deferred in entries.iter() {
+        let Some(value) = crate::stdlib::reflection::evaluate_deferred_property_default_value(
+            deferred,
+            eg,
+        )? else {
+            let exception = eg
+                .exception
+                .as_ref()
+                .expect("deferred property default failure sets an exception");
+            attach_constant_expression_origin(
+                exception,
+                deferred,
+                eg,
+                frame,
+                op_array,
+                ip,
+            );
+            return Ok(None);
+        };
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        let definition = eg
+            .class_by_id(class_id)
+            .and_then(|class| class.properties.get(deferred.property_index))
+            .ok_or_else(|| VmError::Fatal("Invalid deferred property default slot".into()))?;
+        let value = match prepare_property_assignment(value, definition, eg, true, &class_name) {
+            Ok(value) => value,
+            Err(message) => {
+                let exception = make_error_value("TypeError", &message);
+                attach_constant_expression_origin(
+                    &exception,
+                    deferred,
+                    eg,
+                    frame,
+                    op_array,
+                    ip,
+                );
+                eg.exception = Some(exception);
+                return Ok(None);
+            }
+        };
+        let Some(slot) = defaults.get_mut(deferred.property_index) else {
+            return Err(VmError::Fatal(
+                "Invalid deferred property default template slot".into(),
+            ));
+        };
+        *slot = value;
+    }
+
+    let resolved: std::rc::Rc<[Value]> = defaults.into();
+    if let Some(deferred) = eg
+        .class_by_id(class_id)
+        .and_then(|class| class.deferred_instance_defaults.as_ref())
+    {
+        deferred.cache_resolved(resolved.clone());
+    }
+    Ok(Some(resolved))
+}
+
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_newobj"))]
 #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_newobj"))]
@@ -414,15 +556,46 @@ fn op_new_obj_resolved<'a>(
         }
     }
 
-    // Create compact declared-property slots from the class layout.
+    // Create compact declared-property slots from the class layout. Ordinary
+    // classes clone the established immutable template directly. A class with
+    // unresolved symbolic defaults materializes a request-local template on
+    // first construction and publishes it only after every expression and
+    // typed-property guard succeeds.
+    let deferred_defaults = class_def
+        .and_then(|class| class.deferred_instance_defaults.as_ref())
+        .is_some();
+    let deferred_defaults = if deferred_defaults {
+        let class_id = class_def.expect("checked class definition").class_id;
+        match materialize_deferred_instance_defaults(eg, frame, op_array, ip, class_id)? {
+            Some(defaults) => Some(defaults),
+            None => {
+                let exception = eg
+                    .exception
+                    .take()
+                    .expect("deferred property default failure sets an exception");
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        }
+    } else {
+        None
+    };
+    let class_def = class_id.and_then(|class_id| eg.class_by_id(class_id));
     let (class_id, obj) = if let Some(class_def) = class_def {
         let class_id = class_def.class_id;
+        let defaults = deferred_defaults
+            .as_deref()
+            .unwrap_or(class_def.property_defaults.as_ref());
         (
             class_id,
             PhpObject::with_layout_from_defaults(
                 class_id,
                 class_def.property_layout.clone(),
-                class_def.property_defaults.as_ref(),
+                defaults,
             ),
         )
     } else {

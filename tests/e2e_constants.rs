@@ -154,6 +154,96 @@ echo $values[Alias::class] . ':' . $values[Local::class];
 }
 
 #[test]
+fn deferred_instance_defaults_resolve_parent_first_and_initialize_each_object() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function ($class) {
+    echo $class, '>';
+    eval("class $class { const VALUE = '$class'; }");
+});
+
+class DeferredParent {
+    public $parent = ParentSymbol::VALUE;
+}
+class DeferredChild extends DeferredParent {
+    public $child = ChildSymbol::VALUE;
+}
+
+$first = new DeferredChild();
+$second = new DeferredChild();
+echo $first->parent, ':', $first->child, ':', $second->parent, ':', $second->child;
+"#,
+        ),
+        "ParentSymbol>ChildSymbol>ParentSymbol:ChildSymbol:ParentSymbol:ChildSymbol"
+    );
+}
+
+#[test]
+fn deferred_typed_property_default_failures_are_retryable() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+define('DYNAMIC_DEFAULT', 5);
+class GoodDeferredDefault { public int $value = DYNAMIC_DEFAULT; }
+class BadDeferredDefault { public string $value = DYNAMIC_DEFAULT; }
+
+echo (new GoodDeferredDefault())->value, ':';
+for ($attempt = 0; $attempt < 2; $attempt++) {
+    try {
+        new BadDeferredDefault();
+    } catch (TypeError $error) {
+        echo $error->getMessage(), ';';
+    }
+}
+"#,
+        ),
+        concat!(
+            "5:",
+            "Cannot assign int to property BadDeferredDefault::$value of type string;",
+            "Cannot assign int to property BadDeferredDefault::$value of type string;",
+        )
+    );
+}
+
+#[test]
+fn deferred_trait_defaults_bind_to_the_consumer_and_shadowed_defaults_do_not_run() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+define('TRAIT_DEFAULT', 7);
+trait FirstDefault { public $shared = TRAIT_DEFAULT; }
+trait EqualDefault { public $shared = TRAIT_DEFAULT; }
+trait RelativeDefault { public $relative = self::VALUE; }
+
+class DeferredConsumer {
+    use FirstDefault, EqualDefault, RelativeDefault;
+    const VALUE = 8;
+}
+class DeferredBase { public $discarded = NEVER_DEFINED; }
+class ShadowingChild extends DeferredBase { public $discarded = 42; }
+
+$consumer = new DeferredConsumer();
+echo $consumer->shared, ':', $consumer->relative, ':', (new ShadowingChild())->discarded;
+"#,
+        ),
+        "7:8:42"
+    );
+}
+
+#[test]
+fn invalid_property_expressions_are_not_postponed_by_a_symbol_reference() {
+    let error = run_php_expect_error(
+        "<?php class InvalidDeferredDefault { public $value = MISSING + strlen('x'); }",
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("Cannot use non-constant expression as default value for property InvalidDeferredDefault::$value")
+    );
+}
+
+#[test]
 fn php_url_component_constants_are_available() {
     assert_eq!(
         run_php(

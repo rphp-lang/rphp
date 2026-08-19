@@ -795,6 +795,10 @@ fn evaluate_deferred_attribute_expression(
                 array.get_int(index)
             } else if let Some(index) = index.as_str() {
                 array.get_str(index)
+            } else if matches!(index.value_type(), ValueType::True | ValueType::False) {
+                array.get_int(i64::from(index.is_truthy()))
+            } else if index.value_type() == ValueType::Null {
+                array.get_str("")
             } else {
                 None
             };
@@ -1030,6 +1034,30 @@ pub(crate) fn evaluate_deferred_class_constant_value(
         Ok(value) => Ok(Some(value)),
         Err(DeferredAttributeError::Message(error)) => {
             eg.exception = Some(make_error_value("Error", &error));
+            Ok(None)
+        }
+        Err(DeferredAttributeError::Vm(error)) => Err(error),
+    }
+}
+
+pub(crate) fn evaluate_deferred_property_default_value(
+    definition: &crate::compiler::compile::DeferredPropertyDefault,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<Value>, VmError> {
+    match evaluate_deferred_attribute_expression(
+        &definition.expression,
+        &definition.evaluation_scope,
+        &definition.source_file,
+        eg,
+    ) {
+        Ok(value) => Ok(Some(value)),
+        Err(DeferredAttributeError::Message(error)) => {
+            // Autoload may already have raised a user exception. Preserve that
+            // object and its origin; synthesize Error only for an ordinary
+            // unresolved constant-expression dependency.
+            if eg.exception.is_none() {
+                eg.exception = Some(make_error_value("Error", &error));
+            }
             Ok(None)
         }
         Err(DeferredAttributeError::Vm(error)) => Err(error),

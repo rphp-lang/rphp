@@ -3212,6 +3212,16 @@ impl ExecutorGlobals {
         let class_name = class_def.name.clone();
         let declaration_file = class_def.source_file.clone();
         let declaration_line = class_def.declaration_line;
+        let own_deferred_instance_defaults = class_def
+            .deferred_instance_defaults
+            .take()
+            .map(|defaults| defaults.entries().as_ref().clone())
+            .unwrap_or_default();
+        // PHP materializes a child's inherited defaults before its own
+        // declarations. Keep that semantic order independently from RPHP's
+        // storage-slot order, which deliberately places child declarations
+        // first for property lookup.
+        let mut deferred_instance_defaults = Vec::new();
         // PHP does not permit class redeclaration. Besides matching that rule,
         // this guarantees class_by_id pointers remain stable for inline caches.
         if self
@@ -3327,6 +3337,9 @@ impl ExecutorGlobals {
         // Resolve inheritance — merge parent's properties and methods
         if let Some(parent_name) = &class_def.parent {
             if let Some(parent) = self.class_table.get(parent_name.as_str()) {
+                if let Some(defaults) = &parent.deferred_instance_defaults {
+                    deferred_instance_defaults.extend(defaults.entries().iter().cloned());
+                }
                 validate_property_inheritance(
                     self,
                     &class_def,
@@ -3411,6 +3424,7 @@ impl ExecutorGlobals {
                 }
             }
         }
+        deferred_instance_defaults.extend(own_deferred_instance_defaults);
 
         // Merge traits: copy trait methods and properties into this class.
         // Must happen after parent inheritance so trait methods override inherited ones
@@ -3431,6 +3445,47 @@ impl ExecutorGlobals {
                             .map(|(_, definition)| std::rc::Rc::clone(definition))
                     });
             if let Some(trait_def) = trait_definition {
+                let trait_deferred_defaults = trait_def
+                    .deferred_instance_defaults
+                    .as_ref()
+                    .map(|defaults| defaults.entries())
+                    .unwrap_or_else(|| std::rc::Rc::new(Vec::new()));
+                let mut trait_properties = trait_def.properties.clone();
+                // Trait collision checks compare resolved default values. A
+                // direct global constant may have been published by an
+                // earlier include/define() after this trait's source unit was
+                // compiled, so resolve that non-autoloading form solely for
+                // the composition comparison. The consumer still retains the
+                // deferred expression and performs its canonical first-use
+                // materialization below.
+                for deferred in trait_deferred_defaults.iter() {
+                    if !matches!(
+                        deferred.expression.as_ref(),
+                        crate::parser::Expr::Constant(_)
+                    ) {
+                        continue;
+                    }
+                    match crate::stdlib::reflection::evaluate_deferred_property_default_value(
+                        deferred, self,
+                    )
+                    .map_err(|error| error.to_string())?
+                    {
+                        Some(value) => {
+                            if let Some(property) = trait_properties.iter_mut().find(|property| {
+                                property.name == deferred.property_name
+                                    && property.declaring_class == deferred.declaring_class
+                            }) {
+                                property.default = Some(value);
+                            }
+                        }
+                        None => {
+                            // A missing direct constant has no side effects and
+                            // remains a first-use dependency. Do not leak the
+                            // comparison probe's synthetic Error into linking.
+                            self.exception = None;
+                        }
+                    }
+                }
                 if class_def.is_enum {
                     let declaration_location = class_def
                         .source_file
@@ -3464,7 +3519,7 @@ impl ExecutorGlobals {
                 )?;
                 merge_trait_property_definitions(
                     &mut class_def.properties,
-                    &trait_def.properties,
+                    &trait_properties,
                     &class_name,
                     trait_name,
                     &own_property_names,
@@ -3472,6 +3527,22 @@ impl ExecutorGlobals {
                     class_def.source_file.as_deref(),
                     class_def.declaration_line,
                 )?;
+                for deferred in trait_deferred_defaults.iter() {
+                    if own_property_names.contains(&deferred.property_name)
+                        || composed_trait_property_names
+                            .get(&deferred.property_name)
+                            .is_none_or(|first_trait| !first_trait.eq_ignore_ascii_case(trait_name))
+                    {
+                        continue;
+                    }
+                    let mut deferred = deferred.clone();
+                    deferred.declaring_class = class_name.clone();
+                    let mut scope = (*deferred.evaluation_scope).clone();
+                    scope.lexical_class = Some(class_name.clone());
+                    scope.lexical_parent = class_def.parent.clone();
+                    deferred.evaluation_scope = std::rc::Rc::new(scope);
+                    deferred_instance_defaults.push(deferred);
+                }
                 merge_trait_static_property_definitions(
                     &mut class_def.static_properties,
                     &mut static_property_slots,
@@ -3743,6 +3814,31 @@ impl ExecutorGlobals {
             })
             .collect::<Vec<_>>()
             .into();
+
+        deferred_instance_defaults.retain_mut(|deferred| {
+            let Some((property_index, _)) =
+                class_def
+                    .properties
+                    .iter()
+                    .enumerate()
+                    .find(|(_, property)| {
+                        property.name == deferred.property_name
+                            && property.declaring_class == deferred.declaring_class
+                    })
+            else {
+                return false;
+            };
+            deferred.property_index = property_index;
+            true
+        });
+        class_def.deferred_instance_defaults =
+            (!deferred_instance_defaults.is_empty()).then(|| {
+                Box::new(
+                    crate::compiler::compile::DeferredInstancePropertyDefaults::new(
+                        deferred_instance_defaults,
+                    ),
+                )
+            });
 
         // Shared ownership keeps the allocation stable and lets class_alias()
         // publish another lookup key without duplicating metadata or identity.

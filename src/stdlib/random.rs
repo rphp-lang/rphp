@@ -96,6 +96,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         methods: Vec::new(),
         abstract_methods: Vec::new(),
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     })
     .expect("Random\\IntervalBoundary registration is unique");

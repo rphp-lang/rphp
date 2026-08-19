@@ -300,6 +300,7 @@ fn internal_class(name: &str, parent: Option<&str>) -> ClassDef {
         methods: Vec::new(),
         abstract_methods: Vec::new(),
         enum_backing_error: None,
+        deferred_instance_defaults: None,
         class_id: 0,
     }
 }
