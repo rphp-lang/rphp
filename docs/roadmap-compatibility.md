@@ -1053,6 +1053,26 @@ compiled class declarations measures +0.187% independently and +0.119%
 paired, with paired p10/p90 -1.549%/+1.837%; both medians remain below the
 five-percent ceiling and no executor path or runtime layout changed.
 
+The `eval-compile-fatal` checkpoint reaches 3,425 passes with 1,872 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+Valid-syntax compiler failures from eval and included source units now bypass
+Throwable catches as PHP compile fatals without the former duplicated
+`Parse error: Compile error in ...` wrapper; syntax failures remain catchable
+`ParseError` objects. A dedicated eval flag applies `@` reporting through the
+synchronous source unit, restores it after success or a caught parse error and
+keeps the fatal-only mask through shutdown bailout. Three original E2E tests,
+one CLI lifecycle test and the exact focused slice cover normal, catchable,
+fatal, include and shutdown boundaries. `bug55007.phpt` and
+`restore_error_reporting.phpt` become exact for a full-corpus delta of +2/-0
+from `0de2e3c4`; every prior pass is retained and two final manifests are
+byte-for-byte identical. `gh13931.phpt`, `gh8841.phpt` and `gh7771_3.phpt`
+advance to their known later diagnostic/trace boundaries. All five feature
+configurations, all-target, formatting, unsafe, Composer S0, four Symfony S1
+gates and exact PHP 8.5.6 S2/S3 pass. A CPU-pinned 32-pair control of 20,000
+successful eval
+cycles measures -0.320% independently and -0.726% paired, with paired p10/p90
+-2.860%/+2.551%; all samples retain exact output and no hot layout changes.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

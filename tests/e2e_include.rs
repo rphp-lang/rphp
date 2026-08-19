@@ -276,6 +276,46 @@ try {
 }
 
 #[test]
+fn error_suppressed_eval_masks_diagnostics_and_restores_after_catchable_parse_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+error_reporting(30719);
+@eval('echo error_reporting(); trigger_error("hidden", E_USER_WARNING);');
+echo '|', error_reporting(), '|';
+try {
+    @eval('not php ;');
+} catch (ParseError $error) {
+    echo get_class($error), '|', error_reporting();
+}
+"#,
+        ),
+        "4437|30719|ParseError|30719"
+    );
+}
+
+#[test]
+fn eval_compile_errors_are_fatal_and_bypass_throwable_handlers() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+try {
+    eval('class self {}');
+} catch (Throwable $error) {
+    echo 'caught';
+}
+echo 'after';
+"#,
+        "/app/eval-compile-fatal.php",
+        "/app",
+    );
+
+    assert_eq!(
+        error.to_string(),
+        "Cannot use \"self\" as a class name as it is reserved in /app/eval-compile-fatal.php(3) : eval()'d code on line 1"
+    );
+}
+
+#[test]
 fn eval_compiles_generated_wide_addition_without_host_stack_overflow() {
     let expression = std::iter::repeat_n("1", 2_001)
         .collect::<Vec<_>>()
@@ -577,6 +617,33 @@ try {{
     );
 
     assert_eq!(run_php(&source), "caught");
+}
+
+#[test]
+fn compile_error_from_included_file_is_fatal_and_not_catchable() {
+    let (_dir, path) = write_temp_php("compile_error.php", "<?php class self {}");
+    let canonical = std::fs::canonicalize(&path)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let source = format!(
+        r#"<?php
+try {{
+    include '{}';
+}} catch (Throwable $error) {{
+    echo 'caught';
+}}
+echo 'after';
+"#,
+        path
+    );
+    let error =
+        run_php_expect_error_with_source_context(&source, "/app/include-compile-fatal.php", "/app");
+
+    assert_eq!(
+        error.to_string(),
+        format!("Cannot use \"self\" as a class name as it is reserved in {canonical} on line 1")
+    );
 }
 
 #[test]

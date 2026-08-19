@@ -295,11 +295,7 @@ fn execute_source_unit(
             Err(error) if compile_attempts < 16 => {
                 let Some(owner) = unavailable_class_constant_owner(&error.message) else {
                     eg.emit_compile_deprecations(&error.deprecations);
-                    return Ok(include_parse_error(
-                        eg,
-                        caller.is_some(),
-                        format!("Compile error in {resolved_path}: {}", error.message),
-                    ));
+                    return Err(VmError::Fatal(error.message));
                 };
                 let class_name = imported_class_name(&stmts, owner)
                     .unwrap_or_else(|| owner.trim_start_matches('\\').to_string());
@@ -307,20 +303,13 @@ fn execute_source_unit(
                     || crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?;
                 if !loaded {
                     eg.emit_compile_deprecations(&error.deprecations);
-                    return Ok(include_parse_error(
-                        eg,
-                        caller.is_some(),
-                        format!("Compile error in {resolved_path}: {}", error.message),
-                    ));
+                    return Err(VmError::Fatal(error.message));
                 }
                 compile_attempts += 1;
             }
             Err(error) => {
-                return Ok(include_parse_error(
-                    eg,
-                    caller.is_some(),
-                    format!("Compile error in {resolved_path}: {error}"),
-                ));
+                eg.emit_compile_deprecations(&error.deprecations);
+                return Err(VmError::Fatal(error.message));
             }
         }
     };
@@ -645,6 +634,10 @@ fn op_eval<'a>(
     op_array: &crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    let suppressed = opline._pad & crate::vm::instruction::EVAL_FLAG_ERROR_SUPPRESS != 0;
+    if suppressed {
+        eg.begin_error_suppression(frame as usize);
+    }
     let source = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) }
         .echo_to_string();
     let source_file = if op_array.source_file.is_empty() {
@@ -658,7 +651,21 @@ fn op_eval<'a>(
         opline.extended_value
     );
     let trace_origin = (source_file.to_string(), opline.extended_value as usize);
-    match execute_eval_source(eg, &source, source_name, (frame, op_array), trace_origin)? {
+    let outcome = execute_eval_source(eg, &source, source_name, (frame, op_array), trace_origin);
+    let outcome = match outcome {
+        Ok(outcome) => {
+            if suppressed {
+                eg.end_error_suppression(frame as usize);
+            }
+            outcome
+        }
+        Err(error) => {
+            // Fatal source-unit bailout does not unwind the `@` frame before
+            // PHP runs shutdown callbacks. Keep its reporting mask active.
+            return Err(error);
+        }
+    };
+    match outcome {
         IncludeFileOutcome::Executed(value) => {
             write_include_result(frame, opline, value);
             Ok(ColdResult::Done)

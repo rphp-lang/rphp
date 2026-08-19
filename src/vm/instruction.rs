@@ -242,6 +242,12 @@ pub const FETCH_DYNAMIC_SILENT: u16 = 1 << 1;
 /// is active. Custom error handlers still run and observe the masked level.
 pub const FETCH_DYNAMIC_ERROR_SUPPRESS: u16 = 1 << 2;
 
+/// `Eval` flag: the source-level expression is under PHP's `@` reporting
+/// mask. A successful evaluation or catchable parse failure restores the
+/// caller mask; a fatal compilation bailout keeps the suppressed mask active
+/// through request shutdown.
+pub const EVAL_FLAG_ERROR_SUPPRESS: u16 = 1;
+
 /// `FetchDynamicVar` is the read half of one read-modify-write operation. The
 /// compiler supplies an owned TMP key, and the fetch replaces it with the
 /// converted symbol name before any warning handler can re-enter the caller.

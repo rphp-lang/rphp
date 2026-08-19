@@ -9,6 +9,53 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,425 pass, 1,872 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+64.659% and the whole-corpus rate is 61.172%; 4,624 of 5,297 attempted cases
+reach runtime (87.295%). Relative to exact base `0de2e3c4`, the pass-set delta
+is +2/-0: all 3,423 prior passes remain passes.
+
+Valid-syntax failures discovered while compiling an `eval()` or included
+source unit now remain uncatchable PHP compile fatals. They retain the
+compiler's canonical message, synthetic eval filename and source line instead
+of being converted to a catchable `ParseError` with a duplicated
+`Compile error in ...` prefix. Syntax failures remain catchable `ParseError`
+objects. A dedicated `Eval` instruction flag also applies PHP's `@` reporting
+mask to the synchronous eval unit: successful evaluation and a catchable parse
+failure restore the caller mask, while a compile-fatal bailout keeps the
+fatal-only mask active through shutdown callbacks.
+
+Three original E2E tests cover successful suppressed eval, warning masking,
+parse-error restoration, compile-fatal catch bypass and the matching included-
+file boundary. A CLI regression additionally proves exit status 255, exact
+fatal presentation, absent catch/continuation output and shutdown observation
+of mask 4437. `Zend/tests/bug55007.phpt` and
+`Zend/tests/restore_error_reporting.phpt` become exact. The only other status
+category movements are expected later boundaries: `gh13931.phpt` and
+`gh8841.phpt` move from the incorrect parse wrapper to runtime, while
+`constexpr/gh7771_3.phpt` moves from runtime to compile. Two full-corpus runs
+produce byte-for-byte identical manifests with SHA-256
+`3b168d4e7af663b4bc9c6dbc23408df28e74ce706badaa7c98d85f5c215651c1`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.6 warmed-kernel S2 and cold-build S3. The
+production inventory remains 1,619 unsafe blocks and 289 unsafe functions. A
+CPU-pinned release comparison of 20,000 successful eval compile/execute cycles
+used two warm-ups per binary, 32 balanced order pairs and no outlier removal.
+Against a fresh, identically built `0de2e3c4` baseline it retained output
+`20000` and measured -0.320% independently and -0.726% paired, with paired
+p10/p90 -2.860%/+2.551%. The ordinary successful eval path remains below the
+five-percent regression ceiling; the newly correct `@eval` mask is not treated
+as a like-for-like performance comparison against the prior missing behavior.
+
+This checkpoint does not claim the remaining `break` diagnostic in
+`gh13931.phpt`, shutdown-callback Throwable origin in `gh8841.phpt`, constant-
+expression diagnostic in `gh7771_3.phpt`, general `@include` suppression or
+the unsupported `fatal_error_backtraces` CLI-INI surface.
+
+The preceding reserved-class-names checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,423 pass, 1,874 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 64.621% and the whole-corpus rate is 61.136%; 4,621 of 5,297 attempted cases
