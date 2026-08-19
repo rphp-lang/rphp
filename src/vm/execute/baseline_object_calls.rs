@@ -4,7 +4,11 @@
 fn internal_class_forbids_dynamic_properties(class_name: &str) -> bool {
     matches!(
         class_name,
-        "Generator" | "WeakReference" | "WeakMap" | "InternalIterator"
+        "Generator"
+            | "WeakReference"
+            | "WeakMap"
+            | "InternalIterator"
+            | "SensitiveParameterValue"
     )
 }
 

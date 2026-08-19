@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::runtime::ExecutorGlobals;
-use crate::value::{PhpArray, Value, ValueType};
+use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 
 #[inline]
 fn displayed_trace_class_name(class: &str) -> &str {
@@ -132,9 +132,13 @@ fn format_trace(
         );
         output.push('(');
         if let Some(arguments) = entry.get_str("args").and_then(Value::as_array) {
-            for (argument_index, (_, argument)) in arguments.iter().enumerate() {
+            for (argument_index, (key, argument)) in arguments.iter().enumerate() {
                 if argument_index != 0 {
                     output.push_str(", ");
+                }
+                if let ArrayKey::String(name) = key {
+                    output.push_str(&name);
+                    output.push_str(": ");
                 }
                 append_trace_argument(&mut output, argument, string_max_len, eg);
             }

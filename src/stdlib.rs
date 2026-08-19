@@ -33,7 +33,7 @@ use crate::vm::execute::{
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
-use crate::vm::function::{Function, FunctionCommon, FunctionType, ParamTypeHint};
+use crate::vm::function::{Function, FunctionCommon, FunctionType, ParamTypeHint, UserFunction};
 use crate::vm::instruction::InlineCache;
 use crate::vm::opcode::OpCode;
 
@@ -6103,6 +6103,44 @@ fn fn_get_defined_vars(
     );
 }
 
+fn trace_parameter_is_sensitive(
+    user: Option<&UserFunction>,
+    common: &FunctionCommon,
+    index: u32,
+) -> bool {
+    let Some(user) = user else { return false };
+    let parameter = if index < common.sig.public_arity() {
+        Some(index as usize)
+    } else if common.sig.is_variadic {
+        Some(common.sig.public_arity() as usize)
+    } else {
+        None
+    };
+    parameter.is_some_and(|parameter| {
+        user.parameter_attributes
+            .get(parameter)
+            .is_some_and(|attributes| {
+                attributes
+                    .iter()
+                    .any(|attribute| attribute.name.eq_ignore_ascii_case("SensitiveParameter"))
+            })
+    })
+}
+
+fn redact_trace_argument(
+    user: Option<&UserFunction>,
+    common: &FunctionCommon,
+    index: u32,
+    argument: Value,
+    eg: &ExecutorGlobals,
+) -> Value {
+    if trace_parameter_is_sensitive(user, common, index) {
+        builtin_classes::sensitive_parameter_value(eg, argument)
+    } else {
+        argument
+    }
+}
+
 /// Collect the live PHP call chain behind the internal debug_backtrace frame.
 ///
 /// # Safety (debug and creation modes)
@@ -6144,6 +6182,7 @@ pub(crate) unsafe fn collect_debug_backtrace(
             break;
         }
         let common = &*(*frame).func;
+        let user = (function.fn_type() == FunctionType::User).then(|| function.as_user());
         let mut entry = PhpArray::new();
         if let Some((file, line)) = eg.detached_trace_origin(frame as usize) {
             // PHP's engine-dispatched callbacks use Unknown:0 for diagnostics
@@ -6191,6 +6230,16 @@ pub(crate) unsafe fn collect_debug_backtrace(
                 entry.set_str("object", (*frame).cv(*this_cv).dereferenced().clone());
             }
             entry.set_str("type", Value::string("->"));
+        } else if let Some((class, hook)) = name.split_once("::$") {
+            entry.set_str("function", Value::string(format!("${hook}")));
+            entry.set_str("class", Value::string(class.to_string()));
+            if include_object {
+                let object = (*frame).cv(0).dereferenced();
+                if object.as_object().is_some() {
+                    entry.set_str("object", object.clone());
+                }
+            }
+            entry.set_str("type", Value::string("->"));
         } else if let Some((class, method)) = name.rsplit_once("::") {
             entry.set_str("function", Value::string(method.to_string()));
             entry.set_str("class", Value::string(class.to_string()));
@@ -6229,7 +6278,25 @@ pub(crate) unsafe fn collect_debug_backtrace(
                     )
                 };
                 if let Some(argument) = argument {
-                    arguments.push(argument);
+                    arguments.push(redact_trace_argument(user, common, index, argument, eg));
+                }
+            }
+            if common.sig.is_variadic
+                && let Some(values) = (*frame).cv(common.sig.variadic_cv_index).as_array()
+            {
+                for (key, value) in values.iter() {
+                    if let ArrayKey::String(name) = key {
+                        arguments.set_str(
+                            &name,
+                            redact_trace_argument(
+                                user,
+                                common,
+                                common.sig.public_arity(),
+                                value.dereferenced().clone(),
+                                eg,
+                            ),
+                        );
+                    }
                 }
             }
             entry.set_str("args", Value::array(arguments));
@@ -6648,7 +6715,15 @@ fn var_dump_value_inner(
                 .lazy_object_state(val)
                 .filter(|state| !state.initializing);
             let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
-            let output = if let Some(instance) = initialized_proxy {
+            let output = if object.class_name.as_ref() == "SensitiveParameterValue" {
+                format!(
+                    "{}object(SensitiveParameterValue)#{} (0) {{\n{}}}\n",
+                    prefix,
+                    val.object_handle()
+                        .expect("live sensitive value must retain its object handle"),
+                    prefix,
+                )
+            } else if let Some(instance) = initialized_proxy {
                 let mut out = format!(
                     "{}lazy proxy object({})#{} (1) {{\n{}  [\"instance\"]=>\n",
                     prefix,
@@ -7084,6 +7159,9 @@ fn print_r_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
             let Some(object) = val.as_object() else {
                 return String::new();
             };
+            if object.class_name.as_ref() == "SensitiveParameterValue" {
+                return "SensitiveParameterValue Object\n(\n)\n".to_string();
+            }
             let Some(class) = eg.find_class(&object.class_name) else {
                 return String::new();
             };

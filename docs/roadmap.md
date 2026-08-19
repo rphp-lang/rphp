@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-08-18
+Status: active coordination map, 2026-08-19
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 3,367/5,599 with zero timeouts and zero crashes. PHP's weak scalar return conversion, union preference, diagnostics, `finally`, strict widening and reference separation add an exact +10/-0 over `24a592bc`; all prior passes remain. The five feature configurations, unsafe ratchet, Composer S0, Symfony S1/S2 and CPU-pinned return/call/startup controls pass. Broader conversion and the remaining PHP 8.5 failure clusters stay explicit compatibility work. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The pinned PHP 8.5.6 AMD64 checkpoint is now 3,387/5,599 with zero timeouts and zero crashes. `#[SensitiveParameter]` now redacts fixed, defaulted, named and variadic arguments in live and stored traces through PHP's opaque `SensitiveParameterValue`; exact metadata, property-setter hooks and wrapper error surfaces add +20/-0 over `3283b463`. The five feature configurations, unsafe ratchet, Composer S0, Symfony S1/S2 and CPU-pinned startup/call controls pass. General eval-frame mapping, exact Throwable-trace lifetime and the remaining PHP 8.5 failure clusters stay explicit compatibility work. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

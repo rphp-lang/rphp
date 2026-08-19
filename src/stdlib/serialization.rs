@@ -241,7 +241,11 @@ fn serialize_value(
             drop(object);
             if matches!(
                 class_name.to_ascii_lowercase().as_str(),
-                "generator" | "weakreference" | "weakmap" | "internaliterator"
+                "generator"
+                    | "weakreference"
+                    | "weakmap"
+                    | "internaliterator"
+                    | "sensitiveparametervalue"
             ) {
                 eg.exception = Some(crate::value::make_error_value(
                     "Exception",

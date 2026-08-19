@@ -438,6 +438,10 @@ pub(crate) fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value
         .expect("object-to-array cast requires an object value");
     let mut result = PhpArray::new();
 
+    if object.class_name.as_ref() == "SensitiveParameterValue" {
+        return Value::array(result);
+    }
+
     if let Some(class) = eg.class_by_id(object.class_id) {
         for (slot, definition) in class.properties.iter().enumerate() {
             let Some(property) = object.get_property_slot(slot) else {

@@ -54,7 +54,7 @@ use super::{
     property_skip_lazy_initialization, property_to_string, reflection_compound_types,
     reflection_get_doc_comment, reflection_type_allows_null, reflection_type_generic_arguments,
     reflection_type_has_generic_arguments, reflection_type_is_builtin, reflection_type_name,
-    reflection_type_to_string,
+    reflection_type_to_string, sensitive_parameter_construct,
 };
 use crate::compiler::compile::{ClassConstantDefinition, ClassDef, PropertyDefinition};
 use crate::compiler::make_internal_method;
@@ -567,6 +567,57 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     })
     .unwrap();
     register_method!("Override", "__construct", override_construct, 1, 0, []);
+
+    eg.register_class(ClassDef {
+        name: "SensitiveParameter".to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: true,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        trait_precedences: vec![],
+        properties: vec![],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        enum_backing_error: None,
+        deferred_instance_defaults: None,
+        class_id: 0,
+        attributes: vec![AttributeDefinition {
+            name: "Attribute".to_string(),
+            arguments: vec![AttributeArgument {
+                name: None,
+                value: Ok(Value::long(32)),
+                deferred_expression: None,
+            }],
+            evaluation_scope: std::rc::Rc::new(AttributeEvaluationScope::default()),
+            target: 1,
+            source_file: String::new(),
+            source_line: 0,
+            strict_types: false,
+        }],
+    })
+    .unwrap();
+    register_method!(
+        "SensitiveParameter",
+        "__construct",
+        sensitive_parameter_construct,
+        1,
+        0,
+        []
+    );
 
     eg.register_class(ClassDef {
         name: "Deprecated".to_string(),

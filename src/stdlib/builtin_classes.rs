@@ -1165,6 +1165,68 @@ fn fn_spl_priority_queue_is_empty(
     );
 }
 
+const SENSITIVE_PARAMETER_VALUE_CLASS: &str = "SensitiveParameterValue";
+
+#[inline]
+fn sensitive_parameter_value_key() -> String {
+    crate::runtime::mangle_private_prop(SENSITIVE_PARAMETER_VALUE_CLASS, "value")
+}
+
+pub(super) fn sensitive_parameter_value(eg: &ExecutorGlobals, value: Value) -> Value {
+    let class = eg
+        .find_class(SENSITIVE_PARAMETER_VALUE_CLASS)
+        .expect("SensitiveParameterValue must be registered before execution");
+    Value::object(PhpObject::with_layout(
+        class.class_id,
+        class.property_layout.clone(),
+        vec![value.dereferenced().clone()],
+    ))
+}
+
+fn fn_sensitive_parameter_value_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = arg!(ed, 1).dereferenced().clone();
+    let key = sensitive_parameter_value_key();
+    if let Some(mut object) = arg!(ed, 0).as_object_mut() {
+        if object
+            .get_property(&key)
+            .is_some_and(|stored| !stored.is_undef())
+        {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "Cannot modify readonly property SensitiveParameterValue::$value",
+            ));
+            return Ok(());
+        }
+        object.set_property(&key, value);
+    }
+    Ok(())
+}
+
+fn fn_sensitive_parameter_value_get_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let key = sensitive_parameter_value_key();
+    let value = arg!(ed, 0)
+        .as_object()
+        .and_then(|object| object.get_property(&key).cloned())
+        .unwrap_or_else(Value::null);
+    ret!(rv, value);
+}
+
+fn fn_sensitive_parameter_value_debug_info(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::array(PhpArray::new()));
+}
+
 #[cold]
 fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
     use crate::compiler::compile::ClassDef;
@@ -1756,6 +1818,85 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     funcs.extend(super::fiber::register(eg));
     funcs.extend(reflection::register(eg));
+
+    eg.register_class(ClassDef {
+        attributes: Vec::new(),
+        name: SENSITIVE_PARAMETER_VALUE_CLASS.to_string(),
+        source_file: None,
+        declaration_line: 0,
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: true,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        trait_precedences: vec![],
+        properties: vec![PropertyDefinition::declared(
+            "value".to_string(),
+            None,
+            Visibility::Private,
+            SENSITIVE_PARAMETER_VALUE_CLASS.to_string(),
+            ParamTypeHint::Mixed,
+            true,
+            false,
+        )],
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec!["value".to_string()],
+        methods: vec![],
+        abstract_methods: vec![],
+        enum_backing_error: None,
+        deferred_instance_defaults: None,
+        class_id: 0,
+    })
+    .unwrap();
+    reg_method!(
+        SENSITIVE_PARAMETER_VALUE_CLASS,
+        "__construct",
+        fn_sensitive_parameter_value_construct,
+        2,
+        1,
+        "value"
+    );
+    funcs
+        .last_mut()
+        .expect("SensitiveParameterValue constructor was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::Mixed];
+    reg_method!(
+        SENSITIVE_PARAMETER_VALUE_CLASS,
+        "getValue",
+        fn_sensitive_parameter_value_get_value,
+        1,
+        0
+    );
+    funcs
+        .last_mut()
+        .expect("SensitiveParameterValue::getValue was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Mixed;
+    reg_method!(
+        SENSITIVE_PARAMETER_VALUE_CLASS,
+        "__debugInfo",
+        fn_sensitive_parameter_value_debug_info,
+        1,
+        0
+    );
+    funcs
+        .last_mut()
+        .expect("SensitiveParameterValue::__debugInfo was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Array;
 
     funcs.extend(register_value_error(eg));
 

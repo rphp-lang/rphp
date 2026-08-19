@@ -321,6 +321,117 @@ fn debug_print_backtrace_formats_locations_arguments_limits_and_main() {
     );
 }
 
+#[test]
+fn sensitive_parameter_redacts_live_and_throwable_traces() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function captured($plain, #[SensitiveParameter] $secret, $tail = 'tail') {
+    $live = debug_backtrace()[0]['args'];
+    $thrown = (new Exception)->getTrace()[0]['args'];
+    echo $live[0], ':', get_class($live[1]), ':', $live[1]->getValue(), ':', $live[2], '|';
+    echo $thrown[0], ':', get_class($thrown[1]), ':', $thrown[1]->getValue(), ':', $thrown[2], '|';
+}
+captured('plain', 'secret', 'tail', 'extra');
+
+function named(#[SensitiveParameter] $first = null, $plain = null, #[SensitiveParameter] $last = null) {
+    $args = debug_backtrace()[0]['args'];
+    echo count($args), ':', get_class($args[0]), ':', get_class($args[2]), ':', $args[2]->getValue(), '|';
+}
+named(plain: 'plain', last: 'last');
+
+function variadic($plain, #[SensitiveParameter] ...$secret) {
+    return (new Exception)->getTrace()[0]['args'];
+}
+$args = variadic('plain', 'one', 'two');
+echo $args[0], ':', get_class($args[1]), ':', $args[1]->getValue(), ':', get_class($args[2]), ':', $args[2]->getValue();
+"#,
+            "/app/sensitive-trace.php",
+            "/app",
+        ),
+        concat!(
+            "plain:SensitiveParameterValue:secret:tail|",
+            "plain:SensitiveParameterValue:secret:tail|",
+            "3:SensitiveParameterValue:SensitiveParameterValue:last|",
+            "plain:SensitiveParameterValue:one:SensitiveParameterValue:two",
+        )
+    );
+}
+
+#[test]
+fn sensitive_parameter_formats_debug_print_backtrace_without_disclosure() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nfunction concealed(#[SensitiveParameter] $secret) { debug_print_backtrace(); }\nconcealed('do-not-print');",
+            "/app/sensitive.php",
+            "/app",
+        ),
+        "#0 /app/sensitive.php(3): concealed(Object(SensitiveParameterValue))\n"
+    );
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nfunction concealedNamed($plain, #[SensitiveParameter] ...$secret) { debug_print_backtrace(); }\nconcealedNamed(plain: 2, first: 'one', second: 'two');",
+            "/app/sensitive-named.php",
+            "/app",
+        ),
+        "#0 /app/sensitive-named.php(3): concealedNamed(2, first: Object(SensitiveParameterValue), second: Object(SensitiveParameterValue))\n"
+    );
+}
+
+#[test]
+fn sensitive_parameter_value_is_opaque_but_retains_its_value() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = new SensitiveParameterValue('secret');
+var_dump($value);
+debug_zval_dump($value);
+print_r($value);
+var_dump([$value]);
+echo var_export($value, true), '|', count((array) $value), ':', json_encode($value), '|';
+echo $value->getValue(), ':', (clone $value)->getValue(), '|';
+try { serialize($value); } catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { echo (string) $value; } catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+try { $value->dynamic = 1; } catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+"#,
+        ),
+        concat!(
+            "object(SensitiveParameterValue)#1 (0) {\n}\n",
+            "object(SensitiveParameterValue)#1 (0) refcount(2){\n}\n",
+            "SensitiveParameterValue Object\n(\n)\n",
+            "array(1) {\n  [0]=>\n  object(SensitiveParameterValue)#1 (0) {\n  }\n}\n",
+            "\\SensitiveParameterValue::__set_state(array(\n))|0:{}|",
+            "secret:secret|",
+            "Exception:Serialization of 'SensitiveParameterValue' is not allowed|",
+            "Error:Object of class SensitiveParameterValue could not be converted to string|",
+            "Error:Cannot create dynamic property SensitiveParameterValue::$dynamic",
+        )
+    );
+}
+
+#[test]
+fn sensitive_parameter_trace_snapshot_keeps_an_object_alive() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class RetainedSecret {
+    public function __destruct() { echo 'destroyed|'; }
+}
+function retain(#[SensitiveParameter] $secret) {
+    return (new Exception)->getTrace()[0]['args'][0];
+}
+$wrapper = retain(new RetainedSecret());
+echo get_class($wrapper), ':', get_class($wrapper->getValue()), '|alive|';
+unset($wrapper);
+echo 'released';
+"#,
+            "/app/sensitive-lifetime.php",
+            "/app",
+        ),
+        "SensitiveParameterValue:RetainedSecret|alive|releaseddestroyed|"
+    );
+}
+
 // === strlen() ===
 
 #[test]

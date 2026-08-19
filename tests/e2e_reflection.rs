@@ -414,6 +414,33 @@ try {
 }
 
 #[test]
+fn sensitive_parameter_builtins_expose_php_85_metadata() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$markerClass = new ReflectionClass(SensitiveParameter::class);
+$markerAttribute = $markerClass->getAttributes()[0];
+echo $markerClass->getName(), ':', (int) $markerClass->isInternal(), (int) $markerClass->isFinal(), ':';
+echo $markerAttribute->getName(), ':', $markerAttribute->getArguments()[0], ':', get_class($markerAttribute->newInstance()), ':';
+echo $markerClass->getConstructor()->getNumberOfParameters(), '|';
+
+$valueClass = new ReflectionClass(SensitiveParameterValue::class);
+$property = $valueClass->getProperty('value');
+echo $valueClass->getName(), ':', (int) $valueClass->isInternal(), (int) $valueClass->isFinal(), ':';
+echo (int) $property->isPrivate(), (int) $property->isReadOnly(), ':', $property->getType(), ':';
+echo $valueClass->getConstructor()->getNumberOfRequiredParameters(), ':';
+echo $valueClass->getMethod('getValue')->getReturnType(), ':';
+echo $valueClass->getMethod('__debugInfo')->getReturnType();
+"#,
+        ),
+        concat!(
+            "SensitiveParameter:11:Attribute:32:Attribute:0|",
+            "SensitiveParameterValue:11:11:mixed:1:mixed:array",
+        )
+    );
+}
+
+#[test]
 fn no_discard_reports_only_unused_results_across_direct_and_callback_calls() {
     assert_eq!(
         run_php(

@@ -1414,6 +1414,14 @@ fn override_construct(
     Ok(())
 }
 
+fn sensitive_parameter_construct(
+    _ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    Ok(())
+}
+
 fn deprecated_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,

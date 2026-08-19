@@ -1,6 +1,6 @@
 mod common;
 
-use common::{run_php, run_php_expect_error};
+use common::{run_php, run_php_expect_error, run_php_with_source_context};
 
 #[test]
 fn property_magic_constant_covers_defaults_hooks_and_attribute_arguments() {
@@ -1459,5 +1459,34 @@ class MagicHiddenHookMethods {
             "Call to undefined method HiddenHookMethods::$value::set()\n",
             "magic:$value::get:2\n",
         )
+    );
+}
+
+#[test]
+fn sensitive_parameter_redacts_property_setter_hook_arguments() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class SensitiveSetter {
+    public mixed $value {
+        set(#[SensitiveParameter] mixed $value) {
+            throw new Exception('hook');
+        }
+    }
+}
+$object = new SensitiveSetter();
+try {
+    $object->value = 'concealed';
+} catch (Exception $exception) {
+    $frame = $exception->getTrace()[0];
+    $argument = $frame['args'][0];
+    echo $frame['class'], ':', $frame['type'], ':', $frame['function'], ':';
+    echo get_class($argument), ':', $argument->getValue();
+}
+"#,
+            "/app/sensitive-hook.php",
+            "/app",
+        ),
+        "SensitiveSetter:->:$value::set:SensitiveParameterValue:concealed"
     );
 }
