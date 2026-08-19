@@ -9,11 +9,44 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,239 pass, 2,058 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,250 pass, 2,047 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-61.148% and the whole-corpus rate is 57.850%; 4,610 of 5,297 attempted cases
-reach runtime (87.030%). Relative to exact base `0f84ee36`, the pass-set delta
-is +7/-0: all 3,232 prior passes remain exact.
+61.355% and the whole-corpus rate is 58.046%; 4,615 of 5,297 attempted cases
+reach runtime (87.125%). Relative to exact base `8bbd98b9`, the pass-set delta
+is +11/-0: all 3,239 prior passes remain exact.
+
+Enum declarations now carry their complete backing type and any property syntax
+from the parser into compiler validation. Backed enums accept exactly one
+`int` or `string` type; class-like, scalar and union alternatives receive PHP's
+canonical type spelling and declaration line. Every backed case must provide a
+value, every unit-enum case must omit one, and instance, static, typed, untyped
+or hooked property declarations all reach PHP's compiler-stage
+`Enum ... cannot include properties` diagnostic instead of an earlier parser
+rejection or a silently incomplete case.
+
+Four original E2E tests cover valid unit, integer-backed and string-backed
+declarations, invalid scalar/class/union backing types, namespaced case-value
+diagnostics and all admitted property syntax shapes. The 152-case
+`Zend/tests/enum` slice rises from 78 to 89 exact passes. The eleven gains are
+the complete selected backing-shape, case-value-presence and property-declaration
+cluster; no other full-corpus status or failure stage moves.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. The change ends
+after parser AST and compiler diagnostics, with no executor, runtime layout or
+generated valid-enum bytecode change, so no runtime performance lane applies.
+
+Lazy duplicate or mismatched backing-value validation, mutation/reference
+diagnostics for built-in enum properties, Reflection and SplObjectStorage remain
+separate checkpoints.
+
+The preceding `enum-serialization-core` checkpoint is documented below. It
+reached 3,239 passes with 2,058 failures, 114 skips, one XFAIL, 187 unsupported
+cases, zero timeouts and zero crashes. Relative to exact base `0f84ee36`, its
+pass-set delta was +7/-0 with all 3,232 prior passes retained.
 
 Enum cases now use PHP 8.5's dedicated `E:<length>:"Class:Case";` serialization
 form. Serialization proves the value against the request's registered enum-case

@@ -980,6 +980,10 @@ pub enum Stmt {
         uses: Vec<GenericAncestor>,
         trait_aliases: Vec<TraitAlias>,
         cases: Vec<EnumCase>,
+        /// Parsed only so the compiler can issue PHP's declaration-stage enum
+        /// diagnostic instead of rejecting otherwise valid property syntax as
+        /// a parser error.
+        properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
         methods: Vec<ClassMethod>,
     },
@@ -1179,6 +1183,7 @@ pub struct ClassConstant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumCase {
     pub attributes: Vec<Attribute>,
+    pub line: usize,
     pub name: String,
     pub value: Option<Expr>,
 }

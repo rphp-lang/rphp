@@ -872,6 +872,23 @@ Exact enum `debug_zval_dump()` refcounts, SplObjectStorage's custom wire format,
 generic trailing-data handling, Reflection and remaining enum declaration or
 readonly contracts remain separate checkpoints.
 
+The `enum-declaration-shape` checkpoint reaches 3,250 passes with 2,047
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Enum backing declarations now carry compound type syntax into compiler
+validation, accept only one `int` or `string` type and use PHP's canonical type
+spelling. Backed cases require a value, unit-enum cases reject one, and instance,
+static, typed, untyped or hooked properties reach the declaration-stage enum
+diagnostic instead of an earlier parser error. The 152-case enum slice rises
+from 78 to 89 exact passes and the full-corpus delta from exact base `8bbd98b9`
+is +11/-0, with all 3,239 prior passes retained and no other status or
+failure-stage movement. Four original E2E tests, all five feature
+configurations, all-target, formatting, unsafe policy, Composer S0, four
+Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass. The change stops at
+parser AST and compiler diagnostics, so no runtime performance lane applies.
+Lazy duplicate/mismatched backing validation, runtime enum-property mutation
+and reference diagnostics, Reflection and SplObjectStorage remain separate
+checkpoints.
+
 The `fiber-bailout-shutdown` checkpoint reaches 3,186 passes with 2,111
 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
 crashes. A lazy request-local FIFO retains validated shutdown callbacks,

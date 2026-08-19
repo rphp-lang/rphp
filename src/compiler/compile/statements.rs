@@ -5052,6 +5052,7 @@ impl Compiler {
                 uses,
                 trait_aliases,
                 cases,
+                properties,
                 constants,
                 methods,
             } => {
@@ -5064,9 +5065,48 @@ impl Compiler {
                         line,
                     ));
                 }
+                if let Some(backing_type) = backing_type
+                    && !matches!(backing_type, TypeHint::Int | TypeHint::String)
+                {
+                    let display = self
+                        .convert_type_hint(&Some(backing_type.clone()))
+                        .diagnostic_display_name();
+                    return Err(self.goto_error(
+                        &format!(
+                            "Enum backing type must be int or string, {display} given"
+                        ),
+                        *enum_line,
+                    ));
+                }
+                if let Some(property) = properties.first() {
+                    return Err(self.goto_error(
+                        &format!("Enum {resolved_enum} cannot include properties"),
+                        property.line,
+                    ));
+                }
                 // Compile enum as a class. Each case becomes a static property
                 // holding a singleton object with `name` (and optionally `value`) properties.
                 let is_backed = backing_type.is_some();
+                for case in cases {
+                    let invalid = if is_backed {
+                        case.value.is_none().then(|| {
+                            format!(
+                                "Case {} of backed enum {resolved_enum} must have a value",
+                                case.name
+                            )
+                        })
+                    } else {
+                        case.value.is_some().then(|| {
+                            format!(
+                                "Case {} of non-backed enum {resolved_enum} must not have a value",
+                                case.name
+                            )
+                        })
+                    };
+                    if let Some(message) = invalid {
+                        return Err(self.goto_error(&message, case.line));
+                    }
+                }
                 let mut resolved_implements = Vec::with_capacity(implements.len() + 2);
                 let mut inherited_interfaces = std::collections::HashSet::new();
                 for interface in implements {

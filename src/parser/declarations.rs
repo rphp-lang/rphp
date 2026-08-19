@@ -1167,7 +1167,8 @@ impl Parser {
         // Optional backing type: enum Foo: string { ... }
         let backing_type = if self.peek() == Token::Colon {
             self.advance(); // consume ':'
-            Some(self.parse_base_type_hint()?)
+            let hint = self.parse_base_type_hint()?;
+            Some(self.maybe_parse_compound_type(hint)?)
         } else {
             None
         };
@@ -1188,6 +1189,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
 
         let mut cases = Vec::new();
+        let mut properties = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
         let mut uses = Vec::new();
@@ -1253,8 +1255,8 @@ impl Parser {
                 }
             } else if self.peek() == Token::Case {
                 self.advance(); // consume 'case'
-                let case_name = match self.advance() {
-                    Token::Identifier(n, _) => n,
+                let (case_name, case_line) = match self.advance() {
+                    Token::Identifier(n, line) => (n, line),
                     other => return Err(format!("Expected enum case name, got {:?}", other)),
                 };
                 let value = if self.peek() == Token::Assign {
@@ -1266,6 +1268,7 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 cases.push(EnumCase {
                     attributes,
+                    line: case_line,
                     name: case_name,
                     value,
                 });
@@ -1318,6 +1321,13 @@ impl Parser {
                         return_type,
                         generic_params,
                     });
+                } else if matches!(self.peek(), Token::Variable(_, _))
+                    || self.is_type_hint_start()
+                {
+                    let (declared, hooks) =
+                        self.parse_property_declaration(&modifiers, &attributes)?;
+                    properties.extend(declared);
+                    methods.extend(hooks);
                 } else {
                     return Err(format!("Unexpected token in enum body: {:?}", self.peek()));
                 }
@@ -1335,6 +1345,7 @@ impl Parser {
             uses,
             trait_aliases,
             cases,
+            properties,
             constants,
             methods,
         })
