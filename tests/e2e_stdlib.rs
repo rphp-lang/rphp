@@ -322,6 +322,43 @@ fn debug_print_backtrace_formats_locations_arguments_limits_and_main() {
 }
 
 #[test]
+fn argument_introspection_uses_live_parameters_and_retains_only_extra_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function caller_arguments() {
+    return debug_backtrace()[1]['args'];
+}
+function mutate_arguments($fixed, &$changed, $removed) {
+    echo json_encode(caller_arguments()), '|';
+    $changed = 'after';
+    unset($removed);
+    echo json_encode(func_get_args()), '|', json_encode(caller_arguments()), '|';
+}
+$changed = 'before';
+mutate_arguments('fixed', $changed, 'gone', 'extra');
+echo $changed, '|';
+
+class MagicArgumentSnapshot {
+    public function __call($name, $arguments) {
+        eval('$arguments = []; echo json_encode(debug_backtrace()[1]["args"]), "|";');
+        return debug_backtrace()[0]['args'];
+    }
+}
+echo json_encode((new MagicArgumentSnapshot)->missing('value'));
+"#,
+        ),
+        concat!(
+            r#"["fixed","before","gone","extra"]|"#,
+            r#"["fixed","after",null,"extra"]|"#,
+            r#"["fixed","after",null,"extra"]|after|"#,
+            r#"["missing",[]]|"#,
+            r#"["missing",[]]"#,
+        )
+    );
+}
+
+#[test]
 fn sensitive_parameter_redacts_live_and_throwable_traces() {
     assert_eq!(
         run_php_with_source_context(

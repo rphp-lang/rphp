@@ -9938,6 +9938,16 @@ impl Compiler {
         cvs
     }
 
+    /// Retain variable names only when a compiled method can execute another
+    /// source unit in its local symbol-table scope.
+    fn dynamic_scope_cvs(&self) -> Vec<(u32, String)> {
+        self.instructions
+            .iter()
+            .any(|instruction| matches!(instruction.opcode, OpCode::Include | OpCode::Eval))
+            .then(|| self.all_cvs())
+            .unwrap_or_default()
+    }
+
     /// Controls how a positional argument's Send opcode is chosen.
     /// - `RefAware`: compile-time ref check (FunctionCall with known ref_args)
     /// - `ValOnly`: always SendVal (New — constructor ref_args unknown at compile time)

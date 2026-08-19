@@ -5870,20 +5870,32 @@ fn caller_argument(ed: *mut ExecuteData, index: u32, eg: &ExecutorGlobals) -> Op
         if caller.is_null() || index >= (*caller).num_args {
             return None;
         }
-        if let Some(arguments) = eg.function_arguments.get(&(caller as usize)) {
+        let function = &*(*caller).func;
+        if index >= function.sig.public_arity()
+            && let Some(arguments) = eg.function_arguments.get(&(caller as usize))
+        {
             return arguments.get(index as usize).cloned();
         }
-        let function = &*(*caller).func;
         let value = if function.sig.is_variadic && index >= function.sig.public_arity() {
             let offset = index - function.sig.public_arity();
             return (*caller)
                 .cv(function.sig.variadic_cv_index)
                 .as_array()
-                .and_then(|arguments| arguments.get_value_at(offset as usize).cloned());
+                .and_then(|arguments| arguments.get_value_at(offset as usize))
+                .map(live_argument_value);
         } else {
             (*caller).cv(function.sig.param_cv_index(index))
         };
-        Some(value.dereferenced().clone())
+        Some(live_argument_value(value))
+    }
+}
+
+fn live_argument_value(value: &Value) -> Value {
+    let value = value.dereferenced();
+    if value.is_undef() {
+        Value::null()
+    } else {
+        value.clone()
     }
 }
 
@@ -6166,6 +6178,11 @@ pub(crate) unsafe fn collect_debug_backtrace(
     } else {
         eg.trace_caller(ed as usize, (*ed).prev_execute_data)
     };
+    // Eval uses a synchronous scope bridge and writes variables back only when
+    // its detached activation returns. Retain active eval frames while walking
+    // to their logical caller so its declared trace arguments observe changes
+    // made before that writeback boundary.
+    let mut eval_scope_frames = Vec::new();
     while !frame.is_null() && (limit == 0 || trace.len() < limit) {
         // The top-level script is represented by an executable frame in RPHP,
         // but PHP traces stop at the last function/method called from it.
@@ -6178,6 +6195,9 @@ pub(crate) unsafe fn collect_debug_backtrace(
             break;
         }
         let synthetic_frame = eg.detached_trace_function(frame as usize);
+        if synthetic_frame == Some("eval") {
+            eval_scope_frames.push(frame);
+        }
         let name = synthetic_frame.map_or_else(
             || crate::vm::execute::displayed_function_name(eg, (*frame).func),
             str::to_string,
@@ -6265,21 +6285,38 @@ pub(crate) unsafe fn collect_debug_backtrace(
             let count = (*frame).num_args;
             let mut arguments = PhpArray::with_packed_capacity(count as usize);
             for index in 0..count {
-                let argument = if let Some(saved) = eg.function_arguments.get(&(frame as usize)) {
+                let scoped_argument = common.sig.param_names.get(index as usize).and_then(|name| {
+                    eval_scope_frames.iter().find_map(|scope_frame| {
+                        let scope_function = Function::from_common_ptr((**scope_frame).func);
+                        (scope_function.fn_type() == FunctionType::User)
+                            .then(|| scope_function.as_user())
+                            .and_then(|scope_user| {
+                                scope_user
+                                    .op_array
+                                    .all_cvs
+                                    .iter()
+                                    .find(|(_, candidate)| candidate == name)
+                                    .map(|(cv, _)| live_argument_value((**scope_frame).cv(*cv)))
+                            })
+                    })
+                });
+                let argument = if scoped_argument.is_some() {
+                    scoped_argument
+                } else if index >= common.sig.public_arity()
+                    && let Some(saved) = eg.function_arguments.get(&(frame as usize))
+                {
                     saved.get(index as usize).cloned()
                 } else if common.sig.is_variadic && index >= common.sig.public_arity() {
                     let offset = index - common.sig.public_arity();
                     (*frame)
                         .cv(common.sig.variadic_cv_index)
                         .as_array()
-                        .and_then(|values| values.get_value_at(offset as usize).cloned())
+                        .and_then(|values| values.get_value_at(offset as usize))
+                        .map(live_argument_value)
                 } else {
-                    Some(
-                        (*frame)
-                            .cv(common.sig.param_cv_index(index))
-                            .dereferenced()
-                            .clone(),
-                    )
+                    Some(live_argument_value(
+                        (*frame).cv(common.sig.param_cv_index(index)),
+                    ))
                 };
                 if let Some(argument) = argument {
                     arguments.push(redact_trace_argument(user, common, index, argument, eg));
@@ -6306,6 +6343,9 @@ pub(crate) unsafe fn collect_debug_backtrace(
             entry.set_str("args", Value::array(arguments));
         }
         trace.push(Value::array(entry));
+        if synthetic_frame.is_none() {
+            eval_scope_frames.clear();
+        }
         frame = caller;
     }
     trace

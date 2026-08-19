@@ -9,6 +9,49 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,390 pass, 1,907 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+63.998% and the whole-corpus rate is 60.547%; 4,636 of 5,297 attempted cases
+reach runtime (87.521%). Relative to exact base `87006c82`, the pass-set delta
+is +2/-0: all 3,388 prior passes remain passes.
+
+Function argument introspection now reads declared parameters from their live
+CVs. Assigning through a reference or unsetting a fixed parameter is therefore
+visible immediately to `func_get_arg()`, `func_get_args()`,
+`debug_backtrace()` and `debug_print_backtrace()`, with an unset value exposed
+as PHP `NULL`. True non-variadic extra arguments still use the stable cold
+snapshot required after compiler temporaries reuse their original frame slots.
+
+Methods containing `eval` now retain the same local-scope CV metadata already
+used by method includes, so the eval scope can read and write method variables.
+A backtrace taken before eval returns overlays the active eval-scope values on
+the declared arguments of its logical caller. The ordinary function-call path,
+call-frame layout and optional executor side-state layout are unchanged.
+
+One original E2E regression covers fixed and by-reference mutation, unset-to-
+null conversion, preservation of an extra argument, magic-call argument
+packing, active eval traces and post-eval writeback. Both
+`Zend/tests/backtrace/bug70547.phpt` and `Zend/tests/bug73156.phpt` become exact.
+A 37-case backtrace and argument-introspection slice moves from 22 to 24 passes
+without a lost pass. Two full-corpus runs reproduce the same counts,
+classifications and pass set, with no other status or failure-stage movement.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and exact unsafe ratchet pass, as do Composer S0, all four Symfony S1
+component gates and warmed-kernel S2. The production inventory remains 1,618
+unsafe blocks and 289 unsafe functions. A CPU-pinned release comparison of
+2,000 eval compile/execute cycles inside a method used two warm-ups per binary
+and 32 balanced order pairs without outlier removal. It retained checksum
+`2000` and measured +4.979% independently and +4.468% paired, with paired
+p10/p90 +2.396%/+7.076%; both medians remain below the five-percent regression
+ceiling.
+
+This checkpoint does not claim exact multiline eval-argument origins, broader
+Throwable-trace lifetime behavior, or unrelated trait, generator and include
+backtrace cases. Those remain separate compatibility work.
+
+The preceding eval-backtrace checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,388 pass, 1,909 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 63.961% and the whole-corpus rate is 60.511%; 4,636 of 5,297 attempted cases
