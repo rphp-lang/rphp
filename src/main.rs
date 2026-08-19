@@ -112,6 +112,22 @@ fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
     })
 }
 
+fn exit_after_pending_shutdown(eg: &mut ExecutorGlobals, default_code: i32) -> ! {
+    let logical_caller = eg.current_execute_data.get();
+    match stdlib::run_shutdown_functions(eg, logical_caller) {
+        Ok(()) => std::process::exit(default_code),
+        Err(execute::VmError::Exit(code)) => std::process::exit(code),
+        Err(execute::VmError::Parse(message)) => {
+            eprintln!("\nParse error: {message}");
+            std::process::exit(255);
+        }
+        Err(error) => {
+            eprintln!("\nFatal error: {error}");
+            std::process::exit(255);
+        }
+    }
+}
+
 fn read_source(action: CliAction) -> Result<String, String> {
     match action {
         CliAction::Inline(code) => {
@@ -289,11 +305,11 @@ fn main() {
     match exec_result {
         Ok(_) => {}
         Err(execute::VmError::Exit(code)) => {
-            std::process::exit(code);
+            exit_after_pending_shutdown(&mut eg, code);
         }
         Err(execute::VmError::Parse(message)) => {
             eprintln!("\nParse error: {message}");
-            std::process::exit(255);
+            exit_after_pending_shutdown(&mut eg, 255);
         }
         Err(e) => {
             // PHP's displayed runtime fatal begins on a fresh diagnostic line.
@@ -301,7 +317,7 @@ fn main() {
             // precedes it and remains observable as the required blank line
             // after output that was already emitted.
             eprintln!("\nFatal error: {e}");
-            std::process::exit(255);
+            exit_after_pending_shutdown(&mut eg, 255);
         }
     }
 }

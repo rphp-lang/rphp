@@ -804,6 +804,28 @@ empty-request startup at -0.671% independently and -0.681% paired, while the
 ordinary-call control is +0.259% independently and +0.277% paired. Exact output
 is retained and every median remains below the five-percent ceiling.
 
+The `fiber-bailout-shutdown` checkpoint reaches 3,186 passes with 2,111
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. A lazy request-local FIFO retains validated shutdown callbacks,
+arguments, lexical scope and live receivers; it accepts callbacks appended
+during shutdown and runs after success, `exit` or a displayed fatal. Handled
+shutdown exceptions continue the queue. VM bailout is now a distinct Fiber
+terminal state, so shutdown status and `getReturn()` match PHP 8.5 after direct,
+nested, multiple-Fiber, E_USER_ERROR and fallible-allocation fatals. The Fiber
+directory reaches 65/110 and ten adjacent shutdown/diagnostic cases also become
+exact, for a full-corpus delta of +16/-0. Four failures advance from output to
+runtime: `bug41026.phpt` still needs relative `self` callable diagnostics,
+`bug51827.phpt` and `bug71221.phpt` need the exact inactive-file synthetic
+trace, and `bug78396.phpt` needs filesystem flags. All five feature
+configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. CPU-pinned 32-pair release A/B medians
+put 150 empty requests at -0.665% independently and -0.800% paired, and 20,000
+Fiber switches at +0.815% independently and +0.470% paired. Exact outputs are
+retained; paired p10/p90 ranges are -1.333%/-0.062% and -1.441%/+1.966%, and
+both medians remain below the five-percent ceiling. General cycle collection,
+destructor Fibers, generator/internal crossings, signals, ticks and broader
+OOM emulation remain separate checkpoints.
+
 The `fiber-force-close` checkpoint reaches 3,170 passes with 2,127 failures,
 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
 Last external Fiber release now delivers an uncatchable internal exit through

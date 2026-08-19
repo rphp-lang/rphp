@@ -2751,15 +2751,20 @@ fn fn_str_repeat(
         ret!(rv, Value::null());
     }
     let times = times as usize;
-    let total_bytes = s.len().checked_mul(times).ok_or_else(|| {
-        VmError::Fatal("Allowed memory size exhausted while repeating string".to_string())
-    })?;
-    let mut repeated = Vec::new();
-    repeated.try_reserve_exact(total_bytes).map_err(|_| {
+    let allocation_failure = |bytes: usize| {
+        let (file, line) = internal_call_source(ed);
         VmError::Fatal(format!(
-            "Allowed memory size exhausted (tried to allocate {total_bytes} bytes)"
+            "Allowed memory size of 134217728 bytes exhausted (tried to allocate {bytes} bytes) in {file} on line {line}"
         ))
-    })?;
+    };
+    let total_bytes = s
+        .len()
+        .checked_mul(times)
+        .ok_or_else(|| allocation_failure(usize::MAX))?;
+    let mut repeated = Vec::new();
+    repeated
+        .try_reserve_exact(total_bytes)
+        .map_err(|_| allocation_failure(total_bytes))?;
     if total_bytes != 0 {
         repeated.extend_from_slice(s.as_bytes());
         while repeated.len() < total_bytes {
@@ -5434,11 +5439,22 @@ fn fn_trigger_error(
     }
 
     if level == E_USER_ERROR {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, throw an exception or call exit with a string message instead",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
         let (file, line) = internal_call_source(ed);
         if dispatch_php_error(eg, ed, level, &message, &file, line)? {
             ret!(rv, Value::bool(true));
         }
-        return Err(VmError::Fatal(message));
+        eg.record_last_error(level, &message, &file, line);
+        return Err(VmError::Fatal(format!(
+            "{message} in {file} on line {line}"
+        )));
     }
     let label = match level {
         E_USER_WARNING => "Warning",
@@ -5487,14 +5503,90 @@ fn fn_get_exception_handler(
     ret!(rv, eg.exception_handler.clone().unwrap_or_else(Value::null));
 }
 
-/// The S2 CLI fixture only needs registration to be accepted; invocation at
-/// request teardown remains outside this compatibility slice.
 fn fn_register_shutdown_function(
-    _ed: *mut ExecuteData,
-    _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    Ok(())
+    let callback = arg!(ed, 0);
+    let Some(resolved) = resolve_callback_at_callsite(callback, eg, ed) else {
+        let detail = if callback.as_str().is_some() || callback.as_array().is_some() {
+            invalid_handler_callback_detail(callback, eg)
+        } else {
+            "no array or string given".to_string()
+        };
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "register_shutdown_function(): Argument #1 ($callback) must be a valid callback, {detail}"
+            ),
+        ));
+        return Ok(());
+    };
+    let arguments = arg_opt!(ed, 1)
+        .and_then(Value::as_array)
+        .map(|arguments| arguments.values().cloned().collect())
+        .unwrap_or_default();
+    eg.shutdown_functions
+        .get_or_insert_with(|| Box::new(std::collections::VecDeque::new()))
+        .push_back(ShutdownFunction {
+            callback: resolved,
+            arguments,
+        });
+    ret!(rv, Value::null());
+}
+
+/// Execute the request-local FIFO while allowing a callback to append another
+/// shutdown callback. An escaping VM error or Throwable stops the remaining
+/// callbacks, as it terminates PHP's request-shutdown function phase.
+pub fn run_shutdown_functions(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    loop {
+        let next = eg
+            .shutdown_functions
+            .as_deref_mut()
+            .and_then(std::collections::VecDeque::pop_front);
+        let Some(next) = next else {
+            eg.shutdown_functions = None;
+            return Ok(());
+        };
+        let result = call_resolved_with_values_from(
+            eg,
+            &next.callback,
+            &next.arguments,
+            logical_caller,
+            "Unknown",
+            0,
+        );
+        if let Err(error) = result {
+            eg.shutdown_functions = None;
+            return Err(error);
+        }
+        if let Some(exception) = eg.exception.take() {
+            match dispatch_uncaught_exception_handler(eg, logical_caller, &exception) {
+                Ok(true) => continue,
+                Ok(false) => {
+                    if eg.exception.is_none() {
+                        eg.exception = Some(exception);
+                    }
+                }
+                Err(error) => {
+                    eg.shutdown_functions = None;
+                    return Err(error);
+                }
+            }
+            let exception = eg
+                .exception
+                .take()
+                .expect("unhandled shutdown exception must remain pending");
+            eg.shutdown_functions = None;
+            return Err(VmError::Fatal(
+                crate::vm::execute::format_uncaught_throwable(eg, &exception),
+            ));
+        }
+    }
 }
 
 fn fn_error_reporting(
@@ -7943,6 +8035,11 @@ pub(crate) struct ResolvedCallback {
     pub(crate) is_magic_call: bool,
 }
 
+pub(crate) struct ShutdownFunction {
+    callback: ResolvedCallback,
+    arguments: Vec<Value>,
+}
+
 impl Clone for ResolvedCallback {
     fn clone(&self) -> Self {
         Self {
@@ -8085,16 +8182,33 @@ fn get_calling_scope_class<'a>(
     if ed.is_null() {
         return None;
     }
-    // ed is the stdlib function's own frame; the caller is prev_execute_data
-    let caller = unsafe { (*ed).prev_execute_data };
-    if caller.is_null() {
+    // SAFETY: an internal handler receives its live frame and executes
+    // synchronously beneath a caller frame that remains allocated until the
+    // handler returns. Function metadata is request-owned immutable storage.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        if caller.is_null() || (*caller).func.is_null() {
+            return None;
+        }
+        eg.declaring_class_of((*caller).func)
+    }
+}
+
+fn get_calling_scope_receiver(ed: *mut crate::vm::frame::ExecuteData) -> Option<Value> {
+    if ed.is_null() {
         return None;
     }
-    let func = unsafe { (*caller).func };
-    if func.is_null() {
-        return None;
+    // SAFETY: this is the same synchronous internal-call boundary as
+    // get_calling_scope_class(). A signature with this_offset=1 guarantees
+    // the live caller frame owns an initialized receiver in CV(0); cloning it
+    // retains the object beyond the registering call.
+    unsafe {
+        let caller = (*ed).prev_execute_data;
+        if caller.is_null() || (*caller).func.is_null() || (*(*caller).func).sig.this_offset != 1 {
+            return None;
+        }
+        Some((*caller).cv(0).clone())
     }
-    eg.declaring_class_of(func)
 }
 
 fn resolve_magic_callback(
@@ -8716,7 +8830,40 @@ pub(super) fn resolve_callback_at_callsite(
     } else {
         None
     };
-    resolve_callback_with_cache(val, eg, caller_class, callback_cache_slot(ed))
+    resolve_callback_with_cache(val, eg, caller_class, callback_cache_slot(ed)).or_else(|| {
+        let name = val.as_str()?;
+        let (class_name, method_name) = name.rsplit_once("::")?;
+        // PHP retains the legacy scoped callable `SelfClass::method` when a
+        // non-static method registers or immediately invokes it on its live
+        // `$this`. The resolved descriptor must own that receiver because a
+        // shutdown callback executes after the registering frame has left.
+        let declaring = get_calling_scope_class(ed, eg)?;
+        let class_name = class_name.trim_start_matches('\\');
+        if !declaring.eq_ignore_ascii_case(class_name) {
+            return None;
+        }
+        let receiver = get_calling_scope_receiver(ed)?;
+        let object = receiver.as_object()?;
+        if !eg.class_is_a(&object.class_name, class_name) {
+            return None;
+        }
+        let called_scope_class_id = object.class_id;
+        drop(object);
+        let (visibility, is_static, func_ptr, defining) =
+            find_method_in_class_hierarchy(eg, class_name, method_name)?;
+        if is_static || !eg.check_visibility(Some(declaring), defining, visibility) {
+            return None;
+        }
+        Some(ResolvedCallback {
+            func_ptr,
+            prepend_args: vec![receiver],
+            use_vars: vec![],
+            called_scope_class_id,
+            bound_this: None,
+            closure_static_vars: None,
+            is_magic_call: false,
+        })
+    })
 }
 
 #[cold]

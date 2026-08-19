@@ -284,3 +284,100 @@ try {
         "second|first\n"
     );
 }
+
+#[test]
+fn shutdown_callbacks_retain_arguments_scope_and_fifo_registration_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ShutdownOwner {
+    public function arm(): void {
+        register_shutdown_function('ShutdownOwner::finish', 'scoped');
+    }
+
+    public function finish(string $label): void {
+        echo $label, ':', get_class($this), "\n";
+        $fiber = new Fiber(function (): int {
+            Fiber::suspend(1);
+            return 2;
+        });
+        var_dump($fiber->start());
+        $fiber->resume();
+        var_dump($fiber->getReturn());
+        register_shutdown_function(function (): void {
+            echo "late\n";
+        });
+    }
+}
+
+(new ShutdownOwner())->arm();
+register_shutdown_function(function (string $label): void {
+    echo $label, "\n";
+}, 'second');
+echo "body\n";
+"#,
+        ),
+        concat!(
+            "body\n",
+            "scoped:ShutdownOwner\n",
+            "int(1)\n",
+            "int(2)\n",
+            "second\n",
+            "late\n",
+        )
+    );
+}
+
+#[test]
+fn shutdown_exceptions_use_the_active_exception_handler_and_continue() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_exception_handler(function (Throwable $error): void {
+    echo 'caught:', $error->getMessage(), "\n";
+});
+register_shutdown_function(function (): void {
+    echo "throwing\n";
+    throw new Exception('shutdown');
+});
+register_shutdown_function(function (): void {
+    echo "after\n";
+});
+"#,
+        ),
+        "throwing\ncaught:shutdown\nafter\n"
+    );
+}
+
+#[test]
+fn fatal_fiber_shutdown_observes_the_bailout_return_state() {
+    let source = r#"register_shutdown_function(function () use (&$fiber): void {
+    try {
+        $fiber->getReturn();
+    } catch (FiberError $error) {
+        echo 'shutdown:', $error->getMessage(), "\n";
+    }
+});
+$fiber = new Fiber(function (): void {
+    trigger_error('boom', E_USER_ERROR);
+});
+$fiber->start();"#;
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_rphp"))
+        .args(["-r", source])
+        .output()
+        .expect("RPHP CLI must execute the fatal request specimen");
+
+    assert_eq!(output.status.code(), Some(255));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        concat!(
+            "\nDeprecated: Passing E_USER_ERROR to trigger_error() is deprecated since 8.4, ",
+            "throw an exception or call exit with a string message instead in Command line code on line 9\n",
+            "shutdown:Cannot get fiber return value: The fiber exited with a fatal error\n",
+        )
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "\nFatal error: boom in Command line code on line 9\n"
+    );
+}

@@ -9,6 +9,59 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,186 pass, 2,111 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+60.147% and the whole-corpus rate is 56.903%; 4,610 of 5,297 attempted cases
+reach runtime (87.030%). Relative to the preceding 3,170-pass checkpoint, the
+exact pass-set delta is +16/-0.
+
+`register_shutdown_function()` now validates and retains resolved callbacks,
+supplied arguments, lexical scope and a live instance receiver in a lazily
+allocated request-local FIFO. Shutdown callbacks may append more callbacks,
+run before ordinary root-scope destruction on successful requests and still
+run after `exit` or a displayed fatal diagnostic. An exception raised in the
+queue is offered once to the active exception handler; a handled exception
+continues the queue, while an unhandled replacement ends the phase.
+
+A Fiber terminated by a VM bailout is now distinct from one that returned or
+threw. Shutdown code observes PHP 8.5's exact `FiberError` from `getReturn()`,
+including after a fallible `str_repeat()` allocation. Unhandled E_USER_ERROR
+also emits its PHP 8.5 deprecation and retains physical file/line metadata for
+the subsequent fatal. The three direct/nested/multiple-Fiber fatal cases,
+`fiber-in-shutdown-function`, `get-return-after-bailout` and `gh10437` become
+exact, taking the complete 110-case Fiber directory from 59 to 65 passes.
+
+Ten adjacent lifecycle/diagnostic cases also become exact:
+`anon/gh13097_a.phpt`, `bug20240.phpt`, three `gh10695` shutdown-exception
+cases, `gh13446_3.phpt`, `gh13446_4.phpt`, `lsb/lsb_010.phpt`,
+`object_gc_in_shutdown.phpt` and `register_shutdown_function_refcount.phpt`.
+Four remaining failures advance from an inert output mismatch to their later
+runtime boundary without becoming passes: `bug41026.phpt` still needs relative
+`self` callable diagnostics, `bug51827.phpt` and `bug71221.phpt` need the exact
+inactive-file synthetic trace, and `bug78396.phpt` needs filesystem flags.
+General cycle collection, destructor Fibers, generator/internal crossings,
+signals and ticks remain separate checkpoints.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,623 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6.
+
+The exact base `118646fe` and final release candidate were compared on CPU 8
+in `performance` mode without removing outliers. Thirty-two balanced
+ABBA/BAAB pairs of 150 empty-output requests measured baseline
+p10/median/p90 0.208827/0.209715/0.211578 seconds versus candidate
+0.207066/0.208320/0.209572 seconds: -0.665% by independent medians and -0.800%
+by the paired-ratio median, whose p10/p90 is -1.333%/-0.062%. A separate
+32-pair 20,000-cycle Fiber switch control retained output
+`199990000|200010000` and measured baseline 0.017052/0.017210/0.017659 seconds
+versus candidate 0.017180/0.017350/0.017696 seconds: +0.815% independently and
++0.470% paired, with paired p10/p90 -1.441%/+1.966%. Both medians remain below
+the five-percent regression ceiling.
+
+The preceding `fiber-force-close` checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,170 pass, 2,127 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 59.845% and the whole-corpus rate is 56.617%; 4,610 of 5,297 attempted cases

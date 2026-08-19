@@ -44,6 +44,7 @@ pub(crate) enum FiberReturnState {
     NotStarted,
     NotReturned,
     Threw,
+    Fatal,
 }
 
 struct FiberSuspension {
@@ -59,6 +60,7 @@ struct FiberContext {
     status: FiberStatus,
     result: Value,
     threw: bool,
+    bailed_out: bool,
     force_closing: bool,
     owned_object_references: usize,
     boundary_execute_data: *mut ExecuteData,
@@ -75,6 +77,7 @@ impl FiberContext {
             status: FiberStatus::Created,
             result: Value::null(),
             threw: false,
+            bailed_out: false,
             force_closing: false,
             owned_object_references: 0,
             boundary_execute_data: std::ptr::null_mut(),
@@ -155,6 +158,7 @@ impl FiberRuntime {
         match context.status {
             FiberStatus::Created => Err(FiberReturnState::NotStarted),
             FiberStatus::Running | FiberStatus::Suspended => Err(FiberReturnState::NotReturned),
+            FiberStatus::Terminated if context.bailed_out => Err(FiberReturnState::Fatal),
             FiberStatus::Terminated if context.threw => Err(FiberReturnState::Threw),
             FiberStatus::Terminated => Ok(context.result.clone()),
         }
@@ -285,6 +289,7 @@ impl FiberRuntime {
                         (*context).state.exchange(eg);
                         (*context).status = FiberStatus::Terminated;
                         (*context).threw = true;
+                        (*context).bailed_out = true;
                         (*context).state.cleanup_frames();
                         let stacks = (*context)
                             .state
@@ -408,6 +413,7 @@ impl FiberRuntime {
             let cleanup_error = cleanup.err();
             let failure = (*context).state.exception.take();
             (*context).threw = failure.is_some();
+            (*context).bailed_out = execution_error.is_some() || cleanup_error.is_some();
             (*context).status = FiberStatus::Terminated;
             (*context).owned_object_references = 0;
             (*context).state.cleanup_frames();

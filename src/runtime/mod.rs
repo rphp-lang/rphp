@@ -382,6 +382,12 @@ pub struct ExecutorGlobals {
     pub(crate) handling_error: bool,
     pub(crate) exception_handler: Option<crate::value::Value>,
     pub(crate) exception_handler_stack: Vec<Option<crate::value::Value>>,
+    /// Request-shutdown callbacks retain resolved callable state and supplied
+    /// arguments until top-level execution finishes. The queue is allocated
+    /// only after the first registration so ordinary requests keep one null
+    /// sidecar word and no teardown scan.
+    pub(crate) shutdown_functions:
+        Option<Box<std::collections::VecDeque<crate::stdlib::ShutdownFunction>>>,
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
     pub method_declaring_class: HashMap<*const FunctionCommon, String>,
     /// Sparse canonical spellings for built-ins whose public name is not the
@@ -1044,6 +1050,7 @@ impl ExecutorGlobals {
             handling_error: false,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
+            shutdown_functions: None,
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
             internal_static_methods: None,
@@ -1149,6 +1156,7 @@ impl ExecutorGlobals {
             handling_error: false,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
+            shutdown_functions: None,
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
             internal_static_methods: None,

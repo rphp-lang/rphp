@@ -157,6 +157,10 @@ fn fiber_get_return(
             eg,
             "Cannot get fiber return value: The fiber threw an exception",
         ),
+        Err(FiberReturnState::Fatal) => fiber_error(
+            eg,
+            "Cannot get fiber return value: The fiber exited with a fatal error",
+        ),
     }
     Ok(())
 }

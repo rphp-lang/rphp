@@ -42,6 +42,11 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
             Err(error) => execution = Err(error),
         }
     }
+    if execution.is_ok() && eg.exception.is_none() && eg.shutdown_functions.is_some()
+        && let Err(error) = crate::stdlib::run_shutdown_functions(eg, frame)
+    {
+        execution = Err(error);
+    }
     crate::value::end_object_handle_request();
     execution?;
 
