@@ -4160,14 +4160,19 @@ impl Compiler {
                     };
                     let default = default
                         .map(|value| {
-                            normalize_typed_declaration_default(value, &type_hint).ok_or_else(|| {
-                                format!(
-                                    "Cannot use default value for property {}::${} of type {}",
-                                    name,
-                                    prop.name,
-                                    type_hint.display_name()
-                                )
-                            })
+                            normalize_typed_declaration_default(value, &type_hint).map_err(
+                                |value| {
+                                    self.goto_error(
+                                        &invalid_typed_declaration_default_message(
+                                            &value,
+                                            &type_hint,
+                                            &resolved_class,
+                                            &prop.name,
+                                        ),
+                                        prop.line,
+                                    )
+                                },
+                            )
                         })
                         .transpose()?;
                     if property_is_readonly && !prop.is_static {
@@ -4964,14 +4969,19 @@ impl Compiler {
                     };
                     let default = default
                         .map(|value| {
-                            normalize_typed_declaration_default(value, &type_hint).ok_or_else(|| {
-                                format!(
-                                    "Cannot use default value for trait property {}::${} of type {}",
-                                    name,
-                                    prop.name,
-                                    type_hint.display_name()
-                                )
-                            })
+                            normalize_typed_declaration_default(value, &type_hint).map_err(
+                                |value| {
+                                    self.goto_error(
+                                        &invalid_typed_declaration_default_message(
+                                            &value,
+                                            &type_hint,
+                                            &resolved_trait,
+                                            &prop.name,
+                                        ),
+                                        prop.line,
+                                    )
+                                },
+                            )
                         })
                         .transpose()?;
                     let mut definition = PropertyDefinition::declared_with_set_visibility(
@@ -5942,7 +5952,7 @@ impl Compiler {
                 } else {
                     let value = value.expect("resolved class constant");
                     let value_type = value.value_type();
-                    normalize_typed_declaration_default(value, &type_hint).ok_or_else(|| {
+                    normalize_typed_declaration_default(value, &type_hint).map_err(|_| {
                         format!(
                             "Cannot use value of type {:?} for class constant {}::{} of type {}",
                             value_type,

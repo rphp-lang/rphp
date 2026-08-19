@@ -9,11 +9,51 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,316 pass, 1,981 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,323 pass, 1,974 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-62.601% and the whole-corpus rate is 59.225%; 4,621 of 5,297 attempted cases
-reach runtime (87.238%). Relative to exact base `a23e9085`, the pass-set delta
-is +4/-0: all 3,312 prior passes remain exact.
+62.734% and the whole-corpus rate is 59.350%; 4,621 of 5,297 attempted cases
+reach runtime (87.238%). Relative to exact base `89df791f`, the pass-set delta
+is +7/-0: all 3,316 prior passes remain exact.
+
+An invalid literal default for a typed property now fails during compilation
+with PHP 8.5's exact declaration diagnostic and property source line. Non-null
+defaults name the actual value type, canonical `Class::$property` identity and
+canonical declared type. A null default for a non-nullable simple or union type
+uses PHP's dedicated `Default value for property of type ... may not be null`
+message and suggests `?Type` or `Type|null`; a bare intersection instead uses
+the ordinary `Cannot use null as default value` form.
+
+The shared declaration path covers instance, static, trait and anonymous-class
+properties, suppressing RPHP's private anonymous sequence in public errors.
+The normalizer returns a rejected value only to the cold diagnostic builder;
+accepted integer-to-float widening, nullable defaults, canonical union order,
+parameter defaults and typed class constants preserve their existing behavior.
+
+One original E2E matrix covers the diagnostic families, exact virtual filename
+and line, static and trait declarations, anonymous classes and the accepted
+defaults. Existing instance/static tests now assert the complete PHP message.
+Seven full-corpus cases become exact passes:
+`union_nullable_property_fails.phpt`, `bug81268.phpt`,
+`typed_properties_013.phpt`, `typed_properties_014.phpt`,
+`typed_properties_015.phpt`, `typed_properties_049.phpt` and
+`union_types/illegal_default_value_property.phpt`. There are no lost passes,
+other status/category changes or stable non-pass output hash changes.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. CPU-pinned 32-pair release comparisons against the exact
+parent used four warmups and batches of 150 processes. Balanced order-specific
+median ratios were +0.055% for empty `-r` startup and +0.398% for compiling 32
+valid typed defaults. Outputs were exact, no outliers were removed and both
+decision medians remain below the five-percent regression ceiling. Deferred
+global/class constants and broader constant-expression property initializers
+remain separate contracts; this checkpoint does not claim their first-use
+resolution.
+
+The preceding `typed-property-incdec-overflow` checkpoint reached 3,316 passes
+with 1,981 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts
+and zero crashes. Relative to exact base `a23e9085`, its pass-set delta was
++4/-0 with all 3,312 prior passes retained.
 
 Integer overflow from pre- or post-increment/decrement of an instance or static
 typed property now follows the exact property contract. A declaration that

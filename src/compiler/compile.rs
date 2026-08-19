@@ -2101,22 +2101,57 @@ fn property_default_matches_exact(value: &Value, hint: &ParamTypeHint) -> bool {
 
 /// Property defaults are compile-time constants and never use weak scalar
 /// coercion. PHP's one widening exception is an integer default for `float`.
-fn normalize_typed_declaration_default(value: Value, hint: &ParamTypeHint) -> Option<Value> {
+fn normalize_typed_declaration_default(value: Value, hint: &ParamTypeHint) -> Result<Value, Value> {
     if property_default_matches_exact(&value, hint) {
-        return Some(value);
+        return Ok(value);
     }
     match hint {
-        ParamTypeHint::Float if value.value_type() == ValueType::Long => {
-            Some(Value::double(value.as_long()? as f64))
-        }
+        ParamTypeHint::Float if value.value_type() == ValueType::Long => Ok(Value::double(
+            value
+                .as_long()
+                .expect("checked typed property integer default") as f64,
+        )),
         ParamTypeHint::Nullable(inner) if value.value_type() != ValueType::Null => {
             normalize_typed_declaration_default(value, inner)
         }
-        ParamTypeHint::Union(parts) => parts
-            .iter()
-            .find_map(|part| normalize_typed_declaration_default(value.clone(), part)),
-        _ => None,
+        ParamTypeHint::Union(parts) => {
+            let mut rejected = value;
+            for part in parts {
+                match normalize_typed_declaration_default(rejected, part) {
+                    Ok(value) => return Ok(value),
+                    Err(value) => rejected = value,
+                }
+            }
+            Err(rejected)
+        }
+        _ => Err(value),
     }
+}
+
+fn invalid_typed_declaration_default_message(
+    value: &Value,
+    hint: &ParamTypeHint,
+    class: &str,
+    property: &str,
+) -> String {
+    let declared_type = hint.property_declaration_display_name();
+    if value.value_type() == ValueType::Null && !matches!(hint, ParamTypeHint::Intersection(_)) {
+        let nullable_type = if matches!(hint, ParamTypeHint::Union(_)) {
+            format!("{declared_type}|null")
+        } else {
+            format!("?{declared_type}")
+        };
+        return format!(
+            "Default value for property of type {declared_type} may not be null. Use the nullable type {nullable_type} to allow null default value"
+        );
+    }
+    let class = class
+        .strip_prefix("class@anonymous#")
+        .map_or(class, |_| "class@anonymous");
+    format!(
+        "Cannot use {} as default value for property {class}::${property} of type {declared_type}",
+        value.diagnostic_type_name()
+    )
 }
 
 fn constant_expression_references_symbol(expression: &Expr) -> bool {
@@ -4998,7 +5033,7 @@ impl Compiler {
                         && let Ok(value) = func_compiler
                             .eval_const_expr_in_source(default_expr, &func_compiler.known_constants)
                     {
-                        let Some(normalized) = normalize_typed_declaration_default(
+                        let Ok(normalized) = normalize_typed_declaration_default(
                             value.clone(),
                             type_hints.last().unwrap(),
                         ) else {

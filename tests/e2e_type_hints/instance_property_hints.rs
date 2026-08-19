@@ -183,12 +183,9 @@ class InvalidTypedInstanceDefault {
 }
 "#,
     );
-    let rendered = format!("{error:?}");
-    assert!(
-        rendered.contains(
-            "Cannot use default value for property InvalidTypedInstanceDefault::$number of type int"
-        ),
-        "{rendered}"
+    assert_eq!(
+        error.to_string(),
+        "Cannot use string as default value for property InvalidTypedInstanceDefault::$number of type int on line 3"
     );
 }
 
