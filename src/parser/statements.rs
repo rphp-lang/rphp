@@ -250,7 +250,7 @@ impl Parser {
                     Ok(Stmt::Namespace { name, body })
                 }
             }
-            Token::Use if !self.in_class_body => {
+            Token::Use(use_line) if !self.in_class_body => {
                 // Top-level class/function import. Their alias tables are
                 // separate in PHP even when the source alias is identical.
                 self.advance(); // consume 'use'
@@ -318,11 +318,7 @@ impl Parser {
                                 .unwrap_or(&relative_name)
                                 .to_string()
                         };
-                        imports.push((
-                            item_kind,
-                            format!("{first_name}\\{relative_name}"),
-                            alias,
-                        ));
+                        imports.push((item_kind, format!("{first_name}\\{relative_name}"), alias));
                         if self.peek() != Token::Comma {
                             break;
                         }
@@ -361,7 +357,10 @@ impl Parser {
                     }
                 }
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::UseDecl { imports })
+                Ok(Stmt::UseDecl {
+                    line: use_line,
+                    imports,
+                })
             }
             Token::Const => {
                 self.advance(); // consume 'const'

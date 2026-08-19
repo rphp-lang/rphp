@@ -116,7 +116,7 @@ impl Parser {
             Token::Empty => Some("empty".to_string()),
             Token::Unset => Some("unset".to_string()),
             Token::Fn(_) => Some("fn".to_string()),
-            Token::Use => Some("use".to_string()),
+            Token::Use(_) => Some("use".to_string()),
             Token::Declare => Some("declare".to_string()),
             Token::Trait => Some("trait".to_string()),
             Token::Final => Some("final".to_string()),

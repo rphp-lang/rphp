@@ -4182,6 +4182,33 @@ impl Compiler {
         })
     }
 
+    fn validate_class_like_name(&self, name: &str, kind: &str, line: usize) -> Result<(), String> {
+        let article = if matches!(kind, "interface" | "enum") {
+            "an"
+        } else {
+            "a"
+        };
+        if crate::class_names::is_semantically_reserved(name) {
+            return Err(self.goto_error(
+                &format!("Cannot use \"{name}\" as {article} {kind} name as it is reserved"),
+                line,
+            ));
+        }
+        if name == "_" {
+            self.compile_deprecations
+                .borrow_mut()
+                .push(CompileDeprecation {
+                    message: format!(
+                        "Using \"_\" as {article} {kind} name is deprecated since 8.4"
+                    ),
+                    file: self.source_file.clone(),
+                    line,
+                    warning: false,
+                });
+        }
+        Ok(())
+    }
+
     fn attribute_line(&self, attributes: &[Attribute], name: &str) -> Option<usize> {
         attributes.iter().find_map(|attribute| {
             self.resolve_name(&attribute.name)

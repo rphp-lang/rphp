@@ -429,6 +429,26 @@ pub(crate) fn fn_class_alias(
         "class"
     };
 
+    let normalized_alias = alias
+        .strip_prefix('\\')
+        .unwrap_or(&alias)
+        .to_ascii_lowercase();
+    if crate::class_names::is_reserved_alias(&normalized_alias) {
+        let (file, line) = super::internal_call_source(ed);
+        return Err(VmError::Fatal(format!(
+            "Cannot use \"{normalized_alias}\" as a class alias as it is reserved in {file} on line {line}"
+        )));
+    }
+    if normalized_alias == "_" {
+        super::report_internal_deprecation(
+            eg,
+            ed,
+            "Using \"_\" as a class alias is deprecated since 8.4",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
     match eg.register_class_alias(&original, &alias) {
         Ok(None) => ret!(rv, Value::bool(true)),
         Ok(Some(message)) => {

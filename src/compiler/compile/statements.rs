@@ -3353,11 +3353,19 @@ impl Compiler {
                 self.function_use_map = prev_function_use_map;
                 self.constant_use_map = prev_constant_use_map;
             }
-            Stmt::UseDecl { imports } => {
+            Stmt::UseDecl { line, imports } => {
                 for (kind, fqn, alias) in imports {
                     let fqn = fqn.strip_prefix('\\').unwrap_or(fqn).to_string();
                     match kind {
                         UseKind::Class => {
+                            if crate::class_names::is_semantically_reserved(alias) {
+                                return Err(self.goto_error(
+                                    &format!(
+                                        "Cannot use {fqn} as {alias} because '{alias}' is a special class name"
+                                    ),
+                                    *line,
+                                ));
+                            }
                             self.use_map.insert(alias.clone(), fqn);
                         }
                         UseKind::Function => {
@@ -3550,6 +3558,7 @@ impl Compiler {
                 methods,
                 generic_params,
             } => {
+                self.validate_class_like_name(name, "class", *class_line)?;
                 let resolved_class = self.resolve_name(name);
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
@@ -4444,6 +4453,7 @@ impl Compiler {
                 }
             }
             Stmt::Interface {
+                line: interface_line,
                 attributes,
                 name,
                 extends,
@@ -4452,6 +4462,7 @@ impl Compiler {
                 methods,
                 generic_params,
             } => {
+                self.validate_class_like_name(name, "interface", *interface_line)?;
                 let resolved_iface = self.resolve_name(name);
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
@@ -4714,7 +4725,7 @@ impl Compiler {
                     name: resolved_iface,
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
-                    declaration_line: 0,
+                    declaration_line: *interface_line,
                     parent: None,
                     implements: resolved_extends,
                     is_interface: true,
@@ -4753,6 +4764,7 @@ impl Compiler {
                 trait_precedences,
                 generic_params,
             } => {
+                self.validate_class_like_name(name, "trait", *trait_line)?;
                 let resolved_trait = self.resolve_name(name);
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
@@ -5209,6 +5221,7 @@ impl Compiler {
                 constants,
                 methods,
             } => {
+                self.validate_class_like_name(name, "enum", *enum_line)?;
                 let resolved_enum = self.resolve_name(name);
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;

@@ -153,7 +153,7 @@ fn include_parse_error_value(
 fn imported_class_name(statements: &[crate::parser::Stmt], alias: &str) -> Option<String> {
     for statement in statements {
         match statement {
-            crate::parser::Stmt::UseDecl { imports } => {
+            crate::parser::Stmt::UseDecl { imports, .. } => {
                 if let Some((_, name, _)) = imports
                     .iter()
                     .find(|(kind, _, imported_alias)| {

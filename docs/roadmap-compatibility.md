@@ -1032,6 +1032,27 @@ million repeated missing-property reads measures -3.865% independently and
 -3.876% paired, with paired p10/p90 -10.050%/+5.239%; both medians remain below
 the five-percent ceiling and the declared-property path is untouched.
 
+The `reserved-class-names` checkpoint reaches 3,423 passes with 1,874
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. One shared terminal-segment classifier enforces PHP 8.5's reserved
+class-like names across declarations, class imports and runtime
+`class_alias()` strings while preserving raw diagnostic spelling, declaration
+kind, the complete `use` statement line and original/internal lookup priority.
+Class, trait, interface and enum `_` declarations plus an unqualified `_`
+runtime alias emit the 8.4 deprecation; qualified runtime aliases and class
+imports named `_` remain allowed. Two classifier unit tests, six original E2E
+tests and a 24-case focused slice cover positive, negative, boundary and
+interaction paths. The exact full-corpus delta from `91133161` is +27/-0 with
+all prior passes retained; two final manifests are byte-identical.
+`restore_error_reporting.phpt` reaches the
+correct reserved-name failure but remains blocked by independent eval
+compile-error wrapping. All five feature configurations, all-target,
+formatting, unsafe policy, Composer S0, four Symfony S1 gates and exact PHP
+8.5.6 S2/S3 pass. A CPU-pinned 32-pair control over 10,000 independently
+compiled class declarations measures +0.187% independently and +0.119%
+paired, with paired p10/p90 -1.549%/+1.837%; both medians remain below the
+five-percent ceiling and no executor path or runtime layout changed.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

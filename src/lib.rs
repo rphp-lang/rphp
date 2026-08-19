@@ -3,6 +3,7 @@
 
 pub mod base64;
 pub mod builtin_metadata;
+mod class_names;
 pub mod compiler;
 pub mod generics;
 #[cfg(feature = "jit-prototype")]

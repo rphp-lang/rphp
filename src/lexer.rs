@@ -146,7 +146,7 @@ pub enum Token {
     NullSafe,         // ?->
     DoubleColon,      // ::
     Fn(usize),        // fn (arrow functions), with source line
-    Use,              // use (closure use)
+    Use(usize),       // use (imports and closure capture), with source line
     Pipe,             // | (bitwise or, multi-catch separator)
     Ampersand,        // & (bitwise and, reference)
     Caret,            // ^ (bitwise xor)
@@ -727,7 +727,7 @@ impl<'a> Lexer<'a> {
                         "yield" => tokens.push(Token::Yield(line)),
                         "from" => tokens.push(Token::From),
                         "fn" => tokens.push(Token::Fn(line)),
-                        "use" => tokens.push(Token::Use),
+                        "use" => tokens.push(Token::Use(line)),
                         "print" => tokens.push(Token::Print),
                         "global" => tokens.push(Token::Global),
                         "clone" => tokens.push(Token::Clone(line)),

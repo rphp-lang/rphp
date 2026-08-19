@@ -598,6 +598,77 @@ catch (ValueError $error) { echo $error->getMessage(); }
 }
 
 #[test]
+fn class_alias_rejects_reserved_terminal_names_after_normalizing_case() {
+    for (alias, normalized) in [
+        ("Vendor\\BoOl", "vendor\\bool"),
+        ("ARRAY", "array"),
+        ("callable", "callable"),
+        ("Static", "static"),
+    ] {
+        let source =
+            format!("<?php\nclass AliasSource {{}}\nclass_alias(AliasSource::class, '{alias}');");
+        let error = run_php_expect_error_with_source_context(
+            &source,
+            "/virtual/reserved-class-alias.php",
+            "/virtual",
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Cannot use \"{normalized}\" as a class alias as it is reserved in /virtual/reserved-class-alias.php on line 3"
+            )
+        );
+    }
+}
+
+#[test]
+fn class_alias_deprecates_only_an_unqualified_underscore_alias() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class AliasSource {}
+var_dump(class_alias(AliasSource::class, '_'));
+var_dump(class_alias(AliasSource::class, 'Vendor\_'));
+var_dump(class_exists('_', false), class_exists('Vendor\_', false));
+"#,
+            "/virtual/underscore-class-alias.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nDeprecated: Using \"_\" as a class alias is deprecated since 8.4 in /virtual/underscore-class-alias.php on line 3\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+#[test]
+fn class_alias_keeps_original_lookup_and_internal_class_error_priority() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+set_error_handler(function($level, $message) { echo "$level:$message\n"; });
+var_dump(class_alias('MissingReservedSource', 'int', false));
+try { class_alias(stdClass::class, 'bool'); }
+catch (ValueError $error) { echo $error->getMessage(), "\n"; }
+class AliasSource {}
+var_dump(class_alias(AliasSource::class, 'Vendor\Resource'));
+"#,
+            "/virtual/class-alias-priority.php",
+            "/virtual",
+        ),
+        concat!(
+            "2:Class \"MissingReservedSource\" not found\n",
+            "bool(false)\n",
+            "class_alias(): Argument #1 ($class) must be a user-defined class name, internal class name given\n",
+            "bool(true)\n",
+        )
+    );
+}
+
+#[test]
 fn class_alias_uses_canonical_identity_in_new_diagnostics_and_dynamic_instanceof() {
     assert_eq!(
         run_php(

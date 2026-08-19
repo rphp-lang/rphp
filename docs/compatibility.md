@@ -9,6 +9,58 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,423 pass, 1,874 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+64.621% and the whole-corpus rate is 61.136%; 4,621 of 5,297 attempted cases
+reach runtime (87.238%). Relative to exact base `91133161`, the pass-set delta
+is +27/-0: all 3,396 prior passes remain passes.
+
+A shared case-insensitive terminal-segment classifier now rejects PHP 8.5's
+scalar, pseudo-class and special class names in class-like declarations, class
+imports and runtime `class_alias()` strings. Declaration diagnostics preserve
+the raw spelling, declaration kind, file and source line; `use` diagnostics
+retain the start line of the complete import statement even for multiline
+group imports. Runtime aliases normalize case and a leading namespace
+separator only for validation and diagnostics, after resolving the original
+class and enforcing the internal-class restriction. Function and constant
+import namespaces remain independent of the class-name restriction.
+
+Using `_` as a class, trait, interface or enum name, or as an unqualified
+runtime class alias, emits PHP 8.5's deprecation introduced in 8.4. Qualified
+runtime aliases ending in `\_` and class-import aliases named `_` remain
+allowed without that deprecation. Legacy spellings such as `resource`,
+`numeric`, `scalar`, `integer`, `double`, `boolean` and `real` remain legal
+class names. Two classifier unit tests and six original E2E tests cover
+declaration kinds, raw case, namespaces, multiline group imports,
+function/constant import boundaries, runtime string-only keywords, `_`,
+allowed legacy names and original/internal class lookup priority.
+
+The exact 24-case reserved-name slice rises from 0 to 20 passes. The complete
+corpus additionally makes all four `_` declaration cases, all four GH-15976
+class-like cases and the lazy-object fatal-shutdown interaction exact. Two
+full-corpus runs produce byte-for-byte identical manifests with SHA-256
+`ba0b0ee188593b085ab2a6060c69451d443f5f5b0b16b9b901d785791546ad87`.
+The only non-pass category movement is explained:
+`restore_error_reporting.phpt` now reaches the correct reserved `self`
+compile failure, but the independent eval boundary still wraps it as
+`Parse error: Compile error` rather than PHP's fatal diagnostic.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.6 warmed-kernel S2 and cold-build S3. The
+production inventory remains 1,619 unsafe blocks and 289 unsafe functions. A
+CPU-pinned release comparison of 10,000 independently compiled class
+declarations used two warm-ups per binary, 32 balanced order pairs and no
+outlier removal. Against a fresh, identically built `91133161` baseline it
+retained checksum `10000` and measured +0.187% independently and +0.119%
+paired, with paired p10/p90 -1.549%/+1.837%. Both medians remain below the
+five-percent regression ceiling; no executor path or runtime layout changed.
+
+This checkpoint does not claim exact eval compile-error wrapping, aliasing of
+internal classes, or broader PHP syntax and runtime compatibility.
+
+The preceding magic-property-entry-frame checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,396 pass, 1,901 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 64.112% and the whole-corpus rate is 60.654%; 4,636 of 5,297 attempted cases

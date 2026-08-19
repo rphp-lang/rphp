@@ -426,7 +426,7 @@ impl Parser {
 
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
-            if self.peek() == Token::Use {
+            if matches!(self.peek(), Token::Use(_)) {
                 self.advance();
                 loop {
                     uses.push(self.parse_generic_ancestor()?);
@@ -694,7 +694,7 @@ impl Parser {
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
             // Trait `use` statements: use Foo, Bar;
-            if self.peek() == Token::Use {
+            if matches!(self.peek(), Token::Use(_)) {
                 self.advance(); // consume 'use'
                 loop {
                     uses.push(self.parse_generic_ancestor()?);
@@ -887,7 +887,7 @@ impl Parser {
 
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
-            if self.peek() == Token::Use {
+            if matches!(self.peek(), Token::Use(_)) {
                 self.advance();
                 loop {
                     uses.push(self.parse_generic_ancestor()?);
@@ -1043,8 +1043,8 @@ impl Parser {
     /// Parse interface declaration
     fn parse_interface(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'interface'
-        let name = match self.advance() {
-            Token::Identifier(n, _) => n,
+        let (name, line) = match self.advance() {
+            Token::Identifier(n, line) => (n, line),
             other => return Err(format!("Expected interface name, got {:?}", other)),
         };
         let generic_params = self.parse_generic_parameters()?;
@@ -1147,6 +1147,7 @@ impl Parser {
         self.pop_generic_scope();
 
         Ok(Stmt::Interface {
+            line,
             attributes: Vec::new(),
             name,
             extends,
@@ -1200,7 +1201,7 @@ impl Parser {
 
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
-            if self.peek() == Token::Use {
+            if matches!(self.peek(), Token::Use(_)) {
                 self.advance();
                 loop {
                     uses.push(self.parse_generic_ancestor()?);
@@ -1949,7 +1950,7 @@ impl Parser {
         self.expect(&Token::RParen)?;
 
         let mut use_vars = Vec::new();
-        if self.peek() == Token::Use {
+        if matches!(self.peek(), Token::Use(_)) {
             self.advance();
             self.expect_lparen()?;
             let is_ref = if self.peek() == Token::Ampersand {

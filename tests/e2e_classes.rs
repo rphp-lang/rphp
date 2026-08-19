@@ -1,6 +1,102 @@
 /// Tests for classes and objects (basic)
 mod common;
-use common::{run_php, run_php_expect_error, run_php_with_source_context};
+use common::{
+    run_php, run_php_expect_error, run_php_expect_error_with_source_context,
+    run_php_with_source_context,
+};
+
+#[test]
+fn class_like_declarations_reject_reserved_names_and_preserve_raw_spelling() {
+    for (source, file, expected) in [
+        (
+            "<?php\nclass INT {}",
+            "/virtual/reserved-class.php",
+            "Cannot use \"INT\" as a class name as it is reserved in /virtual/reserved-class.php on line 2",
+        ),
+        (
+            "<?php\nnamespace Domain;\ntrait BoOl {}",
+            "/virtual/reserved-trait.php",
+            "Cannot use \"BoOl\" as a trait name as it is reserved in /virtual/reserved-trait.php on line 3",
+        ),
+        (
+            "<?php\ninterface MiXeD {}",
+            "/virtual/reserved-interface.php",
+            "Cannot use \"MiXeD\" as an interface name as it is reserved in /virtual/reserved-interface.php on line 2",
+        ),
+        (
+            "<?php\nenum NeVeR {}",
+            "/virtual/reserved-enum.php",
+            "Cannot use \"NeVeR\" as an enum name as it is reserved in /virtual/reserved-enum.php on line 2",
+        ),
+    ] {
+        assert_eq!(
+            run_php_expect_error_with_source_context(source, file, "/virtual").to_string(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn underscore_class_like_names_emit_php_84_deprecations() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+namespace C { class _ {} }
+namespace T { trait _ {} }
+namespace I { interface _ {} }
+namespace E { enum _ {} }
+namespace { echo "ok\n"; }
+"#,
+            "/virtual/underscore-class-names.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nDeprecated: Using \"_\" as a class name is deprecated since 8.4 in /virtual/underscore-class-names.php on line 2\n",
+            "\nDeprecated: Using \"_\" as a trait name is deprecated since 8.4 in /virtual/underscore-class-names.php on line 3\n",
+            "\nDeprecated: Using \"_\" as an interface name is deprecated since 8.4 in /virtual/underscore-class-names.php on line 4\n",
+            "\nDeprecated: Using \"_\" as an enum name is deprecated since 8.4 in /virtual/underscore-class-names.php on line 5\n",
+            "ok\n",
+        )
+    );
+}
+
+#[test]
+fn class_imports_reject_special_aliases_at_the_use_statement_line() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+use Vendor\{
+    First as Good,
+    Second as BoOl
+};
+"#,
+        "/virtual/reserved-group-use.php",
+        "/virtual",
+    );
+    assert_eq!(
+        error.to_string(),
+        "Cannot use Vendor\\Second as BoOl because 'BoOl' is a special class name in /virtual/reserved-group-use.php on line 2"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+use function Vendor\bool as mixed;
+use const Vendor\int as string;
+use Vendor\Package as _;
+class resource {}
+class numeric {}
+class scalar {}
+class binary {}
+class integer {}
+class double {}
+class boolean {}
+class real {}
+echo "ok\n";
+"#,
+        ),
+        "ok\n"
+    );
+}
 
 #[test]
 fn anonymous_get_class_names_use_parent_or_first_interface_and_remain_aliasable() {

@@ -901,6 +901,7 @@ pub enum Stmt {
         generic_params: Vec<GenericParameter>,
     },
     Interface {
+        line: usize,
         attributes: Vec<Attribute>,
         name: String,
         extends: Vec<GenericAncestor>,
@@ -956,6 +957,7 @@ pub enum Stmt {
     UseDecl {
         // Each entry carries its own kind so mixed group-use declarations can
         // import classes, functions and constants in one statement.
+        line: usize,
         imports: Vec<(UseKind, String, String)>, // (kind, fully_qualified, alias)
     },
     Const {
