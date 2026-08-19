@@ -11674,15 +11674,13 @@ fn fn_gc_disable(
     Ok(())
 }
 
-/// RPHP uses reference-counted values and currently has no separate Zend-style
-/// cycle collector queue. Expose the observable no-cycles result instead of
-/// rejecting portable cleanup code that invokes the collector explicitly.
 fn fn_gc_collect_cycles(
     _ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::long(0));
+    let collected = eg.collect_cycles()?;
+    ret!(rv, Value::long(collected as i64));
 }
 
 /// PHP_INT_SIZE, PHP_INT_MAX etc. are handled as constants.

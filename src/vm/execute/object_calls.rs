@@ -1260,6 +1260,15 @@ unsafe fn commit_object_array_consumers(
             };
             consumer_count += 1;
             cursor = cursor.add(3);
+            let next_ip = cursor.offset_from(instruction_base);
+            if next_ip >= 0
+                && caller_op_array
+                    .instructions
+                    .get(next_ip as usize)
+                    .is_some_and(|instruction| instruction.opcode == OpCode::ReleaseTemps)
+            {
+                cursor = cursor.add(1);
+            }
             continue;
         }
         trailing = Some((fetch.op2, fetch.result, fetch.result_type));
@@ -1529,7 +1538,13 @@ unsafe fn resolve_baseline_virtual_aggregate(
         }
     }
 
-    let method_ip = constructor_do_ip + 2;
+    let object_assign_ip = constructor_do_ip + 1;
+    let (method_ip, _) = crate::vm::quick::after_optional_assignment_release(
+        caller_op_array,
+        object_assign_ip,
+        new_object.result_type,
+        new_object.result,
+    )?;
     let method = caller_op_array.instructions.get(method_ip)?;
     if method.opcode != OpCode::InitMethodCall
         || method._pad & CALL_FLAG_OBJECT_ARRAY_CONSUMERS == 0
@@ -1711,6 +1726,13 @@ unsafe fn resolve_baseline_virtual_aggregate(
             consumer_accumulators[consumer_count] = accumulator;
             consumer_count += 1;
             cursor += 3;
+            if caller_op_array
+                .instructions
+                .get(cursor)
+                .is_some_and(|instruction| instruction.opcode == OpCode::ReleaseTemps)
+            {
+                cursor += 1;
+            }
         } else {
             trailing_entry = entry;
             trailing_result = fetch.result;
@@ -2307,7 +2329,14 @@ unsafe fn try_execute_virtual_object_array_pipeline(
         }
     }
 
-    let method_ptr = constructor_do_ptr.add(2);
+    let object_assign_ip = new_ip + 1 + new_object.extended_value as usize + 1;
+    let (method_ip, _) = crate::vm::quick::after_optional_assignment_release(
+        caller_op_array,
+        object_assign_ip,
+        new_object.result_type,
+        new_object.result,
+    )?;
+    let method_ptr = caller_op_array.instructions.as_ptr().add(method_ip);
     let method = &*method_ptr;
     if method.opcode != OpCode::InitMethodCall
         || method._pad & CALL_FLAG_OBJECT_ARRAY_CONSUMERS == 0
@@ -2324,7 +2353,6 @@ unsafe fn try_execute_virtual_object_array_pipeline(
         return None;
     }
     let receiver_class_id = method_receiver.object_class_id_unchecked();
-    let method_ip = method_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
     let method_cache = caller_op_array.cache.get(method_ip)?;
     if receiver_class_id == 0
         || method_cache.class_id != receiver_class_id

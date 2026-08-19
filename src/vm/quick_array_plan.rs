@@ -121,9 +121,44 @@ fn instruction_mentions_operand(
     op_type: OpType,
     slot: u16,
 ) -> bool {
+    if instruction.opcode == OpCode::ReleaseTemps
+        && matches!(op_type, OpType::Tmp | OpType::Var)
+    {
+        // op2 is an exclusive range boundary, not a consumed operand.
+        return instruction.op1 <= slot && slot < instruction.op2;
+    }
     (instruction.op1_type == op_type && instruction.op1 == slot)
         || (instruction.op2_type == op_type && instruction.op2 == slot)
         || (instruction.result_type == op_type && instruction.result == slot)
+}
+
+/// Return the first instruction after an assignment and its optional bounded
+/// statement cleanup. The assigned TMP/VAR is already moved into the CV; an
+/// admitted quick span may therefore step over the cleanup while retaining
+/// the original bytecode as its deoptimization target.
+pub(crate) fn after_optional_assignment_release(
+    op_array: &OpArray,
+    assign_ip: usize,
+    source_type: OpType,
+    source: u16,
+) -> Option<(usize, Option<usize>)> {
+    let release_ip = assign_ip.checked_add(1)?;
+    let Some(release) = op_array.instructions.get(release_ip) else {
+        return Some((release_ip, None));
+    };
+    if release.opcode != OpCode::ReleaseTemps {
+        return Some((release_ip, None));
+    }
+    if !matches!(source_type, OpType::Tmp | OpType::Var)
+        || release.op1_type != OpType::Tmp
+        || release.op2_type != OpType::Tmp
+        || release.op1 >= release.op2
+        || source < release.op1
+        || source >= release.op2
+    {
+        return None;
+    }
+    Some((release_ip + 1, Some(release_ip)))
 }
 
 fn object_array_add_consumer(
@@ -186,10 +221,17 @@ pub fn detect_object_array_consumer_span(op_array: &OpArray, init_ip: usize) -> 
     }
 
     let array_cv = assign.op1;
+    let (after_assign_ip, assignment_release_ip) = after_optional_assignment_release(
+        op_array,
+        assign_ip,
+        do_fcall.result_type,
+        do_fcall.result,
+    )?;
     let mut fetch_ips = [usize::MAX; QUICK_STRAIGHT_ARRAY_MAX_ADDS];
+    let mut consumer_release_ips = [usize::MAX; QUICK_STRAIGHT_ARRAY_MAX_ADDS];
     let mut fetch_count = 0usize;
     let mut add_count = 0usize;
-    let mut cursor = assign_ip + 1;
+    let mut cursor = after_assign_ip;
     while fetch_count < fetch_ips.len() {
         let Some(fetch) = op_array.instructions.get(cursor).copied() else {
             break;
@@ -215,8 +257,25 @@ pub fn detect_object_array_consumer_span(op_array: &OpArray, init_ip: usize) -> 
         if let (Some(add), Some(assign)) = (add, assign)
             && object_array_add_consumer(fetch, add, assign).is_some()
         {
+            let mut next_cursor = cursor + 3;
+            if let Some(release) = op_array.instructions.get(next_cursor)
+                && release.opcode == OpCode::ReleaseTemps
+            {
+                if release.op1_type != OpType::Tmp
+                    || release.op2_type != OpType::Tmp
+                    || release.op1 >= release.op2
+                    || fetch.result < release.op1
+                    || fetch.result >= release.op2
+                    || add.result < release.op1
+                    || add.result >= release.op2
+                {
+                    return None;
+                }
+                consumer_release_ips[add_count] = next_cursor;
+                next_cursor += 1;
+            }
             add_count += 1;
-            cursor += 3;
+            cursor = next_cursor;
             continue;
         }
 
@@ -231,7 +290,11 @@ pub fn detect_object_array_consumer_span(op_array: &OpArray, init_ip: usize) -> 
     }
 
     for (ip, instruction) in op_array.instructions.iter().enumerate() {
-        if ip == assign_ip || fetch_ips[..fetch_count].contains(&ip) {
+        if ip == assign_ip
+            || assignment_release_ip == Some(ip)
+            || consumer_release_ips[..add_count].contains(&ip)
+            || fetch_ips[..fetch_count].contains(&ip)
+        {
             continue;
         }
         if instruction_mentions_operand(instruction, OpType::Cv, array_cv) {
@@ -291,7 +354,12 @@ pub fn detect_virtual_object_array_pipeline_span(
         }
     }
 
-    let method_ip = object_assign_ip + 1;
+    let (method_ip, object_release_ip) = after_optional_assignment_release(
+        op_array,
+        object_assign_ip,
+        new_object.result_type,
+        new_object.result,
+    )?;
     let method = *op_array.instructions.get(method_ip)?;
     if method.opcode != OpCode::InitMethodCall
         || method._pad & crate::vm::instruction::CALL_FLAG_OBJECT_ARRAY_CONSUMERS == 0
@@ -319,6 +387,7 @@ pub fn detect_virtual_object_array_pipeline_span(
     for (ip, instruction) in op_array.instructions.iter().enumerate() {
         if ip != new_ip
             && ip != object_assign_ip
+            && object_release_ip != Some(ip)
             && instruction_mentions_operand(instruction, new_object.result_type, new_object.result)
         {
             return None;
@@ -331,6 +400,7 @@ pub fn detect_virtual_object_array_pipeline_span(
         }
         if matches!(constructor_do.result_type, OpType::Tmp | OpType::Var)
             && ip != constructor_do_ip
+            && object_release_ip != Some(ip)
             && instruction_mentions_operand(
                 instruction,
                 constructor_do.result_type,
@@ -385,7 +455,12 @@ pub fn detect_virtual_declared_object_read_span(
         return None;
     }
 
-    let mut cursor = object_assign_ip + 1;
+    let (mut cursor, object_release_ip) = after_optional_assignment_release(
+        op_array,
+        object_assign_ip,
+        new_object.result_type,
+        new_object.result,
+    )?;
     let mut read_count = 0usize;
     while read_count < 8 {
         let Some(read) = op_array.instructions.get(cursor).copied() else {
@@ -418,6 +493,7 @@ pub fn detect_virtual_declared_object_read_span(
     for (ip, instruction) in op_array.instructions.iter().enumerate() {
         if ip != new_ip
             && ip != object_assign_ip
+            && object_release_ip != Some(ip)
             && instruction_mentions_operand(instruction, new_object.result_type, new_object.result)
         {
             return None;
@@ -431,6 +507,7 @@ pub fn detect_virtual_declared_object_read_span(
         }
         if matches!(constructor_do.result_type, OpType::Tmp | OpType::Var)
             && ip != constructor_do_ip
+            && object_release_ip != Some(ip)
             && instruction_mentions_operand(
                 instruction,
                 constructor_do.result_type,

@@ -19,6 +19,7 @@ use crate::vm::virtual_aggregate_cache::{
     RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS, ResolvedVirtualAggregateCacheEntry,
 };
 
+mod cycle;
 pub(crate) mod fiber;
 #[path = "coroutine/state.rs"]
 pub(crate) mod suspended;

@@ -829,6 +829,30 @@ WeakMap insert/read plus 1,000-removal lane is approximately 19.9x PHP 8.5.6's
 median and is retained as explicit indexed-sidecar optimization debt, not a
 regression or parity claim.
 
+The `cycle-collector-core` checkpoint reaches 3,232 passes with 2,065 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+Explicit `gc_collect_cycles()` now collects unreachable graphs composed of
+ordinary objects, arrays, Closures and owned references, applies WeakMap
+ephemeron reachability, preserves weak identities through destructor execution,
+rechecks resurrection before releasing graph edges and returns PHP 8.5's
+exercised strongly connected component counts. It also remains explicit while
+automatic GC is disabled. Fifteen focused GC/weak-reference cases and four
+adjacent Fiber, generator and magic-method lifecycle cases become exact, for a
+full-corpus delta of +19/-0 from exact base `a022a0c5`; all 3,213 prior passes
+remain. Four cases advance to known later boundaries without an unexplained
+category move. Five original E2E tests, all five feature configurations,
+all-target, formatting, unsafe policy, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. CPU-pinned 32-pair release A/B medians
+put 150 empty requests at -0.719% independently and -0.704% paired, a million
+declared-object lifecycles at +0.214% independently and -0.945% paired, and the
+balanced ordered-workload ratio at -0.133%; exact outputs remain and all
+relevant regression medians are below the five-percent ceiling. A new explicit
+collector lane is approximately 13.9x PHP 8.5.6's median and is retained as an
+optimization baseline, not a regression or parity claim. Automatic threshold
+collection, complete `gc_status()` telemetry, generator/Fiber/resource cycle
+breadth, WeakMap indexing, exact root-color ordering after transient weak
+upgrades and compound-Echo temporary lifetime remain separate checkpoints.
+
 The `fiber-bailout-shutdown` checkpoint reaches 3,186 passes with 2,111
 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
 crashes. A lazy request-local FIFO retains validated shutdown callbacks,

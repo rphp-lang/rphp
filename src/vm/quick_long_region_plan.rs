@@ -1162,7 +1162,14 @@ fn detect_long_ops_region_inner(
                     if next_ip <= ip || next_ip > backedge_ip {
                         return None;
                     }
-                    let first_read_ip = ip + 3;
+                    let constructor_do_ip = ip + 1;
+                    let object_assign_ip = constructor_do_ip + 1;
+                    let (first_read_ip, _) = after_optional_assignment_release(
+                        op_array,
+                        object_assign_ip,
+                        instruction.result_type,
+                        instruction.result,
+                    )?;
                     let read_count = next_ip.checked_sub(first_read_ip)?;
                     if read_count == 0 || read_count > 8 {
                         return None;
@@ -1235,7 +1242,13 @@ fn detect_long_ops_region_inner(
                     }
 
                     let constructor_do_ip = ip + 1 + instruction.extended_value as usize;
-                    let method_ip = constructor_do_ip + 2;
+                    let object_assign_ip = constructor_do_ip + 1;
+                    let (method_ip, _) = after_optional_assignment_release(
+                        op_array,
+                        object_assign_ip,
+                        instruction.result_type,
+                        instruction.result,
+                    )?;
                     let method = *op_array.instructions.get(method_ip)?;
                     if method.opcode != OpCode::InitMethodCall
                         || method.op1_type != OpType::Cv
@@ -1246,7 +1259,14 @@ fn detect_long_ops_region_inner(
                     add_mask_slot(&mut object_input_mask, method.op1, total_slots)?;
 
                     let method_do_ip = method_ip + 1 + method.extended_value as usize;
-                    let mut cursor = method_do_ip + 2;
+                    let result_assign_ip = method_do_ip + 1;
+                    let method_do = *op_array.instructions.get(method_do_ip)?;
+                    let (mut cursor, _) = after_optional_assignment_release(
+                        op_array,
+                        result_assign_ip,
+                        method_do.result_type,
+                        method_do.result,
+                    )?;
                     let mut output_mask = 0u64;
                     let mut consumer_count = 0usize;
                     let mut consumers = [QuickObjectArrayConsumer::EMPTY; 4];
@@ -1254,6 +1274,10 @@ fn detect_long_ops_region_inner(
                     let mut trailing_result = 0;
                     while cursor < next_ip {
                         let fetch = *op_array.instructions.get(cursor)?;
+                        if fetch.opcode == OpCode::ReleaseTemps && cursor + 1 == next_ip {
+                            cursor = next_ip;
+                            break;
+                        }
                         if fetch.opcode != OpCode::FetchDimR {
                             return None;
                         }
@@ -1271,6 +1295,13 @@ fn detect_long_ops_region_inner(
                             };
                             consumer_count += 1;
                             cursor += 3;
+                            if cursor < next_ip
+                                && op_array.instructions.get(cursor).is_some_and(|instruction| {
+                                    instruction.opcode == OpCode::ReleaseTemps
+                                })
+                            {
+                                cursor += 1;
+                            }
                         } else {
                             add_mask_slot(&mut long_output_mask, fetch.result, total_slots)?;
                             output_mask |= 1u64 << fetch.result;

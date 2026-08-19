@@ -732,25 +732,39 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     } else {
                         // ASSIGN_CV op1=CV(dest), op2=value, result=optional copy
-                        // Object-producing TMPs are SSA values. When an
+                        // Unused TMP/VAR results are SSA values. When an
                         // assignment does not publish an expression result,
                         // transfer that sole bytecode owner into the
                         // destination instead of retaining a hidden TMP alias
                         // until frame teardown. Besides avoiding one Rc pair,
-                        // this makes object-store handle lifetime follow PHP
-                        // variables rather than compiler storage.
+                        // this makes value lifetime follow PHP variables rather
+                        // than compiler storage.
                         let movable_source = opline._pad & ASSIGN_CV_MOVE_SOURCE != 0
                             && opline.result_type == OpType::Unused
                             && matches!(opline.op2_type, OpType::Tmp | OpType::Var);
                         let mut cloned = if movable_source {
                             let source = (*frame)
                                 .get_op_mut(opline.op2 as u32, opline.op2_type);
-                            if matches!(
+                            if (&*source).is_reference() {
+                                // A by-value assignment from a reference-
+                                // returning call must read through the cell;
+                                // moving the raw VAR would turn the destination
+                                // into an observable alias.
+                                (&*(*frame).get_op_ptr(
+                                    opline.op2 as u32,
+                                    opline.op2_type,
+                                    op_array,
+                                ))
+                                    .clone()
+                            } else if matches!(
                                 (&*source).value_type(),
-                                ValueType::Object | ValueType::Closure
+                                ValueType::Array | ValueType::Object | ValueType::Closure
                             ) {
                                 std::mem::replace(&mut *source, Value::undef())
                             } else {
+                                // Scalar scratch values are intentionally kept
+                                // populated: hot-loop activation may validate
+                                // their established slot tags at the backedge.
                                 (&*source).clone()
                             }
                         } else {

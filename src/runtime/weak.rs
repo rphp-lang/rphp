@@ -38,6 +38,31 @@ struct WeakIteratorState {
     by_reference: bool,
 }
 
+pub(crate) struct WeakMapCycleEntry {
+    pub(crate) key_identity: usize,
+    pub(crate) key: Option<Value>,
+    pub(crate) value: Value,
+}
+
+pub(crate) struct WeakMapCycleState {
+    pub(crate) map_identity: usize,
+    pub(crate) map: Option<Value>,
+    pub(crate) entries: Vec<WeakMapCycleEntry>,
+}
+
+pub(crate) struct WeakIteratorCycleState {
+    pub(crate) iterator_identity: usize,
+    pub(crate) iterator: Option<Value>,
+    pub(crate) map: Value,
+}
+
+#[derive(Default)]
+pub(crate) struct WeakCycleSnapshot {
+    pub(crate) maps: Vec<WeakMapCycleState>,
+    pub(crate) iterators: Vec<WeakIteratorCycleState>,
+    pub(crate) stale_identities: Vec<usize>,
+}
+
 #[derive(Default)]
 pub(super) struct WeakObjectRuntime {
     references: HashMap<usize, WeakReferenceState>,
@@ -46,6 +71,74 @@ pub(super) struct WeakObjectRuntime {
 }
 
 impl WeakObjectRuntime {
+    fn cycle_snapshot(&self) -> WeakCycleSnapshot {
+        let mut stale = std::collections::HashSet::new();
+        for (&target_identity, state) in &self.references {
+            if state.target.strong_count() == 0 {
+                stale.insert(target_identity);
+            }
+            if state.owner.strong_count() == 0 {
+                stale.insert(state.owner_identity);
+            }
+        }
+
+        let maps = self
+            .maps
+            .iter()
+            .map(|(&map_identity, state)| {
+                let map = state.owner.upgrade().map(Value::from_object_owner);
+                if map.is_none() {
+                    stale.insert(map_identity);
+                }
+                let entries = state
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        let key = entry.key.upgrade();
+                        if key.is_none() {
+                            stale.insert(entry.key_identity);
+                        }
+                        WeakMapCycleEntry {
+                            key_identity: entry.key_identity,
+                            key,
+                            value: entry
+                                .value
+                                .clone_cycle_handle()
+                                .expect("WeakMap values use owned reference cells"),
+                        }
+                    })
+                    .collect();
+                WeakMapCycleState {
+                    map_identity,
+                    map,
+                    entries,
+                }
+            })
+            .collect();
+
+        let iterators = self
+            .iterators
+            .iter()
+            .map(|(&iterator_identity, state)| {
+                let iterator = state.owner.upgrade().map(Value::from_object_owner);
+                if iterator.is_none() {
+                    stale.insert(iterator_identity);
+                }
+                WeakIteratorCycleState {
+                    iterator_identity,
+                    iterator,
+                    map: state.map.clone(),
+                }
+            })
+            .collect();
+
+        WeakCycleSnapshot {
+            maps,
+            iterators,
+            stale_identities: stale.into_iter().collect(),
+        }
+    }
+
     fn reference_for_target(&mut self, target_identity: usize) -> Option<Value> {
         let state = self.references.get(&target_identity)?;
         if state.cleared || state.target.strong_count() == 0 {
@@ -483,5 +576,12 @@ impl ExecutorGlobals {
         self.weak_objects
             .as_deref_mut()
             .map_or_else(Vec::new, |runtime| runtime.release_identity(identity))
+    }
+
+    pub(crate) fn weak_cycle_snapshot(&self) -> WeakCycleSnapshot {
+        self.weak_objects.as_deref().map_or_else(
+            WeakCycleSnapshot::default,
+            WeakObjectRuntime::cycle_snapshot,
+        )
     }
 }

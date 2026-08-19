@@ -310,6 +310,27 @@ fn run_final_object_destructor_tree(
     Ok(ran_destructor)
 }
 
+/// Invoke only the user-destructor phase for a cycle candidate. Cycle edges
+/// remain intact until every initially unreachable object has received this
+/// phase, because a destructor may resurrect any member of the component.
+#[cold]
+pub(crate) fn run_cycle_object_destructor(
+    eg: &mut ExecutorGlobals,
+    owner: &Value,
+) -> Result<(), VmError> {
+    let Some(object) = owner.as_object() else {
+        return Ok(());
+    };
+    let class_name = object.class_name.to_string();
+    drop(object);
+    if eg.find_method_info(&class_name, "__destruct").is_some()
+        && owner.mark_object_destructed()
+    {
+        let _ = call_magic_method(eg, owner, "__destruct", &[])?;
+    }
+    Ok(())
+}
+
 /// Run user destructors for direct object handles whose remaining references
 /// all belong to the frame that is about to be released. The ordinary scalar
 /// path remains allocation-free; object counts are built only for frames that

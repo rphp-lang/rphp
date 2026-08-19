@@ -1461,6 +1461,9 @@ fn build_straight_scalar_double_function_plan(
     let mut temporary_results = HashMap::new();
     let mut operations = Vec::new();
     for instruction in &op_array.instructions {
+        if instruction.opcode == OpCode::ReleaseTemps {
+            continue;
+        }
         if instruction.opcode == OpCode::Return {
             if instruction.extended_value == 0 {
                 return None;
@@ -1635,6 +1638,9 @@ fn scalar_double_return_arm(
     operations: &mut Vec<ScalarDoubleOp>,
 ) -> Option<ScalarDoubleSource> {
     for instruction in function.op_array.instructions.get(start..limit)? {
+        if instruction.opcode == OpCode::ReleaseTemps {
+            continue;
+        }
         if instruction.opcode == OpCode::Return {
             if instruction.extended_value == 0 {
                 return None;
@@ -1678,6 +1684,10 @@ fn build_conditional_scalar_double_function_plan(
     let mut operations = Vec::new();
     let mut ip = 0usize;
     while let Some(instruction) = instructions.get(ip) {
+        if instruction.opcode == OpCode::ReleaseTemps {
+            ip += 1;
+            continue;
+        }
         if scalar_double_op_kind(instruction.opcode).is_some() {
             append_scalar_double_operation(
                 function,
@@ -1872,6 +1882,10 @@ fn build_composed_scalar_double_function_plan(
     let mut ip = 0usize;
     while ip < op_array.instructions.len() {
         let instruction = &op_array.instructions[ip];
+        if instruction.opcode == OpCode::ReleaseTemps {
+            ip += 1;
+            continue;
+        }
         if instruction.opcode == OpCode::Return {
             if instruction.extended_value == 0 || !contains_call {
                 return None;
@@ -2149,6 +2163,11 @@ fn build_straight_scalar_long_function_plan(
     let mut operations = Vec::new();
 
     for instruction in &op_array.instructions {
+        if instruction.opcode == OpCode::ReleaseTemps {
+            // The scalar plan never materializes canonical Value slots; the
+            // cleanup remains relevant only on baseline fallback.
+            continue;
+        }
         if instruction.opcode == OpCode::Return {
             // The compiler appends an implicit `return null` even after an
             // explicit return. Only an explicit scalar return proves a plan.
@@ -2220,6 +2239,9 @@ fn scalar_long_return_arm(
     operations: &mut Vec<ScalarLongOp>,
 ) -> Option<ScalarLongSource> {
     for instruction in function.op_array.instructions.get(start..limit)? {
+        if instruction.opcode == OpCode::ReleaseTemps {
+            continue;
+        }
         if instruction.opcode == OpCode::Return {
             if instruction.extended_value == 0 {
                 return None;
@@ -2260,6 +2282,10 @@ fn build_conditional_scalar_long_function_plan(
     // mask remains a predicate operand because PHP integer `&` cannot fail or
     // overflow once both Long guards have succeeded.
     while let Some(instruction) = instructions.get(ip) {
+        if instruction.opcode == OpCode::ReleaseTemps {
+            ip += 1;
+            continue;
+        }
         if instruction.opcode == OpCode::BitwiseAnd {
             if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
                 return None;
@@ -2479,7 +2505,9 @@ fn build_conditional_scalar_long_function_plan(
         // the post-body binding and the incoming binding without inventing a
         // second control-flow representation.
         for instruction in &instructions[when_true_ip..when_false_ip] {
-            if instruction.opcode == OpCode::AssignCv {
+            if instruction.opcode == OpCode::ReleaseTemps {
+                continue;
+            } else if instruction.opcode == OpCode::AssignCv {
                 bind_scalar_long_local(function, instruction, &mut when_true_results)?;
             } else {
                 append_scalar_long_operation(
@@ -2928,6 +2956,12 @@ fn build_object_long_weighted_string_score(
     let mut string_adjustments = Vec::new();
     let mut string_end_target = None;
     let mut ip = 6usize;
+    // A compound scalar RHS may leave canonical intermediate TMPs for the
+    // statement cleanup. The ObjectLong program represents that cleanup as a
+    // Noop because its own checked operations never materialize those Values.
+    while matches!(operations.get(ip), Some(ObjectLongOp::Noop)) {
+        ip += 1;
+    }
     while string_adjustments.len() < 8 {
         let Some(ObjectLongOp::StringLiteralBranch {
             argument,
@@ -3453,6 +3487,10 @@ fn build_object_long_function_plan(function: &UserFunction) -> Option<Box<Object
                 )?,
             },
             OpCode::Return => ObjectLongOp::Bail,
+            // The object/Long plan computes into its own scalar slots and
+            // never materializes canonical TMP/VAR owners. A cleanup emitted
+            // after assignment is therefore a one-for-one control-flow no-op.
+            OpCode::ReleaseTemps => ObjectLongOp::Noop,
             _ => return None,
         };
         operations.push(operation);
@@ -3690,25 +3728,26 @@ fn build_object_array_function_plan(
                 }));
             }
             OpCode::ReleaseTemps => {
-                // A method receiver materialized by FetchObjR is represented
-                // virtually by this plan. The compiler still emits its exact
-                // one-slot Zend lifetime boundary after DoFcall; consume that
-                // boundary without rejecting the otherwise unchanged plan.
+                // Receivers and scalar results represented virtually by this
+                // plan still have an exact baseline lifetime range. Consume
+                // that bounded range in the proof state; the plan itself does
+                // not materialize any of these canonical Value slots.
                 if pending_call.is_some()
                     || instruction.op1_type != OpType::Tmp
                     || instruction.op2_type != OpType::Tmp
-                    || instruction.op2 != instruction.op1.checked_add(1)?
+                    || instruction.op1 >= instruction.op2
                 {
                     return None;
                 }
-                let receiver = instruction.op1 as usize;
-                if receiver >= aliases.len()
-                    || !matches!(aliases[receiver], Some(ObjectArraySource::Property { .. }))
-                {
+                let start = instruction.op1 as usize;
+                let end = instruction.op2 as usize;
+                if end > aliases.len() {
                     return None;
                 }
-                aliases[receiver] = None;
-                initialized_long[receiver] = false;
+                for slot in start..end {
+                    aliases[slot] = None;
+                    initialized_long[slot] = false;
+                }
             }
             OpCode::AssignCv => {
                 if pending_call.is_some() || instruction.op1_type != OpType::Cv {
@@ -3931,6 +3970,10 @@ pub(crate) fn build_scalar_string_function_plan(
     let mut operations = Vec::new();
     let mut ip = 0usize;
     while let Some(instruction) = instructions.get(ip) {
+        if instruction.opcode == OpCode::ReleaseTemps {
+            ip += 1;
+            continue;
+        }
         if instruction.opcode == OpCode::BitwiseAnd {
             if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
                 return None;
@@ -4320,6 +4363,10 @@ fn build_composed_scalar_long_function_plan(
 
     while ip < op_array.instructions.len() {
         let instruction = &op_array.instructions[ip];
+        if instruction.opcode == OpCode::ReleaseTemps {
+            ip += 1;
+            continue;
+        }
         if instruction.opcode == OpCode::Return {
             if instruction.extended_value == 0 || !contains_call {
                 return None;
@@ -4644,6 +4691,10 @@ pub(crate) fn build_composed_typed_long_function_plan(
 
     while ip < op_array.instructions.len() {
         let instruction = &op_array.instructions[ip];
+        if instruction.opcode == OpCode::ReleaseTemps {
+            ip += 1;
+            continue;
+        }
         if instruction.opcode == OpCode::Return {
             if instruction.extended_value == 0 || !contains_string {
                 return None;
@@ -5432,6 +5483,15 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
 
     while ip < instructions.len() {
         let instruction = &instructions[ip];
+
+        // A scalar property plan never materializes the canonical TMP/VAR
+        // values covered by this statement-boundary cleanup. The baseline
+        // opcode remains authoritative when any property/type guard fails;
+        // after a proven Long-only operation it is transparent to the plan.
+        if instruction.opcode == OpCode::ReleaseTemps {
+            ip += 1;
+            continue;
+        }
 
         // $this->p = $this->p +/- scalar
         if instruction.opcode == OpCode::FetchObjR && ip + 2 < instructions.len() {

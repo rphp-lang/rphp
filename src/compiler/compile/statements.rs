@@ -1787,6 +1787,7 @@ impl Compiler {
                 }
             }
             Stmt::Assign { var, expr } => {
+                let first_tmp = self.next_tmp as u16;
                 // Detect $x .= expr pattern → emit AssignConcat (in-place string append)
                 let cv_idx = self.resolve_cv(var);
                 let compact_concat_rhs = match expr {
@@ -1798,7 +1799,7 @@ impl Compiler {
                         && self.definitely_defined_cvs.contains(&cv_idx) => Some(right.as_ref()),
                     _ => None,
                 };
-                if let Some(right) = compact_concat_rhs {
+                let moved_source = if let Some(right) = compact_concat_rhs {
                     let (rhs_op, rhs_type) = self.compile_expr(right);
                     let mut instr = Instruction::new(OpCode::AssignConcat);
                     instr.op1_type = OpType::Cv;
@@ -1806,6 +1807,7 @@ impl Compiler {
                     instr.op2_type = rhs_type;
                     instr.op2 = rhs_op;
                     self.instructions.push(instr);
+                    None
                 } else {
                     let (operand, op_type) = self.compile_expr(expr);
                     let mut assign = Instruction::new(OpCode::AssignCv);
@@ -1815,6 +1817,27 @@ impl Compiler {
                     assign.op2 = operand;
                     assign._pad |= ASSIGN_CV_MOVE_SOURCE;
                     self.instructions.push(assign);
+                    Some((operand, op_type))
+                };
+                let end_tmp = self.next_tmp as u16;
+                let sole_tmp_moved_by_assignment = end_tmp == first_tmp.saturating_add(1)
+                    && moved_source.is_some_and(|(operand, op_type)| {
+                        matches!(op_type, OpType::Tmp | OpType::Var) && operand == first_tmp
+                    });
+                if end_tmp > first_tmp && !sole_tmp_moved_by_assignment {
+                    // Assignment consumes or moves its RHS result, but calls
+                    // may also leave argument/materialization temporaries in
+                    // the caller frame. They cease to be PHP roots at this
+                    // statement boundary just like an unused expression. A
+                    // sole TMP/VAR result is transferred directly by AssignCv
+                    // and needs neither a second drop nor a structural cleanup
+                    // opcode after the assignment.
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = end_tmp;
+                    release.op2_type = OpType::Tmp;
+                    self.instructions.push(release);
                 }
                 self.definitely_defined_cvs.insert(cv_idx);
             }
@@ -3158,6 +3181,7 @@ impl Compiler {
                 expr,
                 line,
             } => {
+                let first_tmp = self.next_tmp as u16;
                 let (obj_op, obj_type, deferred_fetches) =
                     self.prepare_property_modify_base(object);
                 let (val_op, val_type) = self.compile_expr(expr);
@@ -3182,6 +3206,18 @@ impl Compiler {
                     assign._pad |= crate::vm::instruction::OBJ_PROP_HOOK_BYPASS;
                 }
                 self.push_instruction_at_line(assign, *line);
+                let end_tmp = self.next_tmp as u16;
+                if end_tmp > first_tmp {
+                    // FetchCvR materializes the receiver and by-value source
+                    // for a property statement. Both cease to be roots after
+                    // the write (the source itself may already have moved).
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = end_tmp;
+                    release.op2_type = OpType::Tmp;
+                    self.instructions.push(release);
+                }
             }
             Stmt::AssignStaticProp {
                 class_name,

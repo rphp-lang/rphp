@@ -256,7 +256,13 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
         }
     }
 
-    let method_ip = constructor_do_ip + 2;
+    let object_assign_ip = constructor_do_ip + 1;
+    let (method_ip, _) = crate::vm::quick::after_optional_assignment_release(
+        caller_op_array,
+        object_assign_ip,
+        new_object.result_type,
+        new_object.result,
+    )?;
     let method = caller_op_array.instructions.get(method_ip)?;
     if method.opcode != OpCode::InitMethodCall
         || method._pad & CALL_FLAG_OBJECT_ARRAY_CONSUMERS == 0

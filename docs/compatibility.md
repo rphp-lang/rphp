@@ -9,11 +9,64 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,213 pass, 2,084 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,232 pass, 2,065 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-60.657% and the whole-corpus rate is 57.385%; 4,610 of 5,297 attempted cases
-reach runtime (87.030%). Relative to exact base `ee64027a`, the pass-set delta
-is +27/-0: all 3,186 prior passes remain exact.
+61.016% and the whole-corpus rate is 57.725%; 4,610 of 5,297 attempted cases
+reach runtime (87.030%). Relative to exact base `a022a0c5`, the pass-set delta
+is +19/-0: all 3,213 prior passes remain exact.
+
+`gc_collect_cycles()` now performs explicit request-local collection for
+unreachable cycles composed of ordinary objects, arrays, Closures and owned
+references. A lazy possible-root registry feeds trial deletion; the cold graph
+applies WeakMap ephemeron reachability to a fixpoint, reports the matching
+strongly connected component count, runs all garbage destructors before
+releasing graph edges, and rebuilds reachability after destructor resurrection.
+WeakReference and WeakMap identities are invalidated only when their final
+targets are released. Explicit collection remains available while automatic GC
+is disabled.
+
+The exact `Zend/tests/gc` and `Zend/tests/weakrefs` gain includes
+`bug78999.phpt`, `gc_042.phpt`, `gc_048.phpt`, eleven `gh10043` cases and
+`weakmap_weakness.phpt`. Four adjacent lifecycle cases also become exact:
+Fiber destructor cases `destructors_002.phpt` and `destructors_003.phpt`,
+generator regression `bug76427.phpt`, and magic-method regression
+`bug29368_2.phpt`. Four further tests advance to a later known runtime boundary:
+three still require suspending an internal Fiber callback, while `gc_049.phpt`
+now reaches the missing `gc_status()` API. There are no unexplained category
+moves and no lost pass.
+
+Five original E2E tests cover self and two-object cycles, object/array/reference
+cycles, destructor resurrection, WeakMap ephemerons and Closure capture graphs.
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory is 1,620 unsafe blocks and 289
+unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and
+cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable oracle
+while the language corpus remained pinned to PHP 8.5.6.
+
+Exact base `a022a0c5` and the final release candidate were compared on CPU 8 in
+`performance` mode without removing outliers. Thirty-two balanced ABBA/BAAB
+pairs of 150 empty-output requests measured baseline p10/median/p90
+0.201480/0.202869/0.205669 seconds versus candidate
+0.200215/0.201410/0.203880 seconds: -0.719% by independent medians and -0.704%
+by the paired-ratio median. A separate million-object declared-lifecycle lane
+retained output `17000000` and measured baseline 0.002652/0.002695/0.002824
+seconds versus candidate 0.002634/0.002700/0.002790 seconds: +0.214%
+independently and -0.945% paired. The existing ordered workload retained output
+`9895778000,1327440292,11223218292,210000` and its balanced order-specific
+median ratio was -0.133%. All relevant regression medians remain below the
+five-percent ceiling.
+
+There is no runnable cycle-collection baseline in RPHP at `a022a0c5`. A new
+100-round lane collecting 1,000 self cycles per round retained the exact prefix
+`100000`; PHP 8.5.6 measured median 0.006229 seconds and RPHP 0.086784 seconds,
+approximately 13.9x the PHP median. This is an explicit optimization baseline,
+not a regression or parity claim. Automatic threshold collection, complete
+`gc_status()` telemetry, generator/Fiber/resource cycle breadth and WeakMap
+indexing remain separate work. Exact PHP root-color ordering after transient
+WeakReference upgrades and compound-Echo temporary lifetime are also outside
+this checkpoint's claim.
+
+The preceding `weak-objects-core` checkpoint is documented below.
 
 RPHP now registers final internal `WeakReference`, `WeakMap` and
 `InternalIterator` classes. `WeakReference::create()` accepts ordinary objects
@@ -37,8 +90,9 @@ comparison or final-class diagnostic. The 17 focused failures remain explicit:
 its cycle-collection section, two `gh17442` cases need broader reference/header
 destructor handling, `notify.phpt` needs the adjacent Reflection capability,
 `weakmap_dtor_exception.phpt` needs an internal stack frame, and
-`weakrefs_004.phpt` needs source-located final-class diagnostics. No general
-cycle-GC claim is made.
+`weakrefs_004.phpt` needs source-located final-class diagnostics. At that
+preceding checkpoint no general cycle-GC claim was made; the explicit collector
+above supersedes only the enumerated cycle cases.
 
 Six original E2E tests cover wrapper caching, object and Closure targets,
 destructor ordering, aliases and clone separation, null probes, key expiry,

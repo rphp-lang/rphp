@@ -226,8 +226,15 @@ fn resolve_quick_virtual_declared_object_reads(
     }
 
     let mut values = [0i64; 8];
+    let object_assign_ip = resume_ip + 2;
+    let (first_read_ip, _) = crate::vm::quick::after_optional_assignment_release(
+        op_array,
+        object_assign_ip,
+        new_object.result_type,
+        new_object.result,
+    )?;
     for (index, read) in reads.iter().copied().enumerate().take(read_count as usize) {
-        let fetch_ip = resume_ip + 3 + index;
+        let fetch_ip = first_read_ip + index;
         let fetch = *op_array.instructions.get(fetch_ip)?;
         if fetch.opcode != OpCode::FetchObjR
             || fetch.op2_type != OpType::Const

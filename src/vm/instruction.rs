@@ -260,8 +260,8 @@ pub const CALL_USER_FUNC_ARRAY_SOURCE_UNPACK: u16 = 1;
 pub const ASSIGN_CV_REBIND: u16 = 1;
 
 /// The compiler proved that an unused TMP/VAR source has no consumers after
-/// this assignment. Object owners may be transferred into the destination so
-/// compiler scratch storage does not extend PHP-visible object lifetime.
+/// this assignment. Its owner may be transferred into the destination so
+/// compiler scratch storage does not extend PHP-visible value lifetime.
 pub const ASSIGN_CV_MOVE_SOURCE: u16 = 1 << 1;
 
 /// AssignDim stores the source l-value's PHP reference cell in the selected
