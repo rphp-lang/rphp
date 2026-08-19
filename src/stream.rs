@@ -80,6 +80,14 @@ enum StreamBackend {
     File(File),
     Memory(Cursor<Vec<u8>>),
     Temp(TempStream),
+    Standard(StandardStream),
+}
+
+#[derive(Clone, Copy)]
+enum StandardStream {
+    Input,
+    Output,
+    Error,
 }
 
 /// Request-owned context data shared by a context resource and streams opened
@@ -125,6 +133,70 @@ pub struct StreamMetadata<'a> {
 }
 
 impl PhpStream {
+    pub(crate) fn standard_input() -> Self {
+        Self::standard(StandardStream::Input)
+    }
+
+    pub(crate) fn standard_output() -> Self {
+        Self::standard(StandardStream::Output)
+    }
+
+    pub(crate) fn standard_error() -> Self {
+        Self::standard(StandardStream::Error)
+    }
+
+    fn standard(stream: StandardStream) -> Self {
+        let (mode, reported_mode, uri) = match stream {
+            StandardStream::Input => (
+                StreamMode {
+                    read: true,
+                    write: false,
+                    append: false,
+                    create: false,
+                    truncate: false,
+                    exclusive: false,
+                },
+                "rb",
+                "php://stdin",
+            ),
+            StandardStream::Output => (
+                StreamMode {
+                    read: false,
+                    write: true,
+                    append: false,
+                    create: false,
+                    truncate: false,
+                    exclusive: false,
+                },
+                "wb",
+                "php://stdout",
+            ),
+            StandardStream::Error => (
+                StreamMode {
+                    read: false,
+                    write: true,
+                    append: false,
+                    create: false,
+                    truncate: false,
+                    exclusive: false,
+                },
+                "wb",
+                "php://stderr",
+            ),
+        };
+        Self {
+            backend: StreamBackend::Standard(stream),
+            mode,
+            reported_mode: reported_mode.to_string(),
+            uri: uri.to_string(),
+            eof: false,
+            #[cfg(feature = "stream-truncate")]
+            memory_append_after_truncate: false,
+            #[cfg(feature = "stream-context")]
+            context: None,
+        }
+    }
+
     pub fn open(path: &str, mode: &str) -> io::Result<Self> {
         let requested_mode = mode;
         let mode = StreamMode::parse(requested_mode)
@@ -224,6 +296,11 @@ impl PhpStream {
                 StreamBackend::File(file) => file.read(buffer),
                 StreamBackend::Memory(memory) => memory.read(buffer),
                 StreamBackend::Temp(temp) => temp.read(buffer),
+                StreamBackend::Standard(StandardStream::Input) => io::stdin().lock().read(buffer),
+                StreamBackend::Standard(_) => Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "standard stream is not readable",
+                )),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -237,6 +314,10 @@ impl PhpStream {
             StreamBackend::File(file) => file.seek(position),
             StreamBackend::Memory(memory) => memory.seek(position),
             StreamBackend::Temp(temp) => temp.seek(position),
+            StreamBackend::Standard(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "standard stream does not support seeking",
+            )),
         }
     }
 
@@ -431,6 +512,14 @@ impl PhpStream {
                     memory.write(buffer)
                 }
                 StreamBackend::Temp(temp) => temp.write(buffer, self.mode.append),
+                StreamBackend::Standard(StandardStream::Output) => {
+                    io::stdout().lock().write(buffer)
+                }
+                StreamBackend::Standard(StandardStream::Error) => io::stderr().lock().write(buffer),
+                StreamBackend::Standard(StandardStream::Input) => Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "standard stream is not writable",
+                )),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -444,6 +533,9 @@ impl PhpStream {
             StreamBackend::File(file) => file.flush(),
             StreamBackend::Memory(memory) => memory.flush(),
             StreamBackend::Temp(temp) => temp.flush(),
+            StreamBackend::Standard(StandardStream::Input) => Ok(()),
+            StreamBackend::Standard(StandardStream::Output) => io::stdout().lock().flush(),
+            StreamBackend::Standard(StandardStream::Error) => io::stderr().lock().flush(),
         }
     }
 
@@ -477,10 +569,12 @@ impl PhpStream {
     pub fn lock_exclusive(&self) -> io::Result<()> {
         match &self.backend {
             StreamBackend::File(file) => file.lock(),
-            StreamBackend::Memory(_) | StreamBackend::Temp(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "exclusive locks require a regular file",
-            )),
+            StreamBackend::Memory(_) | StreamBackend::Temp(_) | StreamBackend::Standard(_) => {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "exclusive locks require a regular file",
+                ))
+            }
         }
     }
 
@@ -495,10 +589,12 @@ impl PhpStream {
                 self.eof = false;
                 Ok(())
             }
-            StreamBackend::Memory(_) | StreamBackend::Temp(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "truncate after locking requires a regular file",
-            )),
+            StreamBackend::Memory(_) | StreamBackend::Temp(_) | StreamBackend::Standard(_) => {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "truncate after locking requires a regular file",
+                ))
+            }
         }
     }
 
@@ -517,6 +613,10 @@ impl PhpStream {
             StreamBackend::File(file) => file.stream_position(),
             StreamBackend::Memory(memory) => Ok(memory.position()),
             StreamBackend::Temp(temp) => temp.position(),
+            StreamBackend::Standard(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "standard stream does not expose a position",
+            )),
         }
     }
 
@@ -531,6 +631,7 @@ impl PhpStream {
             ),
             StreamBackend::Memory(_) => (Some(false), Some(true), Some(self.eof), "PHP", "MEMORY"),
             StreamBackend::Temp(_) => (None, None, None, "PHP", "TEMP"),
+            StreamBackend::Standard(_) => (Some(false), Some(true), Some(self.eof), "PHP", "STDIO"),
         };
         StreamMetadata {
             timed_out,
@@ -540,7 +641,7 @@ impl PhpStream {
             stream_type,
             mode: &self.reported_mode,
             unread_bytes: 0,
-            seekable: true,
+            seekable: !matches!(self.backend, StreamBackend::Standard(_)),
             uri: &self.uri,
         }
     }

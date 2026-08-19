@@ -25,27 +25,27 @@ use super::function::{
 use super::instruction::{
     ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS, ARRAY_INIT_HASH_HINT,
     ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND,
-    ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
-    CALL_FLAG_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST,
-    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE,
-    CALL_FLAG_OBJECT_ARRAY_CONSUMERS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
-    CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
-    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY,
-    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
-    FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
-    FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, Instruction,
-    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, NEW_FLAG_DYNAMIC_CLASS_NAME,
-    NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_VIRTUAL_DECLARED_READS,
-    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OBJ_PROP_REFERENCE_BIND, OpType,
-    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
-    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
-    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
-    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
+    ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,
+    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK,
+    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
+    CALL_FLAG_RETURN_EXPLICITLY_IGNORED, CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE,
+    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
+    CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
+    CLONE_OBJ_WITH_PROPERTIES, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS,
+    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS,
+    FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS,
+    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
+    NEW_FLAG_VIRTUAL_DECLARED_READS, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
+    OBJ_PROP_REFERENCE_BIND, OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT,
+    REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS,
+    SEND_FLAG_NONREFERENCEABLE, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
+    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use super::opcode::OpCode;
 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
@@ -2905,10 +2905,37 @@ enum ArrayKeyRef<'a> {
     String(&'a str),
 }
 
+#[derive(Clone, Copy)]
+enum ArrayKeyError {
+    Illegal,
+    DeprecatedNull,
+    DeprecatedFloat(i64),
+    NonRepresentableFloat { integer: i64, also_deprecated: bool },
+    Resource(i64),
+}
+
+const PHP_LONG_UPPER_BOUND: f64 = 9_223_372_036_854_775_808.0;
+const PHP_ULONG_MODULUS: f64 = 18_446_744_073_709_551_616.0;
+
+/// Match Zend's finite double-to-long modulo conversion outside the signed
+/// range. Non-finite doubles become zero.
+fn php_float_to_long(value: f64) -> i64 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let mut reduced = value % PHP_ULONG_MODULUS;
+    if reduced >= PHP_LONG_UPPER_BOUND {
+        reduced -= PHP_ULONG_MODULUS;
+    } else if reduced < -PHP_LONG_UPPER_BOUND {
+        reduced += PHP_ULONG_MODULUS;
+    }
+    reduced as i64
+}
+
 /// Normalize an array offset while borrowing string storage from the source
 /// `Value`. Read paths can therefore probe `PhpArray` without allocating an
 /// owned `ArrayKey` for every access.
-fn value_to_array_key_ref(val: &Value) -> Result<ArrayKeyRef<'_>, VmError> {
+fn value_to_array_key_ref(val: &Value) -> Result<ArrayKeyRef<'_>, ArrayKeyError> {
     match val.value_type() {
         ValueType::Long => Ok(ArrayKeyRef::Int(val.as_long().unwrap())),
         ValueType::String => {
@@ -2918,11 +2945,26 @@ fn value_to_array_key_ref(val: &Value) -> Result<ArrayKeyRef<'_>, VmError> {
                 None => Ok(ArrayKeyRef::String(value)),
             }
         }
-        ValueType::Null => Ok(ArrayKeyRef::String("")),
+        ValueType::Null => Err(ArrayKeyError::DeprecatedNull),
         ValueType::True => Ok(ArrayKeyRef::Int(1)),
         ValueType::False => Ok(ArrayKeyRef::Int(0)),
-        ValueType::Double => Ok(ArrayKeyRef::Int(val.as_double().unwrap() as i64)),
-        _ => Err(VmError::Fatal("Illegal offset type".into())),
+        ValueType::Double => {
+            let value = val.as_double().unwrap();
+            let integer = php_float_to_long(value);
+            if !value.is_finite() || !(-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&value)
+            {
+                Err(ArrayKeyError::NonRepresentableFloat {
+                    integer,
+                    also_deprecated: value.is_nan(),
+                })
+            } else if value == integer as f64 {
+                Ok(ArrayKeyRef::Int(integer))
+            } else {
+                Err(ArrayKeyError::DeprecatedFloat(integer))
+            }
+        }
+        ValueType::Resource => Err(ArrayKeyError::Resource(val.as_resource_id().unwrap())),
+        _ => Err(ArrayKeyError::Illegal),
     }
 }
 
@@ -2952,20 +2994,25 @@ mod array_key_normalization_tests {
 }
 
 /// Convert a Value to an ArrayKey.
-fn value_to_array_key(val: &Value) -> Result<ArrayKey, VmError> {
+fn value_to_array_key(val: &Value) -> Result<ArrayKey, ArrayKeyError> {
     match value_to_array_key_ref(val)? {
         ArrayKeyRef::Int(value) => Ok(ArrayKey::Int(value)),
         ArrayKeyRef::String(value) => Ok(ArrayKey::String(value.to_string())),
     }
 }
 
-/// `$GLOBALS` dimensions use the same key normalization as arrays, then map
-/// the canonical key onto the string-named global symbol table.
+/// `$GLOBALS` dimensions name variables through scalar string conversion,
+/// unlike ordinary array dimensions. Unsupported containers retain the
+/// existing error boundary until their conversion diagnostics are modeled.
 fn value_to_global_name(val: &Value) -> Result<String, VmError> {
-    Ok(match value_to_array_key_ref(val)? {
-        ArrayKeyRef::Int(value) => value.to_string(),
-        ArrayKeyRef::String(value) => value.to_string(),
-    })
+    match val.value_type() {
+        ValueType::Undef | ValueType::Null | ValueType::False => Ok(String::new()),
+        ValueType::True => Ok("1".to_string()),
+        ValueType::Long | ValueType::Double | ValueType::String | ValueType::Resource => {
+            Ok(val.echo_to_string())
+        }
+        _ => Err(VmError::Fatal("Illegal offset type".into())),
+    }
 }
 
 const MAX_COMPARISON_DEPTH: usize = 512;

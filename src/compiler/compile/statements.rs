@@ -738,6 +738,7 @@ impl Compiler {
                 assign.op2_type = key_type;
                 assign.result = array;
                 assign.result_type = array_type;
+                assign._pad |= ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
                 self.instructions.push(assign);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
@@ -1021,6 +1022,7 @@ impl Compiler {
                 assign.op2_type = key_type;
                 assign.result = value;
                 assign.result_type = value_type;
+                assign._pad |= ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
                 self.instructions.push(assign);
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
@@ -1654,6 +1656,7 @@ impl Compiler {
             rebuild.op2_type = key_type;
             rebuild.result = child;
             rebuild.result_type = child_type;
+            rebuild._pad |= ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
             self.instructions.push(rebuild);
         }
     }
@@ -1674,7 +1677,7 @@ impl Compiler {
             rebuild.op2_type = key_type;
             rebuild.result = child;
             rebuild.result_type = child_type;
-            rebuild._pad |= ASSIGN_DIM_UNSET_REBUILD;
+            rebuild._pad |= ASSIGN_DIM_UNSET_REBUILD | ASSIGN_DIM_KEY_ALREADY_NORMALIZED;
             self.push_instruction_at_line(rebuild, source_line);
         }
     }
@@ -6011,11 +6014,7 @@ impl Compiler {
                             format!("Cannot declare self-referencing constant {reference}"),
                         ));
                     } else if deferred_constant_expression_is_supported(&constant.value)
-                        && (reference.is_some()
-                            || (reason.starts_with("expression Constant(\"")
-                                && reason.ends_with(
-                                    "\") is not a compile-time constant",
-                                )))
+                        && constant_expression_dependency_is_unavailable(&reason)
                     {
                         // PHP 8.5 permits a class-constant expression to depend
                         // on a global constant published by an earlier runtime

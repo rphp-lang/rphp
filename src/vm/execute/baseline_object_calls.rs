@@ -2573,7 +2573,7 @@ fn op_bind_array_dim_ref<'a>(
         }
         let key = match value_to_array_key(index) {
             Ok(key) => key,
-            Err(_) => {
+            Err(ArrayKeyError::Illegal) => {
                 let instruction_index = (opline as *const Instruction)
                     .offset_from(op_array.instructions.as_ptr())
                     as usize;
@@ -2582,13 +2582,95 @@ fn op_bind_array_dim_ref<'a>(
                     frame,
                     op_array,
                     instruction_index,
-                    "Illegal offset type",
+                    &format!(
+                        "Cannot access offset of type {} on array",
+                        index.diagnostic_type_name()
+                    ),
                 ) {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
                     ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
                 });
+            }
+            Err(error) => {
+                let key = match error {
+                    ArrayKeyError::DeprecatedNull => ArrayKey::String(String::new()),
+                    ArrayKeyError::DeprecatedFloat(integer) | ArrayKeyError::Resource(integer) => {
+                        ArrayKey::Int(integer)
+                    }
+                    ArrayKeyError::NonRepresentableFloat { integer, .. } => {
+                        ArrayKey::Int(integer)
+                    }
+                    ArrayKeyError::Illegal => unreachable!(),
+                };
+                match error {
+                    ArrayKeyError::Resource(resource) => report_php_warning(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!(
+                            "Resource ID#{resource} used as offset, casting to integer ({resource})"
+                        ),
+                        false,
+                    )?,
+                    ArrayKeyError::DeprecatedNull => report_php_deprecation(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        "Using null as an array offset is deprecated, use an empty string instead",
+                    )?,
+                    ArrayKeyError::DeprecatedFloat(_) => report_php_deprecation(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!(
+                            "Implicit conversion from float {} to int loses precision",
+                            index.echo_to_string_with_precision(-1)
+                        ),
+                    )?,
+                    ArrayKeyError::NonRepresentableFloat {
+                        also_deprecated,
+                        ..
+                    } => {
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "The float {} is not representable as an int, cast occurred",
+                                index.echo_to_string_with_precision(-1)
+                            ),
+                            false,
+                        )?;
+                        if eg.exception.is_none() && also_deprecated {
+                            report_php_deprecation(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!(
+                                    "Implicit conversion from float {} to int loses precision",
+                                    index.echo_to_string_with_precision(-1)
+                                ),
+                            )?;
+                        }
+                    }
+                    ArrayKeyError::Illegal => unreachable!(),
+                }
+                if let Some(exception) = eg.exception.take() {
+                    return Ok(match throw_in_frame(eg, frame, exception) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
+                        }
+                        ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                    });
+                }
+                key
             }
         };
         if opline._pad & REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE != 0

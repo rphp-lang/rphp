@@ -46,6 +46,7 @@ mod truncate;
 
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
+    register_standard_streams(eg);
     for (name, handler, maximum, required, parameter_names) in [
         #[cfg(not(feature = "stream-context"))]
         (
@@ -261,6 +262,22 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer).unwrap();
         functions.push(function);
+    }
+}
+
+#[cold]
+fn register_standard_streams(eg: &mut ExecutorGlobals) {
+    for (name, stream) in [
+        ("STDIN", PhpStream::standard_input()),
+        ("STDOUT", PhpStream::standard_output()),
+        ("STDERR", PhpStream::standard_error()),
+    ] {
+        #[cfg(feature = "resource-lifetime")]
+        let value = insert_stream(eg, stream);
+        #[cfg(not(feature = "resource-lifetime"))]
+        let value = Value::resource(insert_stream(eg, stream));
+        eg.define_constant(name, value)
+            .expect("CLI standard stream constants are registered once");
     }
 }
 

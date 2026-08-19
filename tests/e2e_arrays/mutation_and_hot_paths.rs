@@ -297,6 +297,6 @@ $array[$key] += 1;
 var_dump($array);
 "#,
         ),
-        "warning:Undefined variable $array\nwarning:Undefined variable $key\nwarning:Undefined array key \"\"\narray(1) {\n  [\"\"]=>\n  int(1)\n}\n",
+        "warning:Undefined variable $array\nwarning:Undefined variable $key\nwarning:Using null as an array offset is deprecated, use an empty string instead\nwarning:Undefined array key \"\"\narray(1) {\n  [\"\"]=>\n  int(1)\n}\n",
     );
 }

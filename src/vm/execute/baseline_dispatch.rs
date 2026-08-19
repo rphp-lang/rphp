@@ -523,6 +523,21 @@ fn throw_operator_error<'a>(
     throw_in_frame(eg, frame, error)
 }
 
+#[cold]
+fn array_access_offset_error(value: &Value, isset_or_empty: bool) -> String {
+    if isset_or_empty {
+        format!(
+            "Cannot access offset of type {} in isset or empty",
+            value.diagnostic_type_name()
+        )
+    } else {
+        format!(
+            "Cannot access offset of type {} on array",
+            value.diagnostic_type_name()
+        )
+    }
+}
+
 /// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -571,6 +586,193 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 }
             };
+        }
+        macro_rules! finish_array_key_diagnostic {
+            () => {{
+                if let Some(exception) = eg.exception.take() {
+                    match throw_in_frame(eg, frame, exception) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue 'vm;
+                        }
+                        ThrowResult::Unhandled(exception) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    }
+                }
+            }};
+        }
+        macro_rules! array_key_ref_or_throw {
+            ($value:expr, $message:expr, $suppressed:expr) => {{
+                let source = $value;
+                match value_to_array_key_ref(source) {
+                    Ok(key) => key,
+                    Err(ArrayKeyError::Resource(resource)) => {
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "Resource ID#{resource} used as offset, casting to integer ({resource})"
+                            ),
+                            $suppressed,
+                        )?;
+                        finish_array_key_diagnostic!();
+                        ArrayKeyRef::Int(resource)
+                    }
+                    Err(ArrayKeyError::DeprecatedNull) => {
+                        report_php_deprecation(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Using null as an array offset is deprecated, use an empty string instead",
+                        )?;
+                        finish_array_key_diagnostic!();
+                        ArrayKeyRef::String("")
+                    }
+                    Err(ArrayKeyError::DeprecatedFloat(integer)) => {
+                        report_php_deprecation(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "Implicit conversion from float {} to int loses precision",
+                                source.echo_to_string_with_precision(-1)
+                            ),
+                        )?;
+                        finish_array_key_diagnostic!();
+                        ArrayKeyRef::Int(integer)
+                    }
+                    Err(ArrayKeyError::NonRepresentableFloat {
+                        integer,
+                        also_deprecated,
+                    }) => {
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "The float {} is not representable as an int, cast occurred",
+                                source.echo_to_string_with_precision(-1)
+                            ),
+                            $suppressed,
+                        )?;
+                        finish_array_key_diagnostic!();
+                        if also_deprecated {
+                            report_php_deprecation(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!(
+                                    "Implicit conversion from float {} to int loses precision",
+                                    source.echo_to_string_with_precision(-1)
+                                ),
+                            )?;
+                            finish_array_key_diagnostic!();
+                        }
+                        ArrayKeyRef::Int(integer)
+                    }
+                    Err(ArrayKeyError::Illegal) => {
+                        array_key_or_throw!(Err::<ArrayKeyRef<'_>, ()>(()), $message)
+                    }
+                }
+            }};
+        }
+        macro_rules! array_key_owned_or_throw {
+            ($value:expr, $message:expr, $suppressed:expr, $report_conversion:expr) => {{
+                let source = $value;
+                match value_to_array_key(source) {
+                    Ok(key) => key,
+                    Err(ArrayKeyError::Resource(resource)) => {
+                        if $report_conversion {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!(
+                                    "Resource ID#{resource} used as offset, casting to integer ({resource})"
+                                ),
+                                $suppressed,
+                            )?;
+                            finish_array_key_diagnostic!();
+                        }
+                        ArrayKey::Int(resource)
+                    }
+                    Err(ArrayKeyError::DeprecatedNull) => {
+                        if $report_conversion {
+                            report_php_deprecation(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "Using null as an array offset is deprecated, use an empty string instead",
+                            )?;
+                            finish_array_key_diagnostic!();
+                        }
+                        ArrayKey::String(String::new())
+                    }
+                    Err(ArrayKeyError::DeprecatedFloat(integer)) => {
+                        if $report_conversion {
+                            report_php_deprecation(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!(
+                                    "Implicit conversion from float {} to int loses precision",
+                                    source.echo_to_string_with_precision(-1)
+                                ),
+                            )?;
+                            finish_array_key_diagnostic!();
+                        }
+                        ArrayKey::Int(integer)
+                    }
+                    Err(ArrayKeyError::NonRepresentableFloat {
+                        integer,
+                        also_deprecated,
+                    }) => {
+                        if $report_conversion {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!(
+                                    "The float {} is not representable as an int, cast occurred",
+                                    source.echo_to_string_with_precision(-1)
+                                ),
+                                $suppressed,
+                            )?;
+                            finish_array_key_diagnostic!();
+                            if also_deprecated {
+                                report_php_deprecation(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    &format!(
+                                        "Implicit conversion from float {} to int loses precision",
+                                        source.echo_to_string_with_precision(-1)
+                                    ),
+                                )?;
+                                finish_array_key_diagnostic!();
+                            }
+                        }
+                        ArrayKey::Int(integer)
+                    }
+                    Err(ArrayKeyError::Illegal) => {
+                        array_key_or_throw!(Err::<ArrayKey, ()>(()), $message)
+                    }
+                }
+            }};
         }
         macro_rules! prepare_constrained_write {
             ($constraints:expr, $value:expr) => {{
@@ -4073,9 +4275,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline.result_type,
                             op_array,
                         );
-                        match array_key_or_throw!(
-                            value_to_array_key_ref(key_val),
-                            "Illegal offset type"
+                        match array_key_ref_or_throw!(
+                            key_val,
+                            &format!(
+                                "Cannot access offset of type {} on array",
+                                key_val.diagnostic_type_name()
+                            ),
+                            false
                         ) {
                             ArrayKeyRef::Int(key) => php_arr.set_int(key, cloned_val),
                             ArrayKeyRef::String(key) => {
@@ -4157,13 +4363,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let Some(arr) = arr_val.as_array() {
-                    let array_key = array_key_or_throw!(
-                        value_to_array_key_ref(idx_val),
-                        if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0 {
-                            "Illegal offset type in isset or empty"
-                        } else {
-                            "Illegal offset type"
-                        }
+                    let array_key = array_key_ref_or_throw!(
+                        idx_val,
+                        &array_access_offset_error(
+                            idx_val,
+                            opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0
+                        ),
+                        opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0
                     );
                     let fetched = match &array_key {
                         ArrayKeyRef::Int(key) => arr.get_int(*key),
@@ -4402,13 +4608,41 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     write_fetch_dim_result(frame, result_ptr, value.dereferenced().clone());
                 } else {
-                    if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)
+                    if arr_val.value_type() == ValueType::Resource
+                        && opline._pad & FETCH_DIM_DESTRUCTURE != 0
+                    {
+                        report_php_warning(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Cannot use resource as array",
+                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    } else if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)
                         && opline._pad & FETCH_DIM_MUTABLE != 0
                         && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
                     {
-                        let array_key = array_key_or_throw!(
-                            value_to_array_key_ref(idx_val),
-                            "Illegal offset type"
+                        let array_key = array_key_ref_or_throw!(
+                            idx_val,
+                            &format!(
+                                "Cannot access offset of type {} on array",
+                                idx_val.diagnostic_type_name()
+                            ),
+                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0
                         );
                         let key = match array_key {
                             ArrayKeyRef::Int(key) => key.to_string(),
@@ -4654,8 +4888,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
-                let key =
-                    array_key_or_throw!(value_to_array_key(idx_val), "Illegal offset type");
+                let key = array_key_owned_or_throw!(
+                    idx_val,
+                    &format!(
+                        "Cannot access offset of type {} on array",
+                        idx_val.diagnostic_type_name()
+                    ),
+                    false
+                    ,
+                    opline._pad & ASSIGN_DIM_KEY_ALREADY_NORMALIZED == 0
+                );
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
                     unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
@@ -4916,9 +5158,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*frame).opline = opline_ptr.add(1) };
                     continue 'vm;
                 }
-                let key = array_key_or_throw!(
-                    value_to_array_key(idx_val),
-                    "Illegal offset type in unset"
+                let key = array_key_owned_or_throw!(
+                    idx_val,
+                    &format!(
+                        "Cannot unset offset of type {} on array",
+                        idx_val.diagnostic_type_name()
+                    ),
+                    false,
+                    true
                 );
                 match arr.value_type() {
                     ValueType::Array => {
@@ -5457,8 +5704,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     continue 'vm;
                 }
 
-                let arr_key =
-                    array_key_or_throw!(value_to_array_key(&key), "Illegal offset type");
+                let arr_key = array_key_owned_or_throw!(
+                    &key,
+                    &format!(
+                        "Cannot access offset of type {} on array",
+                        key.diagnostic_type_name()
+                    ),
+                    false,
+                    true
+                );
                 if let Some(mut php_obj) = obj.as_object_mut() {
                     let caller_class = get_caller_class(frame, eg);
                     let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {

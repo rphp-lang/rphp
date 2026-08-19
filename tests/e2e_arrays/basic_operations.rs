@@ -377,8 +377,52 @@ fn test_e2e_array_bool_key_coercion() {
 
 #[test]
 fn test_e2e_array_null_key_coercion() {
-    // PHP coerces null→"" as array key
-    assert_eq!(run_php("<?php $a = []; $a[null] = 'N'; echo $a[''];"), "N");
+    // PHP 8.5 coerces null→"" after publishing the array-offset deprecation.
+    assert_eq!(
+        run_php("<?php $a = []; $a[null] = 'N'; echo $a[''];"),
+        "\nDeprecated: Using null as an array offset is deprecated, use an empty string instead in <main> on line 1\nN"
+    );
+}
+
+#[test]
+fn test_e2e_array_float_key_diagnostics_and_conversion() {
+    assert_eq!(
+        run_php(
+            "<?php $a = []; $a[0.6] = 'fraction'; $a[INF] = 'infinite'; $a[NAN] = 'nan'; var_dump($a);"
+        ),
+        concat!(
+            "\nDeprecated: Implicit conversion from float 0.6 to int loses precision in <main> on line 1\n",
+            "\nWarning: The float INF is not representable as an int, cast occurred in <main> on line 1\n",
+            "\nWarning: The float NAN is not representable as an int, cast occurred in <main> on line 1\n",
+            "\nDeprecated: Implicit conversion from float NAN to int loses precision in <main> on line 1\n",
+            "array(1) {\n  [0]=>\n  string(3) \"nan\"\n}\n",
+        )
+    );
+}
+
+#[test]
+fn test_e2e_array_float_key_diagnostics_use_round_trip_rendering() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) { echo $message, "\n"; });
+$array = [];
+$array[0.12345678901234567] = 'fraction';
+$array[9223372036854775808.0] = 'boundary';
+var_dump(array_keys($array));
+"#,
+        ),
+        concat!(
+            "Implicit conversion from float 0.12345678901234566 to int loses precision\n",
+            "The float 9.223372036854776E+18 is not representable as an int, cast occurred\n",
+            "array(2) {\n",
+            "  [0]=>\n",
+            "  int(0)\n",
+            "  [1]=>\n",
+            "  int(-9223372036854775808)\n",
+            "}\n",
+        )
+    );
 }
 
 #[test]
@@ -402,14 +446,14 @@ try { $reference =& $array[[]]; } catch (TypeError $error) { echo $error->getMes
 "#,
         ),
         concat!(
-            "Illegal offset type\n",
-            "Illegal offset type\n",
-            "Illegal offset type\n",
-            "Illegal offset type in isset or empty\n",
-            "Illegal offset type in isset or empty\n",
-            "Illegal offset type in unset\n",
-            "Illegal offset type\n",
-            "Illegal offset type",
+            "Cannot access offset of type stdClass on array\n",
+            "Cannot access offset of type array on array\n",
+            "Cannot access offset of type array on array\n",
+            "Cannot access offset of type array in isset or empty\n",
+            "Cannot access offset of type array in isset or empty\n",
+            "Cannot unset offset of type array on array\n",
+            "Cannot access offset of type array on array\n",
+            "Cannot access offset of type array on array",
         )
     );
 }

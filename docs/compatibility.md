@@ -9,11 +9,81 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,334 pass, 1,963 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,357 pass, 1,940 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-62.941% and the whole-corpus rate is 59.546%; 4,636 of 5,297 attempted cases
-reach runtime (87.521%). Relative to exact base `c83ec45d`, the pass-set delta
-is +11/-0: all 3,323 prior passes remain exact.
+63.375% and the whole-corpus rate is 59.957%; 4,636 of 5,297 attempted cases
+reach runtime (87.521%). Relative to exact base `7f3a309c`, the pass-set delta
+is +23/-0: all 3,334 prior passes remain exact.
+
+CLI requests now publish request-local `STDIN`, `STDOUT` and `STDERR` stream
+resources before user code runs. Their stable first-request identities are 1,
+2 and 3; metadata reports the PHP/STDIO backend, `rb`/`wb` direction and
+`php://stdin`, `php://stdout` or `php://stderr` URI. Reads and writes use the
+process standard channels, wrong-direction operations fail, and closing an
+alias retires the resource from the request registry while the constant keeps
+its closed identity. The same runtime resources resolve through global and
+class constants, instance-property and parameter defaults, static locals and
+attribute arguments instead of being rejected during constant-expression
+compilation.
+
+The shared ordinary-array offset boundary now matches PHP 8.5 diagnostics and
+conversion for resource, null and float keys. Resources warn and use their
+integer identity; null publishes the empty-string deprecation; lossy floats
+publish the precision deprecation; and non-finite or out-of-range floats use
+Zend-compatible modulo conversion after the non-representable warning, with
+the additional NAN deprecation. Invalid array, object and Closure keys name
+their concrete type and operation context. Compiler-generated compound and
+nested writeback normalizes an already-read key without duplicating its
+diagnostic, optimized array loops fall back to that baseline boundary, and
+`$GLOBALS` keeps its distinct scalar-to-variable-name conversion, including
+`Resource id #N`.
+
+Five original subprocess tests cover resource identity and metadata, all three
+process channels, direction and close state, runtime constant-expression
+positions, resource array keys, `$GLOBALS` naming and destructuring warnings.
+Original array E2E coverage adds null, finite-lossy, infinite and NAN key
+diagnostics, exact concrete invalid-key errors and single-publication compound
+writeback. Twenty-three full-corpus cases become exact passes:
+`assign_dim_op_undef.phpt`, `bug72543_2.phpt`, `bug79790.phpt`,
+`bug79947.phpt`, `closure_array_key_error.phpt`,
+`closure_array_offset_error.phpt`, `const_array_with_resource_key.phpt`,
+`falsetoarray_003.phpt`, `gc/bug67314.phpt`,
+`illegal_offset_unset_isset_empty.phpt`, `init_array_illegal_offset_type.phpt`,
+`isset/isset_array.phpt`, `list/destruct_resource.phpt`, `offset_array.phpt`,
+`offsets/gh20194.phpt`, `offsets/null_offset_dep_promoted.phpt`,
+`offsets/null_offset_no_uaf.phpt`,
+`offsets/null_offset_unset_via_error_handler.phpt`,
+`offsets/object_container_offset_behaviour.phpt`, `resource_key.phpt`,
+`strict_001.phpt`, `type_coercion/float_to_int/non-rep-float-as-int-extra2.phpt`
+and `type_declarations/scalar_strict_64bit.phpt`.
+
+Two remaining failures advance to later, independent output mismatches:
+`str_offset_006.phpt` still needs re-entrant string-offset writeback after its
+error handler changes the container, and `scalar_return_basic_64bit.phpt` now
+passes its former undefined-`STDERR` stop before exposing existing scalar
+return-coercion differences. There are no other status/category changes and no
+stable output-hash changes among remaining failures.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and exact unsafe ratchet pass; the production inventory remains
+1,620 unsafe blocks and 289 unsafe functions. Composer S0, all four Symfony S1
+component gates and warmed-kernel S2 also pass. CPU-pinned release comparisons
+against the exact parent used four warmups and 32 balanced order pairs without
+outlier removal. Batches of 150 empty `-r` processes measured -0.780%, while
+the established array workload measured +0.800%; outputs were exact and both
+medians remain below the five-percent regression ceiling.
+
+This checkpoint does not claim user/network stream wrappers, non-CLI SAPIs,
+dynamic seekability when a standard descriptor is redirected to a regular
+file, or actual closure of the process descriptor behind a retired RPHP
+resource. Static-property defaults that depend on these runtime resources also
+remain a separate deferred-storage contract. No `Value` or object layout and
+no unsafe inventory changes are introduced.
+
+The preceding `deferred-instance-property-defaults` checkpoint reached 3,334
+passes with 1,963 failures, 114 skips, one XFAIL, 187 unsupported cases, zero
+timeouts and zero crashes. Relative to exact base `c83ec45d`, its pass-set
+delta was +11/-0 with all 3,323 prior passes retained.
 
 An instance property default whose otherwise supported constant expression
 depends on a global or class symbol unavailable while its source unit is
