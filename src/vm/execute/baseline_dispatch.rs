@@ -246,54 +246,50 @@ fn increment_php_alphanumeric_string(value: &str) -> String {
     String::from_utf8(bytes).expect("ASCII increment preserves UTF-8")
 }
 
-fn increment_php_value(value: &Value) -> (Value, Option<IncDecDiagnostic>) {
+fn increment_php_value(value: &Value) -> Option<(Value, Option<IncDecDiagnostic>)> {
     if let Some(number) = value.as_long() {
-        return (
+        return Some((
             number.checked_add(1).map_or_else(
                 || Value::double(number as f64 + 1.0),
                 Value::long,
             ),
             None,
-        );
+        ));
     }
     match value.value_type() {
-        ValueType::Null | ValueType::Undef => (Value::long(1), None),
-        ValueType::True | ValueType::False => (
+        ValueType::Double => Some((Value::double(value.as_double().unwrap() + 1.0), None)),
+        ValueType::Null | ValueType::Undef => Some((Value::long(1), None)),
+        ValueType::True | ValueType::False => Some((
             value.clone(),
             Some(IncDecDiagnostic::Warning(
                 "Increment on type bool has no effect, this will change in the next major version of PHP",
             )),
-        ),
+        )),
         ValueType::String => {
             let text = value.as_str().unwrap();
             let numeric = text.trim();
             if !numeric.is_empty() {
                 if let Ok(number) = numeric.parse::<i64>() {
-                    return (
+                    return Some((
                         number.checked_add(1).map_or_else(
                             || Value::double(number as f64 + 1.0),
                             Value::long,
                         ),
                         None,
-                    );
+                    ));
                 }
                 if let Ok(number) = numeric.parse::<f64>() {
-                    return (Value::double(number + 1.0), None);
+                    return Some((Value::double(number + 1.0), None));
                 }
             }
-            (
+            Some((
                 Value::string(increment_php_alphanumeric_string(text)),
                 Some(IncDecDiagnostic::Deprecation(
                     "Increment on non-numeric string is deprecated, use str_increment() instead",
                 )),
-            )
+            ))
         }
-        _ => (
-            value
-                .to_double()
-                .map_or_else(|| Value::long(1), |number| Value::double(number + 1.0)),
-            None,
-        ),
+        _ => None,
     }
 }
 
@@ -351,9 +347,8 @@ fn decrement_php_value(value: &Value) -> Option<(Value, Option<IncDecDiagnostic>
                 )),
             ))
         }
-        _ => value
-            .to_double()
-            .map(|number| (Value::double(number - 1.0), None)),
+        ValueType::Double => Some((Value::double(value.as_double().unwrap() - 1.0), None)),
+        _ => None,
     }
 }
 
@@ -3687,7 +3682,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    let (new_val, diagnostic) = increment_php_value(&old);
+                    let Some((new_val, diagnostic)) = increment_php_value(&old) else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!("Cannot increment {}", old.diagnostic_type_name())
+                        );
+                    };
                     if let Some(diagnostic) = diagnostic {
                         report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
                         restore_incdec_snapshot_on_exception!(writeback_cv, old);
@@ -3724,26 +3724,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    if let Some((new_val, diagnostic)) = decrement_php_value(&old) {
-                        if let Some(diagnostic) = diagnostic {
-                            report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
-                            restore_incdec_snapshot_on_exception!(writeback_cv, old);
-                            resume_pending_exception!();
-                        }
-                        let new_val = prepare_reference_write!(writeback_cv, new_val);
-                        if opline.result_type != OpType::Unused {
-                            let result_ptr =
-                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                            slot_set(result_ptr, new_val.clone());
-                        }
-                        let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
-                        slot_set(cv_ptr, new_val);
-                    } else if opline.result_type != OpType::Unused {
-                        // Unsupported values retain the existing no-write path.
+                    let Some((new_val, diagnostic)) = decrement_php_value(&old) else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!("Cannot decrement {}", old.diagnostic_type_name())
+                        );
+                    };
+                    if let Some(diagnostic) = diagnostic {
+                        report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
+                        restore_incdec_snapshot_on_exception!(writeback_cv, old);
+                        resume_pending_exception!();
+                    }
+                    let new_val = prepare_reference_write!(writeback_cv, new_val);
+                    if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                        slot_set(result_ptr, Value::null());
+                        slot_set(result_ptr, new_val.clone());
                     }
+                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
+                    slot_set(cv_ptr, new_val);
                 }
             }
 
@@ -3768,7 +3767,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    let (new_val, diagnostic) = increment_php_value(&old);
+                    let Some((new_val, diagnostic)) = increment_php_value(&old) else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!("Cannot increment {}", old.diagnostic_type_name())
+                        );
+                    };
                     if let Some(diagnostic) = diagnostic {
                         report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
                         restore_incdec_snapshot_on_exception!(writeback_cv, old);
@@ -3805,26 +3809,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    if let Some((new_val, diagnostic)) = decrement_php_value(&old) {
-                        if let Some(diagnostic) = diagnostic {
-                            report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
-                            restore_incdec_snapshot_on_exception!(writeback_cv, old);
-                            resume_pending_exception!();
-                        }
-                        let new_val = prepare_reference_write!(writeback_cv, new_val);
-                        if opline.result_type != OpType::Unused {
-                            let result_ptr =
-                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                            slot_set(result_ptr, old.clone());
-                        }
-                        let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
-                        slot_set(cv_ptr, new_val);
-                    } else if opline.result_type != OpType::Unused {
-                        // Unsupported values retain the existing no-write path.
+                    let Some((new_val, diagnostic)) = decrement_php_value(&old) else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!("Cannot decrement {}", old.diagnostic_type_name())
+                        );
+                    };
+                    if let Some(diagnostic) = diagnostic {
+                        report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
+                        restore_incdec_snapshot_on_exception!(writeback_cv, old);
+                        resume_pending_exception!();
+                    }
+                    let new_val = prepare_reference_write!(writeback_cv, new_val);
+                    if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                        slot_set(result_ptr, Value::null());
+                        slot_set(result_ptr, old.clone());
                     }
+                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
+                    slot_set(cv_ptr, new_val);
                 }
             }
 

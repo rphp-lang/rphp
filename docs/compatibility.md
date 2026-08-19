@@ -9,11 +9,51 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,295 pass, 2,002 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,302 pass, 1,995 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-62.205% and the whole-corpus rate is 58.850%; 4,617 of 5,297 attempted cases
-reach runtime (87.163%). Relative to exact base `e6e3fbb6`, the pass-set delta
-is +6/-0: all 3,289 prior passes remain exact.
+62.337% and the whole-corpus rate is 58.975%; 4,618 of 5,297 attempted cases
+reach runtime (87.181%). Relative to exact base `ce434e48`, the pass-set delta
+is +7/-0: all 3,295 prior passes remain exact.
+
+Direct-CV pre- and post-increment or decrement now rejects arrays, resources,
+closures, enums and ordinary or internal objects with PHP 8.5's exact
+`TypeError`: `Cannot increment TYPE` or `Cannot decrement TYPE`, where `TYPE`
+is the diagnostic type or class name. The exception is raised before result or
+operand writeback, so the invalid operand remains identical whether or not the
+operator result is consumed. This error path does not invoke an error handler
+and retains the operator's exact source origin, including uncaught traces.
+
+Two original E2E tests cover all four operator forms across arrays,
+`stdClass`, a named user object, a resource, `Closure`, an enum case and
+`ReflectionMethod`; they also cover identity preservation, used and unused
+results, exact messages, handler exclusion and source lines. Seven full-corpus
+cases become exact passes: `bug54305.phpt`, `incdec_types.phpt`,
+`object_cannot_incdec.phpt`, `object_cannot_incdec_use_result_op.phpt`,
+`oss-fuzz-60734_predec-object.phpt`, `oss-fuzz-60734_preinc-object.phpt` and
+`oss_fuzz_63802.phpt`. There are no other status changes and no stable non-pass
+output hash changes.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. CPU-pinned
+32-pair release measurements produced balanced order-specific median ratios of
+-1.305% for four million direct integer increments plus four million direct
+integer decrements, -4.950% for property work, -1.639% for array work and
+-0.680% for batches of 200 empty requests. Outputs are exact, no outliers were
+removed and every decision median remains below the five-percent regression
+ceiling.
+
+Property, dimension and dynamically named targets remain separate contracts on
+their arithmetic lvalue paths. Extension-defined numeric object operators are
+also outside this checkpoint because their `zend_test` fixture is skipped; no
+broader binary-operator behavior is claimed.
+
+The preceding `incdec-null-bool-warnings` checkpoint reached 3,295 passes with
+2,002 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Relative to exact base `e6e3fbb6`, its pass-set delta was +6/-0
+with all 3,289 prior passes retained.
 
 Direct pre- and post-increment of `bool` and direct pre- and post-decrement of
 `bool` or `null` now emit PHP 8.5's exact `E_WARNING` diagnostics before
@@ -53,9 +93,9 @@ integer decrements, +3.988% for property work, +0.236% for array work and
 removed and every decision median remains below the five-percent regression
 ceiling.
 
-Invalid-operand increment/decrement TypeErrors and property, dimension or
-dynamically named targets remain separate contracts on their existing
-arithmetic writeback paths.
+At that checkpoint, invalid-operand increment/decrement TypeErrors and property,
+dimension or dynamically named targets remained separate contracts on their
+existing arithmetic writeback paths.
 
 The preceding `string-decrement-deprecations` checkpoint reached 3,289 passes
 with 2,008 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts

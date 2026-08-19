@@ -659,6 +659,84 @@ var_dump($missing--);
 }
 
 #[test]
+fn incdec_invalid_cv_operands_throw_type_errors_without_mutation() {
+    let source = r#"<?php
+enum InvalidChoice { case One; }
+class InvalidNamedValue { public function marker() {} }
+
+function invalidPostIncrement(&$value) { return $value++; }
+function invalidPreIncrement(&$value) { return ++$value; }
+function invalidPostDecrement(&$value) { return $value--; }
+function invalidPreDecrement(&$value) { return --$value; }
+
+set_error_handler(function ($level, $message) {
+    echo "unexpected-handler:$level:$message\n";
+});
+
+$values = [
+    [],
+    new stdClass(),
+    new InvalidNamedValue(),
+    fopen('php://memory', 'r'),
+    function () {},
+    InvalidChoice::One,
+    new ReflectionMethod(InvalidNamedValue::class, 'marker'),
+];
+$operations = [
+    'post++' => 'invalidPostIncrement',
+    'pre++' => 'invalidPreIncrement',
+    'post--' => 'invalidPostDecrement',
+    'pre--' => 'invalidPreDecrement',
+];
+
+foreach ($values as $initial) {
+    foreach ($operations as $label => $operation) {
+        $value = $initial;
+        try {
+            $result = $operation($value);
+            echo "unexpected-result:$label\n";
+        } catch (TypeError $exception) {
+            echo "$label:", $exception->getMessage(), ':', $value === $initial ? 'same' : 'changed', "\n";
+        }
+    }
+}
+"#;
+
+    assert_eq!(
+        run_php(source),
+        "post++:Cannot increment array:same\npre++:Cannot increment array:same\npost--:Cannot decrement array:same\npre--:Cannot decrement array:same\npost++:Cannot increment stdClass:same\npre++:Cannot increment stdClass:same\npost--:Cannot decrement stdClass:same\npre--:Cannot decrement stdClass:same\npost++:Cannot increment InvalidNamedValue:same\npre++:Cannot increment InvalidNamedValue:same\npost--:Cannot decrement InvalidNamedValue:same\npre--:Cannot decrement InvalidNamedValue:same\npost++:Cannot increment resource:same\npre++:Cannot increment resource:same\npost--:Cannot decrement resource:same\npre--:Cannot decrement resource:same\npost++:Cannot increment Closure:same\npre++:Cannot increment Closure:same\npost--:Cannot decrement Closure:same\npre--:Cannot decrement Closure:same\npost++:Cannot increment InvalidChoice:same\npre++:Cannot increment InvalidChoice:same\npost--:Cannot decrement InvalidChoice:same\npre--:Cannot decrement InvalidChoice:same\npost++:Cannot increment ReflectionMethod:same\npre++:Cannot increment ReflectionMethod:same\npost--:Cannot decrement ReflectionMethod:same\npre--:Cannot decrement ReflectionMethod:same\n"
+    );
+}
+
+#[test]
+fn incdec_invalid_cv_errors_retain_the_operator_origin_with_or_without_a_result() {
+    let file = "/virtual/incdec-invalid.php";
+    let source = r#"<?php
+class InvalidBox {}
+set_error_handler(function () { echo "unexpected-handler\n"; });
+$value = new InvalidBox();
+try {
+    $result = ++$value;
+} catch (TypeError $exception) {
+    echo $exception->getMessage(), '|', $exception->getFile(), '|', $exception->getLine(), '|', get_class($value), "\n";
+}
+$value = [];
+try {
+    $value--;
+} catch (TypeError $exception) {
+    echo $exception->getMessage(), '|', $exception->getFile(), '|', $exception->getLine(), '|', gettype($value), "\n";
+}
+"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "Cannot increment InvalidBox|{file}|6|InvalidBox\nCannot decrement array|{file}|12|array\n"
+        )
+    );
+}
+
+#[test]
 fn test_e2e_array_append_assignments_chain_and_produce_the_assigned_value() {
     assert_eq!(
         run_php(
