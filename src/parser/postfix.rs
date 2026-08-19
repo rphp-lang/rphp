@@ -131,6 +131,7 @@ impl Parser {
                     )),
                     args,
                     generic_args: Vec::new(),
+                    method_syntax: true,
                     line,
                 });
             }
@@ -158,6 +159,7 @@ impl Parser {
                     )),
                     args,
                     generic_args: Vec::new(),
+                    method_syntax: true,
                     line,
                 });
             }
@@ -189,6 +191,7 @@ impl Parser {
                     )),
                     args,
                     generic_args: Vec::new(),
+                    method_syntax: true,
                     line,
                 });
             }
@@ -315,6 +318,7 @@ impl Parser {
                             callable: Box::new(expr),
                             args,
                             generic_args: Vec::new(),
+                            method_syntax: false,
                             line,
                         };
                     }
@@ -327,6 +331,7 @@ impl Parser {
                         callable: Box::new(expr),
                         args,
                         generic_args,
+                        method_syntax: false,
                         line,
                     };
                 }
@@ -445,6 +450,7 @@ impl Parser {
                                 ])),
                                 args,
                                 generic_args: Vec::new(),
+                                method_syntax: true,
                                 line,
                             };
                         } else {
@@ -471,6 +477,7 @@ impl Parser {
                                 callable: Box::new(Self::dynamic_member_callable(expr, member)),
                                 args,
                                 generic_args: Vec::new(),
+                                method_syntax: true,
                                 line,
                             };
                         } else {
@@ -516,6 +523,7 @@ impl Parser {
                                 ])),
                                 args,
                                 generic_args: Vec::new(),
+                                method_syntax: true,
                                 line,
                             };
                         } else {
@@ -631,7 +639,13 @@ impl Parser {
                                 Expr::PostDecTarget(Box::new(expr))
                             }
                         }
-                        other => return Err(format!("Invalid increment target: {other:?}")),
+                        other => {
+                            if let Some(error) = self.incdec_call_write_error(&other) {
+                                error
+                            } else {
+                                return Err(format!("Invalid increment target: {other:?}"));
+                            }
+                        }
                     };
                 }
                 _ => break,

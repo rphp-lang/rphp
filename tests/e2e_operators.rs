@@ -1,6 +1,6 @@
 /// E2E tests: logical operators, ternary, compound assignment, comments.
 mod common;
-use common::{run_php, run_php_with_source_context};
+use common::{run_php, run_php_expect_error_with_source_context, run_php_with_source_context};
 
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
@@ -766,6 +766,35 @@ try {
         run_php_with_source_context(source, file, "/virtual"),
         "2|Decrement on type null has no effect, this will change in the next major version of PHP|8\nNULL\nNULL\n8192|Increment on non-numeric string is deprecated, use str_increment() instead|11\nstring(1) \"1\"\nstring(1) \"1\"\n2|Increment on type bool has no effect, this will change in the next major version of PHP|14\nbool(false)\nbool(false)\nCannot decrement array|18|array\n"
     );
+}
+
+#[test]
+fn incdec_call_results_fail_during_compilation_with_php_call_kind_and_source_line() {
+    for (expression, expected) in [
+        ("++named();", "function"),
+        ("named()--;", "function"),
+        ("++$callable();", "function"),
+        ("[new Box(), 'method']()++;", "function"),
+        ("--$object->method();", "method"),
+        ("$object->method()++;", "method"),
+        ("++$object->$method();", "method"),
+        ("Box::method()--;", "method"),
+        ("--$class::$method();", "method"),
+    ] {
+        let source = format!("<?php\nif (false) {{\n    {expression}\n}}");
+        let error = run_php_expect_error_with_source_context(
+            &source,
+            "/virtual/incdec-call-result.php",
+            "/virtual",
+        );
+        assert_eq!(
+            format!("{error:?}"),
+            format!(
+                "Fatal(\"Can't use {expected} return value in write context in /virtual/incdec-call-result.php on line 3\")"
+            ),
+            "unexpected diagnostic for {expression}"
+        );
+    }
 }
 
 #[test]

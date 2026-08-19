@@ -383,6 +383,35 @@ fn pipe_and_call_results_in_destructuring_are_deferred_write_errors() {
 }
 
 #[test]
+fn incdec_call_results_are_deferred_function_or_method_write_errors() {
+    for (expression, expected) in [
+        ("++named();", "function"),
+        ("named()--;", "function"),
+        ("++$callable();", "function"),
+        ("[new Box(), 'method']()++;", "function"),
+        ("--$object->method();", "method"),
+        ("$object->method()++;", "method"),
+        ("++$object->$method();", "method"),
+        ("Box::method()--;", "method"),
+        ("--$class::$method();", "method"),
+    ] {
+        let source = format!("<?php\nif (false) {{\n    {expression}\n}}");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(
+            matches!(
+                statements.last(),
+                Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                    if message == &format!(
+                        "Can't use {expected} return value in write context"
+                    ) && *line == 3
+            ),
+            "unexpected AST for {expression}: {statements:#?}"
+        );
+    }
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_retains_its_short_circuit_flag() {
     let tokens = Lexer::new("<?php $object?->{$property};")
         .tokenize()

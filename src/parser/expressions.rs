@@ -988,15 +988,9 @@ impl Parser {
                     | Expr::DynamicNamedStaticProperty { .. }
                     | Expr::DynamicStaticProperty { .. }
                     | Expr::ArrayAccess { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
-                    Expr::FunctionCall { line, .. }
-                    | Expr::MethodCall { line, .. }
-                    | Expr::StaticCall { line, .. }
-                    | Expr::DynamicCall { line, .. }
-                    | Expr::DynamicStaticCall { line, .. } => Ok(Expr::CompileError {
-                        message: "Can't use method return value in write context".to_string(),
-                        line,
-                    }),
-                    other => Err(format!("Invalid increment target: {other:?}")),
+                    other => self
+                        .incdec_call_write_error(&other)
+                        .map_or_else(|| Err(format!("Invalid increment target: {other:?}")), Ok),
                 }
             }
             Token::MinusMinus => {
@@ -1019,15 +1013,9 @@ impl Parser {
                     | Expr::DynamicNamedStaticProperty { .. }
                     | Expr::DynamicStaticProperty { .. }
                     | Expr::ArrayAccess { .. } => Ok(Expr::PreDecTarget(Box::new(target))),
-                    Expr::FunctionCall { line, .. }
-                    | Expr::MethodCall { line, .. }
-                    | Expr::StaticCall { line, .. }
-                    | Expr::DynamicCall { line, .. }
-                    | Expr::DynamicStaticCall { line, .. } => Ok(Expr::CompileError {
-                        message: "Can't use method return value in write context".to_string(),
-                        line,
-                    }),
-                    other => Err(format!("Invalid decrement target: {other:?}")),
+                    other => self
+                        .incdec_call_write_error(&other)
+                        .map_or_else(|| Err(format!("Invalid decrement target: {other:?}")), Ok),
                 }
             }
             Token::Print => {

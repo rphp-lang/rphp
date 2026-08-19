@@ -9,11 +9,44 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,311 pass, 1,986 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,312 pass, 1,985 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-62.507% and the whole-corpus rate is 59.136%; 4,621 of 5,297 attempted cases
-reach runtime (87.238%). Relative to exact base `c4cd2e15`, the pass-set delta
-is +9/-0: all 3,302 prior passes remain exact.
+62.526% and the whole-corpus rate is 59.153%; 4,621 of 5,297 attempted cases
+reach runtime (87.238%). Relative to exact base `764d8d62`, the pass-set delta
+is +1/-0: all 3,311 prior passes remain exact.
+
+Pre- and post-increment or decrement of a call result now produces PHP 8.5's
+compile-time write-context diagnostic instead of a parser error or the wrong
+call kind. Named, dynamic and immediately invoked callable expressions say
+`Can't use function return value in write context`; instance, static and
+dynamically named method syntax says `Can't use method return value in write
+context`. The parser retains method syntax when dynamic dispatch is lowered
+through a callable pair, without changing its runtime lowering. The first
+error is deferred to source-unit scope, so dead branches cannot hide it, and
+the call is never executed. All four inc/dec forms retain the call source line.
+
+Original parser and E2E tests cover nine named, dynamic, immediate-callable,
+instance and static shapes across prefix and postfix increment/decrement inside
+dead code. `increment_function_return_error.phpt`, the final ordinary failure
+in `Zend/tests/in-de-crement`, becomes an exact pass; the complete directory
+has 34 passes and five capability or platform skips. There are no lost passes,
+other status/category changes or stable non-pass output hash changes in the
+full corpus.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. No runtime or framework performance gate applies because
+accepted programs retain their existing dispatch and bytecode; the new state
+is consumed only while constructing compile-time diagnostics for rejected
+sources. Built-in-function results in assignment/reference write contexts,
+nullsafe write diagnostics and other temporary-expression restrictions remain
+separate contracts. A function declared to return by reference is still not a
+writable inc/dec result, matching PHP 8.5.
+
+The preceding `incdec-target-semantics` checkpoint reached 3,311 passes with
+1,986 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Relative to exact base `c4cd2e15`, its pass-set delta was +9/-0
+with all 3,302 prior passes retained.
 
 Pre- and post-increment or decrement of property and dimension targets now
 applies the PHP inc/dec value contract to the already-fetched snapshot before
@@ -62,8 +95,9 @@ regression ceiling. The first generic target candidate measured +5.419%; the
 accepted checked-`Long` fast path recovered the gate without changing cold PHP
 semantics.
 
-Typed-property overflow diagnostics in `incdec_prop.phpt` and the distinct
-function-versus-method return-value write-context diagnostic remain separate.
+At that checkpoint, typed-property overflow diagnostics in `incdec_prop.phpt`
+and the distinct function-versus-method return-value write-context diagnostic
+remained separate.
 Dynamically named and static-property variants share the general target
 lowering but are not separately promoted to compatibility claims here.
 Extension-defined numeric object operators and broader compound-assignment

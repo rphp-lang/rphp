@@ -417,6 +417,10 @@ pub enum Expr {
         callable: Box<Expr>,
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
+        /// The parser also lowers `$object->$method()` and `Class::$method()`
+        /// through a callable pair. Retain their method-call spelling for
+        /// compile-time diagnostics without changing dynamic dispatch.
+        method_syntax: bool,
         line: usize,
     },
     DynamicStaticCall {

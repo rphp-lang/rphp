@@ -1097,6 +1097,32 @@ impl Parser {
         self.compile_error("Can't use nullsafe operator in write context", line)
     }
 
+    fn incdec_call_write_error(&mut self, target: &Expr) -> Option<Expr> {
+        let (kind, line) = match target {
+            Expr::FunctionCall { line, .. } => ("function", *line),
+            Expr::DynamicCall {
+                method_syntax,
+                line,
+                ..
+            } => (
+                if *method_syntax {
+                    "method"
+                } else {
+                    "function"
+                },
+                *line,
+            ),
+            Expr::MethodCall { line, .. }
+            | Expr::StaticCall { line, .. }
+            | Expr::DynamicStaticCall { line, .. } => ("method", *line),
+            _ => return None,
+        };
+        Some(self.compile_error(
+            format!("Can't use {kind} return value in write context"),
+            line,
+        ))
+    }
+
     fn nullsafe_reference_error(&mut self, line: usize) -> Expr {
         self.compile_error("Cannot take reference of a nullsafe chain", line)
     }

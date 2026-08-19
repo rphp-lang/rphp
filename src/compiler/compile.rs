@@ -8951,6 +8951,7 @@ impl Compiler {
                 args,
                 generic_args,
                 line,
+                ..
             } => {
                 // Compile the callable expression (e.g. $var, $arr[0])
                 let (callable_op, callable_type) = self.compile_expr(callable);
