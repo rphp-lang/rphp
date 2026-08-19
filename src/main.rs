@@ -258,6 +258,17 @@ fn main() {
             });
     }
 
+    for (declaration_key, class_def) in result.runtime_class_defs {
+        if let Err(e) = eg.register_runtime_class_declaration(declaration_key, class_def) {
+            if emitted_compile_deprecations {
+                eprintln!("\nFatal error: {}", e);
+            } else {
+                eprintln!("Fatal error: {}", e);
+            }
+            std::process::exit(255);
+        }
+    }
+
     // Register class definitions
     for class_def in result.class_defs {
         if let Err(e) = eg.register_compiled_class(class_def) {

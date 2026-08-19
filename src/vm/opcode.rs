@@ -240,6 +240,10 @@ pub enum OpCode {
     /// Report Deprecated attributes on traits directly used by one class-like
     /// declaration at that declaration's runtime source position.
     ReportDeprecatedTraitUses = 170,
+    /// Publish one named class-like declaration at its source position.
+    /// Ordinary eagerly linked declarations have no pending entry, so the
+    /// same marker remains a cold no-op for them.
+    DeclareClass = 171,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

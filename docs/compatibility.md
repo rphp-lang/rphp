@@ -9,12 +9,71 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,070 pass, 2,227 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,110 pass, 2,187 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-57.957% and the whole-corpus rate is 54.831%; 4,618 of 5,297 attempted cases
-reach runtime (87.181%). Relative to the preceding 3,040-pass checkpoint, the
-exact pass-set delta is +30/-0. The initial PHP 8.5 corpus continues to have no
+58.712% and the whole-corpus rate is 55.546%; 4,610 of 5,297 attempted cases
+reach runtime (87.030%). Relative to the preceding 3,070-pass checkpoint, the
+exact pass-set delta is +40/-0. The initial PHP 8.5 corpus continues to have no
 process hazard.
+
+Trait constants now compose with PHP 8.5's exact value, declared-type,
+visibility and finality compatibility rules. Compatible definitions retain
+their attributes and values; Reflection reports a constant declared directly
+on a trait as belonging to that trait and its composed projection as belonging
+to the consuming class. `ReflectionClass::getConstant()` and
+`ReflectionClassConstant::getDeclaringClass()` expose those values and origins.
+Direct trait-constant access remains illegal and now retains the fetch file and
+line, while incompatible composition and inherited-final diagnostics name the
+actual traits/classes and the class declaration location.
+
+Named classes and enums that consume traits, plus their descendants, are
+published by a cold declaration marker at their executable source position.
+Earlier output therefore precedes a composition failure, forward-declared
+traits work, dead function-local declarations remain unlinked, and dependencies
+autoload only when the declaration executes. A missing dependency raises the
+kind-specific catchable `Error`; a caught failure can be retried after the trait
+is supplied. Ordinary classes remain eagerly linked and their marker is a cold
+no-op. Trait declarations that themselves use traits remain on the existing
+eager path, and doc comments remain unretained metadata; consequently
+`Zend/tests/traits/constant_021.phpt` is not claimed by this checkpoint.
+
+The complete `Zend/tests/traits` directory rises from 92 to 110 exact passes.
+Every executable `constant_001.phpt` through `constant_020.phpt` case passes;
+`constant_016.phpt` remains explicitly unsupported because it requires an
+unimplemented CLI INI capability. The broader exact gains include typed/final
+class constants, source diagnostics, enum mutation failures, forward/eval trait
+composition and three missing-trait cases. The full 5,599-case delta is +40/-0
+with no lost pass, timeout or crash. Five inspected remaining trait/backtrace
+failures advance from an early missing-trait runtime error to their later output
+comparison, and one advances to the expected declaration-check stage; no other
+failure category changes.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and
+cold-build S3 also pass on AMD64; S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6.
+
+The exact base `568fc79d` and final release candidate were compared on one
+pinned AMD64 CPU without removing outliers. Thirty-two balanced ABBA/BAAB pairs
+of 150 empty-output requests measured baseline p10/median/p90
+0.233997/0.235178/0.239952 seconds and candidate
+0.223190/0.224238/0.226935 seconds: -4.652% by independent medians and -4.658%
+by the paired-ratio median, whose p10/p90 is -6.338%/-3.989%. A separate
+32-pair `bench_calls.php` control retained checksum `37500007500000` and
+measured baseline 0.386443/0.389012/0.393184 seconds versus candidate
+0.381720/0.383360/0.390291 seconds: -1.453% independently and -1.320% paired,
+with paired p10/p90 -2.415%/-0.293%. A 32-pair cold-link control over 100
+requests, each composing one trait into 32 classes and retaining output `32`,
+measured baseline 0.195937/0.196757/0.197792 seconds versus candidate
+0.192354/0.193225/0.194059 seconds: -1.795% independently and -1.791% paired,
+with paired p10/p90 -2.400%/-1.376%. These measurements establish absence of a
+regression rather than an optimization claim. Every median remains below the
+five-percent regression ceiling; the new state is confined to cold compiler,
+opcode and request-global declaration side tables and does not alter `Value`,
+object, frame or `ClassDef` layout.
+
+The preceding checkpoint implemented PHP 8.5's final internal `Override`
+attribute.
 
 PHP 8.5's final internal `Override` class is now registered as an
 `#[Attribute(12)]` marker with its zero-argument constructor and Reflection

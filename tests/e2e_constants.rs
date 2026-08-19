@@ -193,6 +193,131 @@ echo ConstantChild::privateValue() . ':' . ConstantChild::INTERFACE_VALUE;
 }
 
 #[test]
+fn trait_constant_composition_preserves_identity_origin_and_reflection_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[Attribute(Attribute::TARGET_CLASS_CONSTANT)]
+class ConstantMarker {}
+trait LeftConstants {
+    #[ConstantMarker]
+    public const array VALUE = [1];
+}
+trait RightConstants { public const array VALUE = [1]; }
+class ConstantConsumer { use LeftConstants, RightConstants; }
+
+$trait = new ReflectionClass(LeftConstants::class);
+$consumer = new ReflectionClass(ConstantConsumer::class);
+echo $trait->getConstant('VALUE')[0], ':';
+echo $trait->getReflectionConstant('VALUE')->getDeclaringClass()->getName(), ':';
+echo $consumer->getConstant('VALUE')[0], ':';
+$constant = $consumer->getReflectionConstant('VALUE');
+echo $constant->getDeclaringClass()->getName(), ':';
+echo count($constant->getAttributes(ConstantMarker::class));
+"#,
+        ),
+        "1:LeftConstants:1:ConstantConsumer:1"
+    );
+}
+
+#[test]
+fn trait_constant_composition_reports_exact_origins_and_final_parent_conflicts() {
+    let cases = [
+        (
+            "<?php\ntrait PublicConstant { public const VALUE = 42; }\nclass PrivateConsumer { use PublicConstant; private const VALUE = 42; }",
+            "PrivateConsumer and PublicConstant define the same constant (VALUE) in the composition of PrivateConsumer. However, the definition differs and is considered incompatible. Class was composed in /virtual/trait-constants.php on line 3",
+        ),
+        (
+            "<?php\ntrait FirstConstant { public const VALUE = 42; }\ntrait SecondConstant { private const VALUE = 42; }\nclass PairConsumer { use FirstConstant, SecondConstant; }",
+            "FirstConstant and SecondConstant define the same constant (VALUE) in the composition of PairConsumer. However, the definition differs and is considered incompatible. Class was composed in /virtual/trait-constants.php on line 4",
+        ),
+        (
+            "<?php\ntrait FinalProvider { public final const VALUE = 42; }\nclass FinalParent { public final const VALUE = 42; }\nclass FinalChild extends FinalParent { use FinalProvider; }",
+            "FinalChild::VALUE cannot override final constant FinalParent::VALUE in /virtual/trait-constants.php on line 4",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "/virtual/trait-constants.php",
+            "/virtual",
+        );
+        assert_eq!(format!("{error:?}"), format!("Fatal(\"{expected}\")"));
+    }
+}
+
+#[test]
+fn direct_trait_constant_errors_retain_the_fetch_source_location() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\ntrait DirectConstant { public const VALUE = 1; }\ntry { echo DirectConstant::VALUE; } catch (Error $error) { echo $error->getFile(), ':', $error->getLine(), ':', count($error->getTrace()); }",
+            "/virtual/trait-constants.php",
+            "/virtual",
+        ),
+        "/virtual/trait-constants.php:3:0"
+    );
+}
+
+#[test]
+fn trait_consumers_and_their_descendants_publish_at_their_source_declarations() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait RuntimeMarker {}
+echo (int) class_exists('RuntimeConsumer', false), ':';
+echo (int) class_exists('RuntimeChild', false), ';';
+class RuntimeConsumer { use RuntimeMarker; }
+class RuntimeChild extends RuntimeConsumer {}
+echo (int) class_exists('RuntimeConsumer', false), ':';
+echo (int) class_exists('RuntimeChild', false);
+"#,
+        ),
+        "0:0;1:1"
+    );
+}
+
+#[test]
+fn runtime_trait_composition_autoloads_dependencies_after_prior_output() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function($symbol) {
+    if ($symbol === 'RuntimeLoadedTrait') {
+        eval("trait RuntimeLoadedTrait { public const VALUE = 'loaded'; }");
+    }
+});
+echo 'before:';
+class RuntimeAutoloadConsumer { use RuntimeLoadedTrait; }
+echo RuntimeAutoloadConsumer::VALUE;
+"#,
+        ),
+        "before:loaded"
+    );
+}
+
+#[test]
+fn caught_missing_trait_allows_the_runtime_declaration_to_be_retried() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function publishConsumer() {
+    class RetryConsumer { use RuntimeMissingTrait; }
+}
+try {
+    publishConsumer();
+} catch (Error $error) {
+    echo $error->getMessage(), ';';
+}
+eval("trait RuntimeMissingTrait { public const VALUE = 7; }");
+publishConsumer();
+echo RetryConsumer::VALUE;
+"#,
+        ),
+        "Trait \"RuntimeMissingTrait\" not found;7"
+    );
+}
+
+#[test]
 fn test_class_constant_visibility_errors_are_catchable() {
     let out = run_php(
         r#"<?php

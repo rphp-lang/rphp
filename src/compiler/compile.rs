@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 /// Global anonymous-class counter — nested compilers must not reuse names.
 static ANONYMOUS_CLASS_COUNTER: AtomicU32 = AtomicU32::new(0);
+/// Runtime declaration markers must remain unique across separately compiled
+/// includes and evals that share one executor.
+static CLASS_DECLARATION_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use super::OpArray;
 use crate::generics::{
@@ -605,6 +608,9 @@ pub struct CompileResult {
     pub main: OpArray,
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
+    /// Named classes whose trait composition must happen at their executable
+    /// declaration marker rather than during source-unit setup.
+    pub runtime_class_defs: Vec<(String, ClassDef)>,
     pub constant_attributes: HashMap<String, Vec<AttributeDefinition>>,
     pub constant_expressions: HashMap<String, ConstantExpressionMetadata>,
     pub generic_metadata: GenericMetadata,
@@ -1016,6 +1022,42 @@ fn declared_method_facts(
     }
 
     result
+}
+
+/// PHP cannot early-link a class that consumes a trait. Its declaration may
+/// emit a composition error after earlier top-level statements have already
+/// run. Descendants share that runtime dependency even when they do not use a
+/// trait directly.
+fn runtime_class_declaration_names(class_defs: &[ClassDef]) -> HashSet<String> {
+    let mut runtime = class_defs
+        .iter()
+        .filter(|class| {
+            !class.is_anonymous()
+                && !class.is_interface
+                && !class.is_trait
+                && !class.uses.is_empty()
+        })
+        .map(|class| class.name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+
+    loop {
+        let mut changed = false;
+        for class in class_defs {
+            if class.is_anonymous() || class.is_interface || class.is_trait {
+                continue;
+            }
+            if class
+                .parent
+                .as_ref()
+                .is_some_and(|parent| runtime.contains(&parent.to_ascii_lowercase()))
+            {
+                changed |= runtime.insert(class.name.to_ascii_lowercase());
+            }
+        }
+        if !changed {
+            return runtime;
+        }
+    }
 }
 
 fn declared_receiver_class(
@@ -2362,6 +2404,10 @@ pub struct Compiler {
     try_entries: Vec<TryEntry>,
     /// Class definitions
     class_defs: Vec<ClassDef>,
+    /// Unique runtime marker aligned one-for-one with `class_defs`. Only named
+    /// class/enum declarations need a marker; traits, interfaces and anonymous
+    /// classes retain their existing publication mechanisms.
+    class_declaration_keys: Vec<Option<String>>,
     /// Source-unit constant attributes are shared by nested compilers and
     /// published into one cold executor side table after compilation.
     constant_attributes: Rc<RefCell<HashMap<String, Vec<AttributeDefinition>>>>,
@@ -2585,6 +2631,7 @@ impl Compiler {
             finally_jump_cv: None,
             try_entries: Vec::new(),
             class_defs: Vec::new(),
+            class_declaration_keys: Vec::new(),
             constant_attributes: Rc::new(RefCell::new(HashMap::new())),
             constant_expressions: Rc::new(RefCell::new(HashMap::new())),
             generic_declarations: Vec::new(),
@@ -3636,6 +3683,22 @@ impl Compiler {
         }
 
         let source_lines = self.materialize_source_lines();
+        let runtime_class_names = runtime_class_declaration_names(&self.class_defs);
+        debug_assert_eq!(self.class_defs.len(), self.class_declaration_keys.len());
+        let mut class_defs = Vec::with_capacity(self.class_defs.len());
+        let mut runtime_class_defs = Vec::new();
+        for (class_def, declaration_key) in
+            self.class_defs.into_iter().zip(self.class_declaration_keys)
+        {
+            if runtime_class_names.contains(&class_def.name.to_ascii_lowercase())
+                && let Some(declaration_key) = declaration_key
+            {
+                runtime_class_defs.push((declaration_key, class_def));
+            } else {
+                class_defs.push(class_def);
+            }
+        }
+
         let generic_use_sites = self.generic_use_sites.borrow().clone();
         let generic_metadata = GenericMetadata::compile_with_inheritance(
             self.generic_declarations,
@@ -3671,7 +3734,8 @@ impl Compiler {
                 ip_to_block: Vec::new(),
             },
             functions: self.functions,
-            class_defs: self.class_defs,
+            class_defs,
+            runtime_class_defs,
             constant_attributes: self.constant_attributes.borrow().clone(),
             constant_expressions: self.constant_expressions.borrow().clone(),
             generic_metadata,
@@ -4221,6 +4285,7 @@ impl Compiler {
             Expr::ClassConstant {
                 class_name,
                 constant,
+                ..
             } => {
                 let source_key = format!("{class_name}::{constant}");
                 if constant.eq_ignore_ascii_case("class") {
@@ -4342,6 +4407,7 @@ impl Compiler {
             Expr::ClassConstant {
                 class_name,
                 constant,
+                ..
             } => known
                 .get(&format!("{}::{}", class_name, constant))
                 .cloned()
@@ -8016,6 +8082,8 @@ impl Compiler {
                     user_func.set_captured_typed_long_plan(captured_plan);
                 }
                 self.functions.extend(func_compiler.functions);
+                self.class_declaration_keys
+                    .extend(func_compiler.class_declaration_keys);
                 self.class_defs.extend(func_compiler.class_defs);
                 self.generic_declarations
                     .extend(nested_generic_declarations);
@@ -8764,6 +8832,7 @@ impl Compiler {
             Expr::ClassConstant {
                 class_name,
                 constant,
+                line,
             } => {
                 let (resolved, dynamic_static_scope) = self.resolve_static_member_owner(class_name);
                 if constant.eq_ignore_ascii_case("class") && !dynamic_static_scope {
@@ -8784,7 +8853,7 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::Throw { expr, line } => {

@@ -2051,6 +2051,8 @@ impl Compiler {
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
+                self.class_declaration_keys
+                    .extend(func_compiler.class_declaration_keys);
                 self.class_defs.extend(func_compiler.class_defs);
                 self.generic_declarations
                     .extend(nested_generic_declarations);
@@ -3848,6 +3850,8 @@ impl Compiler {
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
+                    self.class_declaration_keys
+                        .extend(func_compiler.class_declaration_keys);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
                         method.name.clone(),
@@ -4197,6 +4201,13 @@ impl Compiler {
                         .collect(),
                     class_id: 0,
                 });
+                if resolved_class.starts_with("class@anonymous#") {
+                    self.class_declaration_keys.push(None);
+                } else {
+                    let declaration_key =
+                        self.emit_named_class_declaration(&resolved_class, *class_line);
+                    self.class_declaration_keys.push(Some(declaration_key));
+                }
                 if !uses.is_empty() && !resolved_class.starts_with("class@anonymous#") {
                     self.emit_deprecated_trait_uses(&resolved_class, *class_line);
                 }
@@ -4388,6 +4399,8 @@ impl Compiler {
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
+                    self.class_declaration_keys
+                        .extend(func_compiler.class_declaration_keys);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
                         method.name.clone(),
@@ -4498,6 +4511,7 @@ impl Compiler {
                     abstract_methods: methods.iter().map(|method| method.name.clone()).collect(),
                     class_id: 0,
                 });
+                self.class_declaration_keys.push(None);
             }
             Stmt::Trait {
                 line: trait_line,
@@ -4683,6 +4697,8 @@ impl Compiler {
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
+                    self.class_declaration_keys
+                        .extend(func_compiler.class_declaration_keys);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
                         method.name.clone(),
@@ -4897,6 +4913,7 @@ impl Compiler {
                         .collect(),
                     class_id: 0,
                 });
+                self.class_declaration_keys.push(None);
                 if !uses.is_empty() {
                     self.emit_deprecated_trait_uses(&resolved_trait, *trait_line);
                 }
@@ -5004,6 +5021,7 @@ impl Compiler {
                                     value: Expr::ClassConstant {
                                         class_name: "self".to_string(),
                                         constant: case.name.clone(),
+                                        line: 0,
                                     },
                                     unpack: false,
                                     unpack_line: None,
@@ -5047,6 +5065,7 @@ impl Compiler {
                                         expr: Some(Expr::ClassConstant {
                                             class_name: "self".to_string(),
                                             constant: case.name.clone(),
+                                            line: 0,
                                         }),
                                         line: 0,
                                     }],
@@ -5272,6 +5291,8 @@ impl Compiler {
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
+                    self.class_declaration_keys
+                        .extend(func_compiler.class_declaration_keys);
                     self.class_defs.extend(func_compiler.class_defs);
                     compiled_methods.push((
                         method.name.clone(),
@@ -5397,6 +5418,9 @@ impl Compiler {
                     abstract_methods: vec![],
                     class_id: 0,
                 });
+                let declaration_key =
+                    self.emit_named_class_declaration(&resolved_enum, *enum_line);
+                self.class_declaration_keys.push(Some(declaration_key));
                 if !uses.is_empty() {
                     self.emit_deprecated_trait_uses(&resolved_enum, *enum_line);
                 }
@@ -5417,6 +5441,17 @@ impl Compiler {
         instruction.op1 = consumer;
         instruction.op1_type = OpType::Const;
         self.push_instruction_at_line(instruction, line);
+    }
+
+    fn emit_named_class_declaration(&mut self, class_name: &str, line: usize) -> String {
+        let declaration_id = CLASS_DECLARATION_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let declaration_key = format!("{class_name}@declaration#{declaration_id}");
+        let key_literal = self.add_literal(Value::string(declaration_key.clone()));
+        let mut instruction = Instruction::new(OpCode::DeclareClass);
+        instruction.op1 = key_literal;
+        instruction.op1_type = OpType::Const;
+        self.push_instruction_at_line(instruction, line);
+        declaration_key
     }
 
     fn compile_class_constants(

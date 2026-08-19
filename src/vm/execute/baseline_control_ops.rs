@@ -11,6 +11,108 @@ pub(crate) enum IncludeFileOutcome {
     Thrown(Value),
 }
 
+#[cold]
+#[inline(never)]
+fn op_declare_class<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let declaration_key = op_array.literals[opline.op1 as usize]
+        .as_str()
+        .expect("DeclareClass key must be a string literal")
+        .to_string();
+    let Some(class_def) = eg
+        .take_runtime_class_declaration(&declaration_key)
+        .map_err(VmError::Fatal)?
+    else {
+        return Ok(ColdResult::Done);
+    };
+
+    let dependencies = class_def
+        .parent
+        .iter()
+        .map(|name| ("Class", name.clone()))
+        .chain(
+            class_def
+                .uses
+                .iter()
+                .map(|name| ("Trait", name.clone())),
+        )
+        .chain(
+            class_def
+                .implements
+                .iter()
+                .map(|name| ("Interface", name.clone())),
+        )
+        .collect::<Vec<_>>();
+    for (dependency_kind, dependency) in dependencies {
+        if eg.find_class(&dependency).is_none()
+            && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?
+        {
+            if let Some(exception) = eg.exception.take() {
+                eg.restore_runtime_class_declaration(declaration_key, class_def);
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+            let error = make_error_value(
+                "Error",
+                &format!("{dependency_kind} \"{dependency}\" not found"),
+            );
+            let instruction_index = op_array
+                .instructions
+                .iter()
+                .position(|instruction| std::ptr::eq(instruction, opline))
+                .expect("DeclareClass instruction belongs to its op array");
+            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+            eg.restore_runtime_class_declaration(declaration_key, class_def);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        if let Some(exception) = eg.exception.take() {
+            eg.restore_runtime_class_declaration(declaration_key, class_def);
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+    }
+    for dependency in
+        crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)
+    {
+        if eg.find_class(&dependency).is_some() {
+            continue;
+        }
+        let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+        if let Some(exception) = eg.exception.take() {
+            eg.restore_runtime_class_declaration(declaration_key, class_def);
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+    }
+
+    let class_name = class_def.name.clone();
+    eg.register_compiled_class(class_def)
+        .map_err(VmError::Fatal)?;
+    eg.mark_runtime_class_declared(declaration_key, class_name);
+    Ok(ColdResult::Done)
+}
+
 fn include_parse_error(
     eg: &mut ExecutorGlobals,
     caller_present: bool,
@@ -249,6 +351,12 @@ fn execute_source_unit(
         let ptr = &boxed.common as *const FunctionCommon;
         eg.included_functions.push(boxed);
         let _ = eg.register_function(&name, ptr);
+    }
+    for (declaration_key, class_def) in
+        std::mem::take(&mut compile_result.runtime_class_defs)
+    {
+        eg.register_runtime_class_declaration(declaration_key, class_def)
+            .map_err(VmError::Fatal)?;
     }
     for class_def in compile_result.class_defs {
         if class_def.is_anonymous() {

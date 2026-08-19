@@ -804,6 +804,22 @@ empty-request startup at -0.671% independently and -0.681% paired, while the
 ordinary-call control is +0.259% independently and +0.277% paired. Exact output
 is retained and every median remains below the five-percent ceiling.
 
+The `trait-constant-composition` checkpoint reaches 3,110 passes with 2,187
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Trait constants now preserve PHP 8.5 value/type/visibility/finality
+identity, exact origins, Reflection values and source diagnostics. Named
+trait-consuming classes and their descendants link at their runtime declaration
+marker, including deferred autoload and retryable missing-trait errors. The
+`Zend/tests/traits` directory rises from 92 to 110 exact passes and the full
+corpus delta is +40/-0 with no lost pass; six inspected remaining failures reach
+a later output or declaration-check stage. Doc comments remain an explicit
+separate metadata gap. All five feature configurations, all-target, unsafe,
+Composer S0, four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass.
+CPU-pinned 32-pair release A/B medians put empty-request startup at -4.652%,
+ordinary calls at -1.453% and a 32-consumer trait cold-link control at -1.795%
+independently; paired medians are -4.658%, -1.320% and -1.791%. Exact outputs
+are retained and every median remains below the five-percent ceiling.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

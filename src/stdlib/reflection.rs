@@ -590,6 +590,7 @@ fn evaluate_deferred_attribute_expression(
         Expr::ClassConstant {
             class_name,
             constant,
+            ..
         } => deferred_class_constant(class_name, constant, scope, eg),
         Expr::DynamicNamedClassConstant {
             class_name,
@@ -1057,6 +1058,7 @@ fn report_deprecated_expression_references(
         Expr::ClassConstant {
             class_name,
             constant,
+            ..
         } => {
             let class_name = resolve_attribute_class_name(class_name, scope);
             let resolved = eg.find_class(&class_name).map(|class| {
@@ -1096,6 +1098,7 @@ fn report_deprecated_expression_references(
                     &Expr::ClassConstant {
                         class_name: class_name.clone(),
                         constant: constant.to_string(),
+                        line: 0,
                     },
                     scope,
                     source_file,
@@ -1125,6 +1128,7 @@ fn report_deprecated_expression_references(
                     &Expr::ClassConstant {
                         class_name: class.to_string(),
                         constant: constant.to_string(),
+                        line: 0,
                     },
                     &dynamic_scope,
                     source_file,
@@ -2467,7 +2471,11 @@ fn class_constant_construct(
     with_argument(ed, 0, |receiver| {
         if let Some(mut object) = receiver.as_object_mut() {
             object.set_property("name", Value::string(constant_name));
-            object.set_property("class", Value::string(declaring_class));
+            object.set_property("class", Value::string(declaring_class.clone()));
+            object.set_property(
+                "__reflection_declaring_class",
+                Value::string(declaring_class),
+            );
             object.set_property("__reflection_modifiers", Value::long(modifiers));
             object.set_property("__reflection_value", value);
         }
@@ -3449,6 +3457,42 @@ fn class_get_constants(
     return_value(rv, Value::array(constants))
 }
 
+fn class_get_constant(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::bool(false));
+    }
+    let name = argument_string(ed, 1);
+    let Some(definition) = eg.find_class(&owner).and_then(|class| {
+        class
+            .constants
+            .iter()
+            .find(|constant| constant.name == name)
+            .cloned()
+    }) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if let Some(error) = &definition.evaluation_error {
+        eg.exception = Some(make_error_value("Error", error));
+        return return_value(rv, Value::null());
+    }
+    if definition.value_is_deferred {
+        let Some(value) = evaluate_deferred_class_constant_value(&definition, eg)? else {
+            return return_value(rv, Value::null());
+        };
+        return return_value(rv, value);
+    }
+    return_value(rv, definition.value)
+}
+
 fn class_get_reflection_constants(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -3482,6 +3526,10 @@ fn class_get_reflection_constants(
             [
                 ("name", Value::string(constant.name.clone())),
                 ("class", Value::string(constant.declaring_class.clone())),
+                (
+                    "__reflection_declaring_class",
+                    Value::string(constant.declaring_class.clone()),
+                ),
                 ("__reflection_modifiers", Value::long(modifiers)),
                 ("__reflection_value", constant.value.clone()),
             ],
@@ -3525,6 +3573,10 @@ fn class_get_reflection_constant(
             [
                 ("name", Value::string(constant.name.clone())),
                 ("class", Value::string(constant.declaring_class.clone())),
+                (
+                    "__reflection_declaring_class",
+                    Value::string(constant.declaring_class.clone()),
+                ),
                 ("__reflection_modifiers", Value::long(modifiers)),
                 ("__reflection_value", constant.value.clone()),
             ],

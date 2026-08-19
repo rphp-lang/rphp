@@ -358,6 +358,7 @@ pub enum Expr {
         // ClassName::CONSTANT, self::CONSTANT, parent::CONSTANT, static::CONSTANT
         class_name: String,
         constant: String,
+        line: usize,
     },
     DynamicClassConstant {
         // $class::CONSTANT, $object::CONSTANT, or $class::{$constant}

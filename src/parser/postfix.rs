@@ -125,6 +125,7 @@ impl Parser {
                         Expr::ClassConstant {
                             class_name,
                             constant: "class".to_string(),
+                            line,
                         },
                         constant,
                     )),
@@ -148,6 +149,7 @@ impl Parser {
                         Expr::ClassConstant {
                             class_name,
                             constant: "class".to_string(),
+                            line,
                         },
                         Expr::DynamicVariable {
                             name: Box::new(property),
@@ -178,6 +180,7 @@ impl Parser {
                         Expr::ClassConstant {
                             class_name,
                             constant: "class".to_string(),
+                            line,
                         },
                         Expr::Variable {
                             name: property,
@@ -211,6 +214,7 @@ impl Parser {
             return Ok(Expr::ClassConstant {
                 class_name,
                 constant: member,
+                line: member_line.unwrap_or(self.last_primary_line.unwrap_or(0)),
             });
         }
 
@@ -228,6 +232,7 @@ impl Parser {
                     value: Expr::ClassConstant {
                         class_name,
                         constant: "class".to_string(),
+                        line,
                     },
                     unpack: false,
                     unpack_line: None,

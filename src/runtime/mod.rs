@@ -307,6 +307,13 @@ pub struct ExecutorGlobals {
     /// expression executes. Eager registration would autoload dependencies
     /// from branches that PHP never evaluates.
     pending_anonymous_classes: HashMap<String, ClassDef>,
+    /// Named trait-consuming classes are linked only when execution reaches
+    /// their source declaration. Keys are compiler-unique so conditional or
+    /// repeated declarations with the same PHP name remain distinguishable.
+    pending_runtime_classes: HashMap<String, ClassDef>,
+    /// Retain successfully executed declaration keys so invoking the same
+    /// function-local declaration twice produces PHP's redeclaration error.
+    declared_runtime_classes: HashMap<String, String>,
     /// Named declarations whose invariant property contracts depend on a
     /// class alias that top-level execution has not published yet.
     pending_named_classes: Vec<ClassDef>,
@@ -965,6 +972,8 @@ impl ExecutorGlobals {
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
+            pending_runtime_classes: HashMap::new(),
+            declared_runtime_classes: HashMap::new(),
             pending_named_classes: Vec::new(),
             generic_metadata: GenericMetadata::default(),
             #[cfg(feature = "php-generics-reified")]
@@ -1066,6 +1075,8 @@ impl ExecutorGlobals {
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
+            pending_runtime_classes: HashMap::new(),
+            declared_runtime_classes: HashMap::new(),
             pending_named_classes: Vec::new(),
             generic_metadata: GenericMetadata::default(),
             #[cfg(feature = "php-generics-reified")]
@@ -2726,6 +2737,61 @@ impl ExecutorGlobals {
         }
     }
 
+    /// Retain a named declaration until its cold `DeclareClass` marker runs.
+    /// PHP-name duplication is intentionally checked at execution time, not
+    /// while the containing source unit is prepared.
+    pub fn register_runtime_class_declaration(
+        &mut self,
+        declaration_key: String,
+        class_def: ClassDef,
+    ) -> Result<(), String> {
+        if self.pending_runtime_classes.contains_key(&declaration_key)
+            || self.declared_runtime_classes.contains_key(&declaration_key)
+        {
+            return Err("Duplicate runtime class declaration marker".to_string());
+        }
+        self.pending_runtime_classes
+            .insert(declaration_key, class_def);
+        Ok(())
+    }
+
+    /// Acquire one delayed declaration for dependency loading and publication.
+    /// Markers for ordinary eager classes deliberately return `None` as no-ops.
+    pub(crate) fn take_runtime_class_declaration(
+        &mut self,
+        declaration_key: &str,
+    ) -> Result<Option<ClassDef>, String> {
+        if let Some(class_def) = self.pending_runtime_classes.remove(declaration_key) {
+            return Ok(Some(class_def));
+        }
+        if let Some(class_name) = self.declared_runtime_classes.get(declaration_key) {
+            return Err(format!(
+                "Cannot declare class {class_name}, because the name is already in use"
+            ));
+        }
+        Ok(None)
+    }
+
+    /// An autoloader exception aborts the current declaration but PHP permits
+    /// a later execution to try the same source marker again after it is caught.
+    pub(crate) fn restore_runtime_class_declaration(
+        &mut self,
+        declaration_key: String,
+        class_def: ClassDef,
+    ) {
+        self.pending_runtime_classes
+            .insert(declaration_key, class_def);
+    }
+
+    pub(crate) fn mark_runtime_class_declared(
+        &mut self,
+        declaration_key: String,
+        class_name: String,
+    ) {
+        self.declared_runtime_classes
+            .insert(declaration_key, class_name);
+    }
+
     fn class_definition_requires_delayed_linking(&self, class_def: &ClassDef) -> bool {
         class_def.parent.as_deref().is_some_and(|parent| {
             // A forward child cannot be checked against its interfaces
@@ -2782,6 +2848,8 @@ impl ExecutorGlobals {
     /// For non-interface, non-abstract classes: validates interface contracts.
     pub fn register_class(&mut self, mut class_def: ClassDef) -> Result<(), String> {
         let class_name = class_def.name.clone();
+        let declaration_file = class_def.source_file.clone();
+        let declaration_line = class_def.declaration_line;
         // PHP does not permit class redeclaration. Besides matching that rule,
         // this guarantees class_by_id pointers remain stable for inline caches.
         if self
@@ -2884,6 +2952,8 @@ impl ExecutorGlobals {
                     &class_name,
                     &mut class_def.constants,
                     &parent.constants,
+                    declaration_file.as_deref(),
+                    declaration_line,
                 )?;
             }
         }
@@ -2983,6 +3053,7 @@ impl ExecutorGlobals {
         // Must happen after parent inheritance so trait methods override inherited ones
         // (matching PHP semantics: trait > parent, class > trait).
         let trait_names = class_def.uses.clone();
+        let mut composed_trait_constant_origins = std::collections::HashMap::new();
         let mut composed_trait_property_names = std::collections::HashMap::new();
         let mut composed_static_trait_names = std::collections::HashSet::new();
         for trait_name in &trait_names {
@@ -3024,6 +3095,9 @@ impl ExecutorGlobals {
                     trait_name,
                     &mut class_def.constants,
                     &trait_def.constants,
+                    &mut composed_trait_constant_origins,
+                    declaration_file.as_deref(),
+                    declaration_line,
                 )?;
                 merge_trait_property_definitions(
                     &mut class_def.properties,
@@ -3171,6 +3245,8 @@ impl ExecutorGlobals {
                 &class_name,
                 &mut class_def.constants,
                 &interface.constants,
+                declaration_file.as_deref(),
+                declaration_line,
             )?;
         }
 

@@ -6519,6 +6519,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 resume_pending_exception!();
             }
 
+            OpCode::DeclareClass => {
+                match op_declare_class(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
+                    }
+                    ColdResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                    ColdResult::Done => {}
+                    ColdResult::Continue | ColdResult::Return => {
+                        unreachable!("DeclareClass cannot suspend or pre-advance its caller")
+                    }
+                }
+            }
+
             OpCode::CreateClosure => {
                 op_create_closure(eg, frame, op_array, opline);
             }

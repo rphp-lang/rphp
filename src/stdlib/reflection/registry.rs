@@ -17,18 +17,19 @@ use super::generic_parameters::{
 use super::{
     attribute_construct, attribute_get_arguments, attribute_get_name, attribute_get_target,
     attribute_is_repeated, attribute_new_instance, class_constant_construct, class_construct,
-    class_file_name, class_get_attributes, class_get_constants, class_get_constructor,
-    class_get_default_properties, class_get_interface_names, class_get_interfaces,
-    class_get_lazy_initializer, class_get_method, class_get_methods, class_get_name,
-    class_get_parent, class_get_properties, class_get_property, class_get_reflection_constant,
-    class_get_reflection_constants, class_get_trait_names, class_get_traits, class_has_method,
-    class_implements_interface, class_initialize_lazy_object, class_is_abstract, class_is_final,
-    class_is_instantiable, class_is_interface, class_is_internal, class_is_readonly,
-    class_is_subclass_of, class_is_trait, class_is_uninitialized_lazy_object,
-    class_is_user_defined, class_mark_lazy_object_as_initialized,
-    class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
-    class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_to_string, constant_construct,
-    constant_get_value, deprecated_construct, function_construct, function_get_closure,
+    class_file_name, class_get_attributes, class_get_constant, class_get_constants,
+    class_get_constructor, class_get_default_properties, class_get_interface_names,
+    class_get_interfaces, class_get_lazy_initializer, class_get_method, class_get_methods,
+    class_get_name, class_get_parent, class_get_properties, class_get_property,
+    class_get_reflection_constant, class_get_reflection_constants, class_get_trait_names,
+    class_get_traits, class_has_method, class_implements_interface, class_initialize_lazy_object,
+    class_is_abstract, class_is_final, class_is_instantiable, class_is_interface,
+    class_is_internal, class_is_readonly, class_is_subclass_of, class_is_trait,
+    class_is_uninitialized_lazy_object, class_is_user_defined,
+    class_mark_lazy_object_as_initialized, class_new_instance_without_constructor,
+    class_new_lazy_ghost, class_new_lazy_proxy, class_reset_as_lazy_ghost,
+    class_reset_as_lazy_proxy, class_to_string, constant_construct, constant_get_value,
+    deprecated_construct, function_construct, function_get_closure,
     function_get_closure_called_class, function_get_closure_this,
     function_get_number_of_parameters, function_get_number_of_required_parameters,
     function_get_parameters, function_get_return_type, function_get_tentative_return_type,
@@ -1241,6 +1242,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_method!(
         "ReflectionClass",
+        "getconstant",
+        class_get_constant,
+        2,
+        1,
+        ["name"]
+    );
+    register_method!(
+        "ReflectionClass",
         "getreflectionconstants",
         class_get_reflection_constants,
         2,
@@ -1511,6 +1520,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         3,
         0,
         ["name", "flags"]
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "getdeclaringclass",
+        parameter_get_declaring_class,
+        1,
+        0,
+        []
     );
     register_method!(
         "ReflectionClassConstant",
