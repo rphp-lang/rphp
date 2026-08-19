@@ -204,7 +204,7 @@ var_dump($step);"#;
 
     assert_eq!(
         run_php(source),
-        "handled\nNULL\nint(1)\nhandled\nNULL\nNULL\n"
+        "handled\nNULL\nint(1)\nhandled\nhandled\nNULL\nNULL\n"
     );
 }
 

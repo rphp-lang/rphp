@@ -178,6 +178,30 @@ const FINALLY_JUMP_CLEAR: u8 = 0;
 const FINALLY_JUMP_RESUME: u8 = 1;
 const FINALLY_JUMP_START: u8 = 2;
 
+#[derive(Clone, Copy)]
+enum IncDecDiagnostic {
+    Warning(&'static str),
+    Deprecation(&'static str),
+}
+
+#[cold]
+fn report_incdec_diagnostic(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    diagnostic: IncDecDiagnostic,
+) -> Result<(), VmError> {
+    match diagnostic {
+        IncDecDiagnostic::Warning(message) => {
+            report_php_warning(eg, frame, op_array, opline, message, false)
+        }
+        IncDecDiagnostic::Deprecation(message) => {
+            report_php_deprecation(eg, frame, op_array, opline, message)
+        }
+    }
+}
+
 fn increment_php_alphanumeric_string(value: &str) -> String {
     if value.is_empty() {
         return "1".to_string();
@@ -222,19 +246,24 @@ fn increment_php_alphanumeric_string(value: &str) -> String {
     String::from_utf8(bytes).expect("ASCII increment preserves UTF-8")
 }
 
-fn increment_php_value(value: &Value) -> (Value, bool) {
+fn increment_php_value(value: &Value) -> (Value, Option<IncDecDiagnostic>) {
     if let Some(number) = value.as_long() {
         return (
             number.checked_add(1).map_or_else(
                 || Value::double(number as f64 + 1.0),
                 Value::long,
             ),
-            false,
+            None,
         );
     }
     match value.value_type() {
-        ValueType::Null | ValueType::Undef => (Value::long(1), false),
-        ValueType::True | ValueType::False => (value.clone(), false),
+        ValueType::Null | ValueType::Undef => (Value::long(1), None),
+        ValueType::True | ValueType::False => (
+            value.clone(),
+            Some(IncDecDiagnostic::Warning(
+                "Increment on type bool has no effect, this will change in the next major version of PHP",
+            )),
+        ),
         ValueType::String => {
             let text = value.as_str().unwrap();
             let numeric = text.trim();
@@ -245,28 +274,30 @@ fn increment_php_value(value: &Value) -> (Value, bool) {
                             || Value::double(number as f64 + 1.0),
                             Value::long,
                         ),
-                        false,
+                        None,
                     );
                 }
                 if let Ok(number) = numeric.parse::<f64>() {
-                    return (Value::double(number + 1.0), false);
+                    return (Value::double(number + 1.0), None);
                 }
             }
             (
                 Value::string(increment_php_alphanumeric_string(text)),
-                true,
+                Some(IncDecDiagnostic::Deprecation(
+                    "Increment on non-numeric string is deprecated, use str_increment() instead",
+                )),
             )
         }
         _ => (
             value
                 .to_double()
                 .map_or_else(|| Value::long(1), |number| Value::double(number + 1.0)),
-            false,
+            None,
         ),
     }
 }
 
-fn decrement_php_value(value: &Value) -> Option<(Value, Option<&'static str>)> {
+fn decrement_php_value(value: &Value) -> Option<(Value, Option<IncDecDiagnostic>)> {
     if let Some(number) = value.as_long() {
         return Some((
             number
@@ -276,15 +307,26 @@ fn decrement_php_value(value: &Value) -> Option<(Value, Option<&'static str>)> {
         ));
     }
     match value.value_type() {
-        ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False => {
-            Some((value.clone(), None))
-        }
+        ValueType::Null | ValueType::Undef => Some((
+            value.clone(),
+            Some(IncDecDiagnostic::Warning(
+                "Decrement on type null has no effect, this will change in the next major version of PHP",
+            )),
+        )),
+        ValueType::True | ValueType::False => Some((
+            value.clone(),
+            Some(IncDecDiagnostic::Warning(
+                "Decrement on type bool has no effect, this will change in the next major version of PHP",
+            )),
+        )),
         ValueType::String => {
             let text = value.as_str().unwrap();
             if text.is_empty() {
                 return Some((
                     Value::long(-1),
-                    Some("Decrement on empty string is deprecated as non-numeric"),
+                    Some(IncDecDiagnostic::Deprecation(
+                        "Decrement on empty string is deprecated as non-numeric",
+                    )),
                 ));
             }
             let numeric = text.trim();
@@ -304,7 +346,9 @@ fn decrement_php_value(value: &Value) -> Option<(Value, Option<&'static str>)> {
             }
             Some((
                 value.clone(),
-                Some("Decrement on non-numeric string has no effect and is deprecated"),
+                Some(IncDecDiagnostic::Deprecation(
+                    "Decrement on non-numeric string has no effect and is deprecated",
+                )),
             ))
         }
         _ => value
@@ -584,6 +628,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     value
                 }
             }};
+        }
+        macro_rules! restore_incdec_snapshot_on_exception {
+            ($writeback_cv:expr, $old:expr) => {
+                if eg.exception.is_some() {
+                    let restored = prepare_reference_write!($writeback_cv, $old.clone());
+                    let cv_ptr = (*frame).get_op_mut($writeback_cv, OpType::Cv);
+                    slot_set(cv_ptr, restored);
+                }
+            };
         }
         macro_rules! throw_operator {
             ($class_name:expr, $message:expr) => {{
@@ -3634,15 +3687,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    let (new_val, deprecated_string_increment) = increment_php_value(&old);
-                    if deprecated_string_increment {
-                        report_php_deprecation(
-                            eg,
-                            frame,
-                            op_array,
-                            opline,
-                            "Increment on non-numeric string is deprecated, use str_increment() instead",
-                        )?;
+                    let (new_val, diagnostic) = increment_php_value(&old);
+                    if let Some(diagnostic) = diagnostic {
+                        report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
+                        restore_incdec_snapshot_on_exception!(writeback_cv, old);
                         resume_pending_exception!();
                     }
                     let new_val = prepare_reference_write!(writeback_cv, new_val);
@@ -3678,7 +3726,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     if let Some((new_val, diagnostic)) = decrement_php_value(&old) {
                         if let Some(diagnostic) = diagnostic {
-                            report_php_deprecation(eg, frame, op_array, opline, diagnostic)?;
+                            report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
+                            restore_incdec_snapshot_on_exception!(writeback_cv, old);
                             resume_pending_exception!();
                         }
                         let new_val = prepare_reference_write!(writeback_cv, new_val);
@@ -3719,15 +3768,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    let (new_val, deprecated_string_increment) = increment_php_value(&old);
-                    if deprecated_string_increment {
-                        report_php_deprecation(
-                            eg,
-                            frame,
-                            op_array,
-                            opline,
-                            "Increment on non-numeric string is deprecated, use str_increment() instead",
-                        )?;
+                    let (new_val, diagnostic) = increment_php_value(&old);
+                    if let Some(diagnostic) = diagnostic {
+                        report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
+                        restore_incdec_snapshot_on_exception!(writeback_cv, old);
                         resume_pending_exception!();
                     }
                     let new_val = prepare_reference_write!(writeback_cv, new_val);
@@ -3763,7 +3807,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     if let Some((new_val, diagnostic)) = decrement_php_value(&old) {
                         if let Some(diagnostic) = diagnostic {
-                            report_php_deprecation(eg, frame, op_array, opline, diagnostic)?;
+                            report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
+                            restore_incdec_snapshot_on_exception!(writeback_cv, old);
                             resume_pending_exception!();
                         }
                         let new_val = prepare_reference_write!(writeback_cv, new_val);

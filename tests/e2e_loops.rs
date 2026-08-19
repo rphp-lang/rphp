@@ -262,8 +262,11 @@ fn test_e2e_null_inc() {
 }
 
 #[test]
-fn test_e2e_null_dec_no_effect() {
-    assert_eq!(run_php("<?php $x = null; $x--; echo $x;"), "");
+fn test_e2e_null_dec_warns_and_has_no_effect() {
+    assert_eq!(
+        run_php("<?php $x = null; $x--; echo $x;"),
+        "\nWarning: Decrement on type null has no effect, this will change in the next major version of PHP in <main> on line 1\n"
+    );
 }
 
 #[test]
@@ -273,14 +276,17 @@ fn test_e2e_pre_inc_null() {
 
 #[test]
 fn test_e2e_pre_dec_null() {
-    assert_eq!(run_php("<?php $x = null; echo --$x;"), "");
+    assert_eq!(
+        run_php("<?php $x = null; echo --$x;"),
+        "\nWarning: Decrement on type null has no effect, this will change in the next major version of PHP in <main> on line 1\n"
+    );
 }
 
 #[test]
-fn test_e2e_bool_inc_dec_have_no_effect() {
+fn test_e2e_bool_inc_dec_warn_and_have_no_effect() {
     assert_eq!(
         run_php("<?php $a = true; $b = false; $a++; --$a; ++$b; $b--; var_dump($a, $b);"),
-        "bool(true)\nbool(false)\n"
+        "\nWarning: Increment on type bool has no effect, this will change in the next major version of PHP in <main> on line 1\n\nWarning: Decrement on type bool has no effect, this will change in the next major version of PHP in <main> on line 1\n\nWarning: Increment on type bool has no effect, this will change in the next major version of PHP in <main> on line 1\n\nWarning: Decrement on type bool has no effect, this will change in the next major version of PHP in <main> on line 1\nbool(true)\nbool(false)\n"
     );
 }
 

@@ -9,11 +9,58 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,289 pass, 2,008 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,295 pass, 2,002 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-62.092% and the whole-corpus rate is 58.743%; 4,617 of 5,297 attempted cases
-reach runtime (87.163%). Relative to exact base `e3916d60`, the pass-set delta
-is +6/-0: all 3,283 prior passes remain exact.
+62.205% and the whole-corpus rate is 58.850%; 4,617 of 5,297 attempted cases
+reach runtime (87.163%). Relative to exact base `e6e3fbb6`, the pass-set delta
+is +6/-0: all 3,289 prior passes remain exact.
+
+Direct pre- and post-increment of `bool` and direct pre- and post-decrement of
+`bool` or `null` now emit PHP 8.5's exact `E_WARNING` diagnostics before
+leaving the operand unchanged. Incrementing `null` remains the distinct
+warning-free conversion to integer 1. Both operator forms retain their exact
+source line, and decrementing an undefined CV preserves the observable order:
+the undefined-variable warning first, then the null-decrement warning.
+
+All four direct inc/dec opcodes consume their pre-handler snapshot. A normally
+returning re-entrant handler may unset or replace the CV, but canonical
+writeback restores the original unchanged `bool` or `null` through an ordinary
+or referenced CV. If the handler throws after mutating the target, the opcode
+restores the pre-handler value before propagating the exception. A shared cold
+diagnostic kind selects warning or deprecation reporting; ordinary integer and
+numeric-string paths do not enter that reporter.
+
+Two original E2E tests cover pre/post values, warning levels and text, source
+lines, null increment, undefined-CV ordering, references, handler replacement
+and exception restoration. Existing null/bool and undefined-snapshot tests now
+assert the PHP 8.5 diagnostics. Six full-corpus cases become exact passes:
+`incdec_bool_exception.phpt`, `incdec_undef.phpt`,
+`oss-fuzz-60709_globals_unset_after_undef_warning.phpt`,
+`unset_globals_in_error_handler.phpt`, `remove_predecessor_of_pi_node.phpt`
+and `unreachable_phi_cycle.phpt`. No other status or failure category changes.
+`incdec_types.phpt` gains all scalar warnings but retains its independent
+invalid-operand TypeErrors.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. CPU-pinned
+32-pair release measurements produced balanced order-specific median ratios of
++2.169% for four million direct integer increments plus four million direct
+integer decrements, +3.988% for property work, +0.236% for array work and
+-0.984% for batches of 200 empty requests. Outputs are exact, no outliers were
+removed and every decision median remains below the five-percent regression
+ceiling.
+
+Invalid-operand increment/decrement TypeErrors and property, dimension or
+dynamically named targets remain separate contracts on their existing
+arithmetic writeback paths.
+
+The preceding `string-decrement-deprecations` checkpoint reached 3,289 passes
+with 2,008 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts
+and zero crashes. Relative to exact base `e3916d60`, its pass-set delta was
++6/-0 with all 3,283 prior passes retained.
 
 Direct pre- and post-decrement of strings now follows the exercised PHP 8.5
 contract. An empty string emits `E_DEPRECATED` with `Decrement on empty string
@@ -53,10 +100,10 @@ work, -0.407% for array work and -1.227% for batches of 200 empty requests.
 Outputs are exact, no outliers were removed and every decision median remains
 below the five-percent regression ceiling.
 
-PHP 8.5's null/bool decrement diagnostics and invalid-type errors remain
-separate opcode contracts. Complex property, dimension and dynamically named
-decrement targets currently use the arithmetic writeback path rather than this
-direct-CV decrement path.
+At that checkpoint, null/bool decrement diagnostics remained separate.
+Invalid-type errors are still a separate opcode contract. Complex property,
+dimension and dynamically named decrement targets currently use the arithmetic
+writeback path rather than this direct-CV decrement path.
 
 The preceding `string-increment-deprecation` checkpoint reached 3,283 passes
 with 2,014 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts

@@ -523,6 +523,7 @@ var_dump(++$value);
 var_dump($value);
 
 set_error_handler(function ($level, $message) {
+    $GLOBALS['value'] = "handler-value";
     throw new Exception("$level:$message");
 });
 $value = "A";
@@ -577,6 +578,7 @@ var_dump($value--);
 var_dump($value);
 
 set_error_handler(function ($level, $message) {
+    $GLOBALS['value'] = "handler-value";
     throw new Exception("$level:$message");
 });
 $value = "";
@@ -591,6 +593,68 @@ var_dump($value);
     assert_eq!(
         run_php(source),
         "replace:8192:Decrement on non-numeric string has no effect and is deprecated\nstring(3) \"abc\"\nstring(3) \"abc\"\nreplace:8192:Decrement on empty string is deprecated as non-numeric\nstring(0) \"\"\nint(-1)\ncaught:8192:Decrement on empty string is deprecated as non-numeric\nstring(0) \"\"\n"
+    );
+}
+
+#[test]
+fn incdec_bool_and_null_emit_php_85_warnings_at_the_operator_line() {
+    let file = "/virtual/incdec-null-bool.php";
+    let source = r#"<?php
+$false = false;
+var_dump($false++, $false);
+$true = true;
+var_dump(--$true, $true);
+$null = null;
+var_dump($null--, $null);
+$incrementNull = null;
+var_dump(++$incrementNull, $incrementNull);
+"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "\nWarning: Increment on type bool has no effect, this will change in the next major version of PHP in {file} on line 3\nbool(false)\nbool(false)\n\nWarning: Decrement on type bool has no effect, this will change in the next major version of PHP in {file} on line 5\nbool(true)\nbool(true)\n\nWarning: Decrement on type null has no effect, this will change in the next major version of PHP in {file} on line 7\nNULL\nNULL\nint(1)\nint(1)\n"
+        )
+    );
+}
+
+#[test]
+fn incdec_scalar_warnings_keep_the_snapshot_across_handlers_and_exceptions() {
+    let source = r#"<?php
+set_error_handler(function ($level, $message) {
+    echo "replace:$level:$message\n";
+    $GLOBALS['value'] = 99;
+});
+$value = false;
+var_dump($value++, $value);
+$value = null;
+var_dump(--$value, $value);
+$value = null;
+$reference =& $value;
+var_dump(--$reference, $value, $reference);
+
+set_error_handler(function ($level, $message) {
+    $GLOBALS['value'] = "handler-value";
+    throw new Exception("$level:$message");
+});
+$value = true;
+try {
+    $value--;
+} catch (Exception $exception) {
+    echo "caught:", $exception->getMessage(), "\n";
+}
+var_dump($value);
+
+set_error_handler(function ($level, $message) {
+    echo "undefined:$level:$message\n";
+});
+unset($missing);
+var_dump($missing--);
+"#;
+
+    assert_eq!(
+        run_php(source),
+        "replace:2:Increment on type bool has no effect, this will change in the next major version of PHP\nbool(false)\nbool(false)\nreplace:2:Decrement on type null has no effect, this will change in the next major version of PHP\nNULL\nNULL\nreplace:2:Decrement on type null has no effect, this will change in the next major version of PHP\nNULL\nNULL\nNULL\ncaught:2:Decrement on type bool has no effect, this will change in the next major version of PHP\nbool(true)\nundefined:2:Undefined variable $missing\nundefined:2:Decrement on type null has no effect, this will change in the next major version of PHP\nNULL\n"
     );
 }
 
