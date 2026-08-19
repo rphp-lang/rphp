@@ -7,6 +7,87 @@ use rphp::parser::Parser;
 use rphp::vm::opcode::OpCode;
 
 #[test]
+fn override_methods_require_an_effective_inherited_contract() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface NamedRequirement { public function fromInterface(): void; }
+trait AbstractRequirement { abstract protected function fromTrait(): void; }
+abstract class OverrideParent {
+    abstract public function __construct();
+    protected function inherited(): void {}
+}
+class OverrideChild extends OverrideParent implements NamedRequirement {
+    use AbstractRequirement;
+    #[Override] public function __construct() {}
+    #[Override] public function inherited(): void {}
+    #[Override] public function fromInterface(): void {}
+    #[Override] public function fromTrait(): void {}
+}
+
+class TraitParent { protected function fromComposedTrait(): void {} }
+trait ParentOverride {
+    #[Override] public function fromComposedTrait(): void {}
+}
+class TraitChild extends TraitParent { use ParentOverride; }
+
+trait SuppressedOverride {
+    #[Override] public function suppressed(): void {}
+}
+trait SelectedPlain { public function suppressed(): void {} }
+class PrecedenceChild {
+    use SuppressedOverride, SelectedPlain {
+        SelectedPlain::suppressed insteadof SuppressedOverride;
+    }
+}
+echo 'ok';
+"#,
+        ),
+        "ok"
+    );
+
+    let cases = [
+        (
+            "<?php class MissingOverride { #[Override] public function value(): void {} }",
+            "MissingOverride::value()",
+        ),
+        (
+            "<?php class PrivateParent { private function value(): void {} } class PrivateChild extends PrivateParent { #[Override] public function value(): void {} }",
+            "PrivateChild::value()",
+        ),
+        (
+            "<?php class ConstructorParent { public function __construct() {} } class ConstructorChild extends ConstructorParent { #[Override] public function __construct() {} }",
+            "ConstructorChild::__construct()",
+        ),
+        (
+            "<?php trait ConcreteMethod { public function value(): void {} } class ConcreteTraitChild { use ConcreteMethod; #[Override] public function value(): void {} }",
+            "ConcreteTraitChild::value()",
+        ),
+        (
+            "<?php class HiddenParent { private function hidden(): void {} } trait HiddenOverride { #[Override] public function hidden(): void {} } class HiddenTraitChild extends HiddenParent { use HiddenOverride; }",
+            "HiddenTraitChild::hidden()",
+        ),
+        (
+            "<?php class ForwardChild extends ForwardParent {} class ForwardParent { #[Override] public function missing(): void {} }",
+            "ForwardParent::missing()",
+        ),
+        (
+            "<?php trait AliasedOverride { #[Override] public function inherited(): void {} } class AliasParent { public function inherited(): void {} } class AliasChild extends AliasParent { use AliasedOverride { AliasedOverride::inherited as missingAlias; } }",
+            "AliasChild::missingAlias()",
+        ),
+    ];
+    for (source, member) in cases {
+        let error = run_php_expect_error(source);
+        assert_eq!(
+            format!("{error:?}"),
+            format!(
+                "Fatal(\"{member} has #[\\\\Override] attribute, but no matching parent method exists\")"
+            )
+        );
+    }
+}
+
+#[test]
 fn runtime_class_alias_completes_pending_property_invariance_linking() {
     assert_eq!(
         run_php(

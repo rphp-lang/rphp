@@ -496,6 +496,81 @@ fn no_discard_validation_rejects_unsupported_declarations_before_execution() {
 }
 
 #[test]
+fn override_is_an_internal_method_and_property_attribute() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$class = new ReflectionClass(Override::class);
+$marker = $class->getAttributes(Attribute::class, ReflectionAttribute::IS_INSTANCEOF)[0];
+echo $class->getName(), ':', (int) $class->isInternal(), (int) $class->isFinal(), (int) $class->isInstantiable(), ':';
+echo $marker->getName(), ':', $marker->getArguments()[0], ':';
+$constructor = $class->getConstructor();
+echo $constructor->getName(), ':', $constructor->getNumberOfParameters(), ':';
+echo get_class(new Override), ':';
+
+class OverrideBase { public function inherited(): void {} }
+class OverrideChild extends OverrideBase {
+    #[Override]
+    public function inherited(): void {}
+}
+$attribute = (new ReflectionMethod(OverrideChild::class, 'inherited'))->getAttributes()[0];
+echo $attribute->getTarget(), ':';
+echo get_class($attribute->newInstance());
+"#,
+        ),
+        "Override:111:Attribute:12:__construct:0:Override:4:Override"
+    );
+}
+
+#[test]
+fn override_target_and_repetition_validation_precedes_execution() {
+    let cases = [
+        (
+            "<?php #[Override] class Invalid {}",
+            "Attribute \"Override\" cannot target class (allowed targets: method, property)",
+        ),
+        (
+            "<?php #[Override] function invalid() {}",
+            "Attribute \"Override\" cannot target function (allowed targets: method, property)",
+        ),
+        (
+            "<?php class Invalid { #[Override] public const VALUE = 1; }",
+            "Attribute \"Override\" cannot target class constant (allowed targets: method, property)",
+        ),
+        (
+            "<?php function invalid(#[Override] $value) {}",
+            "Attribute \"Override\" cannot target parameter (allowed targets: method, property)",
+        ),
+        (
+            "<?php class ParentType { public function value() {} } class Invalid extends ParentType { #[Override] #[Override] public function value() {} }",
+            "Attribute \"Override\" must not be repeated",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = run_php_expect_error(source);
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected Override validation error: {error}"
+        );
+    }
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[DelayedTargetValidation]
+#[Override]
+class DelayedClass {}
+#[DelayedTargetValidation]
+#[Override]
+function delayed(#[DelayedTargetValidation] #[Override] $value): void {}
+echo 'ok';
+"#,
+        ),
+        "ok"
+    );
+}
+
+#[test]
 fn property_hook_type_exposes_php_85_backed_enum_contract() {
     assert_eq!(
         run_php(

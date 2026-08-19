@@ -381,6 +381,105 @@ var_dump($external, $ordinary->items);
 }
 
 #[test]
+fn override_properties_and_hooks_match_only_effective_parent_contracts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface RequiredProperties {
+    public mixed $plain { get; }
+    public mixed $promoted { get; }
+}
+class HookParent {
+    public mixed $hooked = 'parent' {
+        get => $this->hooked;
+        set => $value;
+    }
+    public mixed $implicitlyReadable {
+        set { $this->implicitlyReadable = $value; }
+    }
+}
+class HookChild extends HookParent implements RequiredProperties {
+    #[Override]
+    public mixed $plain = 'plain';
+
+    public function __construct(
+        #[Override]
+        public mixed $promoted = 'promoted',
+    ) {}
+
+    public mixed $hooked {
+        #[Override]
+        get => parent::$hooked::get();
+        #[Override]
+        set => parent::$hooked::set($value);
+    }
+
+    public mixed $implicitlyReadable {
+        #[Override]
+        get => parent::$implicitlyReadable::get();
+    }
+}
+$child = new HookChild;
+echo $child->plain, ':', $child->promoted, ':';
+$parameter = (new ReflectionMethod(HookChild::class, '__construct'))->getParameters()[0];
+$property = new ReflectionProperty(HookChild::class, 'promoted');
+echo count($parameter->getAttributes(Override::class)), ':';
+$attribute = $property->getAttributes(Override::class)[0];
+echo $attribute->getTarget(), ':', get_class($attribute->newInstance()), ':';
+$hooked = new ReflectionProperty(HookChild::class, 'hooked');
+foreach ($hooked->getHooks() as $hook) {
+    $attribute = $hook->getAttributes(Override::class)[0];
+    echo $attribute->getTarget(), ':', get_class($attribute->newInstance()), ':';
+}
+"#,
+        ),
+        "plain:promoted:0:8:Override:4:Override:4:Override:"
+    );
+
+    let cases = [
+        (
+            "<?php class MissingProperty { #[Override] public mixed $value; }",
+            "MissingProperty::$value",
+            "property",
+        ),
+        (
+            "<?php class PrivatePropertyParent { private mixed $value; } class PrivatePropertyChild extends PrivatePropertyParent { #[Override] public mixed $value; }",
+            "PrivatePropertyChild::$value",
+            "property",
+        ),
+        (
+            "<?php trait ConcreteProperty { public mixed $value; } class ConcretePropertyChild { use ConcreteProperty; #[Override] public mixed $value; }",
+            "ConcretePropertyChild::$value",
+            "property",
+        ),
+        (
+            "<?php trait MarkedProperty { #[Override] public mixed $value; } class MarkedPropertyChild { use MarkedProperty; }",
+            "MarkedPropertyChild::$value",
+            "property",
+        ),
+        (
+            "<?php class SetterOnly { public mixed $value { set {} } } class MissingGetter extends SetterOnly { public mixed $value { #[Override] get => 1; } }",
+            "MissingGetter::$value::get()",
+            "method",
+        ),
+        (
+            "<?php class DelayedHook { public mixed $value { #[DelayedTargetValidation] #[Override] get => 1; } }",
+            "DelayedHook::$value::get()",
+            "method",
+        ),
+    ];
+    for (source, member, kind) in cases {
+        let error = run_php_expect_error(source);
+        assert_eq!(
+            format!("{error:?}"),
+            format!(
+                "Fatal(\"{member} has #[\\\\Override] attribute, but no matching parent {kind} exists\")"
+            )
+        );
+    }
+}
+
+#[test]
 fn setter_hook_inheritance_diagnostics_include_the_implicit_void_contract() {
     let error = run_php_expect_error(
         r#"<?php

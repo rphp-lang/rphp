@@ -1983,6 +1983,7 @@ impl Compiler {
                     &resolved_name,
                     &cp.return_type_hint,
                 )?;
+                self.validate_override_target(attributes, "function", false)?;
                 func_compiler.return_type_context = cp.return_type_hint.clone();
                 self.validate_generator_return_type(
                     func_compiler.contains_yield,
@@ -3214,6 +3215,7 @@ impl Compiler {
                 attributes,
                 declarations,
             } => {
+                self.validate_override_target(attributes, "constant", false)?;
                 let reflected_attributes = self.compile_attributes(attributes, 64);
                 for (name, value) in declarations {
                 // Compile the value expression and emit FetchConst to define it
@@ -3391,6 +3393,7 @@ impl Compiler {
             } => {
                 let resolved_class = self.resolve_name(name);
                 self.validate_no_discard_target(attributes, "class")?;
+                self.validate_override_target(attributes, "class", false)?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
                     return Err(self.goto_error(
                         &format!("Cannot apply #[\\Deprecated] to class {resolved_class}"),
@@ -3694,6 +3697,7 @@ impl Compiler {
                         &method.name,
                         &cp.return_type_hint,
                     )?;
+                    self.validate_override_target(&method.attributes, "method", true)?;
                     self.validate_magic_method_return_type(
                         &resolved_class,
                         &method.name,
@@ -3828,13 +3832,19 @@ impl Compiler {
                         .params
                         .iter()
                         .map(|parameter| {
-                            self.compile_attributes_in_scope_with_property(
+                            let mut attributes = self.compile_attributes_in_scope_with_property(
                                 &parameter.attributes,
                                 32,
                                 Some(&resolved_class),
                                 resolved_parent.as_deref(),
                                 hook_property.as_deref(),
-                            )
+                            );
+                            if parameter.promoted_property.is_some() {
+                                attributes.retain(|attribute| {
+                                    !attribute.name.eq_ignore_ascii_case("Override")
+                                });
+                            }
+                            attributes
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
@@ -3882,6 +3892,7 @@ impl Compiler {
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
+                    self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
                         return Err(self.goto_error(
                             "Cannot use the final modifier on an abstract property",
@@ -4201,6 +4212,7 @@ impl Compiler {
             } => {
                 let resolved_iface = self.resolve_name(name);
                 self.validate_no_discard_target(attributes, "class")?;
+                self.validate_override_target(attributes, "class", false)?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
                     return Err(self.goto_error(
                         &format!("Cannot apply #[\\Deprecated] to interface {resolved_iface}"),
@@ -4283,6 +4295,7 @@ impl Compiler {
                         &method.name,
                         &cp.return_type_hint,
                     )?;
+                    self.validate_override_target(&method.attributes, "method", true)?;
                     self.validate_magic_method_return_type(
                         &resolved_iface,
                         &method.name,
@@ -4359,13 +4372,19 @@ impl Compiler {
                         .params
                         .iter()
                         .map(|parameter| {
-                            self.compile_attributes_in_scope_with_property(
+                            let mut attributes = self.compile_attributes_in_scope_with_property(
                                 &parameter.attributes,
                                 32,
                                 Some(&resolved_iface),
                                 None,
                                 hook_property.as_deref(),
-                            )
+                            );
+                            if parameter.promoted_property.is_some() {
+                                attributes.retain(|attribute| {
+                                    !attribute.name.eq_ignore_ascii_case("Override")
+                                });
+                            }
+                            attributes
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
@@ -4386,6 +4405,7 @@ impl Compiler {
                     self.compile_class_constants(&resolved_iface, None, constants)?;
                 let mut compiled_properties = Vec::new();
                 for property in properties {
+                    self.validate_override_target(&property.attributes, "property", true)?;
                     if property.is_abstract {
                         return Err(self.goto_error(
                             "Property in interface cannot be explicitly abstract. All interface members are implicitly abstract",
@@ -4493,6 +4513,7 @@ impl Compiler {
             } => {
                 let resolved_trait = self.resolve_name(name);
                 self.validate_no_discard_target(attributes, "class")?;
+                self.validate_override_target(attributes, "class", false)?;
                 if !generic_params.is_empty()
                     || methods
                         .iter()
@@ -4559,6 +4580,7 @@ impl Compiler {
                         &method.name,
                         &cp.return_type_hint,
                     )?;
+                    self.validate_override_target(&method.attributes, "method", true)?;
                     self.validate_magic_method_return_type(
                         &resolved_trait,
                         &method.name,
@@ -4644,14 +4666,20 @@ impl Compiler {
                         .params
                         .iter()
                         .map(|parameter| {
-                            self.compile_attributes_in_scope_mode_with_property(
+                            let mut attributes = self.compile_attributes_in_scope_mode_with_property(
                                 &parameter.attributes,
                                 32,
                                 Some(&resolved_trait),
                                 None,
                                 hook_property.as_deref(),
                                 true,
-                            )
+                            );
+                            if parameter.promoted_property.is_some() {
+                                attributes.retain(|attribute| {
+                                    !attribute.name.eq_ignore_ascii_case("Override")
+                                });
+                            }
+                            attributes
                         })
                         .collect();
                     self.functions.extend(func_compiler.functions);
@@ -4668,6 +4696,7 @@ impl Compiler {
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 for prop in properties {
+                    self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
                         return Err(self.goto_error(
                             "Cannot use the final modifier on an abstract property",
@@ -4886,6 +4915,7 @@ impl Compiler {
             } => {
                 let resolved_enum = self.resolve_name(name);
                 self.validate_no_discard_target(attributes, "class")?;
+                self.validate_override_target(attributes, "class", false)?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
                     return Err(self.goto_error(
                         &format!("Cannot apply #[\\Deprecated] to enum {resolved_enum}"),
@@ -5149,6 +5179,7 @@ impl Compiler {
                         &method.name,
                         &cp.return_type_hint,
                     )?;
+                    self.validate_override_target(&method.attributes, "method", true)?;
                     self.validate_magic_method_return_type(
                         &resolved_enum,
                         &method.name,
@@ -5229,7 +5260,16 @@ impl Compiler {
                     user_func.parameter_attributes = method
                         .params
                         .iter()
-                        .map(|parameter| self.compile_attributes(&parameter.attributes, 32))
+                        .map(|parameter| {
+                            let mut attributes =
+                                self.compile_attributes(&parameter.attributes, 32);
+                            if parameter.promoted_property.is_some() {
+                                attributes.retain(|attribute| {
+                                    !attribute.name.eq_ignore_ascii_case("Override")
+                                });
+                            }
+                            attributes
+                        })
                         .collect();
                     self.functions.extend(func_compiler.functions);
                     self.class_defs.extend(func_compiler.class_defs);
@@ -5247,6 +5287,7 @@ impl Compiler {
                 // Static properties (cases) are stored as class properties with is_enum_case flag.
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 for case in cases {
+                    self.validate_override_target(&case.attributes, "class constant", false)?;
                     let case_name = &case.name;
                     let case_value = &case.value;
                     use crate::value::{PhpArray, PhpObject};
@@ -5386,6 +5427,7 @@ impl Compiler {
     ) -> Result<Vec<ClassConstantDefinition>, String> {
         let mut names = std::collections::HashSet::new();
         for constant in constants {
+            self.validate_override_target(&constant.attributes, "class constant", false)?;
             if !names.insert(constant.name.as_str()) {
                 return Err(format!(
                     "Cannot redefine class constant {}::{}",

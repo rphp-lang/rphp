@@ -9,47 +9,76 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,040 pass, 2,257 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,070 pass, 2,227 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-57.391% and the whole-corpus rate is 54.295%; 4,618 of 5,297 attempted cases
-reach runtime (87.181%). Relative to the preceding 3,037-pass checkpoint, the
-exact pass-set delta is +3/-0. The initial PHP 8.5 corpus continues to have no
+57.957% and the whole-corpus rate is 54.831%; 4,618 of 5,297 attempted cases
+reach runtime (87.181%). Relative to the preceding 3,040-pass checkpoint, the
+exact pass-set delta is +30/-0. The initial PHP 8.5 corpus continues to have no
 process hazard.
 
-Reference-returning get hooks now recognize a return of their own property as
-backing-storage access, including the reference-binding opcode used by PHP 8.5.
-Indirect dimension assignment, append, append-by-reference and coalesce writes
-dereference temporary and variable results before mutating the exposed cell.
-An alias obtained from a property hook or magic getter carries access-local
-provenance, so the mutation writes through that alias without a synthetic
-setter call or asymmetric-visibility check, while ordinary reference-valued
-properties retain their write visibility. Direct reference assignment to a
-hooked property invokes its getter first and then raises PHP's overloaded-
-object error.
+PHP 8.5's final internal `Override` class is now registered as an
+`#[Attribute(12)]` marker with its zero-argument constructor and Reflection
+contract. Compile-time validation accepts it only on methods, property hooks,
+properties and promoted properties, rejects repetition, and preserves
+`DelayedTargetValidation` target suppression without suppressing the semantic
+override check. A promoted marker is reflected on the property rather than the
+constructor parameter.
 
-The complete `Zend/tests/property_hooks` directory now has 181 of 211 exact
-passes, up from 179. `property_hooks/bug007.phpt`,
-`property_hooks/bug009.phpt` and the general
-`coalesce/assign_coalesce_008.phpt` case move to exact passes. The complete
-5,599-case delta is +3/-0 with no lost pass, other status or failure-stage
-movement, timeout or crash. All five Cargo
-configurations, all-feature/all-target, formatting and the exact unsafe ratchet
-pass. Composer S0, all four Symfony S1 gates, warmed-kernel S2 and cold-build S3
-also pass on AMD64; S3 used the available PHP 8.5.9 Phar-capable oracle, while
-the language corpus remained pinned to PHP 8.5.6.
+Cold class linking requires each marked member to match an effective
+non-private parent declaration, inherited interface contract or abstract trait
+requirement. Concrete constructors and concrete members supplied only by a
+trait are not override contracts; abstract constructors are. Trait markers are
+validated when composed, honor `insteadof`, and propagate to aliases under the
+alias name. Property matching remains case-sensitive, and hook matching uses
+the exact inherited get/set capability, including implicit accessors of plain
+or backed properties.
 
-The exact base `664cd430` and release candidate were compared in 32 balanced
+All 50 `Zend/tests/attributes/override` cases now pass, up from 25. The four
+delayed-target-validation error cases and
+`property_hooks/override_attribute_fail.phpt` also become exact, while all 59
+corpus cases that use `Override` pass. The complete property-hooks directory is
+182 of 211. The full 5,599-case delta is +30/-0 with no lost pass, other status
+or failure-stage movement, timeout or crash. All five Cargo configurations,
+all-feature/all-target, formatting and the exact unsafe ratchet pass. Composer
+S0, all four Symfony S1 gates, warmed-kernel S2 and cold-build S3 also pass on
+AMD64; S3 used the available PHP 8.5.9 Phar-capable oracle, while the language
+corpus remained pinned to PHP 8.5.6.
+
+The exact base `6923306b` and release candidate were compared on one pinned
+Ryzen 9 7950X CPU without removing outliers. Sixty-three balanced ABBA/BAAB
+pairs of 150 empty-output requests measured baseline p10/median/p90
+0.204465/0.205459/0.207942 seconds and candidate
+0.203213/0.204080/0.205632 seconds: -0.671% by independent medians and -0.681%
+by the paired-ratio median, whose p10/p90 is -1.563%/+0.028%. A separate
+31-pair `bench_calls.php` control retained checksum `37500007500000` and
+measured baseline 0.375214/0.379965/0.385529 seconds versus candidate
+0.377402/0.380948/0.385341 seconds: +0.259% independently and +0.277% paired,
+with paired p10/p90 -1.334%/+1.601%. Both medians remain below the five-percent
+regression ceiling. Override validation stays on compile/link and Reflection
+paths, the added built-in fits the regression-tested registry reservation, and
+no runtime value, object, frame or property layout changes.
+
+The preceding checkpoint made reference-returning get hooks recognize a return
+of their own property as backing-storage access, including the reference-
+binding opcode used by PHP 8.5. Indirect dimension assignment, append,
+append-by-reference and coalesce writes dereference temporary and variable
+results before mutating the exposed cell. An alias obtained from a property
+hook or magic getter carries access-local provenance, so the mutation writes
+through that alias without a synthetic setter call or asymmetric-visibility
+check, while ordinary reference-valued properties retain their write
+visibility. Direct reference assignment to a hooked property invokes its
+getter first and then raises PHP's overloaded-object error. That checkpoint
+raised the complete property-hooks directory from 179 to 181 and the full
+corpus by +3/-0.
+
+Its exact base `664cd430` and release candidate were compared in 32 balanced
 pairs on one pinned Ryzen 9 7950X CPU without removing outliers. Batches of 150
 empty-output requests measured -1.229% independently and -1.185% paired.
 Checksum-preserving controls measured -0.322%/-0.513% for indexed array append,
 +0.425%/-0.233% for irregular integer-dimension assignment, -0.040%/-0.048%
 for ordinary calls and +0.113%/+0.261% for append-by-reference, with each pair
-reported as independent/paired median delta. Their paired p10/p90 ranges were
-respectively -5.831%/+3.981%, -3.481%/+14.167%, -2.611%/+4.721%,
--1.948%/+2.077% and -4.378%/+4.585%; the noisy indexed-append upper tail is
-retained rather than removed. Every independent and paired median remains
-below the five-percent regression ceiling; the samples do not establish an
-optimization claim.
+reported as independent/paired median delta. Every independent and paired
+median remained below the five-percent regression ceiling.
 
 The preceding checkpoint scoped a protected instance property through the
 oldest non-private declaration in its prototype family, used that prototype's

@@ -945,8 +945,8 @@ impl ExecutorGlobals {
         self.function_table.reserve(512);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
-        self.class_by_id.reserve(72);
-        self.static_property_slots_by_class.reserve(72);
+        self.class_by_id.reserve(73);
+        self.static_property_slots_by_class.reserve(73);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
@@ -2019,6 +2019,474 @@ impl ExecutorGlobals {
         rendered
     }
 
+    fn override_attribute<'a>(
+        attributes: &'a [crate::vm::function::AttributeDefinition],
+    ) -> Result<Option<&'a crate::vm::function::AttributeDefinition>, String> {
+        let mut overrides = attributes
+            .iter()
+            .filter(|attribute| attribute.name.eq_ignore_ascii_case("Override"));
+        let first = overrides.next();
+        if let Some(repeated) = overrides.next() {
+            return Err(format!(
+                "Attribute \"Override\" must not be repeated{}",
+                Self::attribute_source_location(repeated)
+            ));
+        }
+        Ok(first)
+    }
+
+    fn attribute_source_location(attribute: &crate::vm::function::AttributeDefinition) -> String {
+        if attribute.source_file.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " in {} on line {}",
+                attribute.source_file, attribute.source_line
+            )
+        }
+    }
+
+    fn override_owner_name(class_def: &ClassDef) -> String {
+        class_def
+            .anonymous_public_name()
+            .unwrap_or_else(|| class_def.name.clone())
+            .split('\0')
+            .next()
+            .unwrap_or(&class_def.name)
+            .to_string()
+    }
+
+    fn collect_override_interfaces<'a>(
+        &'a self,
+        class_def: &ClassDef,
+        interfaces: &mut Vec<&'a ClassDef>,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        for interface_name in &class_def.implements {
+            let Some(interface) = self.find_class(interface_name) else {
+                continue;
+            };
+            if visited.insert(interface.name.to_ascii_lowercase()) {
+                interfaces.push(interface);
+                self.collect_override_interfaces(interface, interfaces, visited);
+            }
+        }
+        if let Some(parent) = class_def
+            .parent
+            .as_deref()
+            .and_then(|parent| self.find_class(parent))
+        {
+            self.collect_override_interfaces(parent, interfaces, visited);
+        }
+    }
+
+    fn internal_interface_declares_method(interface: &ClassDef, method: &str) -> bool {
+        if interface.source_file.is_some() {
+            return false;
+        }
+        // Core interface definitions expose their identity and ancestry here,
+        // while their callable contracts remain implemented as internal stubs.
+        let interface = interface.name.to_ascii_lowercase();
+        let method = method.to_ascii_lowercase();
+        match interface.as_str() {
+            "iteratoraggregate" => method == "getiterator",
+            "iterator" => matches!(
+                method.as_str(),
+                "current" | "key" | "next" | "rewind" | "valid"
+            ),
+            "recursiveiterator" => matches!(method.as_str(), "haschildren" | "getchildren"),
+            "countable" => method == "count",
+            "arrayaccess" => matches!(
+                method.as_str(),
+                "offsetexists" | "offsetget" | "offsetset" | "offsetunset"
+            ),
+            "stringable" => method == "__tostring",
+            "serializable" => matches!(method.as_str(), "serialize" | "unserialize"),
+            "jsonserializable" => method == "jsonserialize",
+            "unitenum" => method == "cases",
+            "backedenum" => matches!(method.as_str(), "from" | "tryfrom"),
+            "sessionhandlerinterface" => matches!(
+                method.as_str(),
+                "open" | "close" | "read" | "write" | "destroy" | "gc"
+            ),
+            "sessionupdatetimestamphandlerinterface" => {
+                matches!(method.as_str(), "validateid" | "updatetimestamp")
+            }
+            _ => false,
+        }
+    }
+
+    fn override_interface_method_exists(&self, class_def: &ClassDef, method: &str) -> bool {
+        let mut interfaces = Vec::new();
+        self.collect_override_interfaces(
+            class_def,
+            &mut interfaces,
+            &mut std::collections::HashSet::new(),
+        );
+        interfaces.into_iter().any(|interface| {
+            interface
+                .methods
+                .iter()
+                .any(|candidate| candidate.0.eq_ignore_ascii_case(method))
+                || Self::internal_interface_declares_method(interface, method)
+        })
+    }
+
+    fn override_interface_property_exists(&self, class_def: &ClassDef, property: &str) -> bool {
+        let mut interfaces = Vec::new();
+        self.collect_override_interfaces(
+            class_def,
+            &mut interfaces,
+            &mut std::collections::HashSet::new(),
+        );
+        interfaces.into_iter().any(|interface| {
+            interface
+                .properties
+                .iter()
+                .any(|candidate| candidate.name == property)
+        })
+    }
+
+    fn abstract_trait_method_exists(
+        &self,
+        class_def: &ClassDef,
+        method: &str,
+        excluded_trait: Option<&str>,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        class_def.uses.iter().any(|trait_name| {
+            let Some(trait_def) = self.find_class(trait_name) else {
+                return false;
+            };
+            if !visited.insert(trait_def.name.to_ascii_lowercase()) {
+                return false;
+            }
+            let own_match = excluded_trait
+                .is_none_or(|excluded| !trait_def.name.eq_ignore_ascii_case(excluded))
+                && trait_def.methods.iter().any(|candidate| {
+                    candidate.0.eq_ignore_ascii_case(method)
+                        && trait_def.method_is_abstract(&candidate.0)
+                });
+            own_match
+                || self.abstract_trait_method_exists(trait_def, method, excluded_trait, visited)
+        })
+    }
+
+    fn abstract_trait_property_exists(
+        &self,
+        class_def: &ClassDef,
+        property: &str,
+        excluded_trait: Option<&str>,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        class_def.uses.iter().any(|trait_name| {
+            let Some(trait_def) = self.find_class(trait_name) else {
+                return false;
+            };
+            if !visited.insert(trait_def.name.to_ascii_lowercase()) {
+                return false;
+            }
+            let own_match = excluded_trait
+                .is_none_or(|excluded| !trait_def.name.eq_ignore_ascii_case(excluded))
+                && trait_def.properties.iter().any(|candidate| {
+                    candidate.name == property
+                        && (candidate.abstract_get_hook() || candidate.abstract_set_hook())
+                });
+            own_match
+                || self.abstract_trait_property_exists(trait_def, property, excluded_trait, visited)
+        })
+    }
+
+    fn override_parent_method_exists(&self, class_def: &ClassDef, method: &str) -> bool {
+        let mut parent_name = class_def.parent.as_deref();
+        while let Some(name) = parent_name {
+            let Some(parent) = self.find_class(name) else {
+                break;
+            };
+            if let Some(candidate) = self.find_effective_method(parent, method) {
+                if method.eq_ignore_ascii_case("__construct") {
+                    return candidate.is_abstract;
+                }
+                if candidate.visibility != Visibility::Private {
+                    return true;
+                }
+            }
+            if let Some((property_name, hook)) = method
+                .strip_prefix('$')
+                .and_then(|name| name.split_once("::"))
+                && let Some(property) = parent.properties.iter().find(|property| {
+                    property.name == property_name && property.visibility != Visibility::Private
+                })
+            {
+                let inherited_accessor = match hook.to_ascii_lowercase().as_str() {
+                    "get" => property.has_get_hook || !property.is_virtual_hook_property(),
+                    "set" => {
+                        !property.is_readonly
+                            && (property.has_set_hook || !property.is_virtual_hook_property())
+                    }
+                    _ => false,
+                };
+                if inherited_accessor {
+                    return true;
+                }
+            }
+            parent_name = parent.parent.as_deref();
+        }
+        false
+    }
+
+    fn override_parent_property_exists(&self, class_def: &ClassDef, property: &str) -> bool {
+        let mut parent_name = class_def.parent.as_deref();
+        while let Some(name) = parent_name {
+            let Some(parent) = self.find_class(name) else {
+                break;
+            };
+            if parent.properties.iter().any(|candidate| {
+                candidate.name == property && candidate.visibility != Visibility::Private
+            }) || parent.static_properties.iter().any(|candidate| {
+                candidate.name == property && candidate.visibility != Visibility::Private
+            }) {
+                return true;
+            }
+            parent_name = parent.parent.as_deref();
+        }
+        false
+    }
+
+    fn override_method_exists(
+        &self,
+        class_def: &ClassDef,
+        method: &str,
+        excluded_trait: Option<&str>,
+    ) -> bool {
+        self.override_parent_method_exists(class_def, method)
+            || self.override_interface_method_exists(class_def, method)
+            || self.abstract_trait_method_exists(
+                class_def,
+                method,
+                excluded_trait,
+                &mut std::collections::HashSet::new(),
+            )
+    }
+
+    fn override_property_exists(
+        &self,
+        class_def: &ClassDef,
+        property: &str,
+        excluded_trait: Option<&str>,
+    ) -> bool {
+        self.override_parent_property_exists(class_def, property)
+            || self.override_interface_property_exists(class_def, property)
+            || self.abstract_trait_property_exists(
+                class_def,
+                property,
+                excluded_trait,
+                &mut std::collections::HashSet::new(),
+            )
+    }
+
+    fn missing_override_method_error(
+        class_def: &ClassDef,
+        method: &str,
+        attribute: &crate::vm::function::AttributeDefinition,
+    ) -> String {
+        format!(
+            "{}::{}() has #[\\Override] attribute, but no matching parent method exists{}",
+            Self::override_owner_name(class_def),
+            method,
+            Self::attribute_source_location(attribute)
+        )
+    }
+
+    fn missing_override_property_error(
+        class_def: &ClassDef,
+        property: &str,
+        attribute: &crate::vm::function::AttributeDefinition,
+    ) -> String {
+        format!(
+            "{}::${} has #[\\Override] attribute, but no matching parent property exists{}",
+            Self::override_owner_name(class_def),
+            property,
+            Self::attribute_source_location(attribute)
+        )
+    }
+
+    fn validate_composed_trait_overrides(
+        &self,
+        class_def: &ClassDef,
+        composition_owner: &ClassDef,
+        trait_def: &ClassDef,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> Result<(), String> {
+        if !visited.insert(trait_def.name.to_ascii_lowercase()) {
+            return Ok(());
+        }
+        for method in &trait_def.methods {
+            if composition_owner
+                .trait_precedences
+                .iter()
+                .any(|precedence| {
+                    precedence.method.eq_ignore_ascii_case(&method.0)
+                        && precedence
+                            .instead_of
+                            .iter()
+                            .any(|excluded| excluded.eq_ignore_ascii_case(&trait_def.name))
+                })
+            {
+                continue;
+            }
+            if class_def
+                .methods
+                .iter()
+                .any(|candidate| candidate.0.eq_ignore_ascii_case(&method.0))
+            {
+                continue;
+            }
+            let Some(attribute) = Self::override_attribute(&method.4.attributes)? else {
+                continue;
+            };
+            if !self.override_method_exists(class_def, &method.0, Some(&trait_def.name)) {
+                return Err(Self::missing_override_method_error(
+                    class_def, &method.0, attribute,
+                ));
+            }
+        }
+        for property in trait_def
+            .properties
+            .iter()
+            .chain(&trait_def.static_properties)
+        {
+            if class_def
+                .properties
+                .iter()
+                .chain(&class_def.static_properties)
+                .any(|candidate| candidate.name == property.name)
+            {
+                continue;
+            }
+            let Some(attribute) = Self::override_attribute(&property.attributes)? else {
+                continue;
+            };
+            if !self.override_property_exists(class_def, &property.name, Some(&trait_def.name)) {
+                return Err(Self::missing_override_property_error(
+                    class_def,
+                    &property.name,
+                    attribute,
+                ));
+            }
+        }
+        for nested in &trait_def.uses {
+            if let Some(nested) = self.find_class(nested) {
+                self.validate_composed_trait_overrides(class_def, trait_def, nested, visited)?;
+            }
+        }
+        self.validate_composed_trait_alias_overrides(class_def, trait_def)?;
+        Ok(())
+    }
+
+    fn validate_composed_trait_alias_overrides(
+        &self,
+        class_def: &ClassDef,
+        composition_owner: &ClassDef,
+    ) -> Result<(), String> {
+        for adaptation in &composition_owner.trait_aliases {
+            let Some(alias) = adaptation.alias.as_deref() else {
+                continue;
+            };
+            let source_trait = adaptation
+                .trait_name
+                .as_deref()
+                .and_then(|name| {
+                    composition_owner
+                        .uses
+                        .iter()
+                        .find(|used| used.eq_ignore_ascii_case(name))
+                })
+                .or_else(|| {
+                    composition_owner.uses.iter().find(|used| {
+                        self.find_class(used).is_some_and(|trait_def| {
+                            trait_def
+                                .methods
+                                .iter()
+                                .any(|method| method.0.eq_ignore_ascii_case(&adaptation.method))
+                        })
+                    })
+                });
+            let Some(source_trait) = source_trait.and_then(|name| self.find_class(name)) else {
+                continue;
+            };
+            let Some(source_method) = source_trait
+                .methods
+                .iter()
+                .find(|method| method.0.eq_ignore_ascii_case(&adaptation.method))
+            else {
+                continue;
+            };
+            let Some(attribute) = Self::override_attribute(&source_method.4.attributes)? else {
+                continue;
+            };
+            if !self.override_method_exists(class_def, alias, Some(&source_trait.name)) {
+                return Err(Self::missing_override_method_error(
+                    class_def, alias, attribute,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn validate_override_contracts(&self, class_def: &ClassDef) -> Result<(), String> {
+        let _ = Self::override_attribute(&class_def.attributes)?;
+        for constant in &class_def.constants {
+            let _ = Self::override_attribute(&constant.attributes)?;
+        }
+        for method in &class_def.methods {
+            let Some(attribute) = Self::override_attribute(&method.4.attributes)? else {
+                continue;
+            };
+            if !class_def.is_trait && !self.override_method_exists(class_def, &method.0, None) {
+                return Err(Self::missing_override_method_error(
+                    class_def, &method.0, attribute,
+                ));
+            }
+        }
+        for property in class_def
+            .properties
+            .iter()
+            .chain(&class_def.static_properties)
+        {
+            let Some(attribute) = Self::override_attribute(&property.attributes)? else {
+                continue;
+            };
+            if !class_def.is_trait
+                && !self.override_property_exists(class_def, &property.name, None)
+            {
+                return Err(Self::missing_override_property_error(
+                    class_def,
+                    &property.name,
+                    attribute,
+                ));
+            }
+        }
+        if class_def.is_trait {
+            return Ok(());
+        }
+        let mut visited = std::collections::HashSet::new();
+        for trait_name in &class_def.uses {
+            if let Some(trait_def) = self.find_class(trait_name) {
+                self.validate_composed_trait_overrides(
+                    class_def,
+                    class_def,
+                    trait_def,
+                    &mut visited,
+                )?;
+            }
+        }
+        self.validate_composed_trait_alias_overrides(class_def, class_def)?;
+        Ok(())
+    }
+
     /// Concrete parent methods carry the same parameter contravariance and
     /// return covariance contract as interfaces and abstract declarations.
     /// Constructors retain PHP's historical exemption unless the inherited
@@ -2259,7 +2727,14 @@ impl ExecutorGlobals {
     }
 
     fn class_definition_requires_delayed_linking(&self, class_def: &ClassDef) -> bool {
-        property_hook_setter_variance_requires_delayed_linking(self, class_def)
+        class_def.parent.as_deref().is_some_and(|parent| {
+            // A forward child cannot be checked against its interfaces
+            // until a later source declaration supplies inherited
+            // implementations. Classes without interface requirements
+            // retain the established eager-link behavior, including
+            // unsupported internal parents that are intentionally absent.
+            !class_def.implements.is_empty() && self.find_class(parent).is_none()
+        }) || property_hook_setter_variance_requires_delayed_linking(self, class_def)
             || class_def
                 .parent
                 .as_deref()
@@ -2331,6 +2806,7 @@ impl ExecutorGlobals {
                 class_is_a_in_table(class_table, actual, bound)
             })?;
         validate_property_hook_setter_variance(self, &class_def)?;
+        self.validate_override_contracts(&class_def)?;
         // Assign stable class ID
         let id = self.next_class_id;
         self.next_class_id += 1;

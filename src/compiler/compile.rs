@@ -3952,6 +3952,19 @@ impl Compiler {
         Ok(first)
     }
 
+    fn override_attribute_line(&self, attributes: &[Attribute]) -> Result<Option<usize>, String> {
+        let mut lines = attributes.iter().filter_map(|attribute| {
+            self.resolve_name(&attribute.name)
+                .eq_ignore_ascii_case("Override")
+                .then_some(attribute.line)
+        });
+        let first = lines.next();
+        if let Some(line) = lines.next() {
+            return Err(self.goto_error("Attribute \"Override\" must not be repeated", line));
+        }
+        Ok(first)
+    }
+
     fn has_delayed_target_validation(&self, attributes: &[Attribute]) -> bool {
         self.attribute_line(attributes, "DelayedTargetValidation")
             .is_some()
@@ -3971,6 +3984,26 @@ impl Compiler {
         Err(self.goto_error(
             &format!(
                 "Attribute \"NoDiscard\" cannot target {target} (allowed targets: function, method)"
+            ),
+            line,
+        ))
+    }
+
+    fn validate_override_target(
+        &self,
+        attributes: &[Attribute],
+        target: &str,
+        member_target: bool,
+    ) -> Result<(), String> {
+        let Some(line) = self.override_attribute_line(attributes)? else {
+            return Ok(());
+        };
+        if member_target || self.has_delayed_target_validation(attributes) {
+            return Ok(());
+        }
+        Err(self.goto_error(
+            &format!(
+                "Attribute \"Override\" cannot target {target} (allowed targets: method, property)"
             ),
             line,
         ))
@@ -4709,6 +4742,11 @@ impl Compiler {
         let mut type_hints = Vec::new();
         let mut param_names = Vec::new();
         for (i, param) in params.iter().enumerate() {
+            self.validate_override_target(
+                &param.attributes,
+                "parameter",
+                param.promoted_property.is_some(),
+            )?;
             if param.name == "this" {
                 return Err(self.goto_error("Cannot use $this as parameter", param.line));
             }
@@ -7865,6 +7903,9 @@ impl Compiler {
                     "{closure}",
                     &cp.return_type_hint,
                 ) {
+                    self.deferred_error = Some(error);
+                }
+                if let Err(error) = self.validate_override_target(attributes, "function", false) {
                     self.deferred_error = Some(error);
                 }
                 func_compiler.return_type_context = cp.return_type_hint.clone();

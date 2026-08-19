@@ -1374,6 +1374,14 @@ fn attribute_construct(
     Ok(())
 }
 
+fn override_construct(
+    _ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    Ok(())
+}
+
 fn deprecated_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,
@@ -3664,11 +3672,8 @@ fn class_get_constructor(
     {
         return return_value(rv, Value::null());
     }
-    let mut methods = Vec::new();
-    collect_reflected_methods(eg, &owner, &mut methods, &mut HashSet::new());
-    let Some((name, visibility, is_static, is_final, function, declaring_class)) = methods
-        .into_iter()
-        .find(|(name, ..)| name.eq_ignore_ascii_case("__construct"))
+    let Some((name, visibility, is_static, is_final, function, declaring_class)) =
+        find_reflected_method(eg, &owner, "__construct")
     else {
         return return_value(rv, Value::null());
     };

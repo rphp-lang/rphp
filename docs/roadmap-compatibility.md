@@ -789,6 +789,21 @@ calls at -0.040% and append-by-reference at +0.113% independently; all paired
 and independent medians remain below the five-percent ceiling, with outliers
 retained.
 
+The `override-attribute` checkpoint reaches 3,070 passes with 2,227 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+PHP 8.5's final internal `Override` attribute now validates methods, properties,
+property hooks and promoted properties against effective parent, interface and
+abstract-trait contracts. It preserves delayed target validation, applies
+trait precedence and aliases, recognizes implicit accessors on backed
+properties, and exposes the expected Reflection metadata. All 50 dedicated
+override cases and all 59 corpus cases using the marker pass; the exact full-
+corpus delta is +30/-0 with no other status or failure-stage movement. All five
+feature configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. CPU-pinned release A/B medians put
+empty-request startup at -0.671% independently and -0.681% paired, while the
+ordinary-call control is +0.259% independently and +0.277% paired. Exact output
+is retained and every median remains below the five-percent ceiling.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract
