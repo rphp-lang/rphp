@@ -9,11 +9,56 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,250 pass, 2,047 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,260 pass, 2,037 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-61.355% and the whole-corpus rate is 58.046%; 4,615 of 5,297 attempted cases
-reach runtime (87.125%). Relative to exact base `8bbd98b9`, the pass-set delta
-is +11/-0: all 3,239 prior passes remain exact.
+61.544% and the whole-corpus rate is 58.225%; 4,615 of 5,297 attempted cases
+reach runtime (87.125%). Relative to exact base `7aea4a1f`, the pass-set delta
+is +10/-0: all 3,250 prior passes remain exact.
+
+Concrete class and enum declarations now validate PHP 8.5's reserved interface
+contract across direct, inherited and separately included interface graphs.
+Ordinary and abstract classes cannot implement `UnitEnum` or `BackedEnum`;
+unit enums cannot acquire `BackedEnum`; and explicitly repeating an enum's
+implicit interface reports the canonical declaration-stage fatal. User
+interfaces may still extend either built-in and backed enums may implement an
+interface derived from `BackedEnum`, including legal diamonds.
+
+Enums reject `Throwable` and direct or indirect `Serializable` with the exact
+class-like kind, source and line. `Serializable` also emits PHP's preceding
+deprecation for the concrete enum. Concrete legacy classes receive the same
+deprecation unless an effective `__serialize()` and `__unserialize()` pair is
+declared, inherited or supplied by a trait; interfaces and abstract classes do
+not emit it. The cold linker applies the rule after includes as well as within
+one compiled source unit.
+
+Four original E2E tests cover legal enum-interface diamonds, direct and
+transitive rejection, the `BackedEnum`/`UnitEnum` diagnostic distinction,
+inherited serialization hooks, diagnostic ordering and separately included
+interface graphs. The 152-case `Zend/tests/enum` slice rises from 89 to 98
+exact passes. Seven selected enum interface cases, adjacent `Throwable` and
+duplicate-interface cases, and `serialize/serializable_deprecation.phpt`
+become exact; no other full-corpus status or failure category moves.
+Four remaining failures advance within the same output category by gaining the
+required preceding `Serializable` deprecation; their later independent
+serialization or signature mismatches remain visible.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. The work is
+confined to compiler validation, declaration diagnostics and cold class linking;
+it changes no executor path or runtime/value/object layout, so no runtime
+performance lane applies.
+
+Lazy duplicate or mismatched backing-value validation, mutation/reference
+diagnostics for built-in enum properties, Reflection and SplObjectStorage remain
+separate checkpoints.
+
+The preceding `enum-declaration-shape` checkpoint is documented below. It
+reached 3,250 passes with 2,047 failures, 114 skips, one XFAIL, 187 unsupported
+cases, zero timeouts and zero crashes. Relative to exact base `8bbd98b9`, its
+pass-set delta was +11/-0 with all 3,239 prior passes retained.
 
 Enum declarations now carry their complete backing type and any property syntax
 from the parser into compiler validation. Backed enums accept exactly one

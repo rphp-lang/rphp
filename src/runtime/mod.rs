@@ -3017,6 +3017,194 @@ impl ExecutorGlobals {
             .remove(&name.to_ascii_lowercase())
     }
 
+    #[cold]
+    fn interface_closure_for_roots(&self, roots: &[String]) -> Vec<String> {
+        let mut closure = Vec::new();
+        let mut stack = roots.iter().rev().cloned().collect::<Vec<_>>();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(name) = stack.pop() {
+            let definition = self.find_class(&name);
+            let canonical = definition.map_or(name, |interface| interface.name.clone());
+            if !seen.insert(canonical.to_ascii_lowercase()) {
+                continue;
+            }
+            closure.push(canonical);
+            if let Some(interface) = definition
+                && interface.is_interface
+            {
+                stack.extend(interface.implements.iter().rev().cloned());
+            }
+        }
+        closure
+    }
+
+    #[cold]
+    fn class_like_has_effective_method(&self, class_def: &ClassDef, method: &str) -> bool {
+        if class_def
+            .methods
+            .iter()
+            .any(|(name, ..)| name.eq_ignore_ascii_case(method))
+            || class_def.trait_aliases.iter().any(|alias| {
+                alias
+                    .alias
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(method))
+            })
+        {
+            return true;
+        }
+        let mut stack = class_def
+            .uses
+            .iter()
+            .chain(class_def.parent.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(name) = stack.pop() {
+            if !seen.insert(name.to_ascii_lowercase()) {
+                continue;
+            }
+            let Some(definition) = self.find_class(&name) else {
+                continue;
+            };
+            if definition
+                .methods
+                .iter()
+                .any(|(name, ..)| name.eq_ignore_ascii_case(method))
+                || definition.trait_aliases.iter().any(|alias| {
+                    alias
+                        .alias
+                        .as_deref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(method))
+                })
+            {
+                return true;
+            }
+            stack.extend(definition.uses.iter().cloned());
+            stack.extend(definition.parent.iter().cloned());
+        }
+        false
+    }
+
+    #[cold]
+    fn declaration_interface_contract(&mut self, class_def: &ClassDef) -> Result<(), String> {
+        if class_def.is_interface || class_def.is_trait {
+            return Ok(());
+        }
+        let location = class_def
+            .source_file
+            .as_ref()
+            .map_or_else(String::new, |file| {
+                format!(" in {file} on line {}", class_def.declaration_line)
+            });
+        let is_backed_enum = class_def.is_enum
+            && class_def
+                .implements
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("BackedEnum"));
+        let mut roots = if class_def.is_enum {
+            class_def
+                .implements
+                .iter()
+                .filter(|name| {
+                    !name.eq_ignore_ascii_case("UnitEnum")
+                        && !(is_backed_enum && name.eq_ignore_ascii_case("BackedEnum"))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            class_def.implements.clone()
+        };
+        if !class_def.is_enum {
+            let mut parent = class_def.parent.as_deref();
+            let mut seen = std::collections::HashSet::new();
+            while let Some(name) = parent {
+                if !seen.insert(name.to_ascii_lowercase()) {
+                    break;
+                }
+                let Some(definition) = self.find_class(name) else {
+                    break;
+                };
+                roots.extend(definition.implements.iter().cloned());
+                parent = definition.parent.as_deref();
+            }
+        }
+        if roots.is_empty() {
+            return Ok(());
+        }
+        let closure = self.interface_closure_for_roots(&roots);
+
+        if !class_def.is_enum {
+            for root in &roots {
+                let inherited = self.interface_closure_for_roots(std::slice::from_ref(root));
+                if inherited
+                    .first()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("BackedEnum"))
+                {
+                    return Err(format!(
+                        "Non-enum class {} cannot implement interface BackedEnum{location}",
+                        class_def.name
+                    ));
+                }
+                if inherited.iter().any(|name| {
+                    name.eq_ignore_ascii_case("UnitEnum") || name.eq_ignore_ascii_case("BackedEnum")
+                }) {
+                    return Err(format!(
+                        "Non-enum class {} cannot implement interface UnitEnum{location}",
+                        class_def.name
+                    ));
+                }
+            }
+        } else if !is_backed_enum
+            && closure
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("BackedEnum"))
+        {
+            return Err(format!(
+                "Non-backed enum {} cannot implement interface BackedEnum{location}",
+                class_def.name
+            ));
+        }
+
+        let implements_serializable = closure
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("Serializable"));
+        if class_def.source_file.is_some()
+            && implements_serializable
+            && (class_def.is_enum
+                || (!class_def.is_abstract
+                    && !(self.class_like_has_effective_method(class_def, "__serialize")
+                        && self.class_like_has_effective_method(class_def, "__unserialize"))))
+        {
+            self.emit_compile_deprecations(&[crate::compiler::compile::CompileDeprecation {
+                message: format!(
+                    "{} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)",
+                    class_def.name
+                ),
+                file: class_def.source_file.clone().unwrap_or_default(),
+                line: class_def.declaration_line,
+                warning: false,
+            }]);
+        }
+        if class_def.is_enum && implements_serializable {
+            return Err(format!(
+                "Enum {} cannot implement the Serializable interface{location}",
+                class_def.name
+            ));
+        }
+        if class_def.is_enum
+            && closure
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("Throwable"))
+        {
+            return Err(format!(
+                "Enum {} cannot implement interface Throwable{location}",
+                class_def.name
+            ));
+        }
+        Ok(())
+    }
+
     /// Register a class definition and its methods in the function table.
     /// Resolves inheritance: merges parent properties/methods into child.
     /// For non-interface, non-abstract classes: validates interface contracts.
@@ -3132,6 +3320,7 @@ impl ExecutorGlobals {
             }
         }
 
+        self.declaration_interface_contract(&class_def)?;
         self.validate_parent_method_contracts(&class_def)?;
         self.validate_abstract_method_contracts(&class_def)?;
 

@@ -889,6 +889,27 @@ Lazy duplicate/mismatched backing validation, runtime enum-property mutation
 and reference diagnostics, Reflection and SplObjectStorage remain separate
 checkpoints.
 
+The `enum-interface-contracts` checkpoint reaches 3,260 passes with 2,037
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Concrete declarations now validate PHP 8.5's `UnitEnum`, `BackedEnum`,
+`Throwable` and `Serializable` restrictions through direct, inherited and
+separately included interface graphs while preserving legal user-interface
+diamonds. Explicit enum interfaces and non-backed misuse report the canonical
+declaration kind, source and line. Concrete legacy `Serializable` classes and
+forbidden enums emit the required deprecation unless an effective modern magic
+pair suppresses it for a class. The enum slice rises from 89 to 98 exact passes;
+`serialize/serializable_deprecation.phpt` is the tenth gain. The exact
+full-corpus delta from base `7aea4a1f` is +10/-0, with every prior pass retained
+and no other status or failure-category movement. Four remaining failures gain
+the required preceding deprecation at the same output stage while retaining
+their independent later gaps. Four original E2E tests, all five feature
+configurations, all-target, formatting, unsafe policy, Composer S0, four
+Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass. Compiler validation
+and cold class linking change no executor or runtime data layout, so no runtime
+performance lane applies. Lazy duplicate/mismatched backing values, runtime
+enum-property mutation/reference diagnostics, Reflection and SplObjectStorage
+remain separate checkpoints.
+
 The `fiber-bailout-shutdown` checkpoint reaches 3,186 passes with 2,111
 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
 crashes. A lazy request-local FIFO retains validated shutdown callbacks,

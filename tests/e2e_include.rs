@@ -1,6 +1,6 @@
 /// End-to-end tests for include/require/include_once/require_once statements.
 mod common;
-use common::{run_php, run_php_with_source_context};
+use common::{run_php, run_php_expect_error_with_source_context, run_php_with_source_context};
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -57,6 +57,80 @@ fn test_basic_require() {
     let source = format!("<?php require '{}';", path);
     let output = run_php(&source);
     assert_eq!(output, "from required");
+}
+
+#[test]
+fn included_interface_graph_enforces_enum_only_and_serializable_contracts() {
+    let dir = TempDir::new();
+    let contracts = dir.path().join("enum-contracts.php");
+    std::fs::write(
+        &contracts,
+        "<?php interface ExternalUnit extends UnitEnum {} interface ExternalBacked extends BackedEnum {} interface ExternalLegacy extends Serializable {}",
+    )
+    .unwrap();
+
+    let invalid = dir.path().join("invalid-enum-implementor.php");
+    std::fs::write(&invalid, "<?php class Invalid implements ExternalUnit {}").unwrap();
+    let invalid_source = format!(
+        "<?php require '{}'; require '{}';",
+        contracts.to_string_lossy(),
+        invalid.to_string_lossy()
+    );
+    let error = run_php_expect_error_with_source_context(
+        &invalid_source,
+        "/virtual/include-driver.php",
+        "/virtual",
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Non-enum class Invalid cannot implement interface UnitEnum in {} on line 1",
+            invalid.to_string_lossy()
+        )
+    );
+
+    let aliased = dir.path().join("aliased-enum-implementor.php");
+    std::fs::write(
+        &aliased,
+        "<?php class AliasedInvalid implements ExternalBackedAlias {}",
+    )
+    .unwrap();
+    let aliased_source = format!(
+        "<?php require '{}'; class_alias(ExternalBacked::class, 'ExternalBackedAlias'); require '{}';",
+        contracts.to_string_lossy(),
+        aliased.to_string_lossy(),
+    );
+    let error = run_php_expect_error_with_source_context(
+        &aliased_source,
+        "/virtual/include-driver.php",
+        "/virtual",
+    );
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Non-enum class AliasedInvalid cannot implement interface UnitEnum in {} on line 1",
+            aliased.to_string_lossy()
+        )
+    );
+
+    let legacy = dir.path().join("legacy-implementor.php");
+    std::fs::write(
+        &legacy,
+        "<?php class LegacyValue implements ExternalLegacy { public function serialize(): string { return ''; } public function unserialize(string $data): void {} }",
+    )
+    .unwrap();
+    let legacy_source = format!(
+        "<?php require '{}'; require '{}'; echo 'ok';",
+        contracts.to_string_lossy(),
+        legacy.to_string_lossy()
+    );
+    assert_eq!(
+        run_php_with_source_context(&legacy_source, "/virtual/include-driver.php", "/virtual"),
+        format!(
+            "\nDeprecated: LegacyValue implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary) in {} on line 1\nok",
+            legacy.to_string_lossy()
+        )
+    );
 }
 
 #[test]

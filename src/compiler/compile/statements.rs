@@ -4265,6 +4265,30 @@ impl Compiler {
                     implements.iter().map(|i| self.resolve_name(&i.name)).collect();
                 let resolved_uses: Vec<String> =
                     uses.iter().map(|u| self.resolve_name(&u.name)).collect();
+
+                for interface in &resolved_implements {
+                    let inherited = self.compiled_interface_closure(interface);
+                    let reserved = if interface.eq_ignore_ascii_case("BackedEnum") {
+                        Some("BackedEnum")
+                    } else if interface.eq_ignore_ascii_case("UnitEnum")
+                        || inherited.iter().any(|name| {
+                            name.eq_ignore_ascii_case("UnitEnum")
+                                || name.eq_ignore_ascii_case("BackedEnum")
+                        })
+                    {
+                        Some("UnitEnum")
+                    } else {
+                        None
+                    };
+                    if let Some(reserved) = reserved {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Non-enum class {resolved_class} cannot implement interface {reserved}"
+                            ),
+                            *class_line,
+                        ));
+                    }
+                }
                 let resolved_trait_aliases = trait_aliases
                     .iter()
                     .map(|adaptation| TraitMethodAlias {
@@ -5107,33 +5131,94 @@ impl Compiler {
                         return Err(self.goto_error(&message, case.line));
                     }
                 }
+
+                // PHP validates forbidden enum magic methods before interface
+                // compatibility, including when Serializable is also present.
+                if let Some(method) = methods
+                    .iter()
+                    .find(|method| enum_magic_method_is_forbidden(&method.name))
+                {
+                    return Err(self.goto_error(
+                        &format!(
+                            "Enum {resolved_enum} cannot include magic method {}",
+                            method.name
+                        ),
+                        method.line,
+                    ));
+                }
                 let mut resolved_implements = Vec::with_capacity(implements.len() + 2);
-                let mut inherited_interfaces = std::collections::HashSet::new();
+                let mut direct_interfaces = std::collections::HashSet::new();
                 for interface in implements {
                     let resolved = self.resolve_name(&interface.name);
-                    for inherited in self.compiled_interface_closure(&resolved) {
-                        if inherited.eq_ignore_ascii_case("UnitEnum")
-                            || inherited.eq_ignore_ascii_case("BackedEnum")
-                        {
-                            return Err(format!(
-                                "Enum {name} cannot implement previously implemented interface {inherited}"
-                            ));
-                        }
-                        if inherited.eq_ignore_ascii_case("Serializable") {
-                            return Err(format!(
-                                "Enum {name} cannot implement the Serializable interface"
-                            ));
-                        }
-                        if inherited.eq_ignore_ascii_case("Throwable") {
-                            return Err(format!(
-                                "Enum {name} cannot implement interface Throwable"
-                            ));
-                        }
-                        if !inherited_interfaces.insert(inherited.to_ascii_lowercase()) {
-                            return Err(format!(
-                                "Enum {name} cannot implement previously implemented interface {inherited}"
-                            ));
-                        }
+                    if !direct_interfaces.insert(resolved.to_ascii_lowercase()) {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Enum {resolved_enum} cannot implement previously implemented interface {resolved}"
+                            ),
+                            *enum_line,
+                        ));
+                    }
+                    if resolved.eq_ignore_ascii_case("BackedEnum") && !is_backed {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Non-backed enum {resolved_enum} cannot implement interface BackedEnum"
+                            ),
+                            *enum_line,
+                        ));
+                    }
+                    if resolved.eq_ignore_ascii_case("UnitEnum")
+                        || resolved.eq_ignore_ascii_case("BackedEnum")
+                    {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Enum {resolved_enum} cannot implement previously implemented interface {resolved}"
+                            ),
+                            *enum_line,
+                        ));
+                    }
+
+                    let inherited = self.compiled_interface_closure(&resolved);
+                    if !is_backed
+                        && inherited
+                            .iter()
+                            .any(|name| name.eq_ignore_ascii_case("BackedEnum"))
+                    {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Non-backed enum {resolved_enum} cannot implement interface BackedEnum"
+                            ),
+                            *enum_line,
+                        ));
+                    }
+                    if inherited
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case("Serializable"))
+                    {
+                        self.compile_deprecations
+                            .borrow_mut()
+                            .push(CompileDeprecation {
+                                message: format!(
+                                    "{resolved_enum} implements the Serializable interface, which is deprecated. Implement __serialize() and __unserialize() instead (or in addition, if support for old PHP versions is necessary)"
+                                ),
+                                file: self.source_file.clone(),
+                                line: *enum_line,
+                                warning: false,
+                            });
+                        return Err(self.goto_error(
+                            &format!(
+                                "Enum {resolved_enum} cannot implement the Serializable interface"
+                            ),
+                            *enum_line,
+                        ));
+                    }
+                    if inherited
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case("Throwable"))
+                    {
+                        return Err(self.goto_error(
+                            &format!("Enum {resolved_enum} cannot implement interface Throwable"),
+                            *enum_line,
+                        ));
                     }
                     resolved_implements.push(resolved);
                 }
