@@ -186,6 +186,12 @@ pub const ASSIGN_OBJ_MODIFY: u16 = 1;
 /// Property assignment emitted by PHP 8.5 clone-with. An initialized readonly
 /// property may be replaced once by this array entry after `__clone` returns.
 pub const ASSIGN_OBJ_CLONE_WITH: u16 = 1 << 1;
+/// Instance/static property writeback follows an increment that overflowed a
+/// PHP integer. Typed property validation must not weakly coerce that result.
+pub const PROPERTY_INCDEC_INCREMENT: u16 = 1 << 2;
+/// Instance/static property writeback follows a decrement that underflowed a
+/// PHP integer. This shares the assignment-only flag space above.
+pub const PROPERTY_INCDEC_DECREMENT: u16 = 1 << 3;
 /// A standalone property assignment has no observable expression result. Its
 /// TMP/VAR source can be transferred into property storage instead of leaving
 /// a compiler-only object handle alive until frame teardown.

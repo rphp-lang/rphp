@@ -2911,6 +2911,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
                 cache,
                 class_id,
                 raw_class,
+                opline._pad,
                 value,
             );
         }
@@ -2925,7 +2926,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         raw_class,
         property,
         value,
-        opline._pad & STATIC_PROP_INDIRECT_MODIFY != 0,
+        opline._pad,
     )
 }
 
@@ -3063,6 +3064,7 @@ fn validate_cached_typed_static_property<'a>(
     cache: &mut crate::vm::instruction::InlineCache,
     class_id: u32,
     raw_class: &str,
+    assignment_flags: u16,
     mut value: Value,
 ) -> Result<ColdResult<'a>, VmError> {
     #[cfg(feature = "php-generics-reified")]
@@ -3090,6 +3092,14 @@ fn validate_cached_typed_static_property<'a>(
     let called_class = eg
         .class_by_id(class_id)
         .map_or(raw_class, |class| class.name.as_str());
+    if let Some(overflow) =
+        PropertyIncDecOverflow::from_assignment_flags(assignment_flags)
+        && let Some(stored) = eg.static_property_value(cache.property_slot())
+        && let Some(message) =
+            property_incdec_overflow_message(stored, definition, eg, called_class, overflow)
+    {
+        return Ok(static_property_throw(eg, frame, "TypeError", message));
+    }
     value = match prepare_property_assignment(
         value,
         definition,
@@ -3147,8 +3157,9 @@ fn assign_static_property_cache_miss<'a>(
     raw_class: &str,
     property: &str,
     mut value: Value,
-    indirect: bool,
+    assignment_flags: u16,
 ) -> Result<ColdResult<'a>, VmError> {
+    let indirect = assignment_flags & STATIC_PROP_INDIRECT_MODIFY != 0;
     let action = if indirect { "indirectly modify" } else { "modify" };
     let resolved = match resolve_static_property(
         eg,
@@ -3169,6 +3180,14 @@ fn assign_static_property_cache_miss<'a>(
         let called_class = eg
             .class_by_id(class_id)
             .map_or(raw_class, |class| class.name.as_str());
+        if let Some(overflow) =
+            PropertyIncDecOverflow::from_assignment_flags(assignment_flags)
+            && let Some(stored) = eg.static_property_value(resolved.storage_slot)
+            && let Some(message) =
+                property_incdec_overflow_message(stored, definition, eg, called_class, overflow)
+        {
+            return Ok(static_property_throw(eg, frame, "TypeError", message));
+        }
         value = match prepare_property_assignment(
             value,
             definition,

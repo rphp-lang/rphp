@@ -73,10 +73,12 @@ fn try_assign_cached_typed_instance_property<'a>(
         return Ok(None);
     }
 
+    let overflow = PropertyIncDecOverflow::from_assignment_flags(opline._pad);
     // SAFETY: the live dispatch frame owns the compiler-emitted source slot.
-    // A Reference points at a live VM slot, and flags == 2 proves that the
-    // tagged cache word contains a stable PropertyDefinition pointer.
-    let (source, definition) = unsafe {
+    // A Reference points at a live VM slot, flags == 2 proves that the tagged
+    // cache word contains a stable PropertyDefinition pointer, and the guarded
+    // class ID proves that the cached object slot is addressable here.
+    let (source, definition, overflow_stored) = unsafe {
         let source = &*(*frame).get_op_ptr(
             opline.result as u32,
             opline.result_type,
@@ -92,9 +94,27 @@ fn try_assign_cached_typed_instance_property<'a>(
             cache
                 .typed_instance_property_definition()
                 .expect("typed instance cache must retain its definition"),
+            overflow.map(|_| {
+                (&*object.object_property_slot_unchecked(cache.property_slot())).clone()
+            }),
         )
     };
     let tag = cache.typed_instance_property_tag();
+    if let (Some(overflow), Some(stored)) = (overflow, overflow_stored.as_ref()) {
+        let called_class = eg
+            .class_by_id(object_class_id)
+            .map_or("?", |class| class.name.as_str());
+        if let Some(message) =
+            property_incdec_overflow_message(stored, definition, eg, called_class, overflow)
+        {
+            return Ok(Some(object_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                message,
+            )));
+        }
+    }
     let set_value = |value| {
         // SAFETY: the class-id guard above proves that the cached slot belongs
         // to this object; the object is not borrowed elsewhere in this path.

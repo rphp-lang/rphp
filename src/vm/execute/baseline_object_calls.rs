@@ -2881,6 +2881,31 @@ fn op_assign_obj_prop<'a>(
         let definition = declared_slot
             .and_then(|slot| eg.instance_property_definition(object_class_id, slot));
         if let Some(definition_ref) = definition {
+            if !definition_ref.has_get_hook
+                && !definition_ref.has_set_hook
+                && let Some(overflow) =
+                    PropertyIncDecOverflow::from_assignment_flags(opline._pad)
+            {
+                let message = obj.as_object().and_then(|object| {
+                    object.get_property(&key).and_then(|stored| {
+                        property_incdec_overflow_message(
+                            stored,
+                            definition_ref,
+                            eg,
+                            &object_class_name,
+                            overflow,
+                        )
+                    })
+                });
+                if let Some(message) = message {
+                    return Ok(object_property_throw(
+                        eg,
+                        frame,
+                        "TypeError",
+                        message,
+                    ));
+                }
+            }
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             if let Some(declaration) = definition_ref.generic_declaration
                 && let Err(message) = eg.check_cached_generic_property_value(

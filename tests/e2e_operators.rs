@@ -904,6 +904,57 @@ var_dump($bound());
 }
 
 #[test]
+fn typed_property_incdec_overflow_obeys_float_and_reference_contracts() {
+    let source = r#"<?php
+class OverflowBox {
+    public int|float $wide;
+    public int|bool $narrow;
+    public static int|bool $staticNarrow;
+}
+$box = new OverflowBox();
+$box->wide = PHP_INT_MAX;
+$wideResult = $box->wide++;
+echo 'wide:', is_int($wideResult) ? 'old-int' : 'bad', ':', is_float($box->wide) ? 'float' : 'bad', "\n";
+
+$box->narrow = PHP_INT_MAX;
+$result = 'kept';
+try { $result = $box->narrow++; } catch (TypeError $exception) { echo 'direct-max:', $exception->getMessage(), "\n"; }
+echo 'direct-max-state:', $result, ':', $box->narrow, "\n";
+
+$box->narrow = PHP_INT_MIN;
+$result = 'kept';
+try { $result = --$box->narrow; } catch (TypeError $exception) { echo 'direct-min:', $exception->getMessage(), "\n"; }
+echo 'direct-min-state:', $result, ':', $box->narrow, "\n";
+
+$box->narrow = PHP_INT_MAX;
+$reference =& $box->narrow;
+try { ++$box->narrow; } catch (TypeError $exception) { echo 'held-target:', $exception->getMessage(), "\n"; }
+echo 'held-target-state:', $box->narrow, ':', $reference, "\n";
+
+$box->narrow = PHP_INT_MIN;
+try { $reference--; } catch (TypeError $exception) { echo 'held-alias:', $exception->getMessage(), "\n"; }
+echo 'held-alias-state:', $box->narrow, ':', $reference, "\n";
+
+unset($reference);
+$box->narrow = PHP_INT_MAX;
+try { ++$box->narrow; } catch (TypeError $exception) { echo 'released:', $exception->getMessage(), "\n"; }
+
+OverflowBox::$staticNarrow = PHP_INT_MAX;
+try { OverflowBox::$staticNarrow++; } catch (TypeError $exception) { echo 'static:', $exception->getMessage(), "\n"; }
+echo 'static-state:', OverflowBox::$staticNarrow, "\n";
+
+$staticReference =& OverflowBox::$staticNarrow;
+try { ++OverflowBox::$staticNarrow; } catch (TypeError $exception) { echo 'static-held:', $exception->getMessage(), "\n"; }
+echo 'static-held-state:', OverflowBox::$staticNarrow, ':', $staticReference, "\n";
+"#;
+
+    assert_eq!(
+        run_php(source),
+        "wide:old-int:float\ndirect-max:Cannot increment property OverflowBox::$narrow of type int|bool past its maximal value\ndirect-max-state:kept:9223372036854775807\ndirect-min:Cannot decrement property OverflowBox::$narrow of type int|bool past its minimal value\ndirect-min-state:kept:-9223372036854775808\nheld-target:Cannot increment a reference held by property OverflowBox::$narrow of type int|bool past its maximal value\nheld-target-state:9223372036854775807:9223372036854775807\nheld-alias:Cannot decrement a reference held by property OverflowBox::$narrow of type int|bool past its minimal value\nheld-alias-state:-9223372036854775808:-9223372036854775808\nreleased:Cannot increment a reference held by property OverflowBox::$narrow of type int|bool past its maximal value\nstatic:Cannot increment property OverflowBox::$staticNarrow of type int|bool past its maximal value\nstatic-state:9223372036854775807\nstatic-held:Cannot increment a reference held by property OverflowBox::$staticNarrow of type int|bool past its maximal value\nstatic-held-state:9223372036854775807:9223372036854775807\n"
+    );
+}
+
+#[test]
 fn test_e2e_array_append_assignments_chain_and_produce_the_assigned_value() {
     assert_eq!(
         run_php(

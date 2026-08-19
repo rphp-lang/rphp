@@ -42,10 +42,11 @@ use crate::vm::instruction::{
     FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache,
     Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
     NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType,
-    REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS,
-    SEND_FLAG_NONREFERENCEABLE, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
+    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
+    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
+    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -2820,6 +2821,22 @@ impl Compiler {
                 u32::try_from(line).unwrap_or(u32::MAX),
             ));
         }
+    }
+
+    fn mark_last_property_incdec_writeback(&mut self, increment: bool) {
+        let writeback = self
+            .instructions
+            .last_mut()
+            .expect("property inc/dec emits a writeback instruction");
+        debug_assert!(matches!(
+            writeback.opcode,
+            OpCode::AssignObjProp | OpCode::AssignStaticProp | OpCode::AssignLateStaticProp
+        ));
+        writeback._pad |= if increment {
+            PROPERTY_INCDEC_INCREMENT
+        } else {
+            PROPERTY_INCDEC_DECREMENT
+        };
     }
 
     fn invalidate_reentrant_definitions(&mut self) {
@@ -6786,6 +6803,11 @@ impl Compiler {
                     self.mark_trailing_mutable_dimension_fetches();
                     self.record_last_instruction_source_line(source_line);
                 }
+                let property_writeback = matches!(
+                    &writeback,
+                    ForeachArrayWriteback::ObjectProperty { .. }
+                        | ForeachArrayWriteback::StaticProperty { .. }
+                );
                 let original = self.alloc_tmp();
                 let mut preserve = Instruction::new(OpCode::AssignCv);
                 preserve.op1 = original;
@@ -6806,6 +6828,12 @@ impl Compiler {
                 operation.result_type = OpType::Tmp;
                 self.push_instruction_at_line(operation, source_line);
                 self.emit_foreach_reference_source_writeback(writeback, updated, OpType::Tmp);
+                if property_writeback {
+                    self.mark_last_property_incdec_writeback(matches!(
+                        expr,
+                        Expr::PostIncTarget(_)
+                    ));
+                }
                 (original, OpType::Tmp)
             }
             Expr::PreInc { name, line } => {
@@ -6866,6 +6894,11 @@ impl Compiler {
                     self.mark_trailing_mutable_dimension_fetches();
                     self.record_last_instruction_source_line(source_line);
                 }
+                let property_writeback = matches!(
+                    &writeback,
+                    ForeachArrayWriteback::ObjectProperty { .. }
+                        | ForeachArrayWriteback::StaticProperty { .. }
+                );
                 let result = self.alloc_tmp();
                 let mut operation = Instruction::new(if matches!(expr, Expr::PreIncTarget(_)) {
                     OpCode::PreInc
@@ -6878,6 +6911,9 @@ impl Compiler {
                 operation.result_type = OpType::Tmp;
                 self.push_instruction_at_line(operation, source_line);
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
+                if property_writeback {
+                    self.mark_last_property_incdec_writeback(matches!(expr, Expr::PreIncTarget(_)));
+                }
                 (result, OpType::Tmp)
             }
             Expr::Ternary {

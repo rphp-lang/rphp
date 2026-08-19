@@ -658,6 +658,23 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }};
         }
+        macro_rules! reject_reference_incdec_overflow {
+            ($writeback_cv:expr, $old:expr, $overflow:expr) => {
+                if let Some(writeback_cv) = $writeback_cv {
+                    let reference = (*frame).cv(writeback_cv);
+                    if reference.is_owned_reference()
+                        && let Some(message) = reference_incdec_overflow_message(
+                            reference,
+                            $old,
+                            eg,
+                            $overflow,
+                        )
+                    {
+                        throw_operator!("TypeError", &message);
+                    }
+                }
+            };
+        }
         macro_rules! resume_pending_exception {
             () => {
                 if let Some(exception) = eg.exception.take() {
@@ -3715,6 +3732,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         Some(opline.op1 as u32)
                     };
+                    reject_reference_incdec_overflow!(
+                        writeback_cv,
+                        &old,
+                        PropertyIncDecOverflow::Increment
+                    );
                     let Some((new_val, diagnostic)) = increment_php_value(&old) else {
                         throw_operator!(
                             "TypeError",
@@ -3801,6 +3823,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         Some(opline.op1 as u32)
                     };
+                    reject_reference_incdec_overflow!(
+                        writeback_cv,
+                        &old,
+                        PropertyIncDecOverflow::Decrement
+                    );
                     let Some((new_val, diagnostic)) = decrement_php_value(&old) else {
                         throw_operator!(
                             "TypeError",
@@ -3856,6 +3883,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
+                    reject_reference_incdec_overflow!(
+                        Some(writeback_cv),
+                        &old,
+                        PropertyIncDecOverflow::Increment
+                    );
                     let Some((new_val, diagnostic)) = increment_php_value(&old) else {
                         throw_operator!(
                             "TypeError",
@@ -3902,6 +3934,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
+                    reject_reference_incdec_overflow!(
+                        Some(writeback_cv),
+                        &old,
+                        PropertyIncDecOverflow::Decrement
+                    );
                     let Some((new_val, diagnostic)) = decrement_php_value(&old) else {
                         throw_operator!(
                             "TypeError",

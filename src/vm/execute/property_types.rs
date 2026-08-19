@@ -207,6 +207,120 @@ fn property_diagnostic_class_name(class: &str) -> &str {
         .map_or(class, |_| "class@anonymous")
 }
 
+#[derive(Clone, Copy)]
+enum PropertyIncDecOverflow {
+    Increment,
+    Decrement,
+}
+
+impl PropertyIncDecOverflow {
+    #[inline(always)]
+    fn from_assignment_flags(flags: u16) -> Option<Self> {
+        if flags & PROPERTY_INCDEC_INCREMENT != 0 {
+            Some(Self::Increment)
+        } else if flags & PROPERTY_INCDEC_DECREMENT != 0 {
+            Some(Self::Decrement)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn overflow_value(self, current: &Value) -> Option<Value> {
+        let current = current.as_long()?;
+        match self {
+            Self::Increment if current == i64::MAX => {
+                Some(Value::double(current as f64 + 1.0))
+            }
+            Self::Decrement if current == i64::MIN => {
+                Some(Value::double(current as f64 - 1.0))
+            }
+            _ => None,
+        }
+    }
+
+    fn action(self) -> &'static str {
+        match self {
+            Self::Increment => "increment",
+            Self::Decrement => "decrement",
+        }
+    }
+
+    fn boundary(self) -> &'static str {
+        match self {
+            Self::Increment => "maximal",
+            Self::Decrement => "minimal",
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn reference_incdec_overflow_message(
+    reference: &Value,
+    current: &Value,
+    eg: &ExecutorGlobals,
+    overflow: PropertyIncDecOverflow,
+) -> Option<String> {
+    let overflow_value = overflow.overflow_value(current)?;
+    let constraint = reference
+        .reference_property_constraints()
+        .into_iter()
+        .find(|constraint| {
+            !property_type_matches_exact(
+                &overflow_value,
+                &constraint.type_hint,
+                eg,
+                &constraint.type_scope,
+                &constraint.called_class,
+            )
+        })?;
+    Some(format!(
+        "Cannot {} a reference held by property {}::${} of type {} past its {} value",
+        overflow.action(),
+        property_diagnostic_class_name(&constraint.declaring_class),
+        constraint.property,
+        constraint.type_hint.property_declaration_display_name(),
+        overflow.boundary(),
+    ))
+}
+
+#[cold]
+#[inline(never)]
+fn property_incdec_overflow_message(
+    stored: &Value,
+    definition: &crate::compiler::compile::PropertyDefinition,
+    eg: &ExecutorGlobals,
+    called_class: &str,
+    overflow: PropertyIncDecOverflow,
+) -> Option<String> {
+    let current = stored.dereferenced();
+    let overflow_value = overflow.overflow_value(current)?;
+    if stored.is_owned_reference()
+        && let Some(message) =
+            reference_incdec_overflow_message(stored, current, eg, overflow)
+    {
+        return Some(message);
+    }
+    if property_type_matches_exact(
+        &overflow_value,
+        &definition.type_hint,
+        eg,
+        &definition.type_scope,
+        called_class,
+    ) {
+        return None;
+    }
+    Some(format!(
+        "Cannot {} property {}::${} of type {} past its {} value",
+        overflow.action(),
+        property_diagnostic_class_name(&definition.type_scope),
+        definition.name,
+        definition.type_hint.property_declaration_display_name(),
+        overflow.boundary(),
+    ))
+}
+
 #[inline]
 pub(crate) fn prepare_property_assignment(
     value: Value,

@@ -9,11 +9,52 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,312 pass, 1,985 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,316 pass, 1,981 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-62.526% and the whole-corpus rate is 59.153%; 4,621 of 5,297 attempted cases
-reach runtime (87.238%). Relative to exact base `764d8d62`, the pass-set delta
-is +1/-0: all 3,311 prior passes remain exact.
+62.601% and the whole-corpus rate is 59.225%; 4,621 of 5,297 attempted cases
+reach runtime (87.238%). Relative to exact base `a23e9085`, the pass-set delta
+is +4/-0: all 3,312 prior passes remain exact.
+
+Integer overflow from pre- or post-increment/decrement of an instance or static
+typed property now follows the exact property contract. A declaration that
+accepts the overflow `float`, such as `int|float`, stores it normally; a
+declaration such as `int|bool` instead throws `Cannot increment property ...
+past its maximal value` or the corresponding decrement/minimal diagnostic.
+The guarded writeback recognizes only a boundary integer produced by the
+specific inc/dec direction and uses exact type membership rather than ordinary
+weak property-assignment coercion.
+
+When the property cell is a reference, both direct property syntax and an
+external alias enforce every retained property constraint and use PHP's
+distinct `Cannot increment a reference held by property ...` diagnostic. The
+special wording remains after the external alias is unset because the property
+still owns the reference cell. Rejected operations preserve the original
+boundary value and any outer assignment target; post-increment of an accepting
+union still returns the old integer while storing a float. These rules cover
+instance and static properties in all four pre/post directions.
+
+An original E2E regression covers accepting and rejecting unions, maximal and
+minimal boundaries, direct and aliased access, released aliases, static
+storage, exact messages and state preservation. Four full-corpus cases become
+exact passes: `typed_properties_019.phpt`, `typed_properties_044.phpt`,
+`typed_properties_097.phpt` and `union_types/incdec_prop.phpt`. There are no
+lost passes, other status/category changes or stable non-pass output hash
+changes.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. CPU-pinned 32-pair release comparisons against the exact
+parent measured balanced order-specific median ratios of +1.185% for ordinary
+property work and +0.787% for typed-property work. Outputs were exact, four
+warmups preceded each workload, no outliers were removed and both decision
+medians remain below the five-percent regression ceiling. Property hooks and
+generic property contracts remain separate: hook dispatch is preserved and no
+broader generic-property or float-to-int coercion behavior is claimed.
+
+The preceding `incdec-call-write-context` checkpoint reached 3,312 passes with
+1,985 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Relative to exact base `764d8d62`, its pass-set delta was +1/-0
+with all 3,311 prior passes retained.
 
 Pre- and post-increment or decrement of a call result now produces PHP 8.5's
 compile-time write-context diagnostic instead of a parser error or the wrong
