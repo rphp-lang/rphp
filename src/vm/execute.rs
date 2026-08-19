@@ -2370,6 +2370,123 @@ fn call_initializer_before<'a>(
     None
 }
 
+/// Recover the public method identity of one live frame backed by shared trait
+/// bytecode. The active call site retains the selected alias, while `$this` or
+/// the static initializer identifies the nearest class that composed the
+/// trait. Keeping this on diagnostic/trace paths avoids cloning every trait
+/// op-array or publishing per-call side state.
+#[cold]
+pub(crate) fn displayed_frame_function_name(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> String {
+    if frame.is_null() {
+        return "internal function".to_string();
+    }
+
+    // SAFETY: diagnostic and trace callers pass one live VM frame. Its saved
+    // caller, function descriptor, op-array and resume instruction remain live
+    // for this synchronous metadata walk.
+    unsafe {
+        let function = (*frame).func;
+        if function.is_null() {
+            return "internal function".to_string();
+        }
+        let Some(trait_name) = eg.declaring_class_of(function) else {
+            return displayed_function_name(eg, function);
+        };
+        if !eg
+            .class_table
+            .get(trait_name)
+            .is_some_and(|definition| definition.is_trait)
+        {
+            return displayed_function_name(eg, function);
+        }
+
+        let registered_name = registered_function_name(eg, function);
+        let Some((registered_class, registered_method)) = registered_name.rsplit_once("::") else {
+            return displayed_function_name(eg, function);
+        };
+        let caller = (*frame).prev_execute_data;
+        let mut selected_method = None;
+        let mut static_called_class_id = 0;
+        if !caller.is_null() && !(*caller).func.is_null() {
+            let caller_function = Function::from_common_ptr((*caller).func);
+            if caller_function.fn_type() == FunctionType::User {
+                let caller_op_array = &caller_function.as_user().op_array;
+                let base = caller_op_array.instructions.as_ptr();
+                let resume = (*caller).opline;
+                let resume_index = resume.offset_from(base);
+                let do_fcall_ptr = if resume_index >= 0
+                    && (resume_index as usize) < caller_op_array.instructions.len()
+                    && (*resume).opcode == OpCode::DoFcall
+                {
+                    Some(resume)
+                } else if resume_index > 0
+                    && (resume_index as usize) <= caller_op_array.instructions.len()
+                    && (*resume.sub(1)).opcode == OpCode::DoFcall
+                {
+                    Some(resume.sub(1))
+                } else {
+                    None
+                };
+                if let Some(do_fcall_ptr) = do_fcall_ptr
+                    && let Some(initializer) =
+                        call_initializer_before(caller_op_array, do_fcall_ptr)
+                {
+                    if matches!(
+                        initializer.opcode,
+                        OpCode::InitMethodCall
+                            | OpCode::InitStaticCall
+                            | OpCode::InitLateStaticCall
+                    ) {
+                        let method = &*(*caller).get_op_ptr(
+                            initializer.op2 as u32,
+                            initializer.op2_type,
+                            caller_op_array,
+                        );
+                        selected_method = method.as_str().map(str::to_owned);
+                    } else if initializer.opcode == OpCode::InitDynamicCall {
+                        let callback = &*(*caller).get_op_ptr(
+                            initializer.op1 as u32,
+                            initializer.op1_type,
+                            caller_op_array,
+                        );
+                        selected_method = callback
+                            .as_str()
+                            .and_then(|name| name.rsplit_once("::"))
+                            .map(|(_, method)| method.to_owned());
+                    }
+                    static_called_class_id =
+                        static_site_called_class_id(eg, caller, caller_op_array, do_fcall_ptr, 0);
+                }
+            }
+        }
+
+        let receiver_class = if (*function).sig.this_offset == 1 && (*frame).num_cvs != 0 {
+            let receiver = (*frame).cv(0);
+            (receiver.value_type() == ValueType::Object)
+                .then(|| receiver.object_class_name_unchecked())
+        } else {
+            None
+        };
+        let called_class = receiver_class.or_else(|| {
+            eg.class_by_id(static_called_class_id)
+                .map(|definition| definition.name.as_str())
+        });
+        let public_class = called_class
+            .and_then(|class| eg.trait_composition_scope(class, trait_name))
+            .or_else(|| {
+                (!registered_class.eq_ignore_ascii_case(trait_name)).then_some(registered_class)
+            })
+            .unwrap_or(trait_name);
+        format!(
+            "{public_class}::{}",
+            selected_method.as_deref().unwrap_or(registered_method)
+        )
+    }
+}
+
 #[cold]
 fn static_site_called_class_id(
     eg: &ExecutorGlobals,
@@ -2540,12 +2657,13 @@ fn is_synthesized_enum_method(eg: &ExecutorGlobals, function: *const FunctionCom
 fn too_few_arguments_error(
     eg: &ExecutorGlobals,
     function: *const FunctionCommon,
+    call: *mut ExecuteData,
     common: &FunctionCommon,
     supplied: u32,
     caller_op_array: &crate::compiler::OpArray,
     call_instruction: &Instruction,
 ) -> Value {
-    let name = displayed_function_name(eg, function);
+    let name = displayed_frame_function_name(eg, call);
     let required = common.sig.required_num_args;
     let internal_diagnostic =
         common.fn_type == FunctionType::Internal || is_synthesized_enum_method(eg, function);
@@ -2589,6 +2707,7 @@ fn too_few_arguments_error(
 fn argument_type_error(
     eg: &ExecutorGlobals,
     function: *const FunctionCommon,
+    call: *mut ExecuteData,
     common: &FunctionCommon,
     parameter_index: usize,
     hint: &ParamTypeHint,
@@ -2596,7 +2715,7 @@ fn argument_type_error(
     caller_op_array: &crate::compiler::OpArray,
     call_instruction: &Instruction,
 ) -> Value {
-    let name = displayed_function_name(eg, function);
+    let name = displayed_frame_function_name(eg, call);
     let parameter = common
         .sig
         .param_names
@@ -2863,6 +2982,7 @@ fn execute_full_call<'a>(
                 type_error = Some(argument_type_error(
                     eg,
                     (*call).func,
+                    call,
                     func_common,
                     i,
                     hint,
@@ -2920,6 +3040,7 @@ fn execute_full_call<'a>(
         let error = too_few_arguments_error(
             eg,
             func_common as *const FunctionCommon,
+            call,
             func_common,
             num_args,
             op_array,

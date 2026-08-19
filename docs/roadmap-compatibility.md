@@ -998,6 +998,23 @@ ordinary calls at -1.453% and a 32-consumer trait cold-link control at -1.795%
 independently; paired medians are -4.658%, -1.320% and -1.791%. Exact outputs
 are retained and every median remains below the five-percent ceiling.
 
+The `trait-method-identity` checkpoint reaches 3,395 passes with 1,902
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Shared trait op-arrays keep the trait as their lexical visibility
+owner, while cold trace and type-diagnostic paths recover the concrete composing
+class and selected original or alias name from the live call site. Instance,
+static and inherited identities therefore match PHP 8.5 without per-call side
+state or per-composition bytecode copies. Three backtrace cases and two trait
+diagnostic cases become exact for a full-corpus delta of +5/-0 with no other
+movement. `bug69180-backtrace.phpt` retains a separate missing magic-property
+entry frame. All five feature configurations, all-target, formatting, unsafe,
+Composer S0, four Symfony S1 gates and exact PHP 8.5.6 S2/S3 pass. CPU-pinned
+32-pair release controls put 32-consumer/eight-method cold linking at -0.874%
+independently and -0.249% paired, and a five-million-call trait method at
+-0.033% and +0.009%; all medians remain below the five-percent ceiling. A
+semantically equivalent deep-clone prototype was rejected at +35.774% paired
+cold-link regression.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

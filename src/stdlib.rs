@@ -6199,7 +6199,7 @@ pub(crate) unsafe fn collect_debug_backtrace(
             eval_scope_frames.push(frame);
         }
         let name = synthetic_frame.map_or_else(
-            || crate::vm::execute::displayed_function_name(eg, (*frame).func),
+            || crate::vm::execute::displayed_frame_function_name(eg, frame),
             str::to_string,
         );
         if name.is_empty() {

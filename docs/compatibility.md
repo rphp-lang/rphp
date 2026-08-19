@@ -9,6 +9,48 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,395 pass, 1,902 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+64.093% and the whole-corpus rate is 60.636%; 4,636 of 5,297 attempted cases
+reach runtime (87.521%). Relative to exact base `e2d17bad`, the pass-set delta
+is +5/-0: all 3,390 prior passes remain passes.
+
+Shared trait bytecode now retains its trait lexical owner for private scope but
+derives its public runtime identity from the paired live call initializer and
+receiver or static target on diagnostic and trace paths. Original names,
+aliases and inherited calls therefore report the concrete class that first
+composed the trait, while aliases preserve the selected public method name.
+Ordinary trait composition still shares one function/op-array allocation and
+ordinary calls publish no new per-frame side state.
+
+Two original E2E regressions cover instance and static original/alias calls,
+inheritance, backtraces, argument type errors and return type errors. The three
+`Zend/tests/backtrace/bug64239_*` cases plus
+`Zend/tests/traits/bug70156.phpt` and
+`Zend/tests/traits/trait_type_errors.phpt` become exact. A 236-case trait and
+backtrace slice reaches 124 passes without a lost pass. Two full-corpus runs
+produce byte-for-byte identical manifests with no other status or failure-stage
+movement.
+
+All five Cargo configurations, all-feature/all-target, formatting and the
+exact unsafe ratchet pass, as do Composer S0, all four Symfony S1 gates and
+exact PHP 8.5.6 warmed-kernel S2 and cold-build S3. The production inventory is
+1,619 unsafe blocks and 289 unsafe functions. CPU-pinned 32-pair release A/B
+measurements used two warm-ups per binary and removed no outliers. The
+32-consumer/eight-method cold-link control measured -0.874% independently and
+-0.249% paired, with paired p10/p90 -2.711%/+3.219%. A five-million-call trait
+method control, sampled through 20 processes per pair member, measured -0.033%
+independently and +0.009% paired, with p10/p90 -0.805%/+0.735%. Exact outputs
+are retained and every median remains below the five-percent ceiling.
+
+An op-array-per-composition prototype was rejected before integration: it had
+the same exact +5/-0 semantics but regressed the cold-link control by +35.774%
+paired. `bug69180-backtrace.phpt` now has the correct trait alias identity but
+still lacks the outer magic-property `__get` entry frame; that independent
+frame-lifecycle gap remains explicit follow-up work.
+
+The preceding live-function-arguments checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,390 pass, 1,907 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 63.998% and the whole-corpus rate is 60.547%; 4,636 of 5,297 attempted cases

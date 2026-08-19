@@ -353,6 +353,82 @@ FirstCounter::secondAlias(); SecondCounter::counter();
 }
 
 #[test]
+fn trait_backtraces_use_composed_method_names_and_inherit_the_composer_identity() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait TraceNames {
+    public function instanceName() {
+        $frame = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1)[0];
+        return $frame['class'] . '::' . $frame['function'] . $frame['type'];
+    }
+    public static function staticName() {
+        $frame = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1)[0];
+        return $frame['class'] . '::' . $frame['function'] . $frame['type'];
+    }
+}
+class PrimaryTrace {
+    use TraceNames {
+        instanceName as aliasName;
+        staticName as aliasStatic;
+    }
+}
+class ChildTrace extends PrimaryTrace {}
+$primary = new PrimaryTrace();
+$child = new ChildTrace();
+echo $primary->instanceName(), '|', $primary->aliasName(), '|';
+echo $child->instanceName(), '|', $child->aliasName(), '|';
+echo PrimaryTrace::staticName(), '|', PrimaryTrace::aliasStatic(), '|';
+echo ChildTrace::staticName(), '|', ChildTrace::aliasStatic();
+"#,
+        ),
+        concat!(
+            "PrimaryTrace::instanceName->|PrimaryTrace::aliasName->|",
+            "PrimaryTrace::instanceName->|PrimaryTrace::aliasName->|",
+            "PrimaryTrace::staticName::|PrimaryTrace::aliasStatic::|",
+            "PrimaryTrace::staticName::|PrimaryTrace::aliasStatic::",
+        )
+    );
+}
+
+#[test]
+fn trait_type_errors_use_composed_alias_and_consumer_names() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait ComposedDiagnostics {
+    public function accepts(int $value): int { return []; }
+}
+class DiagnosticConsumer {
+    use ComposedDiagnostics { accepts as alias; }
+}
+class DiagnosticChild extends DiagnosticConsumer {}
+try {
+    (new DiagnosticConsumer())->alias([]);
+} catch (TypeError $error) {
+    echo explode('():', $error->getMessage())[0], '|';
+}
+try {
+    (new DiagnosticConsumer())->accepts(1);
+} catch (TypeError $error) {
+    echo explode('():', $error->getMessage())[0], '|';
+}
+try {
+    (new DiagnosticChild())->alias([]);
+} catch (TypeError $error) {
+    echo explode('():', $error->getMessage())[0], '|';
+}
+"#,
+        ),
+        concat!(
+            "DiagnosticConsumer::alias|",
+            "DiagnosticConsumer::accepts|",
+            "DiagnosticConsumer::alias|",
+        )
+    );
+}
+
+#[test]
 fn trait_static_pseudo_calls_resolve_for_each_consuming_class() {
     let out = run_php(
         r#"<?php

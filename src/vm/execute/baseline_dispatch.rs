@@ -3,14 +3,13 @@
 #[cold]
 fn return_type_error_value(
     eg: &ExecutorGlobals,
-    function: *const FunctionCommon,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
     hint: &ParamTypeHint,
     outcome: &str,
 ) -> Value {
-    let function_name = displayed_function_name(eg, function);
+    let function_name = displayed_frame_function_name(eg, frame);
     let error = make_error_value(
         "TypeError",
         &format!(
@@ -6653,7 +6652,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if has_return_type && opline.extended_value == 0 {
                         let err = return_type_error_value(
                             eg,
-                            func_common_ret as *const FunctionCommon,
                             frame,
                             op_array,
                             opline,
@@ -6716,7 +6714,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                                 );
                                                 let err = return_type_error_value(
                                                     eg,
-                                                    func_common_ret as *const FunctionCommon,
                                                     frame,
                                                     op_array,
                                                     opline,
@@ -6742,7 +6739,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     );
                                     let err = return_type_error_value(
                                         eg,
-                                        func_common_ret as *const FunctionCommon,
                                         frame,
                                         op_array,
                                         opline,
@@ -6944,7 +6940,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             if !has_explicit_value {
                                 let err = return_type_error_value(
                                     eg,
-                                    func_common as *const FunctionCommon,
                                     frame,
                                     op_array,
                                     opline,
@@ -6996,7 +6991,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                                     );
                                                     let err = return_type_error_value(
                                                         eg,
-                                                        func_common as *const FunctionCommon,
                                                         frame,
                                                         op_array,
                                                         opline,
@@ -7026,7 +7020,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         );
                                         let err = return_type_error_value(
                                             eg,
-                                            func_common as *const FunctionCommon,
                                             frame,
                                             op_array,
                                             opline,
