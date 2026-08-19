@@ -1859,6 +1859,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         false,
     ))
     .unwrap();
+    funcs.extend(super::weak::register(eg));
     for (name, traversal_interface) in [
         ("ArrayIterator", "Iterator"),
         ("ArrayObject", "IteratorAggregate"),

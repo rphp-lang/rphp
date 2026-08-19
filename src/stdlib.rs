@@ -175,6 +175,7 @@ mod builtin_classes;
 mod fiber;
 mod filesystem;
 mod strings;
+mod weak;
 
 use filesystem::{bytes_to_php_string, php_string_to_bytes};
 use strings::direct_chunk_split;
@@ -6703,6 +6704,62 @@ fn var_dump_value_inner(
                 ));
                 out.push_str(&format!("{}}}\n", prefix));
                 out
+            } else if object.class_name.as_ref() == "WeakReference" {
+                drop(object);
+                let target = eg.weak_reference_target(val).unwrap_or_else(Value::null);
+                let mut out = format!(
+                    "{}object(WeakReference)#{} (1) {{\n{}  [\"object\"]=>\n",
+                    prefix,
+                    val.object_handle()
+                        .expect("live WeakReference must retain its object handle"),
+                    prefix,
+                );
+                out.push_str(&var_dump_value_inner(
+                    &target,
+                    indent + 1,
+                    eg,
+                    true,
+                    visited_arrays,
+                    visited_objects,
+                ));
+                out.push_str(&format!("{}}}\n", prefix));
+                out
+            } else if object.class_name.as_ref() == "WeakMap" {
+                drop(object);
+                let entries = eg.weak_map_entries(val);
+                let mut out = format!(
+                    "{}object(WeakMap)#{} ({}) {{\n",
+                    prefix,
+                    val.object_handle()
+                        .expect("live WeakMap must retain its object handle"),
+                    entries.len(),
+                );
+                for (index, (key, value)) in entries.iter().enumerate() {
+                    out.push_str(&format!(
+                        "{}  [{}]=>\n{}  array(2) {{\n{}    [\"key\"]=>\n",
+                        prefix, index, prefix, prefix,
+                    ));
+                    out.push_str(&var_dump_value_inner(
+                        key,
+                        indent + 2,
+                        eg,
+                        true,
+                        visited_arrays,
+                        visited_objects,
+                    ));
+                    out.push_str(&format!("{}    [\"value\"]=>\n", prefix));
+                    out.push_str(&var_dump_value_inner(
+                        value,
+                        indent + 2,
+                        eg,
+                        true,
+                        visited_arrays,
+                        visited_objects,
+                    ));
+                    out.push_str(&format!("{}  }}\n", prefix));
+                }
+                out.push_str(&format!("{}}}\n", prefix));
+                out
             } else if eg
                 .class_table
                 .get(object.class_name.as_ref())
@@ -7953,6 +8010,11 @@ pub(crate) fn call_object_protocol_method(
     method: &str,
     args: &[Value],
 ) -> Result<Option<Value>, VmError> {
+    let public_method = if method.eq_ignore_ascii_case("offsetSetAppend") {
+        "offsetSet"
+    } else {
+        method
+    };
     let Some(object) = receiver.as_object() else {
         return Ok(None);
     };
@@ -7961,7 +8023,10 @@ pub(crate) fn call_object_protocol_method(
     if !eg.class_is_a(&class_name, interface) {
         return Ok(None);
     }
-    call_object_public_method(eg, receiver, method, args)
+    if class_name == "WeakMap" && interface == "ArrayAccess" {
+        return weak::call_map_protocol(eg, receiver, method, args).map(Some);
+    }
+    call_object_public_method(eg, receiver, public_method, args)
 }
 
 /// Resolve an ordinary public instance method without manufacturing a PHP

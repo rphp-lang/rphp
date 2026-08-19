@@ -9,6 +9,73 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,213 pass, 2,084 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+60.657% and the whole-corpus rate is 57.385%; 4,610 of 5,297 attempted cases
+reach runtime (87.030%). Relative to exact base `ee64027a`, the pass-set delta
+is +27/-0: all 3,186 prior passes remain exact.
+
+RPHP now registers final internal `WeakReference`, `WeakMap` and
+`InternalIterator` classes. `WeakReference::create()` accepts ordinary objects
+and Closures, reuses one live wrapper per target and clears it at the final PHP
+owner boundary while keeping the target live during its own destructor.
+WeakMap admits object and Closure keys, retains insertion order, removes an
+entry immediately after the key destructor, and releases its value afterward.
+Reads, writes, null probes, explicit removal, aliases, cloning, iteration and
+by-reference iteration follow PHP 8.5. The internal classes reject forbidden
+construction, cloning, dynamic properties, append and serialization with the
+exercised diagnostics; dumps expose PHP's weak projections and recursion or
+reference markers.
+
+The complete 35-case `Zend/tests/weakrefs` cluster rises from zero to 18 exact
+passes. Six additional WeakReference/WeakMap users in enum, GC, lazy-object and
+top-level regression tests become exact, as do three `ArrayAccess::empty()`
+cases reached by the same protocol correction. Sixteen remaining failures
+advance from an early missing-class or silent boundary to an executed output
+comparison or final-class diagnostic. The 17 focused failures remain explicit:
+11 require general cyclic collection, `weakmap_weakness.phpt` differs only in
+its cycle-collection section, two `gh17442` cases need broader reference/header
+destructor handling, `notify.phpt` needs the adjacent Reflection capability,
+`weakmap_dtor_exception.phpt` needs an internal stack frame, and
+`weakrefs_004.phpt` needs source-located final-class diagnostics. No general
+cycle-GC claim is made.
+
+Six original E2E tests cover wrapper caching, object and Closure targets,
+destructor ordering, aliases and clone separation, null probes, key expiry,
+iteration by value and reference, nested destructor notification, and the
+construction/property/append/serialization restrictions. Explicit null keys
+remain distinct from append and raise `WeakMap key must be an object`.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,623 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6.
+
+Exact base `ee64027a` and the final release candidate were compared on CPU 8
+in `performance` mode without removing outliers. Thirty-two balanced
+ABBA/BAAB pairs of 150 empty-output requests measured baseline
+p10/median/p90 0.198090/0.199350/0.202431 seconds versus candidate
+0.200362/0.201114/0.203792 seconds: +0.885% by independent medians and +0.869%
+by the paired-ratio median, whose p10/p90 is +0.434%/+1.453%. A separate
+32-pair million-object declared-lifecycle control retained output `17000000`
+and measured baseline 0.001081/0.001099/0.001130 seconds versus candidate
+0.001092/0.001106/0.001125 seconds: +0.651% independently and +1.005% paired,
+with paired p10/p90 -2.329%/+3.110%. Both existing regression medians remain
+below the five-percent ceiling.
+
+WeakMap has no runnable RPHP baseline at `ee64027a`. A new 2,000-key
+insert/read plus 1,000-removal lane retained output `1999000|1000`; across 32
+CPU-pinned pairs, PHP 8.5.6 measured p10/median/p90
+0.000213/0.000219/0.000224 seconds and RPHP measured
+0.004247/0.004352/0.004483 seconds, approximately 19.9x the independent PHP
+median. This is an explicit optimization baseline, not a regression or parity
+claim. Replacing the cold insertion-ordered sidecar's linear identity lookup
+with a proven indexed representation is handed to the Performance Agent while
+the observable weak-lifetime contract and focused tests remain fixed.
+
+The preceding `fiber-bailout-shutdown` checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,186 pass, 2,111 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 60.147% and the whole-corpus rate is 56.903%; 4,610 of 5,297 attempted cases

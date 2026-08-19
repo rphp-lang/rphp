@@ -1,5 +1,13 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+#[inline]
+fn internal_class_forbids_dynamic_properties(class_name: &str) -> bool {
+    matches!(
+        class_name,
+        "Generator" | "WeakReference" | "WeakMap" | "InternalIterator"
+    )
+}
+
 unsafe fn try_execute_property_init_constructor(
     eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
@@ -1285,6 +1293,14 @@ fn op_fetch_obj_r_slow<'a>(
                 let write_flags =
                     opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND);
                 if write_flags != 0 {
+                    if internal_class_forbids_dynamic_properties(&class_name) {
+                        return Ok(object_property_throw(
+                            eg,
+                            frame,
+                            "Error",
+                            format!("Cannot create dynamic property {class_name}::${name}"),
+                        ));
+                    }
                     if eg
                         .class_table
                         .get(class_name.as_str())
@@ -2044,10 +2060,11 @@ fn op_bind_obj_prop_ref<'a>(
             .is_some();
         if creates_dynamic_property
             && !has_magic_get
-            && eg
-                .class_table
-                .get(class_name.as_str())
-                .is_some_and(|class_def| class_def.is_readonly)
+            && (internal_class_forbids_dynamic_properties(&class_name)
+                || eg
+                    .class_table
+                    .get(class_name.as_str())
+                    .is_some_and(|class_def| class_def.is_readonly))
         {
             return Ok(object_property_throw_at(
                 eg,
@@ -2228,26 +2245,6 @@ fn op_bind_array_dim_ref<'a>(
             opline.op2_type,
             op_array,
         );
-        let key = match value_to_array_key(index) {
-            Ok(key) => key,
-            Err(_) => {
-                let instruction_index = (opline as *const Instruction)
-                    .offset_from(op_array.instructions.as_ptr())
-                    as usize;
-                return Ok(match throw_illegal_offset_type(
-                    eg,
-                    frame,
-                    op_array,
-                    instruction_index,
-                    "Illegal offset type",
-                ) {
-                    ThrowResult::Handled(new_frame, new_op_array) => {
-                        ColdResult::NewFrame(new_frame, new_op_array)
-                    }
-                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
-                });
-            }
-        };
         let array_ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
         let raw_type = (*array_ptr).dereferenced().value_type();
         if raw_type == ValueType::String {
@@ -2323,6 +2320,26 @@ fn op_bind_array_dim_ref<'a>(
             frame_slot_set(frame, destination, binding);
             return Ok(ColdResult::Done);
         }
+        let key = match value_to_array_key(index) {
+            Ok(key) => key,
+            Err(_) => {
+                let instruction_index = (opline as *const Instruction)
+                    .offset_from(op_array.instructions.as_ptr())
+                    as usize;
+                return Ok(match throw_illegal_offset_type(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    "Illegal offset type",
+                ) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+        };
         if opline._pad & REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE != 0
             && !(*array_ptr).is_reference()
         {
@@ -2764,12 +2781,12 @@ fn op_assign_obj_prop<'a>(
                 format!("Property {object_display_class_name}::${name} is read-only"),
             ));
         }
-        if !prop_exists && object_class_name.as_ref() == "Generator" {
+        if !prop_exists && internal_class_forbids_dynamic_properties(&object_class_name) {
             return Ok(object_property_throw(
                 eg,
                 frame,
                 "Error",
-                format!("Cannot create dynamic property Generator::${name}"),
+                format!("Cannot create dynamic property {object_display_class_name}::${name}"),
             ));
         }
         // A setter may execute arbitrary user code. Reacquire the stable

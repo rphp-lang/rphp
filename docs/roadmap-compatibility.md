@@ -804,6 +804,31 @@ empty-request startup at -0.671% independently and -0.681% paired, while the
 ordinary-call control is +0.259% independently and +0.277% paired. Exact output
 is retained and every median remains below the five-percent ceiling.
 
+The `weak-objects-core` checkpoint reaches 3,213 passes with 2,084 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+Final internal `WeakReference`, `WeakMap` and `InternalIterator` classes cover
+ordinary-object and Closure targets/keys, cached wrappers, immediate final-owner
+notification, key-before-value destructor order, insertion-ordered iteration,
+by-reference values, aliases, clone separation, dumps and the exercised
+construction, dynamic-property, append and serialization restrictions. The
+35-case `Zend/tests/weakrefs` cluster rises from 0 to 18 exact passes; six
+adjacent weak-object users and three corrected `ArrayAccess::empty()` cases
+also pass, for an exact full-corpus delta of +27/-0 with all 3,186 prior passes
+retained. Sixteen failures advance from missing-class or silent boundaries to
+later output or diagnostic comparison. Eleven focused cases plus the final
+section of `weakmap_weakness.phpt` still require general cyclic collection;
+broader reference/header destructor behavior, Reflection construction, an
+internal destructor stack frame and source-located final-class diagnostics are
+separate boundaries. All five feature configurations, all-target, unsafe,
+Composer S0, four Symfony S1 gates, warmed-kernel S2 and cold-build S3 pass.
+CPU-pinned 32-pair release A/B medians put 150 empty requests at +0.885%
+independently and +0.869% paired, and a million ordinary declared-object
+lifecycles at +0.651% independently and +1.005% paired; exact outputs remain
+and all regression medians are below the five-percent ceiling. A new 2,000-key
+WeakMap insert/read plus 1,000-removal lane is approximately 19.9x PHP 8.5.6's
+median and is retained as explicit indexed-sidecar optimization debt, not a
+regression or parity claim.
+
 The `fiber-bailout-shutdown` checkpoint reaches 3,186 passes with 2,111
 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
 crashes. A lazy request-local FIFO retains validated shutdown callbacks,

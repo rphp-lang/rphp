@@ -4111,6 +4111,32 @@ pub struct PhpClosure {
     pub has_heap_captures: bool,
 }
 
+/// Type-erased weak ownership for PHP objects. Closures use a distinct compact
+/// Value tag but participate in WeakReference and WeakMap as ordinary objects.
+#[derive(Clone)]
+pub(crate) enum WeakPhpObject {
+    Object(std::rc::Weak<RefCell<PhpObject>>),
+    Closure(std::rc::Weak<PhpClosure>),
+}
+
+impl WeakPhpObject {
+    #[inline]
+    pub(crate) fn strong_count(&self) -> usize {
+        match self {
+            Self::Object(owner) => owner.strong_count(),
+            Self::Closure(owner) => owner.strong_count(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn upgrade(&self) -> Option<Value> {
+        match self {
+            Self::Object(owner) => owner.upgrade().map(Value::from_object_owner),
+            Self::Closure(owner) => owner.upgrade().map(Value::from_closure_owner),
+        }
+    }
+}
+
 impl Clone for PhpClosure {
     fn clone(&self) -> Self {
         let static_vars = self.static_vars.as_ref().map(|source| {
@@ -4437,6 +4463,19 @@ impl Value {
         }
     }
 
+    /// Reconstitute a Closure value from a live weak upgrade without changing
+    /// its object-store identity.
+    #[inline]
+    fn from_closure_owner(closure: Rc<PhpClosure>) -> Self {
+        Self {
+            data: ValueData {
+                ptr: Rc::into_raw(closure) as *mut u8,
+            },
+            type_info: ValueType::Closure as u32,
+            _not_send: PhantomData,
+        }
+    }
+
     /// Create a closure value from a PhpClosure.
     /// Clone = Rc refcount bump; binding creates a distinct payload and identity.
     #[inline]
@@ -4570,6 +4609,44 @@ impl Value {
         Some(Rc::downgrade(&object))
     }
 
+    /// Identity shared by ordinary objects and Closure objects for weak APIs.
+    #[inline]
+    pub(crate) fn weak_object_identity(&self) -> Option<usize> {
+        match self.value_type() {
+            ValueType::Object => self.object_identity(),
+            ValueType::Closure => self
+                .as_closure()
+                .map(|closure| closure as *const PhpClosure as usize),
+            _ => None,
+        }
+    }
+
+    /// Temporarily reconstruct the existing Closure owner without consuming
+    /// the strong handle stored by this Value.
+    #[inline]
+    fn closure_owner(&self) -> Option<std::mem::ManuallyDrop<Rc<PhpClosure>>> {
+        if self.value_type() != ValueType::Closure {
+            return None;
+        }
+        // SAFETY: the tag check proves that `Value::closure()` stored exactly
+        // this `Rc<PhpClosure>` raw pointer. ManuallyDrop retains that owner.
+        Some(unsafe {
+            std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const PhpClosure))
+        })
+    }
+
+    /// Weak owner shared by WeakReference and WeakMap keys.
+    #[inline]
+    pub(crate) fn weak_object_owner(&self) -> Option<WeakPhpObject> {
+        match self.value_type() {
+            ValueType::Object => self.object_weak().map(WeakPhpObject::Object),
+            ValueType::Closure => self
+                .closure_owner()
+                .map(|closure| WeakPhpObject::Closure(Rc::downgrade(&closure))),
+            _ => None,
+        }
+    }
+
     /// Request-local object-store handle used by PHP-visible diagnostics.
     #[inline]
     pub fn object_handle(&self) -> Option<u32> {
@@ -4609,6 +4686,18 @@ impl Value {
     pub(crate) fn object_strong_count(&self) -> Option<usize> {
         let object = self.as_object_rc()?;
         Some(Rc::strong_count(&object))
+    }
+
+    /// Strong count for any PHP object admitted by weak APIs.
+    #[inline]
+    pub(crate) fn weak_object_strong_count(&self) -> Option<usize> {
+        match self.value_type() {
+            ValueType::Object => self.object_strong_count(),
+            ValueType::Closure => self
+                .closure_owner()
+                .map(|closure| Rc::strong_count(&closure)),
+            _ => None,
+        }
     }
 
     /// Read the immutable class name for Object values without taking a
@@ -5459,6 +5548,20 @@ impl Value {
             unsafe { &*self.as_ref_ptr() }
         } else {
             self
+        }
+    }
+
+    /// Assign through an existing PHP reference cell, or replace an ordinary
+    /// storage value. Cold internal containers use this to preserve aliases
+    /// without exposing their storage representation to the VM.
+    #[inline]
+    pub(crate) fn assign_dereferenced(&mut self, value: Value) {
+        if self.is_reference() {
+            // SAFETY: an exclusive handle to a live reference owns or borrows
+            // a live target for the duration of this synchronous assignment.
+            drop(unsafe { self.as_ref_ptr().replace(value) });
+        } else {
+            *self = value;
         }
     }
 

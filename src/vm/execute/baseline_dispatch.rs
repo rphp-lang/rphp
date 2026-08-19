@@ -713,8 +713,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             binding.mark_internal_reference_alias();
                         }
                         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
-                        let destructor = ((&*destination).dereferenced().value_type()
-                            == ValueType::Object)
+                        let destructor = (matches!(
+                            (&*destination).dereferenced().value_type(),
+                            ValueType::Object | ValueType::Closure
+                        ))
                             .then(|| prepare_replaced_value_destructor(eg, &*destination))
                             .flatten();
                         let destructor_ran = destructor.is_some();
@@ -743,7 +745,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let mut cloned = if movable_source {
                             let source = (*frame)
                                 .get_op_mut(opline.op2 as u32, opline.op2_type);
-                            if (&*source).value_type() == ValueType::Object {
+                            if matches!(
+                                (&*source).value_type(),
+                                ValueType::Object | ValueType::Closure
+                            ) {
                                 std::mem::replace(&mut *source, Value::undef())
                             } else {
                                 (&*source).clone()
@@ -766,7 +771,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                         };
                         let replaced_object = opline.op1_type == OpType::Cv
-                            && (&*dest).dereferenced().value_type() == ValueType::Object;
+                            && matches!(
+                                (&*dest).dereferenced().value_type(),
+                                ValueType::Object | ValueType::Closure
+                            );
                         let mirrored_global_name = (replaced_object && !(&*dest).is_reference())
                             .then(|| {
                                 let root_frame = (*frame).prev_execute_data.is_null();
@@ -784,8 +792,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                             .get(name)
                                             .filter(|global| {
                                                 !global.is_reference()
-                                                    && global.object_identity()
-                                                        == (&*dest).object_identity()
+                                                    && global.weak_object_identity()
+                                                        == (&*dest).weak_object_identity()
                                             })
                                             .map(|_| name.as_str())
                                     })
@@ -837,9 +845,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 slot_set(dest, cloned);
                             }
                         }
-                        if destructor.is_some()
-                            && let Some(global_name) = mirrored_global_name
-                        {
+                        if let Some(global_name) = mirrored_global_name {
                             globals_set(&mut eg.globals, global_name, (&*dest).clone());
                         }
                         run_prepared_value_destructor(eg, destructor)?;
@@ -4028,7 +4034,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if matches!(arr_val.value_type(), ValueType::Object | ValueType::Closure) {
                     let receiver = arr_val.clone();
                     let key = idx_val.clone();
-                    let method = if opline._pad & FETCH_DIM_ISSET != 0 {
+                    let method = if opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0 {
                         "offsetExists"
                     } else {
                         "offsetGet"
@@ -4085,6 +4091,40 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     }
+                    let value = if opline._pad & FETCH_DIM_EMPTY != 0 && value.is_truthy() {
+                        if suppressed {
+                            eg.begin_error_suppression(frame as usize);
+                        }
+                        let fetched = crate::stdlib::call_object_protocol_method(
+                            eg,
+                            &receiver,
+                            "ArrayAccess",
+                            "offsetGet",
+                            std::slice::from_ref(&key),
+                        )?
+                        .unwrap_or_else(Value::null);
+                        if suppressed {
+                            eg.end_error_suppression(frame as usize);
+                        }
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        fetched
+                    } else if opline._pad & FETCH_DIM_EMPTY != 0 {
+                        Value::null()
+                    } else {
+                        value
+                    };
                     write_fetch_dim_result(frame, result_ptr, value.dereferenced().clone());
                 } else {
                     if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)
@@ -4406,7 +4446,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         eg,
                         &receiver,
                         "ArrayAccess",
-                        "offsetSet",
+                        "offsetSetAppend",
                         &args,
                     )?;
                     if handled.is_none() {
@@ -4471,12 +4511,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         array_ptr = (&mut *array_ptr).as_ref_ptr();
                     }
                     let array_value = &mut *array_ptr;
-                    if matches!(array_value.value_type(), ValueType::Null | ValueType::Undef) {
-                        slot_set(array_ptr, Value::array(PhpArray::new()));
-                    }
-                    let array = (&mut *array_ptr).as_array_mut().ok_or_else(|| {
-                        VmError::Fatal("Cannot append a reference to a non-array".into())
-                    })?;
                     debug_assert_eq!(opline.result_type, OpType::Cv);
                     // Reference assignment rebinds the CV itself. Following an
                     // existing reference here would replace the caller's value
@@ -4487,7 +4521,59 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         binding.mark_internal_reference_alias();
                     }
                     frame_slot_set(frame, target, binding);
-                    array.push((*target).clone_owned_reference_alias());
+                    if matches!(array_value.value_type(), ValueType::Object | ValueType::Closure) {
+                        let receiver = array_value.clone();
+                        let handled = crate::stdlib::call_object_protocol_method(
+                            eg,
+                            &receiver,
+                            "ArrayAccess",
+                            "offsetSetAppend",
+                            &[Value::null(), Value::null()],
+                        )?;
+                        if handled.is_none() {
+                            let instruction_index = (opline_ptr as usize
+                                - op_array.instructions.as_ptr() as usize)
+                                / std::mem::size_of::<Instruction>();
+                            match throw_object_as_array(
+                                eg,
+                                frame,
+                                op_array,
+                                instruction_index,
+                                &receiver,
+                            ) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    } else {
+                        if matches!(array_value.value_type(), ValueType::Null | ValueType::Undef) {
+                            slot_set(array_ptr, Value::array(PhpArray::new()));
+                        }
+                        let array = (&mut *array_ptr).as_array_mut().ok_or_else(|| {
+                            VmError::Fatal("Cannot append a reference to a non-array".into())
+                        })?;
+                        array.push((*target).clone_owned_reference_alias());
+                    }
                 }
             }
 

@@ -107,7 +107,10 @@ fn op_clone_obj<'a>(
         // Enum cases and Generator instances are engine-owned singletons.
         {
             let obj = src_val.as_object().unwrap();
-            let uncloneable = obj.class_name.as_ref() == "Generator"
+            let uncloneable = matches!(
+                obj.class_name.as_ref(),
+                "Generator" | "WeakReference" | "InternalIterator"
+            )
                 || eg
                     .class_table
                     .get(obj.class_name.as_ref())
@@ -136,6 +139,7 @@ fn op_clone_obj<'a>(
         };
         let cloned_val = Value::object(cloned_obj);
         eg.clone_initialized_lazy_proxy(&src_val, &cloned_val);
+        eg.clone_weak_map(&src_val, &cloned_val);
         {
             let cloned = cloned_val.as_object().unwrap();
             for (slot, property) in cloned.property_values.iter().enumerate() {

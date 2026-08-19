@@ -1581,6 +1581,15 @@ impl Compiler {
                     indices,
                 )
             }
+            Expr::ArrayAppendArgument { target, .. } => {
+                let (current, current_type) =
+                    self.compile_array_append_argument_reference(target, &[])?;
+                (
+                    (current, current_type),
+                    ArrayRootWriteback::None,
+                    indices,
+                )
+            }
             expression if self.is_known_user_function_call(expression) => (
                 self.compile_expr(expression),
                 ArrayRootWriteback::None,
@@ -1752,6 +1761,8 @@ impl Compiler {
             }
             Stmt::Echo { expressions, line } => {
                 for expr in expressions {
+                    let release_dimension_temps = matches!(expr, Expr::ArrayAccess { .. });
+                    let first_tmp = self.next_tmp as u16;
                     let (operand, op_type) = self.compile_expr(expr);
                     let mut echo = Instruction::new(OpCode::Echo);
                     echo.op1 = operand;
@@ -1759,6 +1770,20 @@ impl Compiler {
                     echo.extended_value = u32::try_from(*line)
                         .map_err(|_| "Echo source line exceeds bytecode range".to_string())?;
                     self.push_instruction_at_line(echo, *line);
+                    let end_tmp = self.next_tmp as u16;
+                    if release_dimension_temps && end_tmp > first_tmp {
+                        // A dimension read can retain protocol operands and a
+                        // returned reference cell until its consuming echo is
+                        // complete. Retire that bounded expression range, but
+                        // do not apply statement-wide cleanup to calls: their
+                        // argument temporaries have separate frame ownership.
+                        let mut release = Instruction::new(OpCode::ReleaseTemps);
+                        release.op1 = first_tmp;
+                        release.op1_type = OpType::Tmp;
+                        release.op2 = end_tmp;
+                        release.op2_type = OpType::Tmp;
+                        self.instructions.push(release);
+                    }
                 }
             }
             Stmt::Assign { var, expr } => {
@@ -1896,7 +1921,14 @@ impl Compiler {
                     }
                 } else {
                     // Compile condition
+                    let condition_first_tmp = self.next_tmp as u16;
+                    let condition_instruction_start = self.instructions.len();
                     let (cond_op, cond_type) = self.compile_expr(condition);
+                    let condition_end_tmp = self.next_tmp as u16;
+                    let condition_needs_temp_release = condition_end_tmp > condition_first_tmp
+                        && self.instructions[condition_instruction_start..]
+                            .iter()
+                            .any(|instruction| instruction.opcode == OpCode::FetchCvR);
                     let branch_entry = self.definitely_defined_cvs.clone();
 
                     // JmpZ condition, <then_end>
@@ -1907,6 +1939,15 @@ impl Compiler {
                     jmpz.op2 = 0; // placeholder, will be patched
                     self.instructions.push(jmpz);
 
+                    if condition_needs_temp_release {
+                        let mut release = Instruction::new(OpCode::ReleaseTemps);
+                        release.op1 = condition_first_tmp;
+                        release.op1_type = OpType::Tmp;
+                        release.op2 = condition_end_tmp;
+                        release.op2_type = OpType::Tmp;
+                        self.instructions.push(release);
+                    }
+
                     // Compile then body
                     for s in then_body {
                         self.compile_stmt(s)?;
@@ -1914,9 +1955,20 @@ impl Compiler {
                     let then_exit = self.definitely_defined_cvs.clone();
 
                     if else_body.is_empty() {
-                        // Patch JmpZ to jump past then body
-                        let after_then = self.instructions.len() as u16;
-                        self.instructions[jmpz_idx].op2 = after_then;
+                        // The false edge must release the same consumed
+                        // condition temporaries. The true edge may encounter
+                        // this a second time after the body; ownership bits
+                        // make that release an inexpensive no-op.
+                        let false_release = self.instructions.len() as u16;
+                        if condition_needs_temp_release {
+                            let mut release = Instruction::new(OpCode::ReleaseTemps);
+                            release.op1 = condition_first_tmp;
+                            release.op1_type = OpType::Tmp;
+                            release.op2 = condition_end_tmp;
+                            release.op2_type = OpType::Tmp;
+                            self.instructions.push(release);
+                        }
+                        self.instructions[jmpz_idx].op2 = false_release;
                         self.definitely_defined_cvs = branch_entry;
                     } else {
                         // Jmp <after_else> (skip else body when then completes)
@@ -1925,9 +1977,18 @@ impl Compiler {
                         jmp.op1 = 0; // placeholder
                         self.instructions.push(jmp);
 
-                        // Patch JmpZ to jump to else body
+                        // Patch JmpZ to a false-edge cleanup immediately
+                        // before the else body.
                         let else_start = self.instructions.len() as u16;
                         self.instructions[jmpz_idx].op2 = else_start;
+                        if condition_needs_temp_release {
+                            let mut release = Instruction::new(OpCode::ReleaseTemps);
+                            release.op1 = condition_first_tmp;
+                            release.op1_type = OpType::Tmp;
+                            release.op2 = condition_end_tmp;
+                            release.op2_type = OpType::Tmp;
+                            self.instructions.push(release);
+                        }
 
                         // Compile else body
                         self.definitely_defined_cvs = branch_entry;
@@ -2488,6 +2549,7 @@ impl Compiler {
                 line,
             } => {
                 // $var[index] = expr
+                let first_tmp = self.next_tmp as u16;
                 let (idx_op, idx_type) = self.compile_expr(index);
                 let (val_op, val_type) = self.compile_expr(expr);
                 let mut instr = Instruction::new(if var == "GLOBALS" {
@@ -2509,6 +2571,15 @@ impl Compiler {
                     instr.result = val_op;
                 }
                 self.push_instruction_at_line(instr, *line);
+                let end_tmp = self.next_tmp as u16;
+                if end_tmp > first_tmp {
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = end_tmp;
+                    release.op2_type = OpType::Tmp;
+                    self.instructions.push(release);
+                }
                 if var != "GLOBALS" {
                     let cv = self.resolve_cv(var);
                     self.definitely_defined_cvs.insert(cv);
@@ -2752,12 +2823,30 @@ impl Compiler {
                         release._pad |= ASSIGN_CV_REBIND;
                         self.instructions.push(release);
                     }
-                    self.emit_foreach_reference_source_writeback(
-                        writeback,
-                        arr_copy_tmp,
-                        OpType::Tmp,
-                    );
+                    // A direct variable source is promoted to an owned
+                    // reference by ForeachInit, so array element writes are
+                    // already live. Writing the detached iteration operand
+                    // back is redundant for arrays and would replace an
+                    // IteratorAggregate variable with its returned Iterator.
+                    if !matches!(writeback, ForeachArrayWriteback::Variable(_)) {
+                        self.emit_foreach_reference_source_writeback(
+                            writeback,
+                            arr_copy_tmp,
+                            OpType::Tmp,
+                        );
+                    }
                 }
+
+                // IteratorAggregate materializes a request object in the
+                // foreach state TMP. Retire it at the loop boundary so its
+                // object-store handle and any iterator-owned state have the
+                // same lifetime as Zend's transient iterator.
+                let mut release_iterable = Instruction::new(OpCode::ReleaseTemps);
+                release_iterable.op1 = arr_copy_tmp;
+                release_iterable.op1_type = OpType::Tmp;
+                release_iterable.op2 = arr_copy_tmp + 1;
+                release_iterable.op2_type = OpType::Tmp;
+                self.instructions.push(release_iterable);
 
                 // Patch jumps
                 let after_loop = self.instructions.len() as u16;

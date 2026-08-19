@@ -201,10 +201,13 @@ fn serialize_value(
                 .expect("object value lost its payload");
             let class_name = object.class_name.to_string();
             drop(object);
-            if class_name.eq_ignore_ascii_case("Generator") {
+            if matches!(
+                class_name.to_ascii_lowercase().as_str(),
+                "generator" | "weakreference" | "weakmap" | "internaliterator"
+            ) {
                 eg.exception = Some(crate::value::make_error_value(
                     "Exception",
-                    "Serialization of 'Generator' is not allowed",
+                    &format!("Serialization of '{class_name}' is not allowed"),
                 ));
                 return Ok(());
             }
@@ -504,10 +507,15 @@ impl<'a> Parser<'a> {
                 self.expect(b'{')?;
                 let class_name = std::str::from_utf8(class_bytes).map_err(|_| ())?;
                 let allowed = allowed_classes.allows(class_name);
-                if allowed && class_name.eq_ignore_ascii_case("Generator") {
+                if allowed
+                    && matches!(
+                        class_name.to_ascii_lowercase().as_str(),
+                        "generator" | "weakreference" | "weakmap" | "internaliterator"
+                    )
+                {
                     eg.exception = Some(crate::value::make_error_value(
                         "Exception",
-                        "Unserialization of 'Generator' is not allowed",
+                        &format!("Unserialization of '{class_name}' is not allowed"),
                     ));
                     return Err(());
                 }
@@ -559,11 +567,14 @@ impl<'a> Parser<'a> {
                 self.expect(b'"')?;
                 let class_name = std::str::from_utf8(class_bytes).map_err(|_| ())?;
                 if allowed_classes.allows(class_name)
-                    && class_name.eq_ignore_ascii_case("Generator")
+                    && matches!(
+                        class_name.to_ascii_lowercase().as_str(),
+                        "generator" | "weakreference" | "weakmap" | "internaliterator"
+                    )
                 {
                     eg.exception = Some(crate::value::make_error_value(
                         "Exception",
-                        "Unserialization of 'Generator' is not allowed",
+                        &format!("Unserialization of '{class_name}' is not allowed"),
                     ));
                 }
                 Err(())

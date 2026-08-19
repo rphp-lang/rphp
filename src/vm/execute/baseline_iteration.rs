@@ -17,11 +17,43 @@ fn assign_foreach_cv(
         } else {
             slot
         };
-        let destructor = prepare_replaced_value_destructor(eg, &*target);
+        let op_array = (*frame).op_array();
+        let mirrored_global_name = (target == slot)
+            .then(|| {
+                let root_frame = (*frame).prev_execute_data.is_null();
+                let mirrored_variables = if root_frame {
+                    &op_array.main_scope_vars
+                } else {
+                    &op_array.global_vars
+                };
+                mirrored_variables
+                    .iter()
+                    .find(|(candidate, _)| *candidate == cv)
+                    .and_then(|(_, name)| {
+                        eg.globals
+                            .get(name)
+                            .filter(|global| {
+                                !global.is_reference()
+                                    && global.weak_object_identity()
+                                        == (&*target).weak_object_identity()
+                            })
+                            .map(|_| name.as_str())
+                    })
+            })
+            .flatten();
+        let replaced_references = 1 + usize::from(mirrored_global_name.is_some());
+        let destructor = prepare_replaced_value_destructor_with_references(
+            eg,
+            &*target,
+            replaced_references,
+        );
         if target == slot {
             frame_slot_set(frame, slot, value);
         } else {
             slot_set(target, value);
+        }
+        if let Some(global_name) = mirrored_global_name {
+            globals_set(&mut eg.globals, global_name, (&*target).clone());
         }
         run_prepared_value_destructor(eg, destructor)?;
     }
@@ -632,7 +664,7 @@ fn clone_foreach_value<const BY_REFERENCE_LOOP: bool>(value: &Value) -> Value {
     } else if BY_REFERENCE_LOOP && value.is_reference() {
         // SAFETY: the detached foreach array retains the borrowed target for
         // the lifetime of the loop-bound alias.
-        Value::reference(unsafe { value.as_ref_ptr() })
+        Value::reference(value.dereferenced() as *const Value as *mut Value)
     } else {
         value.clone()
     }
@@ -968,7 +1000,7 @@ fn op_foreach_init<'a>(
         set_foreach_iteration_state(frame, opline, arr_val.clone(), 0);
     } else {
         if uses_user_iterator_protocol(arr_val, eg) {
-            if by_reference {
+            if by_reference && !eg.weak_iterator_allows_references(arr_val) {
                 let error = make_error_value(
                     "Error",
                     "An iterator cannot be used with foreach by reference",
@@ -979,6 +1011,9 @@ fn op_foreach_init<'a>(
                     }
                     ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
                 });
+            }
+            if by_reference {
+                eg.enable_weak_iterator_references(arr_val);
             }
             let _ = crate::stdlib::call_object_protocol_method(
                 eg,
@@ -1169,7 +1204,18 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             if let Some(control) = take_foreach_protocol_exception(eg, frame) {
                 return Ok(control);
             }
-            assign_foreach_cv(eg, frame, val_cv, value.dereferenced().clone())?;
+            if BY_REFERENCE_LOOP && value.is_owned_reference() {
+                bind_foreach_value_cv(eg, frame, val_cv, value.clone_owned_reference_alias())?;
+            } else if BY_REFERENCE_LOOP && value.is_reference() {
+                bind_foreach_value_cv(
+                    eg,
+                    frame,
+                    val_cv,
+                    Value::reference(value.dereferenced() as *const Value as *mut Value),
+                )?;
+            } else {
+                assign_foreach_cv(eg, frame, val_cv, value.dereferenced().clone())?;
+            }
             if key_encoded > 0 {
                 let key = crate::stdlib::call_object_protocol_method(
                     eg,
@@ -1418,7 +1464,9 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                         } else if returned.is_reference() {
                             // SAFETY: the getter result retains the referenced target while
                             // the loop CV alias is installed synchronously for this iteration.
-                            Value::reference(unsafe { returned.as_ref_ptr() })
+                            Value::reference(
+                                returned.dereferenced() as *const Value as *mut Value,
+                            )
                         } else {
                             let class_name = arr_val
                                 .as_object()

@@ -84,6 +84,58 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     }
 }
 
+#[inline]
+fn destructor_identity(eg: &ExecutorGlobals, value: &Value) -> Option<usize> {
+    value.object_identity().or_else(|| {
+        value
+            .weak_object_identity()
+            .filter(|identity| eg.has_weak_object_release_work(*identity))
+    })
+}
+
+fn collect_destructor_children(
+    eg: &ExecutorGlobals,
+    value: &Value,
+    children: &mut Vec<(usize, usize, Value)>,
+    seen_arrays: &mut std::collections::HashSet<usize>,
+    seen_references: &mut std::collections::HashSet<usize>,
+) {
+    if let Some(identity) = value.reference_identity()
+        && !seen_references.insert(identity)
+    {
+        return;
+    }
+    let value = value.dereferenced();
+    if let Some(identity) = destructor_identity(eg, value) {
+        if let Some((_, references, _)) = children
+            .iter_mut()
+            .find(|(candidate, _, _)| *candidate == identity)
+        {
+            *references += 1;
+        } else {
+            children.push((identity, 1, value.clone()));
+        }
+        return;
+    }
+    let Some(array_identity) = value.array_identity() else {
+        return;
+    };
+    if !seen_arrays.insert(array_identity) {
+        return;
+    }
+    if let Some(array) = value.as_array() {
+        for (_, nested) in array.iter() {
+            collect_destructor_children(
+                eg,
+                nested,
+                children,
+                seen_arrays,
+                seen_references,
+            );
+        }
+    }
+}
+
 /// Run the destructor tree rooted at one object that is known to be losing all
 /// of the `expected_references` handles named by its release boundary.
 ///
@@ -102,7 +154,7 @@ fn run_final_object_destructor_tree(
     detach_lazy_state: bool,
     logical_caller: *mut ExecuteData,
 ) -> Result<bool, VmError> {
-    if owner.object_strong_count() != Some(expected_references) {
+    if owner.weak_object_strong_count() != Some(expected_references) {
         return Ok(false);
     }
 
@@ -142,7 +194,7 @@ fn run_final_object_destructor_tree(
         // One owner remains in the lazy sidecar and this local Value retains a
         // second handle while dispatch is in progress.
         let expected = released_elsewhere + 2;
-        if instance.object_strong_count() == Some(expected) {
+        if instance.weak_object_strong_count() == Some(expected) {
             ran_destructor |= run_final_object_destructor_tree(
                 eg,
                 instance,
@@ -159,29 +211,53 @@ fn run_final_object_destructor_tree(
             }
         }
     } else if !skip_owner_destructor {
-        let class_name = owner
-            .as_object()
-            .expect("destructor tree requires an object owner")
-            .class_name
-            .to_string();
-        if eg.find_method_info(&class_name, "__destruct").is_some()
-            && owner.mark_object_destructed()
-        {
-            let _ = call_magic_method(eg, &owner, "__destruct", &[])?;
-            ran_destructor = true;
-            if eg.exception.is_some() {
-                if detach_lazy_state {
-                    eg.take_lazy_object_state(&owner);
+        if let Some(object) = owner.as_object() {
+            let class_name = object.class_name.to_string();
+            drop(object);
+            if eg.find_method_info(&class_name, "__destruct").is_some()
+                && owner.mark_object_destructed()
+            {
+                let _ = call_magic_method(eg, &owner, "__destruct", &[])?;
+                ran_destructor = true;
+                if eg.exception.is_some() {
+                    if detach_lazy_state {
+                        eg.take_lazy_object_state(&owner);
+                    }
+                    return Ok(true);
                 }
-                return Ok(true);
             }
         }
     }
 
     // A destructor may resurrect its receiver. Its properties remain live in
     // that case and must not be retired by the original release operation.
-    if owner.object_strong_count() != Some(expected_references) {
+    if owner.weak_object_strong_count() != Some(expected_references) {
         return Ok(ran_destructor);
+    }
+
+    if let Some(identity) = owner.weak_object_identity()
+        && eg.has_weak_object_release_work(identity)
+    {
+        let released = eg.release_weak_object(identity);
+        ran_destructor = true;
+        for value in released {
+            let candidate = value.dereferenced().clone();
+            drop(value);
+            if candidate.weak_object_strong_count() != Some(1) {
+                continue;
+            }
+            ran_destructor |= run_final_object_destructor_tree(
+                eg,
+                candidate,
+                1,
+                release_references,
+                detach_lazy_state,
+                logical_caller,
+            )?;
+            if eg.exception.is_some() {
+                return Ok(true);
+            }
+        }
     }
 
     // Preserve declared-slot and dynamic insertion order while grouping
@@ -189,31 +265,28 @@ fn run_final_object_destructor_tree(
     // explicitly in the strong-count check; every other counted handle is a
     // property edge that will disappear with `owner`.
     let mut children = Vec::<(usize, usize, Value)>::new();
+    let mut seen_arrays = std::collections::HashSet::new();
+    let mut seen_references = std::collections::HashSet::new();
     if let Some(object) = owner.as_object() {
         object.for_each_property(|_, property| {
-            let property = property.dereferenced();
-            let Some(identity) = property.object_identity() else {
-                return;
-            };
-            if let Some((_, references, _)) = children
-                .iter_mut()
-                .find(|(candidate, _, _)| *candidate == identity)
-            {
-                *references += 1;
-            } else {
-                children.push((identity, 1, property.clone()));
-            }
+            collect_destructor_children(
+                eg,
+                property,
+                &mut children,
+                &mut seen_arrays,
+                &mut seen_references,
+            );
         });
     }
 
     for (_, property_references, child) in children {
         let released_elsewhere = child
-            .object_identity()
+            .weak_object_identity()
             .and_then(|identity| release_references.and_then(|counts| counts.get(&identity)))
             .copied()
             .unwrap_or(0);
         let expected = property_references + released_elsewhere + 1;
-        if child.object_strong_count() != Some(expected) {
+        if child.weak_object_strong_count() != Some(expected) {
             continue;
         }
         ran_destructor |= run_final_object_destructor_tree(
@@ -273,7 +346,7 @@ fn run_frame_destructors(
         let mut counts = HashMap::<usize, usize>::new();
         for &index in &candidate_indices {
             let value = &*base.add(index);
-            if let Some(identity) = value.object_identity() {
+            if let Some(identity) = destructor_identity(eg, value) {
                 *counts.entry(identity).or_default() += 1;
             }
         }
@@ -282,7 +355,7 @@ fn run_frame_destructors(
             // handles are retired together at shutdown, so include the mirror
             // when deciding whether this is the object's final PHP owner.
             for value in eg.globals.values().filter(|value| !value.is_reference()) {
-                if let Some(identity) = value.object_identity()
+                if let Some(identity) = destructor_identity(eg, value)
                     && let Some(count) = counts.get_mut(&identity)
                 {
                     *count += 1;
@@ -295,7 +368,7 @@ fn run_frame_destructors(
         // explicitly instead of inheriting randomized HashMap iteration.
         let mut identities = Vec::with_capacity(counts.len());
         let mut record_identity = |index: usize| {
-            if let Some(identity) = (&*base.add(index)).object_identity()
+            if let Some(identity) = destructor_identity(eg, &*base.add(index))
                 && !identities.contains(&identity)
             {
                 identities.push(identity);
@@ -323,11 +396,11 @@ fn run_frame_destructors(
                 let representative = candidate_indices
                     .iter()
                     .map(|index| &*base.add(*index))
-                    .find(|value| value.object_identity() == Some(identity));
+                    .find(|value| destructor_identity(eg, value) == Some(identity));
                 let Some(representative) = representative else {
                     continue;
                 };
-                if representative.object_strong_count() != Some(frame_references) {
+                if representative.weak_object_strong_count() != Some(frame_references) {
                     deferred.push(identity);
                     continue;
                 }
@@ -382,28 +455,36 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     replaced_references: usize,
 ) -> Option<PreparedValueDestructor> {
     let value = value.dereferenced();
-    let Some(object) = value.as_object() else {
+    let Some(identity) = value.weak_object_identity() else {
         return None;
     };
     let fiber_owned_references = value
         .object_identity()
         .map_or(0, |identity| eg.fiber_owned_object_references(identity));
-    if value.object_strong_count() != Some(replaced_references + fiber_owned_references) {
+    if value.weak_object_strong_count() != Some(replaced_references + fiber_owned_references) {
         return None;
     }
-    let requires_vm_release = eg.lazy_object_state(value).is_some()
+    let requires_vm_release = eg.has_weak_object_release_work(identity)
+        || eg.lazy_object_state(value).is_some()
         || value
             .object_identity()
             .is_some_and(|identity| eg.has_fiber_context(identity))
-        || eg.find_method_info(&object.class_name, "__destruct").is_some()
+        || value.as_object().is_some_and(|object| {
+            eg.find_method_info(&object.class_name, "__destruct")
+                .is_some()
+        })
         || {
             let mut nested_object = false;
-            object.for_each_property(|_, property| {
-                nested_object |= property.dereferenced().value_type() == ValueType::Object;
-            });
+            if let Some(object) = value.as_object() {
+                object.for_each_property(|_, property| {
+                    nested_object |= matches!(
+                        property.dereferenced().value_type(),
+                        ValueType::Object | ValueType::Closure
+                    );
+                });
+            }
             nested_object
         };
-    drop(object);
     requires_vm_release.then(|| PreparedValueDestructor {
         owner: value.clone(),
         replaced_references,
@@ -419,7 +500,7 @@ pub(crate) fn run_prepared_value_destructor(
     let Some(release) = release else {
         return Ok(());
     };
-    let Some(references) = release.owner.object_strong_count() else {
+    let Some(references) = release.owner.weak_object_strong_count() else {
         return Ok(());
     };
     if references > release.replaced_references + release.fiber_owned_references + 1 {
@@ -465,7 +546,7 @@ fn release_statement_temps(
                 continue;
             }
             let value = &*base.add(index);
-            if let Some(identity) = value.object_identity() {
+            if let Some(identity) = destructor_identity(eg, value) {
                 *object_counts.entry(identity).or_default() += 1;
             }
         }
@@ -474,7 +555,7 @@ fn release_statement_temps(
             if !is_owned(index) {
                 continue;
             }
-            if let Some(identity) = (&*base.add(index)).object_identity()
+            if let Some(identity) = destructor_identity(eg, &*base.add(index))
                 && !identities.contains(&identity)
             {
                 identities.push(identity);
@@ -489,11 +570,11 @@ fn release_statement_temps(
                 let representative = (first..end)
                     .filter(|index| is_owned(*index))
                     .map(|index| &*base.add(index))
-                    .find(|value| value.object_identity() == Some(identity));
+                    .find(|value| destructor_identity(eg, value) == Some(identity));
                 let Some(representative) = representative else {
                     continue;
                 };
-                if representative.object_strong_count() != Some(range_references) {
+                if representative.weak_object_strong_count() != Some(range_references) {
                     deferred.push(identity);
                     continue;
                 }

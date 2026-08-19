@@ -268,6 +268,15 @@ impl Parser {
                     // it for the statement parser instead of trying to parse
                     // `]` as an index expression.
                     if self.peek_at(1) == Token::RBracket {
+                        if matches!(self.peek_at(2), Token::LBracket(_)) {
+                            self.advance();
+                            self.advance();
+                            expr = Expr::ArrayAppendArgument {
+                                target: Box::new(expr),
+                                line: expression_line.unwrap_or(line),
+                            };
+                            continue;
+                        }
                         if self.preserve_empty_dimension_suffix
                             || self.peek_at(2) == Token::Assign
                         {

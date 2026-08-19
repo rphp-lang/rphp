@@ -22,6 +22,7 @@ use crate::vm::virtual_aggregate_cache::{
 pub(crate) mod fiber;
 #[path = "coroutine/state.rs"]
 pub(crate) mod suspended;
+mod weak;
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[path = "generic_contracts.rs"]
@@ -388,6 +389,9 @@ pub struct ExecutorGlobals {
     /// sidecar word and no teardown scan.
     pub(crate) shutdown_functions:
         Option<Box<std::collections::VecDeque<crate::stdlib::ShutdownFunction>>>,
+    /// WeakReference/WeakMap payloads are cold request state. A null sidecar
+    /// leaves ordinary objects and requests at their established layouts.
+    weak_objects: Option<Box<weak::WeakObjectRuntime>>,
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
     pub method_declaring_class: HashMap<*const FunctionCommon, String>,
     /// Sparse canonical spellings for built-ins whose public name is not the
@@ -976,11 +980,17 @@ impl ExecutorGlobals {
         // The all-features registry includes the complete Reflection and
         // generic runtime surfaces. Reserve the next hash-table envelope so
         // installing that fixed set never rehashes stored function pointers.
+        // The combined optional I/O/resource surface reaches the next hash
+        // envelope once the weak-object methods are installed. Keep ordinary
+        // default requests on the established 896-slot allocation.
+        #[cfg(all(feature = "resource-lifetime", feature = "include-path"))]
+        self.function_table.reserve(900);
+        #[cfg(not(all(feature = "resource-lifetime", feature = "include-path")))]
         self.function_table.reserve(512);
         self.class_table.reserve(66);
         self.method_declaring_class.reserve(512);
-        self.class_by_id.reserve(75);
-        self.static_property_slots_by_class.reserve(75);
+        self.class_by_id.reserve(80);
+        self.static_property_slots_by_class.reserve(80);
         self.static_property_values.reserve(16);
         #[cfg(feature = "php-generics-reified")]
         self.static_generic_property_contracts.reserve(4);
@@ -1051,6 +1061,7 @@ impl ExecutorGlobals {
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             shutdown_functions: None,
+            weak_objects: None,
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
             internal_static_methods: None,
@@ -1157,6 +1168,7 @@ impl ExecutorGlobals {
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             shutdown_functions: None,
+            weak_objects: None,
             method_declaring_class: HashMap::new(),
             internal_function_display_names: None,
             internal_static_methods: None,
