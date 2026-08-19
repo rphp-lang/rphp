@@ -6724,7 +6724,7 @@ impl Compiler {
                 }
                 instr.result_type = OpType::Tmp;
                 instr.result = tmp;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 self.definitely_defined_cvs.insert(cv_idx);
                 (tmp, OpType::Tmp)
             }
@@ -6805,7 +6805,7 @@ impl Compiler {
                 }
                 instr.result_type = OpType::Tmp;
                 instr.result = tmp;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 self.definitely_defined_cvs.insert(cv_idx);
                 (tmp, OpType::Tmp)
             }

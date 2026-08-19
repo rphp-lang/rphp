@@ -541,6 +541,60 @@ var_dump($value);
 }
 
 #[test]
+fn string_decrement_preserves_numeric_kinds_and_reports_php_85_deprecations() {
+    let file = "/virtual/string-decrement.php";
+    let source = r#"<?php
+$integer = "0";
+var_dump($integer--, $integer);
+$decimal = "15.5";
+var_dump(--$decimal);
+$empty = "";
+var_dump($empty--, $empty);
+$text = "abc";
+var_dump(--$text, $text);
+"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "string(1) \"0\"\nint(-1)\nfloat(14.5)\n\nDeprecated: Decrement on empty string is deprecated as non-numeric in {file} on line 7\nstring(0) \"\"\nint(-1)\n\nDeprecated: Decrement on non-numeric string has no effect and is deprecated in {file} on line 9\nstring(3) \"abc\"\nstring(3) \"abc\"\n"
+        )
+    );
+}
+
+#[test]
+fn string_decrement_uses_the_pre_handler_snapshot_and_stops_on_exception() {
+    let source = r#"<?php
+set_error_handler(function ($level, $message) {
+    echo "replace:$level:$message\n";
+    $GLOBALS['value'] = new stdClass();
+});
+$value = "abc";
+var_dump(--$value);
+var_dump($value);
+$value = "";
+var_dump($value--);
+var_dump($value);
+
+set_error_handler(function ($level, $message) {
+    throw new Exception("$level:$message");
+});
+$value = "";
+try {
+    --$value;
+} catch (Exception $exception) {
+    echo "caught:", $exception->getMessage(), "\n";
+}
+var_dump($value);
+"#;
+
+    assert_eq!(
+        run_php(source),
+        "replace:8192:Decrement on non-numeric string has no effect and is deprecated\nstring(3) \"abc\"\nstring(3) \"abc\"\nreplace:8192:Decrement on empty string is deprecated as non-numeric\nstring(0) \"\"\nint(-1)\ncaught:8192:Decrement on empty string is deprecated as non-numeric\nstring(0) \"\"\n"
+    );
+}
+
+#[test]
 fn test_e2e_array_append_assignments_chain_and_produce_the_assigned_value() {
     assert_eq!(
         run_php(

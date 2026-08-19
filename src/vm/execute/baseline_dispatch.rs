@@ -266,6 +266,53 @@ fn increment_php_value(value: &Value) -> (Value, bool) {
     }
 }
 
+fn decrement_php_value(value: &Value) -> Option<(Value, Option<&'static str>)> {
+    if let Some(number) = value.as_long() {
+        return Some((
+            number
+                .checked_sub(1)
+                .map_or_else(|| Value::double(number as f64 - 1.0), Value::long),
+            None,
+        ));
+    }
+    match value.value_type() {
+        ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False => {
+            Some((value.clone(), None))
+        }
+        ValueType::String => {
+            let text = value.as_str().unwrap();
+            if text.is_empty() {
+                return Some((
+                    Value::long(-1),
+                    Some("Decrement on empty string is deprecated as non-numeric"),
+                ));
+            }
+            let numeric = text.trim();
+            if !numeric.is_empty() {
+                if let Ok(number) = numeric.parse::<i64>() {
+                    return Some((
+                        number.checked_sub(1).map_or_else(
+                            || Value::double(number as f64 - 1.0),
+                            Value::long,
+                        ),
+                        None,
+                    ));
+                }
+                if let Ok(number) = numeric.parse::<f64>() {
+                    return Some((Value::double(number - 1.0), None));
+                }
+            }
+            Some((
+                value.clone(),
+                Some("Decrement on non-numeric string has no effect and is deprecated"),
+            ))
+        }
+        _ => value
+            .to_double()
+            .map(|number| (Value::double(number - 1.0), None)),
+    }
+}
+
 #[inline]
 fn shift_operand_long(value: &Value) -> Result<(i64, bool), ()> {
     let value = value.dereferenced();
@@ -3629,40 +3676,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
-                    if let Some(n) = old.as_long() {
-                        let new_val = prepare_reference_write!(writeback_cv, match n.checked_sub(1) {
-                            Some(v) => Value::long(v),
-                            None => Value::double(n as f64 - 1.0),
-                        });
+                    if let Some((new_val, diagnostic)) = decrement_php_value(&old) {
+                        if let Some(diagnostic) = diagnostic {
+                            report_php_deprecation(eg, frame, op_array, opline, diagnostic)?;
+                            resume_pending_exception!();
+                        }
+                        let new_val = prepare_reference_write!(writeback_cv, new_val);
                         if opline.result_type != OpType::Unused {
                             let result_ptr =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
                             slot_set(result_ptr, new_val.clone());
                         }
-                        slot_set(cv_ptr, new_val);
-                    } else if matches!(
-                        old.value_type(),
-                        ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False
-                    ) {
-                        // PHP 8 leaves null and booleans unchanged on decrement.
-                        if opline.result_type != OpType::Unused {
-                            let result_ptr =
-                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                            slot_set(result_ptr, old.clone());
-                        }
-                        let old = prepare_reference_write!(writeback_cv, old);
-                        slot_set(cv_ptr, old);
-                    } else if let Some(d) = old.to_double() {
-                        let new_val = prepare_reference_write!(writeback_cv, Value::double(d - 1.0));
-                        if opline.result_type != OpType::Unused {
-                            let result_ptr =
-                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                            slot_set(result_ptr, new_val.clone());
-                        }
+                        let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
                         slot_set(cv_ptr, new_val);
                     } else if opline.result_type != OpType::Unused {
-                        // Non-numeric values retain the legacy no-effect path.
+                        // Unsupported values retain the existing no-write path.
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
                         slot_set(result_ptr, Value::null());
@@ -3733,39 +3761,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
-                    if let Some(n) = old.as_long() {
-                        let new_val = prepare_reference_write!(writeback_cv, match n.checked_sub(1) {
-                            Some(v) => Value::long(v),
-                            None => Value::double(n as f64 - 1.0),
-                        });
+                    if let Some((new_val, diagnostic)) = decrement_php_value(&old) {
+                        if let Some(diagnostic) = diagnostic {
+                            report_php_deprecation(eg, frame, op_array, opline, diagnostic)?;
+                            resume_pending_exception!();
+                        }
+                        let new_val = prepare_reference_write!(writeback_cv, new_val);
                         if opline.result_type != OpType::Unused {
                             let result_ptr =
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
                             slot_set(result_ptr, old.clone());
                         }
-                        slot_set(cv_ptr, new_val);
-                    } else if matches!(
-                        old.value_type(),
-                        ValueType::Null | ValueType::Undef | ValueType::True | ValueType::False
-                    ) {
-                        if opline.result_type != OpType::Unused {
-                            let result_ptr =
-                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                            slot_set(result_ptr, old.clone());
-                        }
-                        let old = prepare_reference_write!(writeback_cv, old);
-                        slot_set(cv_ptr, old);
-                    } else if let Some(d) = old.to_double() {
-                        let new_val = prepare_reference_write!(writeback_cv, Value::double(d - 1.0));
-                        if opline.result_type != OpType::Unused {
-                            let result_ptr =
-                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                            slot_set(result_ptr, old.clone());
-                        }
+                        let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
                         slot_set(cv_ptr, new_val);
                     } else if opline.result_type != OpType::Unused {
-                        // Non-numeric values retain the legacy no-effect path.
+                        // Unsupported values retain the existing no-write path.
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
                         slot_set(result_ptr, Value::null());
