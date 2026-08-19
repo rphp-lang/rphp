@@ -883,6 +883,16 @@ fn error_suppression_follows_a_called_frame_and_restores_the_request_mask() {
 }
 
 #[test]
+fn nested_error_suppression_intersects_and_restores_the_original_mask() {
+    assert_eq!(
+        run_php(
+            "<?php error_reporting(E_WARNING); function innerMask() { echo 'inner:', error_reporting(), '|'; } function outerMask($value) { echo 'outer:', error_reporting(), '|'; } @outerMask(@innerMask()); echo 'after:', error_reporting();"
+        ),
+        "inner:0|outer:0|after:2"
+    );
+}
+
+#[test]
 fn error_suppression_hides_builtin_undefined_variable_warnings_without_a_handler() {
     assert_eq!(
         run_php("<?php @$directMissing; @($groupedMissing + 1); echo 'ok';"),

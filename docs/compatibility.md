@@ -9,15 +9,52 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,149 pass, 2,148 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,152 pass, 2,145 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-59.449% and the whole-corpus rate is 56.242%; 4,610 of 5,297 attempted cases
-reach runtime (87.030%). Relative to the preceding 3,110-pass checkpoint, the
-exact pass-set delta is +39/-0. The initial PHP 8.5 corpus continues to have no
+59.505% and the whole-corpus rate is 56.296%; 4,610 of 5,297 attempted cases
+reach runtime (87.030%). Relative to the preceding 3,149-pass checkpoint, the
+exact pass-set delta is +3/-0. The initial PHP 8.5 corpus continues to have no
 process hazard.
 
-The final internal `Fiber` and `FiberError` classes now cover PHP 8.5's core
-lifecycle: construction, start arguments, nested current identity, suspension,
+Fiber and coroutine stack exchange now includes the request error-reporting
+mask and active `@` suppression frames. A newly started detached context
+inherits the caller's unsuppressed mask; after suspension, later
+`error_reporting()` changes and caller-side `@` frames remain local to their
+own execution context. A Fiber's own suppression remains active across its
+suspend/resume boundary and unwinds against the original Fiber frame.
+
+The general `@` entry path now intersects the fatal-error mask with the current
+reporting mask instead of replacing it with a fixed value. This also fixes
+nested suppression outside Fibers. The two dedicated Fiber silence cases and
+`Zend/tests/bug34786.phpt` become exact passes. The complete
+`Zend/tests/fibers` directory rises from 39 to 41 passes; the full corpus delta
+is +3/-0 with no lost pass, other status or failure-stage movement, timeout or
+crash. Fiber destruction, GC, force-close and generator crossings remain
+separate boundaries.
+
+All five Cargo configurations, all-feature/all-target, formatting and the
+exact unsafe ratchet pass; the production inventory remains 1,623 unsafe blocks
+and 289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel
+S2 and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9
+Phar-capable oracle while the language corpus remained pinned to PHP 8.5.6.
+
+The exact base `aa7f7700` and final release candidate were compared on one
+pinned Ryzen 9 7950X CPU in `performance` mode without removing outliers.
+Thirty-two balanced ABBA/BAAB pairs of a 20,000-cycle Fiber switch workload
+retained output `199990000|200010000` and measured baseline p10/median/p90
+0.014710/0.014928/0.015835 seconds versus candidate
+0.014549/0.014788/0.015074 seconds: -0.934% by independent medians and -1.267%
+by the paired-ratio median, whose p10/p90 is -4.090%/+0.686%. A separate
+32-pair five-million-call `@` control retained checksum `12500002500000` and
+measured baseline 0.230367/0.232333/0.236449 seconds versus candidate
+0.230317/0.232627/0.236591 seconds: +0.127% independently and +0.030% paired,
+with paired p10/p90 -1.568%/+2.102%. Both medians remain below the five-percent
+regression ceiling. The added state is allocated only with a detached Fiber or
+coroutine context; ordinary executor and value layouts are unchanged.
+
+The preceding Fiber-core checkpoint introduced the final internal `Fiber` and
+`FiberError` classes and covers PHP 8.5's core lifecycle: construction, start
+arguments, nested current identity, suspension,
 resume values, injected exceptions, termination, status queries and return
 values. Each Fiber owns a pinned alternate VM stack and suspended frame state;
 nested execution swaps the request stack sidecars together and preserves a

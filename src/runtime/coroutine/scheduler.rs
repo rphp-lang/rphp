@@ -425,6 +425,11 @@ impl CoroutineScheduler {
             if (*context).state.stacks.is_none() {
                 (*context).state.stacks = Some(scheduler.pool.checkout());
             }
+            if status == CoroutineStatus::Created {
+                (*context)
+                    .state
+                    .initialize_error_reporting(eg.unsuppressed_error_reporting());
+            }
             (*context).state.exchange(eg);
             if status == CoroutineStatus::Created {
                 initialize_entry_frame(eg, context);

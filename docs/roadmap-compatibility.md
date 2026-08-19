@@ -804,6 +804,21 @@ empty-request startup at -0.671% independently and -0.681% paired, while the
 ordinary-call control is +0.259% independently and +0.277% paired. Exact output
 is retained and every median remains below the five-percent ceiling.
 
+The `fiber-error-state` checkpoint reaches 3,152 passes with 2,145 failures,
+114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
+Detached Fiber/coroutine state now owns `error_reporting` and active `@`
+frames, inherits the unsuppressed caller mask on first entry and restores both
+contexts across suspension. General nested `@` also intersects rather than
+replaces the active reporting mask. Both Fiber silence cases and
+`Zend/tests/bug34786.phpt` become exact; the Fiber directory reaches 41/110 and
+the full corpus delta is +3/-0 with no other movement. All five feature
+configurations, all-target, unsafe, Composer S0, four Symfony S1 gates,
+warmed-kernel S2 and cold-build S3 pass. CPU-pinned 32-pair release A/B medians
+put 20,000 Fiber switches at -0.934% independently and -1.267% paired, and a
+five-million suppressed-call control at +0.127% and +0.030%. Exact outputs are
+retained and both remain below the five-percent ceiling. Destruction, GC,
+force-close and generator crossings remain separate Fiber checkpoints.
+
 The `fiber-core-lifecycle` checkpoint reaches 3,149 passes with 2,148 failures,
 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero crashes.
 Pinned alternate VM stacks implement construction, start, suspend, resume,

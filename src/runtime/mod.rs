@@ -927,8 +927,19 @@ impl ExecutorGlobals {
     pub(crate) fn begin_error_suppression(&mut self, frame: usize) {
         self.error_suppression_frames
             .push((frame, self.error_reporting));
-        // PHP 8.2 leaves fatal error classes visible under @.
-        self.error_reporting = PHP_82_SUPPRESSED_ERROR_REPORTING;
+        // PHP leaves fatal error classes visible under @, intersected with
+        // the reporting mask that was active before suppression began.
+        self.error_reporting &= PHP_82_SUPPRESSED_ERROR_REPORTING;
+    }
+
+    /// Reporting mask a newly entered detached execution context inherits.
+    /// A caller-side `@` is an execution-frame property and must not leak into
+    /// a Fiber or coroutine entered by the suppressed call itself.
+    pub(crate) fn unsuppressed_error_reporting(&self) -> i64 {
+        self.error_suppression_frames
+            .first()
+            .map(|(_, reporting)| *reporting)
+            .unwrap_or(self.error_reporting)
     }
 
     pub(crate) fn end_error_suppression(&mut self, frame: usize) {

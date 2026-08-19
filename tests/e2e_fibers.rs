@@ -138,3 +138,51 @@ echo $fiber->isTerminated() ? "terminated\n" : "live\n";
         "generator\nFiberError\nterminated\n"
     );
 }
+
+#[test]
+fn error_reporting_and_silence_frames_are_local_to_each_fiber_context() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function pause_under_silence(): void {
+    echo "fiber-suppressed-a:", error_reporting(), "\n";
+    Fiber::suspend('one');
+    echo "fiber-suppressed-b:", error_reporting(), "\n";
+}
+
+error_reporting(11111);
+$fiber = new Fiber(function (): void {
+    echo "fiber-start:", error_reporting(), "\n";
+    @pause_under_silence();
+    echo "fiber-after-own-silence:", error_reporting(), "\n";
+    Fiber::suspend('two');
+    echo "fiber-after-external-silence:", error_reporting(), "\n";
+});
+
+echo "main-start:", error_reporting(), "\n";
+var_dump($fiber->start());
+echo "main-after-start:", error_reporting(), "\n";
+error_reporting(22222);
+var_dump(@$fiber->resume());
+echo "main-after-external-silence:", error_reporting(), "\n";
+error_reporting(33333);
+var_dump($fiber->resume());
+echo "main-end:", error_reporting(), "\n";
+"#,
+        ),
+        concat!(
+            "main-start:11111\n",
+            "fiber-start:11111\n",
+            "fiber-suppressed-a:325\n",
+            "string(3) \"one\"\n",
+            "main-after-start:11111\n",
+            "fiber-suppressed-b:325\n",
+            "fiber-after-own-silence:11111\n",
+            "string(3) \"two\"\n",
+            "main-after-external-silence:22222\n",
+            "fiber-after-external-silence:11111\n",
+            "NULL\n",
+            "main-end:33333\n",
+        )
+    );
+}

@@ -84,6 +84,8 @@ pub(super) struct CoroutineExecutionState {
     function_arguments: HashMap<usize, Vec<Value>>,
     active_generator: Option<crate::vm::generator::GeneratorRef>,
     pending_invoke_this: Option<Value>,
+    error_reporting: i64,
+    error_suppression_frames: Vec<(usize, i64)>,
 }
 
 impl CoroutineExecutionState {
@@ -97,7 +99,15 @@ impl CoroutineExecutionState {
             function_arguments: HashMap::new(),
             active_generator: None,
             pending_invoke_this: None,
+            error_reporting: 32767,
+            error_suppression_frames: Vec::new(),
         }
+    }
+
+    pub(super) fn initialize_error_reporting(&mut self, reporting: i64) {
+        debug_assert!(self.current_execute_data.is_null());
+        debug_assert!(self.error_suppression_frames.is_empty());
+        self.error_reporting = reporting;
     }
 
     #[inline]
@@ -132,6 +142,13 @@ impl CoroutineExecutionState {
         if self.pending_invoke_this.is_some() || eg.pending_invoke_this.is_some() {
             std::mem::swap(&mut self.pending_invoke_this, &mut eg.pending_invoke_this);
         }
+        std::mem::swap(&mut self.error_reporting, &mut eg.error_reporting);
+        if !self.error_suppression_frames.is_empty() || !eg.error_suppression_frames.is_empty() {
+            std::mem::swap(
+                &mut self.error_suppression_frames,
+                &mut eg.error_suppression_frames,
+            );
+        }
     }
 
     pub(super) fn cleanup_frames(&mut self) {
@@ -155,6 +172,7 @@ impl CoroutineExecutionState {
         self.function_arguments.clear();
         self.active_generator = None;
         self.pending_invoke_this = None;
+        self.error_suppression_frames.clear();
     }
 }
 
@@ -354,6 +372,10 @@ mod tests {
             .insert(2, vec![("child".into(), Value::long(44))]);
         eg.pending_invoke_this = Some(Value::long(55));
         state.pending_invoke_this = Some(Value::long(66));
+        eg.error_reporting = 111;
+        eg.error_suppression_frames.push((3, 101));
+        state.error_reporting = 222;
+        state.error_suppression_frames.push((4, 202));
 
         state.exchange(&mut eg);
 
@@ -369,6 +391,10 @@ mod tests {
             state.pending_invoke_this.as_ref().and_then(Value::as_long),
             Some(55)
         );
+        assert_eq!(eg.error_reporting, 222);
+        assert_eq!(eg.error_suppression_frames, vec![(4, 202)]);
+        assert_eq!(state.error_reporting, 111);
+        assert_eq!(state.error_suppression_frames, vec![(3, 101)]);
 
         state.exchange(&mut eg);
         assert_eq!(eg.exception.as_ref().and_then(Value::as_long), Some(11));
@@ -377,5 +403,7 @@ mod tests {
             eg.pending_invoke_this.as_ref().and_then(Value::as_long),
             Some(55)
         );
+        assert_eq!(eg.error_reporting, 111);
+        assert_eq!(eg.error_suppression_frames, vec![(3, 101)]);
     }
 }

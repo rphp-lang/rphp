@@ -231,6 +231,9 @@ impl FiberRuntime {
                 })
             };
             if is_start {
+                (*context)
+                    .state
+                    .initialize_error_reporting(eg.unsuppressed_error_reporting());
                 let stacks = (&mut *runtime).pool.checkout();
                 (*context).state.stacks = Some(stacks);
             }
