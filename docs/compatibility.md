@@ -9,6 +9,48 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,396 pass, 1,901 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+64.112% and the whole-corpus rate is 60.654%; 4,636 of 5,297 attempted cases
+reach runtime (87.521%). Relative to exact base `3a2a2ae7`, the pass-set delta
+is +1/-0: all 3,395 prior passes remain passes.
+
+Engine-dispatched `__get`, `__set`, `__isset` and `__unset` methods retain their
+detached return boundary while publishing the active property instruction as
+their logical caller. Live backtraces can therefore cross the magic-property
+entry frame and recover its exact source site without making `Return` resume
+the suspended caller. The existing sparse detached-trace side state records
+whether a logical caller is still at its current instruction, reuses its
+allocation after the first dispatch and does not widen `ExecuteData`.
+`IssetObj`, `UnsetObj` and silent intermediate property reads now retain their
+source line in the compiler's existing sparse table, so all four magic entry
+forms expose a line without runtime guessing. Stored Throwable traces keep
+their existing post-execution reconnection behavior.
+
+One original E2E regression covers all four property operations plus an
+inherited nested getter and the adjacent stored-Throwable regression remains
+exact. `Zend/tests/backtrace/bug69180-backtrace.phpt` becomes exact. Two
+full-corpus runs produce byte-for-byte identical manifests with SHA-256
+`63e298441b6559fdb083a9c10e4c4522cc91e58c743f91d7750709e872fa86c7` and
+no other status or failure-stage movement.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.6 warmed-kernel S2 and cold-build S3. The
+production inventory remains 1,619 unsafe blocks and 289 unsafe functions. A
+CPU-pinned release comparison of one million repeated missing-property reads
+used two warm-ups per binary, 32 balanced order pairs and no outlier removal.
+It retained checksum `1000000` and measured -3.865% independently and -3.876%
+paired, with paired p10/p90 -10.050%/+5.239%. Both medians remain below the
+five-percent regression ceiling; the ordinary declared-property path is
+unchanged.
+
+This checkpoint does not generalize detached entry frames beyond magic
+property dispatch or claim the remaining generator, eval, include and
+Throwable-lifetime backtrace differences.
+
+The preceding trait-method-identity checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,395 pass, 1,902 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 64.093% and the whole-corpus rate is 60.636%; 4,636 of 5,297 attempted cases

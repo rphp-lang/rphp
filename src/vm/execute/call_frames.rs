@@ -944,6 +944,36 @@ fn call_magic_method(
     Ok(Some(call_function(eg, func_ptr, &call_args)?))
 }
 
+/// Property magic is engine-dispatched from one active source instruction.
+/// Keep its detached return boundary while retaining that instruction in live
+/// and stored traces.
+fn call_magic_property_method(
+    eg: &mut ExecutorGlobals,
+    obj_val: &Value,
+    method_name: &str,
+    args: &[Value],
+) -> Result<Option<Value>, VmError> {
+    let class_name = {
+        let obj = obj_val.as_object().unwrap();
+        obj.class_name.clone()
+    };
+    let full_name = format!("{}::{}", class_name.to_lowercase(), method_name);
+    let func_ptr = match eg.find_function(&full_name) {
+        Some(ptr) => ptr,
+        None => return Ok(None),
+    };
+
+    let mut call_args = Vec::with_capacity(args.len() + 1);
+    call_args.push(obj_val.clone());
+    call_args.extend_from_slice(args);
+    Ok(Some(call_function_iter_from_current_site(
+        eg,
+        func_ptr,
+        call_args.len(),
+        call_args.iter(),
+    )?))
+}
+
 const PROPERTY_GUARD_GET: u8 = 1;
 const PROPERTY_GUARD_SET: u8 = 1 << 1;
 const PROPERTY_GUARD_ISSET: u8 = 1 << 2;
@@ -1040,7 +1070,7 @@ fn call_guarded_property_magic_method(
         return Ok(None);
     }
     set_property_guard(&receiver, name, operation, true);
-    let result = call_magic_method(eg, &receiver, method, arguments);
+    let result = call_magic_property_method(eg, &receiver, method, arguments);
     set_property_guard(&receiver, name, operation, false);
     result
 }

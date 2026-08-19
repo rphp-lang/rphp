@@ -6226,7 +6226,12 @@ pub(crate) unsafe fn collect_debug_backtrace(
                         .opline
                         .offset_from(caller_op_array.instructions.as_ptr());
                     if let Ok(next) = usize::try_from(next)
-                        && let Some(call_index) = next.checked_sub(1)
+                        && let Some(call_index) =
+                            if eg.detached_trace_caller_is_current_site(frame as usize) {
+                                Some(next)
+                            } else {
+                                next.checked_sub(1)
+                            }
                         && let Some(line) = caller_op_array.source_line(call_index)
                     {
                         entry.set_str(

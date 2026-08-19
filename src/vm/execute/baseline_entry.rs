@@ -427,6 +427,38 @@ where
         None,
         None,
         std::ptr::null_mut(),
+        false,
+        None,
+    )?;
+    Ok(return_value)
+}
+
+/// Enter a user callback dispatched by the active source instruction. Magic
+/// property operations use this detached boundary: their body must return to
+/// the opcode helper, while live/stored traces still expose the source-level
+/// property access as the callback's logical caller and origin.
+fn call_function_iter_from_current_site<'a, I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = &'a Value>,
+{
+    let logical_caller = eg.current_execute_data.get();
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args.cloned(),
+        0,
+        None,
+        0,
+        None,
+        None,
+        logical_caller,
+        true,
         None,
     )?;
     Ok(return_value)
@@ -466,6 +498,7 @@ where
         closure_static_vars,
         None,
         std::ptr::null_mut(),
+        false,
         None,
     )?;
     Ok(return_value)
@@ -495,6 +528,7 @@ where
             None,
             None,
             std::ptr::null_mut(),
+            false,
             None,
         )?;
     Ok(return_value)
@@ -525,6 +559,7 @@ where
         closure_static_vars,
         None,
         std::ptr::null_mut(),
+        false,
         None,
     )?;
     Ok(return_value)
@@ -555,6 +590,7 @@ where
         closure_static_vars,
         Some(named_variadic),
         std::ptr::null_mut(),
+        false,
         None,
     )?;
     Ok(return_value)
@@ -587,6 +623,7 @@ where
         closure_static_vars,
         Some(named_variadic),
         logical_caller,
+        false,
         Some((trace_origin.0, trace_origin.1, None)),
     )?;
     Ok(return_value)
@@ -617,6 +654,7 @@ where
             None,
             None,
             std::ptr::null_mut(),
+            false,
             None,
         )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
@@ -646,6 +684,7 @@ where
         closure_static_vars,
         None,
         std::ptr::null_mut(),
+        false,
         None,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
@@ -664,6 +703,7 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
     named_variadic: Option<Vec<(String, Value)>>,
     logical_caller: *mut ExecuteData,
+    trace_caller_at_current_site: bool,
     trace_origin: Option<(String, usize, Option<&Value>)>,
 ) -> Result<(Value, Option<Value>), VmError>
 where
@@ -808,7 +848,14 @@ where
         logical_caller
     };
     if !logical_caller.is_null() {
-        eg.publish_detached_trace_caller(frame as usize, trace_caller as usize);
+        if trace_caller_at_current_site {
+            eg.publish_detached_trace_caller_at_current_site(
+                frame as usize,
+                trace_caller as usize,
+            );
+        } else {
+            eg.publish_detached_trace_caller(frame as usize, trace_caller as usize);
+        }
     }
     let pending_argument_error = trace_origin
         .as_ref()
@@ -1121,6 +1168,7 @@ where
         None,
         None,
         logical_caller,
+        false,
         Some((call_file.to_string(), call_line, Some(throwable))),
     )?;
     Ok(())
@@ -1159,6 +1207,7 @@ where
         None,
         None,
         std::ptr::null_mut(),
+        false,
         None,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))

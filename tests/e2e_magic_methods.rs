@@ -1,5 +1,8 @@
 mod common;
-use common::{run_php, run_php_expect_error, run_php_expect_error_with_source_context};
+use common::{
+    run_php, run_php_expect_error, run_php_expect_error_with_source_context,
+    run_php_with_source_context,
+};
 
 #[test]
 fn test_tostring_echo() {
@@ -436,6 +439,49 @@ fn detached_magic_method_errors_retain_the_callback_and_call_site_trace() {
         rphp::vm::execute::VmError::Fatal(message)
             if message == "Uncaught Error: Cannot access private property MagicTraceChild::$test in /fixture/magic-trace.php:4\nStack trace:\n#0 /fixture/magic-trace.php(9): MagicTraceBase->__get('test')\n#1 {main}\n  thrown in /fixture/magic-trace.php on line 4"
     ));
+}
+
+#[test]
+fn live_traces_retain_detached_magic_property_entry_frames() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class PropertyTrace {
+    private function trace(): string {
+        return implode('>', array_map(
+            fn($frame) => $frame['class'] . '::' . $frame['function'] . '@' . $frame['line'],
+            debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS),
+        ));
+    }
+    public function __get($name) { return $this->trace(); }
+    public function __set($name, $value) { echo $this->trace(); }
+    public function __isset($name) { echo $this->trace(); return false; }
+    public function __unset($name) { echo $this->trace(); }
+}
+class ChildPropertyTrace extends PropertyTrace {
+    public function __get($name) { return parent::__get($name); }
+}
+$property = new PropertyTrace();
+echo $property->missing, '|';
+$property->missing = 1;
+echo '|';
+isset($property->missing);
+echo '|';
+unset($property->missing);
+echo '|', (new ChildPropertyTrace())->missing;
+"#,
+            "/virtual/magic-property-trace.php",
+            "/virtual",
+        ),
+        concat!(
+            "PropertyTrace::trace@9>PropertyTrace::__get@18|",
+            "PropertyTrace::trace@10>PropertyTrace::__set@19|",
+            "PropertyTrace::trace@11>PropertyTrace::__isset@21|",
+            "PropertyTrace::trace@12>PropertyTrace::__unset@23|",
+            "PropertyTrace::trace@9>PropertyTrace::__get@15>",
+            "ChildPropertyTrace::__get@24",
+        )
+    );
 }
 
 #[test]

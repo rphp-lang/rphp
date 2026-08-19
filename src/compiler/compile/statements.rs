@@ -2974,7 +2974,7 @@ impl Compiler {
                             object,
                             property,
                             nullsafe: false,
-                            ..
+                            line,
                         } => {
                             if let Some(line) = class_constant_temporary_write_line(object) {
                                 return Err(self.goto_error(
@@ -3004,13 +3004,13 @@ impl Compiler {
                             unset.op1_type = object_type;
                             unset.op2 = property;
                             unset.op2_type = OpType::Const;
-                            self.instructions.push(unset);
+                            self.push_instruction_at_line(unset, *line);
                         }
                         Expr::DynamicPropertyAccess {
                             object,
                             property,
                             nullsafe: false,
-                            ..
+                            line,
                         } => {
                             if let Some(line) = class_constant_temporary_write_line(object) {
                                 return Err(self.goto_error(
@@ -3040,7 +3040,7 @@ impl Compiler {
                             unset.op1_type = object_type;
                             unset.op2 = property;
                             unset.op2_type = property_type;
-                            self.instructions.push(unset);
+                            self.push_instruction_at_line(unset, *line);
                         }
                         static_property @ (Expr::StaticProperty { .. }
                         | Expr::DynamicNamedStaticProperty { .. }

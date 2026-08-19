@@ -1015,6 +1015,23 @@ independently and -0.249% paired, and a five-million-call trait method at
 semantically equivalent deep-clone prototype was rejected at +35.774% paired
 cold-link regression.
 
+The `magic-property-entry-frame` checkpoint reaches 3,396 passes with 1,901
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Engine-dispatched `__get`, `__set`, `__isset` and `__unset` activations
+keep their detached return boundary but publish the active property instruction
+as a logical trace caller. Live traces therefore retain the missing outer magic
+method and exact source site without widening `ExecuteData` or changing stored
+Throwable reconnection. `IssetObj`, `UnsetObj` and silent intermediate reads
+retain their line in the existing sparse compiler table. The original
+four-operation/inheritance regression and `bug69180-backtrace.phpt` pass; the
+full-corpus delta is +1/-0 with no other movement, and two final manifests are
+byte-identical. All five feature
+configurations, all-target, formatting, unsafe, Composer S0, four Symfony S1
+gates and exact PHP 8.5.6 S2/S3 pass. A CPU-pinned 32-pair control of one
+million repeated missing-property reads measures -3.865% independently and
+-3.876% paired, with paired p10/p90 -10.050%/+5.239%; both medians remain below
+the five-percent ceiling and the declared-property path is untouched.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

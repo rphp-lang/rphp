@@ -6115,7 +6115,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: _,
-                ..
+                line,
             } => {
                 let (object_op, object_type) = self.compile_isset_object_base(object);
                 let property_op = self.add_literal(Value::string(property.clone()));
@@ -6128,14 +6128,14 @@ impl Compiler {
                 fetch.result = result;
                 fetch.result_type = OpType::Tmp;
                 fetch._pad |= FETCH_OBJ_SILENT;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 (result, OpType::Tmp)
             }
             Expr::DynamicPropertyAccess {
                 object,
                 property,
                 nullsafe: _,
-                ..
+                line,
             } => {
                 let (object_op, object_type) = self.compile_isset_object_base(object);
                 let (property_op, property_type) = self.compile_expr(property);
@@ -6148,7 +6148,7 @@ impl Compiler {
                 fetch.result = result;
                 fetch.result_type = OpType::Tmp;
                 fetch._pad |= FETCH_OBJ_SILENT;
-                self.instructions.push(fetch);
+                self.push_instruction_at_line(fetch, *line);
                 (result, OpType::Tmp)
             }
             static_property @ (Expr::StaticProperty { .. }
@@ -6228,7 +6228,7 @@ impl Compiler {
                 object,
                 property,
                 nullsafe: _,
-                ..
+                line,
             } => {
                 let (object_op, object_type) = self.compile_isset_object_base(object);
                 let property_op = self.add_literal(Value::string(property.clone()));
@@ -6240,7 +6240,7 @@ impl Compiler {
                 isset.op2_type = OpType::Const;
                 isset.result = result;
                 isset.result_type = OpType::Tmp;
-                self.instructions.push(isset);
+                self.push_instruction_at_line(isset, *line);
                 (result, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index, .. } => {
