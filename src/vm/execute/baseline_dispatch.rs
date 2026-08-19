@@ -3660,27 +3660,60 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::PreInc => {
                 // ++$var: increment the already-evaluated read snapshot and
-                // publish it to the destination CV. Maybe-undefined reads use
-                // a TMP snapshot so a re-entrant handler cannot replace the
-                // value consumed by this operation.
+                // publish it to the destination CV. A compiler-emitted
+                // TMP/VAR operand without an op2 CV is the value-only form
+                // used before property or dimension writeback.
+                // Maybe-undefined CV reads use a TMP snapshot so a re-entrant
+                // handler cannot replace the value consumed by this operation.
                 // SAFETY: the compiler resolves the read, optional result and
-                // writeback CV into initialized slots of this active frame.
+                // optional writeback CV into initialized slots of this active
+                // frame.
                 unsafe {
-                    let old = &*(*frame).get_op_ptr(
+                    let old_slot = &*(*frame).get_op_ptr(
                         opline.op1 as u32,
                         opline.op1_type,
                         op_array,
                     );
-                    let old = if old.is_undef() {
+                    let value_only = opline.op2_type == OpType::Unused
+                        && matches!(opline.op1_type, OpType::Tmp | OpType::Var);
+                    debug_assert!(
+                        value_only
+                            || opline.op2_type == OpType::Cv
+                            || opline.op1_type == OpType::Cv
+                    );
+                    let old_slot = if value_only {
+                        old_slot.dereferenced()
+                    } else {
+                        old_slot
+                    };
+                    if value_only
+                        && let Some(number) = old_slot.as_long()
+                        && let Some(incremented) = number.checked_add(1)
+                    {
+                        if opline.result_type != OpType::Unused {
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                                frame_tmp_set_long(frame, result_ptr, incremented);
+                            } else {
+                                slot_set(result_ptr, Value::long(incremented));
+                            }
+                        }
+                        (*frame).opline = opline_ptr.add(1);
+                        continue 'vm;
+                    }
+                    let old = if old_slot.is_undef() {
                         Value::null()
                     } else {
-                        old.clone()
+                        old_slot.clone()
                     };
-                    let writeback_cv = if opline.op2_type == OpType::Cv {
-                        opline.op2 as u32
+                    let writeback_cv = if value_only {
+                        None
+                    } else if opline.op2_type == OpType::Cv {
+                        Some(opline.op2 as u32)
                     } else {
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
-                        opline.op1 as u32
+                        Some(opline.op1 as u32)
                     };
                     let Some((new_val, diagnostic)) = increment_php_value(&old) else {
                         throw_operator!(
@@ -3690,39 +3723,83 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     if let Some(diagnostic) = diagnostic {
                         report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
-                        restore_incdec_snapshot_on_exception!(writeback_cv, old);
+                        if let Some(writeback_cv) = writeback_cv {
+                            restore_incdec_snapshot_on_exception!(writeback_cv, old);
+                        }
                         resume_pending_exception!();
                     }
-                    let new_val = prepare_reference_write!(writeback_cv, new_val);
+                    let new_val = if let Some(writeback_cv) = writeback_cv {
+                        prepare_reference_write!(writeback_cv, new_val)
+                    } else {
+                        new_val
+                    };
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                        slot_set(result_ptr, new_val.clone());
+                        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                            frame_tmp_set(frame, result_ptr, new_val.clone());
+                        } else {
+                            slot_set(result_ptr, new_val.clone());
+                        }
                     }
-                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
-                    slot_set(cv_ptr, new_val);
+                    if let Some(writeback_cv) = writeback_cv {
+                        let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
+                        slot_set(cv_ptr, new_val);
+                    }
                 }
             }
 
             OpCode::PreDec => {
                 // SAFETY: the compiler resolves the read, optional result and
-                // writeback CV into initialized slots of this active frame.
+                // optional writeback CV into initialized slots of this active
+                // frame. TMP/VAR without an op2 CV is the value-only form used
+                // before property or dimension writeback.
                 unsafe {
-                    let old = &*(*frame).get_op_ptr(
+                    let old_slot = &*(*frame).get_op_ptr(
                         opline.op1 as u32,
                         opline.op1_type,
                         op_array,
                     );
-                    let old = if old.is_undef() {
+                    let value_only = opline.op2_type == OpType::Unused
+                        && matches!(opline.op1_type, OpType::Tmp | OpType::Var);
+                    debug_assert!(
+                        value_only
+                            || opline.op2_type == OpType::Cv
+                            || opline.op1_type == OpType::Cv
+                    );
+                    let old_slot = if value_only {
+                        old_slot.dereferenced()
+                    } else {
+                        old_slot
+                    };
+                    if value_only
+                        && let Some(number) = old_slot.as_long()
+                        && let Some(decremented) = number.checked_sub(1)
+                    {
+                        if opline.result_type != OpType::Unused {
+                            let result_ptr =
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                                frame_tmp_set_long(frame, result_ptr, decremented);
+                            } else {
+                                slot_set(result_ptr, Value::long(decremented));
+                            }
+                        }
+                        (*frame).opline = opline_ptr.add(1);
+                        continue 'vm;
+                    }
+                    let old = if old_slot.is_undef() {
                         Value::null()
                     } else {
-                        old.clone()
+                        old_slot.clone()
                     };
-                    let writeback_cv = if opline.op2_type == OpType::Cv {
-                        opline.op2 as u32
+                    let writeback_cv = if value_only {
+                        None
+                    } else if opline.op2_type == OpType::Cv {
+                        Some(opline.op2 as u32)
                     } else {
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
-                        opline.op1 as u32
+                        Some(opline.op1 as u32)
                     };
                     let Some((new_val, diagnostic)) = decrement_php_value(&old) else {
                         throw_operator!(
@@ -3732,17 +3809,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     if let Some(diagnostic) = diagnostic {
                         report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
-                        restore_incdec_snapshot_on_exception!(writeback_cv, old);
+                        if let Some(writeback_cv) = writeback_cv {
+                            restore_incdec_snapshot_on_exception!(writeback_cv, old);
+                        }
                         resume_pending_exception!();
                     }
-                    let new_val = prepare_reference_write!(writeback_cv, new_val);
+                    let new_val = if let Some(writeback_cv) = writeback_cv {
+                        prepare_reference_write!(writeback_cv, new_val)
+                    } else {
+                        new_val
+                    };
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                        slot_set(result_ptr, new_val.clone());
+                        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                            frame_tmp_set(frame, result_ptr, new_val.clone());
+                        } else {
+                            slot_set(result_ptr, new_val.clone());
+                        }
                     }
-                    let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
-                    slot_set(cv_ptr, new_val);
+                    if let Some(writeback_cv) = writeback_cv {
+                        let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
+                        slot_set(cv_ptr, new_val);
+                    }
                 }
             }
 
@@ -3782,7 +3871,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                        slot_set(result_ptr, old.clone());
+                        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                            frame_tmp_set(frame, result_ptr, old.clone());
+                        } else {
+                            slot_set(result_ptr, old.clone());
+                        }
                     }
                     let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
                     slot_set(cv_ptr, new_val);
@@ -3824,7 +3917,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
-                        slot_set(result_ptr, old.clone());
+                        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                            frame_tmp_set(frame, result_ptr, old.clone());
+                        } else {
+                            slot_set(result_ptr, old.clone());
+                        }
                     }
                     let cv_ptr = (*frame).get_op_mut(writeback_cv, OpType::Cv);
                     slot_set(cv_ptr, new_val);
@@ -4238,6 +4335,34 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         value
                     };
+                    if opline._pad & FETCH_DIM_MUTABLE != 0 && !value.is_reference() {
+                        let class_name = receiver
+                            .as_object()
+                            .map(|object| object.class_name.to_string())
+                            .unwrap_or_else(|| "object".to_string());
+                        report_php_notice(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "Indirect modification of overloaded element of {class_name} has no effect"
+                            ),
+                        )?;
+                        if let Some(exception) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue 'vm;
+                                }
+                                ThrowResult::Unhandled(exception) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                     write_fetch_dim_result(frame, result_ptr, value.dereferenced().clone());
                 } else {
                     if matches!(arr_val.value_type(), ValueType::Null | ValueType::Undef)

@@ -9,11 +9,70 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,302 pass, 1,995 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,311 pass, 1,986 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-62.337% and the whole-corpus rate is 58.975%; 4,618 of 5,297 attempted cases
-reach runtime (87.181%). Relative to exact base `ce434e48`, the pass-set delta
-is +7/-0: all 3,295 prior passes remain exact.
+62.507% and the whole-corpus rate is 59.136%; 4,621 of 5,297 attempted cases
+reach runtime (87.238%). Relative to exact base `c4cd2e15`, the pass-set delta
+is +9/-0: all 3,302 prior passes remain exact.
+
+Pre- and post-increment or decrement of property and dimension targets now
+applies the PHP inc/dec value contract to the already-fetched snapshot before
+canonical lvalue writeback. It therefore preserves pre/post results, checked
+integer overflow, numeric and non-numeric string behavior, null/bool warnings
+and invalid-type `TypeError` instead of approximating the operation as binary
+addition or subtraction. The operation carries its source line. A checked
+value-only `Long` fast path keeps ordinary target increments out of the cold
+generic conversion and diagnostic branches.
+
+An inc/dec property fetch now reports an unset declared property like PHP and
+re-reads missing storage after a normally returning read-warning handler. A
+handler that installs an object is therefore observed by the operation and the
+exact class-named `TypeError` preserves that object. Conversely, mutation by
+the operator's own warning or deprecation handler is followed by canonical
+writeback from the original snapshot. An `ArrayAccess::offsetGet()` value that
+is not a reference emits the indirect-modification notice; an invalid fetched
+array then throws before `offsetSet()` can run. TMP/VAR inc/dec results use the
+frame heap bitmap, preventing stale heap-slot drops across rebound closures.
+
+Four original E2E tests cover scalar property values and source lines,
+re-entrant unset/object replacement, all four invalid ArrayAccess forms without
+`offsetSet()`, and heap tracking across a scope-rebound property-increment
+closure. Nine full-corpus cases become exact passes:
+`oss-fuzz-61469_postdec_dynamic_property_unset_error_handler.phpt`,
+`oss-fuzz-61469_postinc_dynamic_property_unset_error_handler.phpt`,
+`oss-fuzz-61469_predec_dynamic_property_unset_error_handler.phpt`,
+`oss-fuzz-61865_postdec_declared_property_unset_error_handler.phpt`,
+`oss-fuzz-61865_predec_declared_property_unset_error_handler.phpt`,
+`overloaded_access.phpt`, `unset_object_property_in_error_handler.phpt`,
+`unset_property_converted_to_obj_in_error_handler.phpt` and
+`typed_properties_061.phpt`. There are no lost passes, other status changes or
+stable non-pass output hash changes.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. CPU-pinned
+32-pair release measurements produced balanced order-specific median ratios of
+-1.513% for the combined property/dimension target workload, -4.111% for
+result-used direct inc/dec, +3.549% for property work, +1.042% for array work
+and -0.468% for batches of 200 empty requests. Outputs are exact, no outliers
+were removed and every decision median remains below the five-percent
+regression ceiling. The first generic target candidate measured +5.419%; the
+accepted checked-`Long` fast path recovered the gate without changing cold PHP
+semantics.
+
+Typed-property overflow diagnostics in `incdec_prop.phpt` and the distinct
+function-versus-method return-value write-context diagnostic remain separate.
+Dynamically named and static-property variants share the general target
+lowering but are not separately promoted to compatibility claims here.
+Extension-defined numeric object operators and broader compound-assignment
+behavior also remain outside this checkpoint.
+
+The preceding `incdec-invalid-operands` checkpoint reached 3,302 passes with
+1,995 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Relative to exact base `ce434e48`, its pass-set delta was +7/-0
+with all 3,295 prior passes retained.
 
 Direct-CV pre- and post-increment or decrement now rejects arrays, resources,
 closures, enums and ordinary or internal objects with PHP 8.5's exact
@@ -45,10 +104,10 @@ integer decrements, -4.950% for property work, -1.639% for array work and
 removed and every decision median remains below the five-percent regression
 ceiling.
 
-Property, dimension and dynamically named targets remain separate contracts on
-their arithmetic lvalue paths. Extension-defined numeric object operators are
-also outside this checkpoint because their `zend_test` fixture is skipped; no
-broader binary-operator behavior is claimed.
+At that checkpoint, property, dimension and dynamically named targets remained
+separate contracts on their arithmetic lvalue paths. Extension-defined numeric
+object operators were also outside that checkpoint because their `zend_test`
+fixture was skipped; no broader binary-operator behavior was claimed.
 
 The preceding `incdec-null-bool-warnings` checkpoint reached 3,295 passes with
 2,002 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and

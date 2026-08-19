@@ -1135,6 +1135,23 @@ fn op_fetch_obj_r_slow<'a>(
             ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
+        let current_incdec_value = || {
+            obj_val
+                .as_object()
+                .and_then(|object| {
+                    if force_dynamic || cache_dynamic_std_class {
+                        object
+                            .get_dynamic_property_with_position(&key)
+                            .map(|(value, _)| value.clone())
+                    } else if property_accessible {
+                        object.get_property(&key).cloned()
+                    } else {
+                        None
+                    }
+                })
+                .filter(|value| !value.is_undef())
+                .unwrap_or_else(Value::null)
+        };
         if write_only_property
             && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_SET)
         {
@@ -1237,6 +1254,21 @@ fn op_fetch_obj_r_slow<'a>(
                     }
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
+            }
+            if val.is_undef() && opline._pad & FETCH_OBJ_INCDEC != 0 {
+                report_php_warning(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &format!("Undefined property: {class_name}::${name}"),
+                    opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
+                )?;
+                if let Some(result) = take_magic_exception(eg, frame) {
+                    return Ok(result);
+                }
+                set_result(current_incdec_value());
+                return Ok(ColdResult::Done);
             }
             set_result(val);
         } else {
@@ -1380,7 +1412,12 @@ fn op_fetch_obj_r_slow<'a>(
                 if let Some(result) = take_magic_exception(eg, frame) {
                     return Ok(result);
                 }
-                set_result(Value::null());
+                let result = if opline._pad & FETCH_OBJ_INCDEC != 0 {
+                    current_incdec_value()
+                } else {
+                    Value::null()
+                };
+                set_result(result);
             }
         }
     }

@@ -737,6 +737,144 @@ try {
 }
 
 #[test]
+fn incdec_property_targets_use_php_value_semantics_and_source_lines() {
+    let file = "/virtual/incdec-target-diagnostics.php";
+    let source = r#"<?php
+class TargetValue { public $value; }
+set_error_handler(function ($level, $message, $file, $line) {
+    echo "$level|$message|$line\n";
+});
+$box = new TargetValue();
+$box->value = null;
+$post = $box->value--;
+var_dump($post, $box->value);
+$box->value = '';
+$pre = ++$box->value;
+var_dump($pre, $box->value);
+$box->value = false;
+$post = $box->value++;
+var_dump($post, $box->value);
+$box->value = [];
+try {
+    $box->value--;
+} catch (TypeError $exception) {
+    echo $exception->getMessage(), '|', $exception->getLine(), '|', is_array($box->value) ? 'array' : 'changed', "\n";
+}
+"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        "2|Decrement on type null has no effect, this will change in the next major version of PHP|8\nNULL\nNULL\n8192|Increment on non-numeric string is deprecated, use str_increment() instead|11\nstring(1) \"1\"\nstring(1) \"1\"\n2|Increment on type bool has no effect, this will change in the next major version of PHP|14\nbool(false)\nbool(false)\nCannot decrement array|18|array\n"
+    );
+}
+
+#[test]
+fn incdec_property_targets_observe_the_php_reentrant_snapshot_boundaries() {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+class ReentrantTarget {
+    public $value;
+    public array $events = [];
+    public string $mode = '';
+    public function handle($level, $message) {
+        $this->events[] = "$level:$message";
+        if ($this->mode === 'object') {
+            $this->value = new stdClass();
+        } else {
+            unset($this->value);
+        }
+    }
+}
+
+$box = new ReentrantTarget();
+$box->value = null;
+$box->mode = 'unset';
+set_error_handler([$box, 'handle']);
+$result = $box->value--;
+restore_error_handler();
+echo 'null:', $result === null ? 'null' : 'changed', ':', array_key_exists('value', get_object_vars($box)) ? 'present' : 'missing', ':', $box->value === null ? 'null' : 'changed', ':', implode(',', $box->events), "\n";
+
+$box = new ReentrantTarget();
+$box->value = '';
+$box->mode = 'object';
+set_error_handler([$box, 'handle']);
+$result = ++$box->value;
+restore_error_handler();
+echo 'string:', $result, ':', $box->value, ':', implode(',', $box->events), "\n";
+
+$box = new ReentrantTarget();
+unset($box->value);
+$box->mode = 'object';
+set_error_handler([$box, 'handle']);
+try {
+    ++$box->value;
+    echo "missing:unexpected\n";
+} catch (TypeError $exception) {
+    echo 'missing:', $exception->getMessage(), ':', get_class($box->value), ':', implode(',', $box->events), "\n";
+}
+restore_error_handler();
+"#;
+
+    assert_eq!(
+        run_php(source),
+        "null:null:present:null:2:Decrement on type null has no effect, this will change in the next major version of PHP\nstring:1:1:8192:Increment on non-numeric string is deprecated, use str_increment() instead\nmissing:Cannot increment stdClass:stdClass:2:Undefined property: ReentrantTarget::$value\n"
+    );
+}
+
+#[test]
+fn incdec_arrayaccess_invalid_targets_throw_before_offset_set() {
+    let source = r#"<?php
+class InvalidOffset implements ArrayAccess {
+    public int $sets = 0;
+    public function offsetGet($offset): mixed { return []; }
+    public function offsetSet($offset, $value): void { $this->sets++; }
+    public function offsetExists($offset): bool { return true; }
+    public function offsetUnset($offset): void {}
+}
+set_error_handler(function ($level, $message) {
+    echo "notice:$level:$message\n";
+});
+$offset = new InvalidOffset();
+try { $offset[0]++; } catch (TypeError $exception) { echo 'post++:', $exception->getMessage(), ':', $offset->sets, "\n"; }
+try { ++$offset[0]; } catch (TypeError $exception) { echo 'pre++:', $exception->getMessage(), ':', $offset->sets, "\n"; }
+try { $offset[0]--; } catch (TypeError $exception) { echo 'post--:', $exception->getMessage(), ':', $offset->sets, "\n"; }
+try { --$offset[0]; } catch (TypeError $exception) { echo 'pre--:', $exception->getMessage(), ':', $offset->sets, "\n"; }
+"#;
+
+    assert_eq!(
+        run_php(source),
+        "notice:8:Indirect modification of overloaded element of InvalidOffset has no effect\npost++:Cannot increment array:0\nnotice:8:Indirect modification of overloaded element of InvalidOffset has no effect\npre++:Cannot increment array:0\nnotice:8:Indirect modification of overloaded element of InvalidOffset has no effect\npost--:Cannot decrement array:0\nnotice:8:Indirect modification of overloaded element of InvalidOffset has no effect\npre--:Cannot decrement array:0\n"
+    );
+}
+
+#[test]
+fn incdec_property_target_results_preserve_heap_tracking_across_rebound_closures() {
+    let source = r#"<?php
+class IncrementOwner {
+    private $value;
+    public function __construct($value) { $this->value = $value; }
+    public function incrementor() { return function () { return ++$this->value; }; }
+}
+class ReboundIncrementOwner extends IncrementOwner {
+    private $value;
+    public function __construct($value) {
+        parent::__construct($value);
+        $this->value = $value * 2;
+    }
+}
+$first = new IncrementOwner(0);
+$second = new ReboundIncrementOwner(10);
+$increment = $first->incrementor();
+var_dump($increment());
+$bound = $increment->bindTo($second, $second);
+var_dump($bound());
+var_dump($bound());
+"#;
+
+    assert_eq!(run_php(source), "int(1)\nint(21)\nint(22)\n");
+}
+
+#[test]
 fn test_e2e_array_append_assignments_chain_and_produce_the_assigned_value() {
     assert_eq!(
         run_php(

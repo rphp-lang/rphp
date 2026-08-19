@@ -49,6 +49,21 @@ use crate::vm::instruction::{
 };
 use crate::vm::opcode::OpCode;
 
+fn incdec_target_source_line(target: &Expr) -> usize {
+    match target {
+        Expr::Variable { line, .. }
+        | Expr::DynamicVariable { line, .. }
+        | Expr::Globals { line }
+        | Expr::ArrayAccess { line, .. }
+        | Expr::PropertyAccess { line, .. }
+        | Expr::DynamicPropertyAccess { line, .. }
+        | Expr::StaticProperty { line, .. }
+        | Expr::DynamicNamedStaticProperty { line, .. }
+        | Expr::DynamicStaticProperty { line, .. } => *line,
+        _ => 0,
+    }
+}
+
 fn assertion_expression_source(expr: &Expr) -> Option<String> {
     fn quote_string(value: &str) -> String {
         format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
@@ -2785,6 +2800,25 @@ impl Compiler {
         }
         if is_call {
             self.invalidate_reentrant_definitions();
+        }
+    }
+
+    fn record_last_instruction_source_line(&mut self, line: usize) {
+        let Some(instruction_index) = self.instructions.len().checked_sub(1) else {
+            return;
+        };
+        if line != 0
+            && self
+                .instruction_source_lines
+                .last()
+                .is_none_or(|(last_index, _)| {
+                    usize::try_from(*last_index).unwrap_or(usize::MAX) < instruction_index
+                })
+        {
+            self.instruction_source_lines.push((
+                u32::try_from(instruction_index).unwrap_or(u32::MAX),
+                u32::try_from(line).unwrap_or(u32::MAX),
+            ));
         }
     }
 
@@ -6729,6 +6763,7 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::PostIncTarget(target) | Expr::PostDecTarget(target) => {
+                let source_line = incdec_target_source_line(target);
                 let (current, current_type, writeback) =
                     match self.compile_foreach_reference_source(target, false, true) {
                         Ok(source) => source,
@@ -6749,6 +6784,7 @@ impl Compiler {
                 }
                 if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
                     self.mark_trailing_mutable_dimension_fetches();
+                    self.record_last_instruction_source_line(source_line);
                 }
                 let original = self.alloc_tmp();
                 let mut preserve = Instruction::new(OpCode::AssignCv);
@@ -6758,20 +6794,17 @@ impl Compiler {
                 preserve.op2_type = current_type;
                 self.instructions.push(preserve);
 
-                let one = self.add_literal(Value::long(1));
                 let updated = self.alloc_tmp();
                 let mut operation = Instruction::new(if matches!(expr, Expr::PostIncTarget(_)) {
-                    OpCode::Add
+                    OpCode::PreInc
                 } else {
-                    OpCode::Sub
+                    OpCode::PreDec
                 });
                 operation.op1 = original;
                 operation.op1_type = OpType::Tmp;
-                operation.op2 = one;
-                operation.op2_type = OpType::Const;
                 operation.result = updated;
                 operation.result_type = OpType::Tmp;
-                self.instructions.push(operation);
+                self.push_instruction_at_line(operation, source_line);
                 self.emit_foreach_reference_source_writeback(writeback, updated, OpType::Tmp);
                 (original, OpType::Tmp)
             }
@@ -6810,6 +6843,7 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => {
+                let source_line = incdec_target_source_line(target);
                 let (left, left_type, writeback) =
                     match self.compile_foreach_reference_source(target, false, true) {
                         Ok(source) => source,
@@ -6830,21 +6864,19 @@ impl Compiler {
                 }
                 if matches!(&writeback, ForeachArrayWriteback::Array(_)) {
                     self.mark_trailing_mutable_dimension_fetches();
+                    self.record_last_instruction_source_line(source_line);
                 }
-                let one = self.add_literal(Value::long(1));
                 let result = self.alloc_tmp();
                 let mut operation = Instruction::new(if matches!(expr, Expr::PreIncTarget(_)) {
-                    OpCode::Add
+                    OpCode::PreInc
                 } else {
-                    OpCode::Sub
+                    OpCode::PreDec
                 });
                 operation.op1 = left;
                 operation.op1_type = left_type;
-                operation.op2 = one;
-                operation.op2_type = OpType::Const;
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
-                self.instructions.push(operation);
+                self.push_instruction_at_line(operation, source_line);
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
                 (result, OpType::Tmp)
             }
