@@ -4193,6 +4193,14 @@ fn fn_get_parent_class(
             return Ok(());
         }
     } else {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "Calling get_parent_class() without arguments is deprecated",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
         let Some(class_name) = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed)
         else {
             ret!(rv, Value::bool(false));

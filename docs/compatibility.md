@@ -9,6 +9,50 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,438 pass, 1,859 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+64.905% and the whole-corpus rate is 61.404%; 4,624 of 5,297 attempted cases
+reach runtime (87.295%). Relative to exact base `a82bfeb5`, the pass-set delta
+is +2/-0: all 3,436 prior passes remain passes.
+
+Calling `get_parent_class()` without an argument now emits PHP 8.5's
+deprecation before resolving the caller's lexical class or returning false in
+global scope. The diagnostic uses the physical callsite and ordinary PHP
+error-handler dispatch, so a handler that throws interrupts both the class
+lookup and the false global return. A class without a parent still returns
+false after ordinary reporting, an inherited method resolves the parent of its
+lexical declaring class, and the explicit object-or-class argument path remains
+unchanged.
+
+An original E2E regression covers throwing handlers in global and class scope,
+restored standard reporting, exact source lines, a parentless class, inherited
+lexical scope and an explicit late-static class argument. The adjacent
+inheritance regression suppresses `E_DEPRECATED` deliberately while retaining
+its trait, runtime alias, object, string and invalid-input coverage. In the
+four-case `get_parent_class()` cluster, both targeted no-argument cases pass;
+the trait case and `bug21961.phpt` remain at their independent output and
+compile boundaries.
+
+`get_parent_class_001.phpt` and `get_parent_class_basic.phpt` make the same two
+fail/output-to-pass transitions in the full corpus, with no other status or
+category movement. Two final manifests are byte-for-byte identical with
+SHA-256
+`800dad7f6ac1aa1366f61e2688f27be5a16175162ab257ef0f39229602c19275`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.6 warmed-kernel S2 and cold-build S3. The
+production inventory remains 1,619 unsafe blocks and 289 unsafe functions. No
+performance or layout gate applies: explicit `get_parent_class($value)` is
+unchanged and the new work exists only on the already deprecated no-argument
+branch.
+
+This checkpoint does not claim the independent trait output and `bug21961.phpt`
+compile failures, optional extension suites outside the selected corpus or
+broader PHP syntax and runtime compatibility.
+
+The preceding get-class-noarg-deprecation checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,436 pass, 1,861 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 64.867% and the whole-corpus rate is 61.368%; 4,624 of 5,297 attempted cases

@@ -1137,6 +1137,26 @@ layout gate applies because the explicit-object path is unchanged and all new
 work is confined to the deprecated no-argument branch. No-argument
 `get_parent_class()` and the missing CLI capability remain separate work.
 
+The `get-parent-class-noarg-deprecation` checkpoint reaches 3,438 passes with
+1,859 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Every no-argument `get_parent_class()` call now dispatches PHP
+8.5's deprecation before resolving lexical class scope or returning false from
+global scope, and a throwing handler interrupts the call before either result.
+Parentless and inherited lexical methods retain their established values,
+while the explicit object-or-class argument path is unchanged. An original E2E
+regression covers global and class handlers, restored reporting, physical
+source lines, parentless and inherited classes, and an explicit late-static
+argument. The complete four-case selected cluster makes both no-argument Zend
+tests exact; its trait output and `bug21961.phpt` compile failures remain at
+independent boundaries. The full-corpus delta from `a82bfeb5` is +2/-0:
+`get_parent_class_001.phpt` and `get_parent_class_basic.phpt` become exact with
+every prior pass and all other categories unchanged. Two final manifests are
+byte-for-byte identical. All five feature configurations, all-target,
+formatting, unsafe policy, Composer S0, four Symfony S1 gates and exact PHP
+8.5.6 S2/S3 pass. No performance or layout gate applies because the explicit
+argument path is unchanged and the new work is confined to the deprecated
+no-argument branch.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

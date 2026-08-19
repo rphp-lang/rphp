@@ -314,6 +314,7 @@ fn get_parent_class_handles_lexical_trait_object_alias_and_invalid_inputs() {
     assert_eq!(
         run_php(
             r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
 class ParentProbe {}
 trait ParentTrait { public function parentFromTrait() { var_dump(get_parent_class()); } }
 class ChildProbe extends ParentProbe {
@@ -342,6 +343,42 @@ foreach (["MissingParentProbe", "", [], 1, null] as $invalid) {
             "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, array given\n",
             "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, int given\n",
             "get_parent_class(): Argument #1 ($object_or_class) must be an object or a valid class name, null given\n",
+        )
+    );
+}
+
+#[test]
+fn get_parent_class_without_argument_deprecates_before_php_85_lexical_lookup() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class ParentName {
+    public static function noParent() { var_dump(get_parent_class()); }
+}
+class ChildParentName extends ParentName {
+    public static function inherited() { var_dump(get_parent_class()); }
+    public static function explicit() { var_dump(get_parent_class(static::class)); }
+}
+class LeafParentName extends ChildParentName {}
+set_error_handler(function($level, $message) { throw new Exception($message); });
+try { get_parent_class(); } catch (Exception $error) { echo 'global:', $error->getMessage(), "\n"; }
+try { LeafParentName::inherited(); } catch (Exception $error) { echo 'method:', $error->getMessage(), "\n"; }
+restore_error_handler();
+ParentName::noParent();
+LeafParentName::inherited();
+LeafParentName::explicit();
+"#,
+            "/virtual/get-parent-class.php",
+            "/virtual",
+        ),
+        concat!(
+            "global:Calling get_parent_class() without arguments is deprecated\n",
+            "method:Calling get_parent_class() without arguments is deprecated\n",
+            "\nDeprecated: Calling get_parent_class() without arguments is deprecated in /virtual/get-parent-class.php on line 3\n",
+            "bool(false)\n",
+            "\nDeprecated: Calling get_parent_class() without arguments is deprecated in /virtual/get-parent-class.php on line 6\n",
+            "string(10) \"ParentName\"\n",
+            "string(15) \"ChildParentName\"\n",
         )
     );
 }
