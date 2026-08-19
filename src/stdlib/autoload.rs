@@ -412,13 +412,6 @@ pub(crate) fn fn_class_alias(
     let Some(original_definition) = eg.find_class(&original) else {
         ret!(rv, Value::bool(false));
     };
-    if eg.class_is_internal(&original) {
-        eg.exception = Some(make_error_value(
-            "ValueError",
-            "class_alias(): Argument #1 ($class) must be a user-defined class name, internal class name given",
-        ));
-        return Ok(());
-    }
     let declaration_kind = if original_definition.is_interface {
         "interface"
     } else if original_definition.is_trait {

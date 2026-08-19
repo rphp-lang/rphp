@@ -9,11 +9,59 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,425 pass, 1,872 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,429 pass, 1,868 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-64.659% and the whole-corpus rate is 61.172%; 4,624 of 5,297 attempted cases
-reach runtime (87.295%). Relative to exact base `0de2e3c4`, the pass-set delta
-is +2/-0: all 3,423 prior passes remain passes.
+64.735% and the whole-corpus rate is 61.243%; 4,624 of 5,297 attempted cases
+reach runtime (87.295%). Relative to exact base `459f8481`, the pass-set delta
+is +4/-0: all 3,425 prior passes remain passes.
+
+`class_alias()` now accepts internal classes and interfaces under the same
+PHP 8.5 contract as user-defined class-like symbols. Original lookup and
+optional autoload still happen first; a missing original reports its warning
+and returns false before the alias spelling is considered. A resolved internal
+symbol then reaches the shared reserved-name and unqualified-`_` validation,
+so reserved aliases remain uncatchable fatals and `_` retains its deprecation
+before publication. The existing alias registry publishes the same class
+definition and numeric identity rather than copying internal metadata.
+
+Constructing `ReflectionClass` from an alias now projects the resolved
+definition's canonical public name. Internal/user classification, class-like
+kind, object identity, `instanceof`, interface catches and canonical
+`get_class()` behavior therefore remain attached to the original definition.
+The constructor-only normalization also applies to user aliases and leaves
+unresolved inputs on their existing path.
+
+Original E2E coverage exercises a missing original under an error handler,
+internal class construction and identity, internal interface `instanceof`,
+canonical Reflection names and internal metadata, reserved aliases and the
+qualified/unqualified `_` boundary. The complete 27-case `class_alias`
+directory plus `gh15976/alias-names.phpt` rises from 17 to 21 passes:
+`class_alias_006.phpt`, both `gh16665` cases and `alias-names.phpt` become
+exact. The full-corpus delta contains those same four transitions from
+fail/runtime to pass and no other status or category movement. Two final
+manifests are byte-for-byte identical with SHA-256
+`b8ed05a78c0ec1e69659762c5ce01bb038266c81cf22336e45a070b8cd732945`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.6 warmed-kernel S2 and cold-build S3. The
+production inventory remains 1,619 unsafe blocks and 289 unsafe functions. No
+runtime performance or layout gate applies: both changes are confined to the
+explicitly invoked cold `class_alias()` and `ReflectionClass` constructor
+paths, reuse the existing alias registry and do not alter executor, value,
+object or ordinary class-lookup paths.
+
+This checkpoint does not claim the five remaining output-different
+`class_alias` cases, the `memory_limit`-dependent unsupported case or broader
+PHP syntax and runtime compatibility.
+
+The preceding eval-compile-fatal checkpoint was pinned to php-src 8.5.6 commit
+`fcc29c8`. Across all 5,599 unmodified `Zend/tests` and `tests/lang` cases,
+3,425 pass, 1,872 fail, 114 skip, one is an upstream XFAIL, 187 are
+unsupported, and none time out or crash. The headline pass rate is 64.659%
+and the whole-corpus rate is 61.172%; 4,624 of 5,297 attempted cases reach
+runtime (87.295%). Relative to exact base `0de2e3c4`, the pass-set delta is
++2/-0: all 3,423 prior passes remain passes.
 
 Valid-syntax failures discovered while compiling an `eval()` or included
 source unit now remain uncatchable PHP compile fatals. They retain the

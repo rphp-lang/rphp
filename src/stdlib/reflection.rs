@@ -2427,13 +2427,18 @@ fn reflection_type_allows_null(
 fn class_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let owner = with_argument(ed, 1, |value| {
         value
             .as_object()
             .map(|object| object.class_name.to_string())
             .unwrap_or_else(|| argument_string(ed, 1))
+    });
+    let owner = eg.find_class(&owner).map_or(owner, |class| {
+        class
+            .anonymous_public_name()
+            .unwrap_or_else(|| class.name.clone())
     });
     set_target(ed, "class", owner.clone());
     with_argument(ed, 0, |value| {

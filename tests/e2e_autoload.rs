@@ -579,7 +579,7 @@ var_dump(class_alias('OriginalClass', 'aliasclass'));
 }
 
 #[test]
-fn class_alias_warnings_use_the_handler_and_internal_classes_raise_value_error() {
+fn class_alias_warnings_use_the_handler_and_internal_aliases_keep_canonical_metadata() {
     assert_eq!(
         run_php_with_source_context(
             r#"<?php
@@ -587,13 +587,35 @@ set_error_handler(function($level, $message, $file, $line) {
     echo $level, ':', $message, ':', $file, ':', $line, "\n";
 });
 var_dump(class_alias('MissingClass', 'MissingAlias', false));
-try { class_alias(stdClass::class, 'ProjectedStdClass'); }
-catch (ValueError $error) { echo $error->getMessage(); }
+var_dump(class_alias(stdClass::class, 'ProjectedStdClass'));
+$object = new ProjectedStdClass();
+$reflection = new ReflectionClass('ProjectedStdClass');
+echo get_class($object), ':', (int) ($object instanceof stdClass), ':',
+    $reflection->getName(), ':', (int) $reflection->isInternal(), "\n";
+var_dump(class_alias(Stringable::class, 'ProjectedStringable'));
+class StringableImplementation {
+    public function __toString(): string { return 'value'; }
+}
+$stringable = new StringableImplementation();
+var_dump(interface_exists('ProjectedStringable', false));
+var_dump(class_exists('ProjectedStringable', false));
+var_dump($stringable instanceof ProjectedStringable);
+echo (new ReflectionClass('ProjectedStringable'))->getName(), ':', (string) $stringable;
 "#,
             "/fixture/class-alias-errors.php",
             "/fixture",
         ),
-        "2:Class \"MissingClass\" not found:/fixture/class-alias-errors.php:5\nbool(false)\nclass_alias(): Argument #1 ($class) must be a user-defined class name, internal class name given"
+        concat!(
+            "2:Class \"MissingClass\" not found:/fixture/class-alias-errors.php:5\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "stdClass:1:stdClass:1\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "bool(true)\n",
+            "Stringable:value",
+        )
     );
 }
 
@@ -626,16 +648,15 @@ fn class_alias_deprecates_only_an_unqualified_underscore_alias() {
     assert_eq!(
         run_php_with_source_context(
             r#"<?php
-class AliasSource {}
-var_dump(class_alias(AliasSource::class, '_'));
-var_dump(class_alias(AliasSource::class, 'Vendor\_'));
+var_dump(class_alias(stdClass::class, '_'));
+var_dump(class_alias(stdClass::class, 'Vendor\_'));
 var_dump(class_exists('_', false), class_exists('Vendor\_', false));
 "#,
             "/virtual/underscore-class-alias.php",
             "/virtual",
         ),
         concat!(
-            "\nDeprecated: Using \"_\" as a class alias is deprecated since 8.4 in /virtual/underscore-class-alias.php on line 3\n",
+            "\nDeprecated: Using \"_\" as a class alias is deprecated since 8.4 in /virtual/underscore-class-alias.php on line 2\n",
             "bool(true)\n",
             "bool(true)\n",
             "bool(true)\n",
@@ -645,16 +666,12 @@ var_dump(class_exists('_', false), class_exists('Vendor\_', false));
 }
 
 #[test]
-fn class_alias_keeps_original_lookup_and_internal_class_error_priority() {
+fn class_alias_checks_original_before_reserved_alias_for_internal_sources() {
     assert_eq!(
         run_php_with_source_context(
             r#"<?php
 set_error_handler(function($level, $message) { echo "$level:$message\n"; });
 var_dump(class_alias('MissingReservedSource', 'int', false));
-try { class_alias(stdClass::class, 'bool'); }
-catch (ValueError $error) { echo $error->getMessage(), "\n"; }
-class AliasSource {}
-var_dump(class_alias(AliasSource::class, 'Vendor\Resource'));
 "#,
             "/virtual/class-alias-priority.php",
             "/virtual",
@@ -662,9 +679,17 @@ var_dump(class_alias(AliasSource::class, 'Vendor\Resource'));
         concat!(
             "2:Class \"MissingReservedSource\" not found\n",
             "bool(false)\n",
-            "class_alias(): Argument #1 ($class) must be a user-defined class name, internal class name given\n",
-            "bool(true)\n",
         )
+    );
+
+    let error = run_php_expect_error_with_source_context(
+        "<?php\nclass_alias(stdClass::class, 'bool');",
+        "/virtual/class-alias-priority.php",
+        "/virtual",
+    );
+    assert_eq!(
+        error.to_string(),
+        "Cannot use \"bool\" as a class alias as it is reserved in /virtual/class-alias-priority.php on line 2"
     );
 }
 
