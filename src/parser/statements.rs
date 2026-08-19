@@ -872,32 +872,8 @@ impl Parser {
                         let value_expr = self.parse_expr()?;
                         self.into_foreach_target(value_expr)?
                    };
-                    if by_ref
-                        && !matches!(
-                            value,
-                            ForeachTarget::Variable(_)
-                                | ForeachTarget::Target(Expr::CompileError { .. })
-                        )
-                    {
-                        return Err(
-                            "Foreach property and dimension references are not supported yet"
-                                .into(),
-                        );
-                    }
                     (Some(first), value, by_ref)
                } else {
-                    if first_by_ref
-                        && !matches!(
-                            first,
-                            ForeachTarget::Variable(_)
-                                | ForeachTarget::Target(Expr::CompileError { .. })
-                        )
-                    {
-                        return Err(
-                            "Foreach property and dimension references are not supported yet"
-                                .into(),
-                        );
-                    }
                     (None, first, first_by_ref)
                };
                 self.expect(&Token::RParen)?;

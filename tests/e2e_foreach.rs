@@ -45,6 +45,42 @@ function captured($values) {
 }
 
 #[test]
+fn foreach_reference_targets_bind_properties_and_dimensions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Box { public int $value = 0; }
+enum ExitCode: int { case Success = 0; }
+
+$propertyValues = [1, 2];
+$box = new Box();
+foreach ($propertyValues as &$box->value) {}
+$box->value = 9;
+echo $propertyValues[0], ',', $propertyValues[1], '|';
+
+$dimensionValues = [3, 4];
+$holder = [];
+foreach ($dimensionValues as &$holder['value']) {}
+$holder['value'] = 8;
+echo $dimensionValues[0], ',', $dimensionValues[1], '|';
+
+$code = ExitCode::Success;
+try {
+    foreach ([5] as &$code->value) {}
+} catch (Error $error) {
+    echo $error->getMessage(), '|';
+}
+echo ExitCode::Success->value;
+"#,
+        ),
+        concat!(
+            "1,9|3,8|",
+            "Cannot indirectly modify readonly property ExitCode::$value|0",
+        )
+    );
+}
+
+#[test]
 fn iterator_aggregate_resolves_nested_aggregates_and_generator_keys() {
     assert_eq!(
         run_php(

@@ -170,6 +170,11 @@ pub const FETCH_OBJ_COMPOUND: u16 = 1 << 4;
 /// parent call and therefore has no ordinary dispatch guard.
 pub const OBJ_PROP_HOOK_BYPASS: u16 = 1 << 5;
 
+/// `FetchObjR` is the terminal source of a by-reference call or foreach. An
+/// initialized non-object readonly value cannot enter the temporary reference
+/// cell that will be written back after the operation.
+pub const FETCH_OBJ_REFERENCE_SOURCE: u16 = 1 << 6;
+
 /// `AssignObjProp` is materializing a reference binding, which uses PHP's
 /// modification diagnostic for a null or scalar receiver.
 pub const ASSIGN_OBJ_MODIFY: u16 = 1;

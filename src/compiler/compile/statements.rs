@@ -120,6 +120,18 @@ fn compiled_hook_uses_backing_property(
     })
 }
 
+fn class_constant_temporary_write_line(expression: &Expr) -> Option<usize> {
+    match expression {
+        Expr::ClassConstant { line, .. } => Some(*line),
+        Expr::PropertyAccess { object, .. }
+        | Expr::DynamicPropertyAccess { object, .. } => {
+            class_constant_temporary_write_line(object)
+        }
+        Expr::ArrayAccess { array, .. } => class_constant_temporary_write_line(array),
+        _ => None,
+    }
+}
+
 impl Compiler {
     pub(super) fn compile_list_assignment_source(
         &mut self,
@@ -447,7 +459,7 @@ impl Compiler {
                 fetch.op2_type = OpType::Const;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_OBJ_MODIFY;
+                fetch._pad |= FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE;
                 if silent_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
@@ -480,7 +492,7 @@ impl Compiler {
                 fetch.op2_type = property_type;
                 fetch.result = current;
                 fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_OBJ_MODIFY;
+                fetch._pad |= FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE;
                 if silent_fetch {
                     fetch._pad |= FETCH_OBJ_SILENT;
                 }
@@ -1245,6 +1257,9 @@ impl Compiler {
         target: &Expr,
         source: &Expr,
     ) -> Result<(u16, OpType), String> {
+        if let Expr::CompileError { message, line } = target {
+            return Err(self.goto_error(message, *line));
+        }
         if let Expr::Globals { line } = target {
             return Err(self.goto_error(
                 "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
@@ -2788,13 +2803,15 @@ impl Compiler {
                     )?;
                 }
                 if let Some(target) = value_write {
-                    self.compile_assignment_target_expression(
-                        target,
-                        &Expr::Variable {
-                            name: value_target_name,
-                            line: 0,
-                        },
-                    )?;
+                    let source = Expr::Variable {
+                        name: value_target_name,
+                        line: 0,
+                    };
+                    if *by_ref {
+                        self.compile_target_reference_assignment(target, &source)?;
+                    } else {
+                        self.compile_assignment_target_expression(target, &source)?;
+                    }
                 }
 
                 // Push loop context — continue jumps to loop_start (ForeachNext)
@@ -2956,6 +2973,12 @@ impl Compiler {
                             nullsafe: false,
                             ..
                         } => {
+                            if let Some(line) = class_constant_temporary_write_line(object) {
+                                return Err(self.goto_error(
+                                    "Cannot use temporary expression in write context",
+                                    line,
+                                ));
+                            }
                             let silent_static_receiver = matches!(
                                 object.as_ref(),
                                 Expr::StaticProperty { .. }
@@ -2986,6 +3009,12 @@ impl Compiler {
                             nullsafe: false,
                             ..
                         } => {
+                            if let Some(line) = class_constant_temporary_write_line(object) {
+                                return Err(self.goto_error(
+                                    "Cannot use temporary expression in write context",
+                                    line,
+                                ));
+                            }
                             let silent_static_receiver = matches!(
                                 object.as_ref(),
                                 Expr::StaticProperty { .. }

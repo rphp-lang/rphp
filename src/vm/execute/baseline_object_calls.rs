@@ -1190,6 +1190,34 @@ fn op_fetch_obj_r_slow<'a>(
             }
         }
         if let Some(val) = found_val {
+            if opline._pad & FETCH_OBJ_REFERENCE_SOURCE != 0
+                && !matches!(
+                    val.dereferenced().value_type(),
+                    ValueType::Object | ValueType::Closure
+                )
+                && obj_val
+                    .as_object()
+                    .and_then(|object| eg.class_table.get(object.class_name.as_ref()))
+                    .is_some_and(|class| class.readonly_props.contains(&name))
+                && !readonly_clone_reinitialization_allowed(eg, obj_val, &name)
+            {
+                let class_name = obj_val
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .unwrap_or_else(|| "object".to_string());
+                return Ok(object_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    if opline._pad & FETCH_OBJ_INCDEC != 0 {
+                        format!("Cannot modify readonly property {class_name}::${name}")
+                    } else {
+                        format!(
+                            "Cannot indirectly modify readonly property {class_name}::${name}"
+                        )
+                    },
+                ));
+            }
             if val.is_undef() && typed_property.is_some() {
                 if opline._pad & FETCH_OBJ_SILENT != 0 {
                     set_result(Value::null());
@@ -1304,7 +1332,7 @@ fn op_fetch_obj_r_slow<'a>(
                     if eg
                         .class_table
                         .get(class_name.as_str())
-                        .is_some_and(|class_def| class_def.is_readonly)
+                        .is_some_and(|class_def| class_def.is_readonly || class_def.is_enum)
                     {
                         return Ok(object_property_throw(
                             eg,
@@ -1609,6 +1637,20 @@ fn op_unset_obj<'a>(
             effective_caller,
         )
     };
+    if eg
+        .class_table
+        .get(object_ref.class_name.as_ref())
+        .is_some_and(|class| class.is_enum && class.readonly_props.contains(&name))
+    {
+        let class_name = object_ref.class_name.clone();
+        drop(object_ref);
+        return Ok(object_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Cannot unset readonly property {class_name}::${name}"),
+        ));
+    }
     if !accessible
         && eg.property_has_asymmetric_set_visibility(&object_ref.class_name, &name)
         && object_ref
@@ -1822,20 +1864,6 @@ fn op_bind_obj_prop_ref<'a>(
                 ));
             }
         }
-        if eg
-            .find_class(&class_name)
-            .is_some_and(|class| class.readonly_props.contains(&name))
-        {
-            return Ok(object_property_throw_at(
-                eg,
-                frame,
-                op_array,
-                instruction_index,
-                "Error",
-                format!("Cannot acquire reference to readonly property {class_name}::${name}"),
-            ));
-        }
-
         let key = if force_dynamic {
             name.clone()
         } else {
@@ -1846,6 +1874,19 @@ fn op_bind_obj_prop_ref<'a>(
                 effective_caller,
             )
         };
+        if eg
+            .find_class(&class_name)
+            .is_some_and(|class| class.readonly_props.contains(&name))
+        {
+            return Ok(object_property_throw_at(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                "Error",
+                format!("Cannot indirectly modify readonly property {class_name}::${name}"),
+            ));
+        }
         let (lazy_declared_property, lazy_dynamic_property) = receiver
             .as_object()
             .map(|object| {
@@ -2064,7 +2105,7 @@ fn op_bind_obj_prop_ref<'a>(
                 || eg
                     .class_table
                     .get(class_name.as_str())
-                    .is_some_and(|class_def| class_def.is_readonly))
+                    .is_some_and(|class_def| class_def.is_readonly || class_def.is_enum))
         {
             return Ok(object_property_throw_at(
                 eg,
@@ -2623,10 +2664,18 @@ fn op_assign_obj_prop<'a>(
         let mut prop_is_writable = true;
         if let Some(class_def) = eg.class_table.get(php_obj.class_name.as_ref()) {
             if class_def.is_enum {
-                let err = make_error_value("Error", &format!(
-                    "Cannot modify readonly property {}::${}",
-                    object_display_class_name, name
-                ));
+                let message = if class_def.readonly_props.contains(&name) {
+                    format!(
+                        "Cannot modify readonly property {}::${}",
+                        object_display_class_name, name
+                    )
+                } else {
+                    format!(
+                        "Cannot create dynamic property {}::${}",
+                        object_display_class_name, name
+                    )
+                };
+                let err = make_error_value("Error", &message);
                 drop(php_obj);
                 match throw_in_frame(eg, frame, err) {
                     ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }

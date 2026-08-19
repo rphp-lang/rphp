@@ -228,6 +228,26 @@ try { $original->__clone(); } catch (Error $error) { echo "manual\n"; }
 }
 
 #[test]
+fn automatic_clone_allows_readonly_increment_writeback() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReadonlyCloneIncrement {
+    public function __construct(public readonly int $value) {}
+    public function __clone() {
+        $this->value++;
+    }
+}
+$original = new ReadonlyCloneIncrement(1);
+$copy = clone $original;
+echo $original->value, ':', $copy->value;
+"#,
+        ),
+        "1:2"
+    );
+}
+
+#[test]
 fn readonly_clone_rejects_indirect_updates_but_clone_with_replaces_directly() {
     assert_eq!(
         run_php(

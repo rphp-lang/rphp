@@ -4402,18 +4402,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     arr.as_array_mut().unwrap().set(key, cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
                     if let Some(element) = php_arr.get_key_mut(&key) {
-                        cloned_val = prepare_constrained_write!(
-                            element.reference_property_constraints(),
-                            cloned_val
-                        );
-                        if opline._pad & crate::vm::instruction::ASSIGN_DIM_RESULT_VALUE != 0 {
-                            debug_assert_eq!(opline.result_type, OpType::Tmp);
-                            let result = unsafe {
-                                (*frame).get_op_mut(opline.result as u32, opline.result_type)
-                            };
-                            unsafe { frame_slot_set(frame, result, cloned_val.clone()) };
+                        if opline._pad & crate::vm::instruction::ASSIGN_DIM_REFERENCE != 0 {
+                            // `=&` rebinds this array dimension itself. Writing
+                            // through an existing reference would mutate its
+                            // former target and leave the dimension attached
+                            // to the wrong cell on the next foreach iteration.
+                            *element = cloned_val;
+                        } else {
+                            cloned_val = prepare_constrained_write!(
+                                element.reference_property_constraints(),
+                                cloned_val
+                            );
+                            if opline._pad & crate::vm::instruction::ASSIGN_DIM_RESULT_VALUE != 0 {
+                                debug_assert_eq!(opline.result_type, OpType::Tmp);
+                                // SAFETY: the compiler emitted this TMP result for the
+                                // current instruction in the live frame; both pointer
+                                // lookup and replacement complete before dispatch advances.
+                                let result = unsafe {
+                                    (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                                };
+                                unsafe { frame_slot_set(frame, result, cloned_val.clone()) };
+                            }
+                            assignment_slot_set(element, cloned_val);
                         }
-                        assignment_slot_set(element, cloned_val);
                     } else {
                         php_arr.set(key, cloned_val);
                     }

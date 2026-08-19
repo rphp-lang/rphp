@@ -9,11 +9,61 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,260 pass, 2,037 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,272 pass, 2,025 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-61.544% and the whole-corpus rate is 58.225%; 4,615 of 5,297 attempted cases
-reach runtime (87.125%). Relative to exact base `7aea4a1f`, the pass-set delta
-is +10/-0: all 3,250 prior passes remain exact.
+61.771% and the whole-corpus rate is 58.439%; 4,617 of 5,297 attempted cases
+reach runtime (87.163%). Relative to exact base `86a51f12`, the pass-set delta
+is +12/-0: all 3,260 prior passes remain exact.
+
+Enum cases now enforce the complete exercised PHP 8.5 property-mutation
+contract. Their declared `name` and backed `value` properties reject direct,
+compound, increment/decrement, reference, by-reference call/return, foreach
+reference and unset operations with the context-specific readonly diagnostic.
+Unknown members reject both assignment and reference creation as dynamic
+properties, while unsetting an unknown member remains a no-op. Unsetting a
+property reached through an enum case constant is rejected during compilation
+as a temporary-expression write.
+
+An explicit by-reference `foreach` value may now target an ordinary or dynamic
+object property or array dimension. The compiler binds each target to the
+current element instead of copying its value, and array-dimension reference
+assignment rebinds an existing slot rather than writing through its former
+reference. Property arguments passed by reference retain PHP's temporary-cell
+and writeback model, so `get_object_vars()` snapshots do not become live
+aliases. Readonly scalar reference sources fail before alias publication, while
+increment/decrement still uses the direct-modification diagnostic and the
+one-write readonly `__clone()` window remains available.
+
+Five original E2E tests cover enum direct/dynamic/reference/unset boundaries,
+property and dimension foreach targets, the readonly clone increment window and
+the compile-time temporary receiver error. The 152-case `Zend/tests/enum` slice
+rises from 98 to 106 exact passes. The other four exact gains are
+`Zend/tests/foreach/foreach_by_ref_to_property.phpt` and readonly-property cases
+`array_append_initialization.phpt`, `gh7942.phpt` and
+`readonly_modification.phpt`. `readonly_props/variation.phpt` advances from an
+early runtime failure to a later output mismatch, and `cache_slot.phpt` gains
+the required indirect-modification diagnostic before retaining its independent
+later runtime failure. No previous pass is lost and no other stable output or
+failure category changes.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. CPU-pinned
+32-pair release controls measured -0.470% for ordinary property work and
+-0.254% for ordinary array work by balanced order-specific median ratios; both
+retain exact checksums and stay below the five-percent regression ceiling.
+
+Object-valued readonly reference detachment, the later closure-bound failure in
+`readonly_props/cache_slot.phpt`, generic owned-reference JSON encoding, lazy
+duplicate or mismatched enum backing values, Reflection and SplObjectStorage
+remain separate checkpoints.
+
+The preceding `enum-interface-contracts` checkpoint reached 3,260 passes with
+2,037 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and
+zero crashes. Relative to exact base `7aea4a1f`, its pass-set delta was +10/-0
+with all 3,250 prior passes retained.
 
 Concrete class and enum declarations now validate PHP 8.5's reserved interface
 contract across direct, inherited and separately included interface graphs.

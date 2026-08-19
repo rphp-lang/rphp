@@ -344,6 +344,102 @@ echo Suit::Hearts->value;
 }
 
 #[test]
+fn enum_case_property_mutations_distinguish_readonly_and_dynamic_members() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum UnitState { case Ready; }
+enum ExitCode: int { case Success = 0; }
+function attempt(string $label, Closure $operation): void {
+    try {
+        $operation();
+        echo $label, ":ok\n";
+    } catch (Error $error) {
+        echo $label, ':', $error->getMessage(), "\n";
+    }
+}
+$unit = UnitState::Ready;
+$code = ExitCode::Success;
+attempt('write-name', function () use ($unit) { $unit->name = 'Changed'; });
+attempt('write-unit-value', function () use ($unit) { $unit->value = 1; });
+attempt('write-backed-value', function () use ($code) { $code->value = 2; });
+attempt('write-missing', function () use ($code) { $code->other = 2; });
+attempt('unset-name', function () use ($unit) { unset($unit->name); });
+attempt('unset-value', function () use ($code) { unset($code->value); });
+attempt('unset-missing', function () use ($code) { unset($code->missing); });
+echo UnitState::Ready->name, ':', ExitCode::Success->name, ':', ExitCode::Success->value;
+"#,
+        ),
+        concat!(
+            "write-name:Cannot modify readonly property UnitState::$name\n",
+            "write-unit-value:Cannot create dynamic property UnitState::$value\n",
+            "write-backed-value:Cannot modify readonly property ExitCode::$value\n",
+            "write-missing:Cannot create dynamic property ExitCode::$other\n",
+            "unset-name:Cannot unset readonly property UnitState::$name\n",
+            "unset-value:Cannot unset readonly property ExitCode::$value\n",
+            "unset-missing:ok\n",
+            "Ready:Success:0",
+        )
+    );
+}
+
+#[test]
+fn enum_case_property_references_fail_before_alias_publication() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+enum ExitCode: int { case Success = 0; }
+readonly class ReadonlyBox {
+    public function __construct(public int $value) {}
+}
+class MutableBox { public int $value = 1; }
+function overwrite(&$slot): void { $slot = 9; }
+function &enumValue(): mixed { return ExitCode::Success->value; }
+function attempt(string $label, Closure $operation): void {
+    try {
+        $operation();
+        echo $label, ":ok\n";
+    } catch (Error $error) {
+        echo $label, ':', $error->getMessage(), "\n";
+    }
+}
+$code = ExitCode::Success;
+attempt('fetch', function () use ($code) { $alias =& $code->value; });
+attempt('pass', function () use ($code) { overwrite($code->value); });
+attempt('return', function () { $alias =& enumValue(); });
+attempt('missing', function () use ($code) { $alias =& $code->missing; });
+$readonly = new ReadonlyBox(2);
+attempt('readonly', function () use ($readonly) { $alias =& $readonly->value; });
+$mutable = new MutableBox();
+overwrite($mutable->value);
+echo 'values:', ExitCode::Success->value, ':', $readonly->value, ':', $mutable->value;
+"#,
+        ),
+        concat!(
+            "fetch:Cannot indirectly modify readonly property ExitCode::$value\n",
+            "pass:Cannot indirectly modify readonly property ExitCode::$value\n",
+            "return:Cannot indirectly modify readonly property ExitCode::$value\n",
+            "missing:Cannot create dynamic property ExitCode::$missing\n",
+            "readonly:Cannot indirectly modify readonly property ReadonlyBox::$value\n",
+            "values:0:2:9",
+        )
+    );
+}
+
+#[test]
+fn enum_case_temporary_property_unset_fails_during_compilation() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\nenum ExitCode: int { case Success = 0; }\nunset(ExitCode::Success->value);",
+        "/virtual/enum-property-unset.php",
+        "/virtual",
+    );
+    assert_eq!(
+        error.to_string(),
+        "Cannot use temporary expression in write context in /virtual/enum-property-unset.php on line 3"
+    );
+}
+
+#[test]
 fn test_enum_implements_interfaces_and_inherits_constants() {
     assert_eq!(
         run_php(
