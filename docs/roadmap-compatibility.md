@@ -1116,6 +1116,27 @@ unchanged and the new lookup is confined to the cold conflict diagnostic.
 `class_alias_017.phpt` and the `memory_limit` capability case remain explicit
 follow-up work.
 
+The `get-class-noarg-deprecation` checkpoint reaches 3,436 passes with 1,861
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Within class scope, no-argument `get_class()` now dispatches PHP 8.5's
+deprecation before returning the lexical declaring class; a throwing handler
+interrupts that return. Outside class scope the existing direct `Error`
+remains undecorated, and explicit-object calls are unchanged. Original E2E
+coverage verifies handler interruption, restored diagnostics, static/instance
+lexical scope, physical source lines, the outside error and runtime aliases.
+The complete alias directory plus the two other no-argument peers forms a
+28-case focused gate with 27 passes and one explicit `memory_limit`
+unsupported case, so every supported upstream `class_alias` case is exact.
+The full-corpus delta from `099be260` is +3/-0:
+`class_alias_017.phpt`, `generator_static_method.phpt` and
+`get_class_basic.phpt` become exact with every prior pass and all other
+categories unchanged; two final manifests are byte-for-byte identical. All
+five feature configurations, all-target, formatting, unsafe policy, Composer
+S0, four Symfony S1 gates and exact PHP 8.5.6 S2/S3 pass. No performance or
+layout gate applies because the explicit-object path is unchanged and all new
+work is confined to the deprecated no-argument branch. No-argument
+`get_parent_class()` and the missing CLI capability remain separate work.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

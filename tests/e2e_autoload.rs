@@ -790,7 +790,7 @@ echo ProductAlias::make() instanceof AliasedProduct ? 'ok' : 'fail';
 #[test]
 fn method_lookup_follows_later_parents_and_runtime_aliases() {
     assert_eq!(
-        run_php(
+        run_php_with_source_context(
             r#"<?php
 class EarlyLinkedChild extends LaterLinkedParent {}
 class LaterLinkedParent {
@@ -809,8 +809,16 @@ $child = new AliasGrandchild;
 $child->instanceMethod();
 AliasGrandchild::staticMethod();
 "#,
+            "/virtual/alias-method-lookup.php",
+            "/virtual",
         ),
-        "linked|AliasGrandchild|CanonicalAliasParent|CanonicalAliasParent"
+        concat!(
+            "linked|AliasGrandchild|",
+            "\nDeprecated: Calling get_class() without arguments is deprecated in /virtual/alias-method-lookup.php on line 9\n",
+            "CanonicalAliasParent|",
+            "\nDeprecated: Calling get_class() without arguments is deprecated in /virtual/alias-method-lookup.php on line 10\n",
+            "CanonicalAliasParent",
+        ),
     );
 }
 

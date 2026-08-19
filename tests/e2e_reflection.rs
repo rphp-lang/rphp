@@ -971,15 +971,22 @@ try {
 }
 
 #[test]
-fn get_class_without_argument_uses_php_82_lexical_scope_without_deprecation() {
+fn get_class_without_argument_deprecates_before_returning_php_85_lexical_scope() {
     assert_eq!(
-        run_php(
+        run_php_with_source_context(
             r#"<?php
 class BaseName {
     public static function direct() { echo get_class(), "\n"; }
     public function instance() { echo get_class(), "\n"; }
 }
 class ChildName extends BaseName {}
+set_error_handler(function($level, $message) { throw new Exception($message); });
+try {
+    ChildName::direct();
+} catch (Exception $error) {
+    echo 'caught:', $error->getMessage(), "\n";
+}
+restore_error_handler();
 ChildName::direct();
 (new ChildName())->instance();
 try {
@@ -988,9 +995,14 @@ try {
     echo $error->getMessage();
 }
 "#,
+            "/virtual/get-class.php",
+            "/virtual",
         ),
         concat!(
+            "caught:Calling get_class() without arguments is deprecated\n",
+            "\nDeprecated: Calling get_class() without arguments is deprecated in /virtual/get-class.php on line 3\n",
             "BaseName\n",
+            "\nDeprecated: Calling get_class() without arguments is deprecated in /virtual/get-class.php on line 4\n",
             "BaseName\n",
             "get_class() without arguments must be called from within a class",
         )

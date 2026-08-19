@@ -9,6 +9,49 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,436 pass, 1,861 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+64.867% and the whole-corpus rate is 61.368%; 4,624 of 5,297 attempted cases
+reach runtime (87.295%). Relative to exact base `099be260`, the pass-set delta
+is +3/-0: all 3,433 prior passes remain passes.
+
+Calling `get_class()` without an argument inside class scope now emits PHP
+8.5's deprecation before returning the lexical class name. The diagnostic uses
+the physical callsite and ordinary PHP error-handler dispatch; a handler that
+throws therefore interrupts the call before a name is returned. Calls outside
+class scope retain their direct `Error` without an additional deprecation, and
+the ordinary explicit-object form remains unchanged. Static late-called scope,
+generators and runtime class aliases continue to return the lexical declaring
+class required by PHP.
+
+The original Reflection E2E regression covers handler interruption, restored
+standard reporting, static and instance lexical scope, exact source lines and
+the outside-scope error. The adjacent alias method-lookup regression now locks
+the same PHP 8.5 diagnostics while preserving canonical alias identity. The
+28-case focused gate contains the complete `class_alias` directory and the two
+other no-argument `get_class()` peers: 27 pass and only the explicit
+`memory_limit` capability case is unsupported. Thus every supported upstream
+case in the `class_alias` directory is exact.
+
+`class_alias_017.phpt`, `generator_static_method.phpt` and
+`get_class_basic.phpt` make the same three fail/output-to-pass transitions in
+the full corpus, with no other status or category movement. Two final
+manifests are byte-for-byte identical with SHA-256
+`f81e9d2cc26d8d9f97dc0ac5b93f3ad93d1c5b964ebd34ff5b083de7e73c5442`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.6 warmed-kernel S2 and cold-build S3. The
+production inventory remains 1,619 unsafe blocks and 289 unsafe functions. No
+performance or layout gate applies: explicit `get_class($object)` is unchanged
+and the new work exists only on the already deprecated no-argument branch.
+
+This checkpoint does not claim the separate no-argument
+`get_parent_class()` contract, the `memory_limit` CLI capability or broader PHP
+syntax and runtime compatibility.
+
+The preceding class-alias-collision-origin checkpoint was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,433 pass, 1,864 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 64.810% and the whole-corpus rate is 61.315%; 4,624 of 5,297 attempted cases
