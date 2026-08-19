@@ -169,16 +169,30 @@ f("hello");
 }
 
 #[test]
-fn test_strict_types_return_type() {
+fn test_strict_types_return_float_widens_int() {
     assert_eq!(
         run_php(
             r#"<?php
 declare(strict_types=1);
 function f(): float { return 10; }
-try { f(); } catch (TypeError $e) { echo "caught"; }
+var_dump(f());
 "#
         ),
-        "caught"
+        "float(10)\n"
+    );
+}
+
+#[test]
+fn weak_scalar_return_still_coerces_after_hot_warmup() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function weakInt($value): int { return $value; }
+for ($i = 0; $i < 100; $i++) { weakInt($i); }
+var_dump(weakInt("42"));
+"#
+        ),
+        "int(42)\n"
     );
 }
 

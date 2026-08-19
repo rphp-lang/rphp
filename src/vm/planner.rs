@@ -476,10 +476,9 @@ pub unsafe fn execute_macro(
                 };
 
                 let common = &*(*frame).func;
-                if super::execute::check_fast_scalar_type_hint(
+                if super::execute::check_fast_scalar_return_type_hint(
                     &*retval_ptr,
                     &common.sig.return_type_hint,
-                    op_array.strict_types,
                 ) != Some(true)
                 {
                     return MacroResult::GuardFail;

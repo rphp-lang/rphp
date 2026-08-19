@@ -9,6 +9,70 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,367 pass, 1,930 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+63.564% and the whole-corpus rate is 60.136%; 4,636 of 5,297 attempted cases
+reach runtime (87.521%). Relative to exact base `24a592bc`, the pass-set delta
+is +10/-0: all 3,357 prior passes remain passes.
+
+User functions, methods, closures, arrow functions and synthesized property-
+hook getters now apply PHP 8.5's weak scalar return contract at the common
+return boundary. Exact union members win before coercion; otherwise canonical
+`int`, `float`, `string` and `bool` preference is used, while literal `true`
+and `false` arms are never treated as general boolean conversion targets.
+Numeric strings use the complete PHP grammar, including sign, whitespace and
+exponent forms, and integer-to-float widening remains valid in strict mode.
+Weak object-to-string returns invoke `__toString()`, whereas strict returns do
+not.
+
+Lossy float and float-string conversion to `int` publishes PHP's deprecation,
+and NAN-to-string or NAN-to-bool conversion publishes the corresponding
+warning. Conversion and its diagnostic happen before an intervening `finally`.
+If a deprecation handler throws, the required return `TypeError` wins and
+retains the handler throwable as `previous`; an exception from the NAN warning
+propagates directly. Ordinary value returns separate the converted result from
+the source reference, while a declared by-reference return updates and
+forwards the materialized shared cell. Hot and planned scalar return paths now
+require the canonical runtime representation and side-exit to this baseline
+boundary when conversion is needed.
+
+Eight original E2E regressions cover scalar kinds and runtime representations,
+union precedence and literal booleans, strict widening, object string
+conversion, diagnostics and exception precedence, `finally`, value/reference
+separation and warmed execution. Ten full-corpus cases become exact passes:
+`arrow_functions/007.phpt`, `bug70117.phpt`, `bug72347.phpt`,
+`property_hooks/get_type_check.phpt`, `property_hooks/recursion.phpt`,
+`return_types/return_reference_separation.phpt`,
+`literal_types/false_no_coercion_on_overload.phpt`,
+`literal_types/true_no_coercion_on_overload.phpt`,
+`type_declarations/return_separation.phpt` and
+`type_declarations/scalar_return_basic_64bit.phpt`.
+
+Two complete runs reproduce the same counts, classifications and pass set.
+Comparison with the base reported several same-status hash changes; a six-case
+rerun on both the unchanged base and candidate reproduced that pre-existing
+nondeterminism from unordered property/SPL rendering and raw Reflection pointer
+text. No stable output regression, pass loss, timeout, crash or other category
+movement was found.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and exact unsafe ratchet pass, as do Composer S0, all four Symfony S1
+component gates and warmed-kernel S2. Consolidating return access reduces the
+production inventory from 1,620 to 1,618 unsafe blocks while retaining 289
+unsafe functions. CPU-pinned release comparisons against the exact parent used
+four warmups and 32 balanced order pairs without outlier removal. Batches of
+150 empty requests measured -4.232%, `bench_calls.php` measured -0.677% with
+checksum `37500007500000`, and the exact typed-return control measured -5.566%
+with checksum `900728`. Outputs were exact and every result remains below the
+five-percent regression ceiling; negative controls are not optimization
+claims.
+
+This checkpoint does not claim broader loose-comparison or parameter/property-
+assignment conversion coverage, unrelated trait diagnostics, optional native
+extensions or non-CLI SAPIs. `Value` and object layouts are unchanged.
+
+The preceding `cli-standard-streams-array-offsets` checkpoint was pinned to
+php-src 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,357 pass, 1,940 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 63.375% and the whole-corpus rate is 59.957%; 4,636 of 5,297 attempted cases

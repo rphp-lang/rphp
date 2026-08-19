@@ -1116,10 +1116,9 @@ pub fn execute_hot_frame(
                         op_array.strict_types,
                     );
                     if !return_type_proven
-                        && super::execute::check_fast_scalar_type_hint(
+                        && super::execute::check_fast_scalar_return_type_hint(
                             unsafe { &*retval_ptr },
                             &common.sig.return_type_hint,
-                            op_array.strict_types,
                         ) != Some(true)
                     {
                         return bailout(frame, opline_ptr, HotBailReason::UnsupportedReturnType);

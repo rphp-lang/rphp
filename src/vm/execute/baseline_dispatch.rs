@@ -202,6 +202,47 @@ fn report_incdec_diagnostic(
     }
 }
 
+#[cold]
+fn report_return_coercion_diagnostic(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    source: &Value,
+    diagnostic: ReturnCoercionDiagnostic,
+) -> Result<(), VmError> {
+    match diagnostic {
+        ReturnCoercionDiagnostic::FloatToInt => report_php_deprecation(
+            eg,
+            frame,
+            op_array,
+            opline,
+            &format!(
+                "Implicit conversion from float {} to int loses precision",
+                source.echo_to_string_with_precision(-1)
+            ),
+        ),
+        ReturnCoercionDiagnostic::FloatStringToInt => report_php_deprecation(
+            eg,
+            frame,
+            op_array,
+            opline,
+            &format!(
+                "Implicit conversion from float-string \"{}\" to int loses precision",
+                source.as_str().unwrap_or("")
+            ),
+        ),
+        ReturnCoercionDiagnostic::NanTo(target) => report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            &format!("unexpected NAN value was coerced to {target}"),
+            false,
+        ),
+    }
+}
+
 fn increment_php_alphanumeric_string(value: &str) -> String {
     if value.is_empty() {
         return "1".to_string();
@@ -6629,6 +6670,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         ret_hint,
                         op_array.strict_types,
                     );
+                    let mut prepared_return = None;
                     if has_return_type
                         && !return_type_proven
                         && opline.op1_type != OpType::Unused
@@ -6636,26 +6678,82 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let retval = unsafe {
                             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                         };
-                        let type_ok = check_fast_scalar_type_hint(
-                            retval,
-                            ret_hint,
-                            op_array.strict_types,
-                        ) == Some(true);
-                        if !type_ok {
-                            let outcome =
-                                format!("{} returned", declared_type_error_value_name(retval));
-                            let err = return_type_error_value(
-                                eg,
-                                func_common_ret as *const FunctionCommon,
-                                frame,
-                                op_array,
-                                opline,
+                        if check_fast_scalar_return_type_hint(retval, ret_hint) != Some(true) {
+                            let source = retval.dereferenced().clone();
+                            let callee_class = eg
+                                .declaring_class_of(func_common_ret as *const FunctionCommon)
+                                .map(str::to_owned);
+                            let preparation = prepare_return_type_value(
+                                &source,
                                 ret_hint,
-                                &outcome,
-                            );
-                            match throw_in_frame(eg, frame, err) {
-                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
-                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                eg,
+                                op_array.strict_types,
+                                frame,
+                                callee_class.as_deref(),
+                            )?;
+                            resume_pending_exception!();
+                            match preparation {
+                                ReturnTypePreparation::Exact => {}
+                                ReturnTypePreparation::Coerced(value, diagnostic) => {
+                                    if let Some(diagnostic) = diagnostic {
+                                        report_return_coercion_diagnostic(
+                                            eg,
+                                            frame,
+                                            op_array,
+                                            opline,
+                                            &source,
+                                            diagnostic,
+                                        )?;
+                                        if let Some(exception) = eg.exception.take() {
+                                            if matches!(
+                                                diagnostic,
+                                                ReturnCoercionDiagnostic::FloatToInt
+                                                    | ReturnCoercionDiagnostic::FloatStringToInt
+                                            ) {
+                                                let outcome = format!(
+                                                    "{} returned",
+                                                    declared_type_error_value_name(&source)
+                                                );
+                                                let err = return_type_error_value(
+                                                    eg,
+                                                    func_common_ret as *const FunctionCommon,
+                                                    frame,
+                                                    op_array,
+                                                    opline,
+                                                    ret_hint,
+                                                    &outcome,
+                                                );
+                                                append_replaced_exception(&err, &exception, eg);
+                                                match throw_in_frame(eg, frame, err) {
+                                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                                }
+                                            }
+                                            eg.exception = Some(exception);
+                                            resume_pending_exception!();
+                                        }
+                                    }
+                                    prepared_return = Some(value);
+                                }
+                                ReturnTypePreparation::Invalid => {
+                                    let outcome = format!(
+                                        "{} returned",
+                                        declared_type_error_value_name(&source)
+                                    );
+                                    let err = return_type_error_value(
+                                        eg,
+                                        func_common_ret as *const FunctionCommon,
+                                        frame,
+                                        op_array,
+                                        opline,
+                                        ret_hint,
+                                        &outcome,
+                                    );
+                                    match throw_in_frame(eg, frame, err) {
+                                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                    }
+                                }
                             }
                         }
                     }
@@ -6667,7 +6765,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             // operand is a slot (not Const), ALL values are scalar.
                             // Skip clone/needs_cleanup entirely — raw 16-byte copy.
                             let frame_no_heap = !unsafe { (*frame).has_heap_slots };
-                            if frame_no_heap && opline.op1_type != OpType::Const {
+                            if prepared_return.is_none()
+                                && frame_no_heap
+                                && opline.op1_type != OpType::Const
+                            {
                                 let retval_ptr = unsafe {
                                     (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
                                 };
@@ -6687,9 +6788,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 // Caller's target: drop old only if caller has heap slots.
                                 unsafe { frame_return_copy_scalar(frame, return_target, src) };
                             } else {
-                                let retval = unsafe {
-                                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                                };
+                                let retval = prepared_return.take().unwrap_or_else(|| {
+                                    prepare_user_return_value(frame, op_array, opline, false).0
+                                });
                                 unsafe { frame_return_set(frame, return_target, retval.clone()) };
                             }
                         }
@@ -6806,6 +6907,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 // ── Return type validation ──
+                let mut prepared_return = None;
                 let func_common = unsafe { &*(*frame).func };
                 let return_hint = &func_common.sig.return_type_hint;
                 // A generator declaration describes the Generator object
@@ -6857,32 +6959,84 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 let retval = unsafe {
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
-                                let retval = retval.dereferenced();
-                                let ret_callee_class = eg.declaring_class_of(unsafe { (*frame).func });
-                                if !check_return_type_hint(
-                                    retval,
+                                let source = retval.dereferenced().clone();
+                                let ret_callee_class = eg
+                                    .declaring_class_of(func_common as *const FunctionCommon)
+                                    .map(str::to_owned);
+                                let preparation = prepare_return_type_value(
+                                    &source,
                                     hint,
                                     eg,
                                     op_array.strict_types,
                                     frame,
-                                    ret_callee_class,
-                                ) {
-                                    let outcome = format!(
-                                        "{} returned",
-                                        declared_type_error_value_name(retval)
-                                    );
-                                    let err = return_type_error_value(
-                                        eg,
-                                        func_common as *const FunctionCommon,
-                                        frame,
-                                        op_array,
-                                        opline,
-                                        hint,
-                                        &outcome,
-                                    );
-                                    match throw_in_frame(eg, frame, err) {
-                                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
-                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                    ret_callee_class.as_deref(),
+                                )?;
+                                resume_pending_exception!();
+                                match preparation {
+                                    ReturnTypePreparation::Exact => {}
+                                    ReturnTypePreparation::Coerced(value, diagnostic) => {
+                                        if let Some(diagnostic) = diagnostic {
+                                            report_return_coercion_diagnostic(
+                                                eg,
+                                                frame,
+                                                op_array,
+                                                opline,
+                                                &source,
+                                                diagnostic,
+                                            )?;
+                                            if let Some(exception) = eg.exception.take() {
+                                                if matches!(
+                                                    diagnostic,
+                                                    ReturnCoercionDiagnostic::FloatToInt
+                                                        | ReturnCoercionDiagnostic::FloatStringToInt
+                                                ) {
+                                                    let outcome = format!(
+                                                        "{} returned",
+                                                        declared_type_error_value_name(&source)
+                                                    );
+                                                    let err = return_type_error_value(
+                                                        eg,
+                                                        func_common as *const FunctionCommon,
+                                                        frame,
+                                                        op_array,
+                                                        opline,
+                                                        hint,
+                                                        &outcome,
+                                                    );
+                                                    append_replaced_exception(
+                                                        &err,
+                                                        &exception,
+                                                        eg,
+                                                    );
+                                                    match throw_in_frame(eg, frame, err) {
+                                                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                                    }
+                                                }
+                                                eg.exception = Some(exception);
+                                                resume_pending_exception!();
+                                            }
+                                        }
+                                        prepared_return = Some(value);
+                                    }
+                                    ReturnTypePreparation::Invalid => {
+                                        let outcome = format!(
+                                            "{} returned",
+                                            declared_type_error_value_name(&source)
+                                        );
+                                        let err = return_type_error_value(
+                                            eg,
+                                            func_common as *const FunctionCommon,
+                                            frame,
+                                            op_array,
+                                            opline,
+                                            hint,
+                                            &outcome,
+                                        );
+                                        match throw_in_frame(eg, frame, err) {
+                                            ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                        }
                                     }
                                 }
                             }
@@ -6915,12 +7069,34 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if opline.op1_type != OpType::Unused {
                         // SAFETY: Return executes with a live frame and its caller-provided slot.
                         let return_target = unsafe { (*frame).return_value };
+                        if return_target.is_null()
+                            && prepared_return.is_some()
+                            && func_common_ret.sig.returns_reference
+                        {
+                            let (_, warn_non_variable) = prepare_typed_user_return_value(
+                                frame,
+                                op_array,
+                                opline,
+                                true,
+                                prepared_return.take(),
+                            );
+                            if warn_non_variable {
+                                report_php_notice(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    "Only variable references should be returned by reference",
+                                )?;
+                            }
+                        }
                         if !return_target.is_null() {
-                            let (retval, warn_non_variable) = prepare_user_return_value(
+                            let (retval, warn_non_variable) = prepare_typed_user_return_value(
                                 frame,
                                 op_array,
                                 opline,
                                 func_common_ret.sig.returns_reference,
+                                prepared_return.take(),
                             );
                             if warn_non_variable {
                                 report_php_notice(
@@ -6997,12 +7173,34 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if opline.op1_type != OpType::Unused {
                     // SAFETY: Return executes with a live frame and its caller-provided slot.
                     let return_target = unsafe { (*frame).return_value };
+                    if return_target.is_null()
+                        && prepared_return.is_some()
+                        && func_common_ret.sig.returns_reference
+                    {
+                        let (_, warn_non_variable) = prepare_typed_user_return_value(
+                            frame,
+                            op_array,
+                            opline,
+                            true,
+                            prepared_return.take(),
+                        );
+                        if warn_non_variable {
+                            report_php_notice(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "Only variable references should be returned by reference",
+                            )?;
+                        }
+                    }
                     if !return_target.is_null() {
-                        let (retval, warn_non_variable) = prepare_user_return_value(
+                        let (retval, warn_non_variable) = prepare_typed_user_return_value(
                             frame,
                             op_array,
                             opline,
                             func_common_ret.sig.returns_reference,
+                            prepared_return.take(),
                         );
                         if warn_non_variable {
                             report_php_notice(

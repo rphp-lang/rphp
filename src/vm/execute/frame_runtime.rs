@@ -483,6 +483,31 @@ fn prepare_user_return_value(
     }
 }
 
+/// Apply a verified scalar return conversion while preserving PHP's distinct
+/// value- and reference-return boundaries. Value returns are separated from
+/// their source CV. A by-reference return instead updates the materialized
+/// cell and forwards the same alias to the caller.
+#[inline(always)]
+fn prepare_typed_user_return_value(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    returns_reference: bool,
+    coerced: Option<Value>,
+) -> (Value, bool) {
+    let Some(coerced) = coerced else {
+        return prepare_user_return_value(frame, op_array, opline, returns_reference);
+    };
+    if !returns_reference {
+        return (coerced, false);
+    }
+    let (mut alias, warn_non_variable) =
+        prepare_user_return_value(frame, op_array, opline, true);
+    debug_assert!(alias.is_reference());
+    alias.assign_dereferenced(coerced);
+    (alias, warn_non_variable)
+}
+
 /// Copy a scalar argument operand directly into a pending call frame.
 #[inline(always)]
 unsafe fn try_copy_scalar_arg(

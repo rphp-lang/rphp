@@ -627,6 +627,292 @@ pub(crate) enum CallArgumentPreparation {
     Invalid,
 }
 
+#[derive(Clone, Copy)]
+enum ReturnCoercionDiagnostic {
+    FloatToInt,
+    FloatStringToInt,
+    NanTo(&'static str),
+}
+
+enum ReturnTypePreparation {
+    Exact,
+    Coerced(Value, Option<ReturnCoercionDiagnostic>),
+    Invalid,
+}
+
+#[derive(Clone, Copy)]
+struct PhpNumericString {
+    number: f64,
+    integer: Option<i64>,
+    uses_float_syntax: bool,
+}
+
+/// Parse a complete PHP numeric string without accepting Rust's `NaN`/`inf`
+/// spellings. The conversion boundary needs to distinguish an out-of-range
+/// decimal integer from a float-syntax value such as `1e2`.
+fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString> {
+    let value = value.trim_matches(|character: char| character.is_ascii_whitespace());
+    if value.is_empty() {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let mut index = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let integer_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        index += 1;
+    }
+    let integer_digits = index - integer_start;
+    let mut fraction_digits = 0usize;
+    let mut uses_float_syntax = false;
+    if bytes.get(index) == Some(&b'.') {
+        uses_float_syntax = true;
+        index += 1;
+        let fraction_start = index;
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        fraction_digits = index - fraction_start;
+    }
+    if integer_digits == 0 && fraction_digits == 0 {
+        return None;
+    }
+    if matches!(bytes.get(index), Some(b'e' | b'E')) {
+        uses_float_syntax = true;
+        index += 1;
+        if matches!(bytes.get(index), Some(b'+' | b'-')) {
+            index += 1;
+        }
+        let exponent_start = index;
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        if index == exponent_start {
+            return None;
+        }
+    }
+    if index != bytes.len() {
+        return None;
+    }
+    let number = value.parse::<f64>().ok()?;
+    Some(PhpNumericString {
+        number,
+        integer: (!uses_float_syntax)
+            .then(|| value.parse::<i64>().ok())
+            .flatten(),
+        uses_float_syntax,
+    })
+}
+
+#[inline]
+fn return_hint_contains(hint: &ParamTypeHint, expected: &ParamTypeHint) -> bool {
+    hint == expected
+        || match hint {
+            ParamTypeHint::Nullable(inner) => return_hint_contains(inner, expected),
+            ParamTypeHint::Union(parts) => parts
+                .iter()
+                .any(|part| return_hint_contains(part, expected)),
+            _ => false,
+        }
+}
+
+#[inline]
+fn weak_return_float_to_int(number: f64) -> Option<(i64, bool)> {
+    let upper_exclusive = -(i64::MIN as f64);
+    if !number.is_finite() || number < i64::MIN as f64 || number >= upper_exclusive {
+        return None;
+    }
+    let integer = number as i64;
+    Some((integer, integer as f64 != number))
+}
+
+fn coerce_scalar_return_value(
+    value: &Value,
+    hint: &ParamTypeHint,
+    weak: bool,
+) -> Option<(Value, Option<ReturnCoercionDiagnostic>)> {
+    let value = value.dereferenced();
+    match hint {
+        ParamTypeHint::Float => match value.value_type() {
+            ValueType::Long => Some((Value::double(value.as_long()? as f64), None)),
+            ValueType::String if weak => {
+                let parsed = parse_php_numeric_string(value.as_str()?)?;
+                Some((Value::double(parsed.number), None))
+            }
+            ValueType::True | ValueType::False if weak => {
+                Some((Value::double(f64::from(value.is_truthy())), None))
+            }
+            _ => None,
+        },
+        ParamTypeHint::Int if weak => match value.value_type() {
+            ValueType::Double => {
+                let (integer, lossy) = weak_return_float_to_int(value.as_double()?)?;
+                Some((
+                    Value::long(integer),
+                    lossy.then_some(ReturnCoercionDiagnostic::FloatToInt),
+                ))
+            }
+            ValueType::True | ValueType::False => {
+                Some((Value::long(i64::from(value.is_truthy())), None))
+            }
+            ValueType::String => {
+                let parsed = parse_php_numeric_string(value.as_str()?)?;
+                if let Some(integer) = parsed.integer {
+                    return Some((Value::long(integer), None));
+                }
+                if !parsed.uses_float_syntax {
+                    return None;
+                }
+                let (integer, lossy) = weak_return_float_to_int(parsed.number)?;
+                Some((
+                    Value::long(integer),
+                    lossy.then_some(ReturnCoercionDiagnostic::FloatStringToInt),
+                ))
+            }
+            _ => None,
+        },
+        ParamTypeHint::String if weak => match value.value_type() {
+            ValueType::Long | ValueType::Double | ValueType::True | ValueType::False => Some((
+                Value::string(value.echo_to_string()),
+                value
+                    .as_double()
+                    .is_some_and(f64::is_nan)
+                    .then_some(ReturnCoercionDiagnostic::NanTo("string")),
+            )),
+            _ => None,
+        },
+        ParamTypeHint::Bool if weak => match value.value_type() {
+            ValueType::Long | ValueType::Double | ValueType::String => Some((
+                Value::bool(value.is_truthy()),
+                value
+                    .as_double()
+                    .is_some_and(f64::is_nan)
+                    .then_some(ReturnCoercionDiagnostic::NanTo("bool")),
+            )),
+            _ => None,
+        },
+        ParamTypeHint::Nullable(inner) if value.value_type() != ValueType::Null => {
+            coerce_scalar_return_value(value, inner, weak)
+        }
+        ParamTypeHint::Union(parts) => {
+            let contains = |candidate: &ParamTypeHint| {
+                parts
+                    .iter()
+                    .any(|part| return_hint_contains(part, candidate))
+            };
+            if !weak {
+                return (value.value_type() == ValueType::Long && contains(&ParamTypeHint::Float))
+                    .then(|| (Value::double(value.as_long().unwrap() as f64), None));
+            }
+            match value.value_type() {
+                ValueType::String => {
+                    let parsed = parse_php_numeric_string(value.as_str()?).filter(|_| {
+                        contains(&ParamTypeHint::Int) || contains(&ParamTypeHint::Float)
+                    });
+                    if contains(&ParamTypeHint::Int)
+                        && let Some(integer) = parsed.and_then(|parsed| parsed.integer)
+                    {
+                        return Some((Value::long(integer), None));
+                    }
+                    if contains(&ParamTypeHint::Float)
+                        && let Some(parsed) = parsed
+                    {
+                        return Some((Value::double(parsed.number), None));
+                    }
+                    if contains(&ParamTypeHint::Int)
+                        && let Some(parsed) = parsed
+                        && parsed.uses_float_syntax
+                        && let Some((integer, lossy)) = weak_return_float_to_int(parsed.number)
+                    {
+                        return Some((
+                            Value::long(integer),
+                            lossy.then_some(ReturnCoercionDiagnostic::FloatStringToInt),
+                        ));
+                    }
+                    contains(&ParamTypeHint::Bool).then(|| (Value::bool(value.is_truthy()), None))
+                }
+                ValueType::Double => {
+                    if contains(&ParamTypeHint::Int)
+                        && let Some((integer, lossy)) =
+                            weak_return_float_to_int(value.as_double().unwrap())
+                    {
+                        return Some((
+                            Value::long(integer),
+                            lossy.then_some(ReturnCoercionDiagnostic::FloatToInt),
+                        ));
+                    }
+                    if contains(&ParamTypeHint::String) {
+                        return Some((
+                            Value::string(value.echo_to_string()),
+                            value
+                                .as_double()
+                                .is_some_and(f64::is_nan)
+                                .then_some(ReturnCoercionDiagnostic::NanTo("string")),
+                        ));
+                    }
+                    contains(&ParamTypeHint::Bool).then(|| {
+                        (
+                            Value::bool(value.is_truthy()),
+                            value
+                                .as_double()
+                                .is_some_and(f64::is_nan)
+                                .then_some(ReturnCoercionDiagnostic::NanTo("bool")),
+                        )
+                    })
+                }
+                ValueType::Long => {
+                    if contains(&ParamTypeHint::Float) {
+                        return Some((Value::double(value.as_long().unwrap() as f64), None));
+                    }
+                    if contains(&ParamTypeHint::String) {
+                        return Some((Value::string(value.echo_to_string()), None));
+                    }
+                    contains(&ParamTypeHint::Bool).then(|| (Value::bool(value.is_truthy()), None))
+                }
+                ValueType::True | ValueType::False => {
+                    if contains(&ParamTypeHint::Int) {
+                        return Some((Value::long(i64::from(value.is_truthy())), None));
+                    }
+                    if contains(&ParamTypeHint::Float) {
+                        return Some((Value::double(f64::from(value.is_truthy())), None));
+                    }
+                    contains(&ParamTypeHint::String)
+                        .then(|| (Value::string(value.echo_to_string()), None))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn prepare_return_type_value(
+    value: &Value,
+    hint: &ParamTypeHint,
+    eg: &mut ExecutorGlobals,
+    strict: bool,
+    frame: *mut ExecuteData,
+    callee_class: Option<&str>,
+) -> Result<ReturnTypePreparation, VmError> {
+    // Exact runtime members always win. Use the strict checker here because
+    // weak acceptance alone is not enough: a declared float must return a
+    // Double value even when the source was an integer.
+    if check_return_type_hint(value, hint, eg, true, frame, callee_class) {
+        return Ok(ReturnTypePreparation::Exact);
+    }
+    if let Some((coerced, diagnostic)) = coerce_scalar_return_value(value, hint, !strict) {
+        return Ok(ReturnTypePreparation::Coerced(coerced, diagnostic));
+    }
+    if !strict
+        && value.dereferenced().value_type() == ValueType::Object
+        && return_hint_contains(hint, &ParamTypeHint::String)
+        && let Some(rendered) = call_magic_method(eg, value, "__tostring", &[])?
+        && rendered.value_type() == ValueType::String
+    {
+        return Ok(ReturnTypePreparation::Coerced(rendered, None));
+    }
+    Ok(ReturnTypePreparation::Invalid)
+}
+
 /// Apply the object-to-string argument conversion used by weak PHP call sites.
 /// Exact union members win before conversion and strict callers never invoke
 /// `__toString()` implicitly.
@@ -745,6 +1031,38 @@ pub(crate) fn check_fast_scalar_type_hint(
     })
 }
 
+/// Validate the canonical representation crossing a scalar return boundary.
+/// This is deliberately stricter than argument acceptance: an integer is a
+/// valid source for `float`, but the observable returned value must first be
+/// widened to a Double by the baseline return path.
+#[inline(always)]
+pub(crate) fn check_fast_scalar_return_type_hint(
+    value: &Value,
+    hint: &ParamTypeHint,
+) -> Option<bool> {
+    Some(match hint {
+        ParamTypeHint::None | ParamTypeHint::Mixed => true,
+        ParamTypeHint::Int => value.value_type() == ValueType::Long,
+        ParamTypeHint::Float => value.value_type() == ValueType::Double,
+        ParamTypeHint::String => value.value_type() == ValueType::String,
+        ParamTypeHint::Bool => {
+            matches!(value.value_type(), ValueType::True | ValueType::False)
+        }
+        ParamTypeHint::Array => value.value_type() == ValueType::Array,
+        ParamTypeHint::Nullable(inner) => {
+            value.value_type() == ValueType::Null
+                || check_fast_scalar_return_type_hint(value, inner) == Some(true)
+        }
+        ParamTypeHint::Union(parts) => parts
+            .iter()
+            .any(|part| check_fast_scalar_return_type_hint(value, part) == Some(true)),
+        ParamTypeHint::Intersection(parts) => parts
+            .iter()
+            .all(|part| check_fast_scalar_return_type_hint(value, part) == Some(true)),
+        _ => return None,
+    })
+}
+
 /// Whether a compiler-proven representation makes a scalar return check
 /// redundant. Unknown facts never bypass the canonical validator.
 #[inline(always)]
@@ -756,9 +1074,7 @@ pub(crate) fn known_scalar_satisfies_type_hint(
     match hint {
         ParamTypeHint::None | ParamTypeHint::Mixed => true,
         ParamTypeHint::Int => known == KnownScalarType::Long,
-        ParamTypeHint::Float => {
-            known == KnownScalarType::Double || (!strict && known == KnownScalarType::Long)
-        }
+        ParamTypeHint::Float => known == KnownScalarType::Double,
         ParamTypeHint::String => known == KnownScalarType::String,
         ParamTypeHint::Bool => known == KnownScalarType::Bool,
         ParamTypeHint::Nullable(inner) => known_scalar_satisfies_type_hint(known, inner, strict),

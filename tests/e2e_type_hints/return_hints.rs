@@ -237,6 +237,162 @@ echo half(7);
 }
 
 #[test]
+fn weak_scalar_returns_are_coerced_to_the_declared_runtime_type() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function asInt($value): int { return $value; }
+function asFloat($value): float { return $value; }
+function asString($value): string { return $value; }
+function asBool($value): bool { return $value; }
+
+var_dump(asInt("42"), asInt(true));
+var_dump(asFloat(7), asFloat("7.5"));
+var_dump(asString(42), asString(false));
+var_dump(asBool(""), asBool(0.5));
+"#
+        ),
+        "int(42)\nint(1)\nfloat(7)\nfloat(7.5)\nstring(2) \"42\"\nstring(0) \"\"\nbool(false)\nbool(true)\n"
+    );
+}
+
+#[test]
+fn weak_scalar_return_numeric_strings_use_the_complete_php_grammar() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) {
+    echo $severity, ':', $message, "\n";
+    return true;
+});
+function toInt($value): int { return $value; }
+function toFloat($value): float { return $value; }
+
+var_dump(toInt(" +42 "), toInt("1e2"), toInt("1e-1"));
+var_dump(toFloat(".5"), toFloat("1e309"));
+foreach (["9223372036854775808", "INF", "NAN", "1x"] as $value) {
+    try { toInt($value); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#
+        ),
+        "8192:Implicit conversion from float-string \"1e-1\" to int loses precision\nint(42)\nint(100)\nint(0)\nfloat(0.5)\nfloat(INF)\ntoInt(): Return value must be of type int, string returned\ntoInt(): Return value must be of type int, string returned\ntoInt(): Return value must be of type int, string returned\ntoInt(): Return value must be of type int, string returned\n"
+    );
+}
+
+#[test]
+fn weak_scalar_return_unions_use_php_conversion_precedence() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function number($value): int|float { return $value; }
+function truth($value): array|bool { return $value; }
+function literalTrue($value): array|true { return $value; }
+
+var_dump(number("42"), number("4.5"), truth(1));
+try { literalTrue(1); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#
+        ),
+        "int(42)\nfloat(4.5)\nbool(true)\nliteralTrue(): Return value must be of type array|true, int returned\n"
+    );
+}
+
+#[test]
+fn weak_return_conversion_reports_php_85_diagnostics_before_finally() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) {
+    echo $severity, ':', $message, "\n";
+    return true;
+});
+function lossy(): int {
+    $value = 1.75;
+    try { return $value; } finally { var_dump($value); }
+}
+function nanString(): string { return NAN; }
+function nanBool(): bool { return NAN; }
+
+var_dump(lossy(), nanString(), nanBool());
+"#
+        ),
+        "8192:Implicit conversion from float 1.75 to int loses precision\nfloat(1.75)\n2:unexpected NAN value was coerced to string\n2:unexpected NAN value was coerced to bool\nint(1)\nstring(3) \"NAN\"\nbool(true)\n"
+    );
+}
+
+#[test]
+fn return_coercion_diagnostic_exceptions_follow_php_precedence() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) {
+    throw new Exception('handler:' . $message);
+});
+function lossy(): int {
+    try { return 1.5; } finally { echo "int-finally\n"; }
+}
+function nanString(): string { return NAN; }
+
+try { lossy(); } catch (Throwable $error) {
+    echo get_class($error), ':', $error->getMessage(), "\n";
+    echo 'previous:', $error->getPrevious()->getMessage(), "\n";
+}
+try { nanString(); } catch (Throwable $error) {
+    echo get_class($error), ':', $error->getMessage(), "\n";
+}
+"#
+        ),
+        "int-finally\nTypeError:lossy(): Return value must be of type int, float returned\nprevious:handler:Implicit conversion from float 1.5 to int loses precision\nException:handler:unexpected NAN value was coerced to string\n"
+    );
+}
+
+#[test]
+fn weak_return_conversion_separates_values_but_updates_returned_references() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function plain(&$value): string { return $value; }
+function &byReference(int &$value): string { return $value; }
+
+$value = 123;
+var_dump(plain($value), $value);
+var_dump(byReference($value), $value);
+"#
+        ),
+        "string(3) \"123\"\nint(123)\nstring(3) \"123\"\nstring(3) \"123\"\n"
+    );
+}
+
+#[test]
+fn weak_object_to_string_return_runs_only_outside_strict_types() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RenderedReturn {
+    public function __toString(): string { echo "cast\n"; return "ready"; }
+}
+function render(): string { return new RenderedReturn(); }
+var_dump(render());
+"#
+        ),
+        "cast\nstring(5) \"ready\"\n"
+    );
+    assert_eq!(
+        run_php(
+            r#"<?php
+declare(strict_types=1);
+class StrictRenderedReturn {
+    public function __toString(): string { echo "unexpected\n"; return "ready"; }
+}
+function render(): string { return new StrictRenderedReturn(); }
+try { render(); } catch (TypeError $error) { echo $error->getMessage(); }
+"#
+        ),
+        "render(): Return value must be of type string, StrictRenderedReturn returned"
+    );
+}
+
+#[test]
 fn test_return_type_mismatch_throws() {
     assert_eq!(
         run_php(
