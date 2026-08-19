@@ -206,7 +206,10 @@ echo $suffix, ':', $numeric, "\n";
 "#,
     );
 
-    assert_eq!(output, "mixed\naa:10\n");
+    assert_eq!(
+        output,
+        "\nDeprecated: Increment on non-numeric string is deprecated, use str_increment() instead in <main> on line 5\nmixed\n\nDeprecated: Increment on non-numeric string is deprecated, use str_increment() instead in <main> on line 9\naa:10\n"
+    );
 }
 
 #[test]

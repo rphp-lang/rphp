@@ -9,11 +9,61 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,276 pass, 2,021 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,283 pass, 2,014 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-61.846% and the whole-corpus rate is 58.510%; 4,617 of 5,297 attempted cases
-reach runtime (87.163%). Relative to exact base `7fc23567`, the pass-set delta
-is +4/-0: all 3,272 prior passes remain exact.
+61.978% and the whole-corpus rate is 58.635%; 4,617 of 5,297 attempted cases
+reach runtime (87.163%). Relative to exact base `6410e526`, the pass-set delta
+is +7/-0: all 3,276 prior passes remain exact.
+
+Direct pre- and post-increment of a non-numeric string now emits PHP 8.5's
+exact `E_DEPRECATED` diagnostic before applying the legacy alphanumeric
+increment. Numeric strings still convert to `int` or `float` without a
+diagnostic. Carry propagation keeps changes already made to an alphanumeric
+suffix when it reaches punctuation, so values such as `.Z` and `a5.9` become
+`.A` and `a5.0`, while unsupported trailing bytes and non-ASCII strings remain
+unchanged.
+
+The increment opcode retains the pre-handler value snapshot. A re-entrant
+error handler may replace the target, but a normally returning handler is
+followed by the increment result's canonical writeback; a handler-thrown
+exception stops that writeback and leaves the original value intact. Compiler
+source metadata now locates both direct increment opcodes at their exact PHP
+line without widening the instruction. The diagnostic remains on the cold
+non-numeric-string branch, while ordinary integer and numeric-string work does
+not enter the error machinery.
+
+Two original E2E tests cover numeric and non-numeric strings, pre/post results,
+punctuation carry boundaries, exact source lines, handler replacement and
+exception interruption. The existing nested dynamic-name test now asserts the
+PHP 8.5 diagnostics that its direct selector increments produce. Seven
+full-corpus cases become exact passes: `variable_variables_curly_syntax.phpt`,
+both enum `unknown-hash` cases, `increment_diagnostic_change_type.phpt`,
+`string_increment_various.phpt`, `postinc_variationStr.phpt` and
+`preinc_variationStr.phpt`. No other status or failure category changes.
+`bug71300.phpt` and the combined increment/decrement cases gain their correct
+increment diagnostics but retain independent later output differences.
+
+All five Cargo configurations, all-feature/all-target, formatting and the exact
+unsafe ratchet pass; the production inventory remains 1,620 unsafe blocks and
+289 unsafe functions. Composer S0, all four Symfony S1 gates, warmed-kernel S2
+and cold-build S3 pass on AMD64. S3 used the available PHP 8.5.9 Phar-capable
+oracle while the language corpus remained pinned to PHP 8.5.6. CPU-pinned
+32-pair release controls measured balanced order-specific median ratios of
+-4.955% for ten million ordinary scalar-loop increments, +1.155% for property
+work, +1.048% for array work and -2.542% for 150 empty requests. Outputs are
+exact, no outliers were removed and every decision median remains below the
+five-percent regression ceiling.
+
+Decrement diagnostics, PHP 8.5's bool warnings and invalid-type increment
+errors remain separate opcode contracts. Complex property, dimension and
+dynamically named increment targets currently use the arithmetic writeback
+path rather than this direct-CV increment path. `bug71300.phpt` also retains
+its independent dynamic-variable divergence.
+
+The preceding `enum-backing-value-contracts` checkpoint reached 3,276 passes
+with 2,021 failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts
+and zero crashes. Relative to exact base `7fc23567`, its pass-set delta was
++4/-0 with all 3,272 prior passes retained.
 
 Backed enums now retain a compiler-proven duplicate-value or backing-type
 diagnostic without publishing it at declaration time. An ordinary read of any

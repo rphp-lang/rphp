@@ -206,7 +206,14 @@ fn increment_php_alphanumeric_string(value: &str) -> String {
                 *byte = b'A';
                 carry_prefix = Some(b'A');
             }
-            _ => return value.to_string(),
+            _ => {
+                // A non-alphanumeric prefix stops carry propagation without
+                // discarding changes already made to the trailing suffix.
+                // For example, PHP increments `".Z"` to `".A"` rather than
+                // restoring the original string or prepending another digit.
+                carry = false;
+                break;
+            }
         }
     }
     if carry {
@@ -215,35 +222,47 @@ fn increment_php_alphanumeric_string(value: &str) -> String {
     String::from_utf8(bytes).expect("ASCII increment preserves UTF-8")
 }
 
-fn increment_php_value(value: &Value) -> Value {
+fn increment_php_value(value: &Value) -> (Value, bool) {
     if let Some(number) = value.as_long() {
-        return number.checked_add(1).map_or_else(
-            || Value::double(number as f64 + 1.0),
-            Value::long,
+        return (
+            number.checked_add(1).map_or_else(
+                || Value::double(number as f64 + 1.0),
+                Value::long,
+            ),
+            false,
         );
     }
     match value.value_type() {
-        ValueType::Null | ValueType::Undef => Value::long(1),
-        ValueType::True | ValueType::False => value.clone(),
+        ValueType::Null | ValueType::Undef => (Value::long(1), false),
+        ValueType::True | ValueType::False => (value.clone(), false),
         ValueType::String => {
             let text = value.as_str().unwrap();
             let numeric = text.trim();
             if !numeric.is_empty() {
                 if let Ok(number) = numeric.parse::<i64>() {
-                    return number.checked_add(1).map_or_else(
-                        || Value::double(number as f64 + 1.0),
-                        Value::long,
+                    return (
+                        number.checked_add(1).map_or_else(
+                            || Value::double(number as f64 + 1.0),
+                            Value::long,
+                        ),
+                        false,
                     );
                 }
                 if let Ok(number) = numeric.parse::<f64>() {
-                    return Value::double(number + 1.0);
+                    return (Value::double(number + 1.0), false);
                 }
             }
-            Value::string(increment_php_alphanumeric_string(text))
+            (
+                Value::string(increment_php_alphanumeric_string(text)),
+                true,
+            )
         }
-        _ => value
-            .to_double()
-            .map_or_else(|| Value::long(1), |number| Value::double(number + 1.0)),
+        _ => (
+            value
+                .to_double()
+                .map_or_else(|| Value::long(1), |number| Value::double(number + 1.0)),
+            false,
+        ),
     }
 }
 
@@ -3568,7 +3587,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    let new_val = prepare_reference_write!(writeback_cv, increment_php_value(&old));
+                    let (new_val, deprecated_string_increment) = increment_php_value(&old);
+                    if deprecated_string_increment {
+                        report_php_deprecation(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Increment on non-numeric string is deprecated, use str_increment() instead",
+                        )?;
+                        resume_pending_exception!();
+                    }
+                    let new_val = prepare_reference_write!(writeback_cv, new_val);
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -3661,7 +3691,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         debug_assert_eq!(opline.op1_type, OpType::Cv);
                         opline.op1 as u32
                     };
-                    let new_val = prepare_reference_write!(writeback_cv, increment_php_value(&old));
+                    let (new_val, deprecated_string_increment) = increment_php_value(&old);
+                    if deprecated_string_increment {
+                        report_php_deprecation(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            "Increment on non-numeric string is deprecated, use str_increment() instead",
+                        )?;
+                        resume_pending_exception!();
+                    }
+                    let new_val = prepare_reference_write!(writeback_cv, new_val);
                     if opline.result_type != OpType::Unused {
                         let result_ptr =
                             (*frame).get_op_mut(opline.result as u32, opline.result_type);

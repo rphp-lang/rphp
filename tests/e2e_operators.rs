@@ -486,6 +486,61 @@ echo $array[0]++, ':', $array[0];
 }
 
 #[test]
+fn string_increment_reports_php_85_deprecation_without_changing_numeric_strings() {
+    let file = "/virtual/string-increment.php";
+    let source = r#"<?php
+$numeric = "41";
+var_dump(++$numeric);
+$post = "A";
+var_dump($post++);
+var_dump($post);
+$punctuation = "!";
+var_dump(++$punctuation);
+var_dump($punctuation);
+$prefixed = ".Z";
+var_dump(++$prefixed);
+$decimalish = "a5.9";
+var_dump(++$decimalish);
+"#;
+
+    assert_eq!(
+        run_php_with_source_context(source, file, "/virtual"),
+        format!(
+            "int(42)\n\nDeprecated: Increment on non-numeric string is deprecated, use str_increment() instead in {file} on line 5\nstring(1) \"A\"\nstring(1) \"B\"\n\nDeprecated: Increment on non-numeric string is deprecated, use str_increment() instead in {file} on line 8\nstring(1) \"!\"\nstring(1) \"!\"\n\nDeprecated: Increment on non-numeric string is deprecated, use str_increment() instead in {file} on line 11\nstring(2) \".A\"\n\nDeprecated: Increment on non-numeric string is deprecated, use str_increment() instead in {file} on line 13\nstring(4) \"a5.0\"\n"
+        )
+    );
+}
+
+#[test]
+fn string_increment_uses_the_pre_handler_snapshot_and_stops_on_exception() {
+    let source = r#"<?php
+set_error_handler(function ($level, $message) {
+    echo "replace:$level:$message\n";
+    $GLOBALS['value'] = new stdClass();
+});
+$value = "foo!";
+var_dump(++$value);
+var_dump($value);
+
+set_error_handler(function ($level, $message) {
+    throw new Exception("$level:$message");
+});
+$value = "A";
+try {
+    ++$value;
+} catch (Exception $exception) {
+    echo "caught:", $exception->getMessage(), "\n";
+}
+var_dump($value);
+"#;
+
+    assert_eq!(
+        run_php(source),
+        "replace:8192:Increment on non-numeric string is deprecated, use str_increment() instead\nstring(4) \"foo!\"\nstring(4) \"foo!\"\ncaught:8192:Increment on non-numeric string is deprecated, use str_increment() instead\nstring(1) \"A\"\n"
+    );
+}
+
+#[test]
 fn test_e2e_array_append_assignments_chain_and_produce_the_assigned_value() {
     assert_eq!(
         run_php(
