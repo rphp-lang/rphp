@@ -1076,6 +1076,50 @@ fn test_include_once_and_include() {
 }
 
 #[test]
+fn repeated_include_propagates_function_redeclaration_with_both_locations() {
+    let (_dir, path) = write_temp_php(
+        "function-redeclaration.php",
+        "<?php\nfunction IncludedFunction() {}\n",
+    );
+    let source = format!("<?php include '{path}'; include '{path}';");
+    let error = run_php_expect_error_with_source_context(
+        &source,
+        "/virtual/include-driver.php",
+        "/virtual",
+    );
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "Cannot redeclare function IncludedFunction() (previously declared in {path}:2) in {path} on line 2"
+        )
+    );
+}
+
+#[test]
+fn repeated_include_does_not_publish_an_inactive_conditional_function_twice() {
+    let (_dir, path) = write_temp_php(
+        "conditional-function.php",
+        r#"<?php
+if (defined('SECOND_INCLUDE')) {
+    echo 'inner';
+} else {
+    function ConditionalIncludeFunction() {}
+    define('SECOND_INCLUDE', true);
+    include __FILE__;
+    echo 'outer';
+}
+"#,
+    );
+    let source = format!("<?php include '{path}';");
+
+    assert_eq!(
+        run_php_with_source_context(&source, "/virtual/include-driver.php", "/virtual"),
+        "innerouter"
+    );
+}
+
+#[test]
 fn test_nested_include() {
     let dir = TempDir::new();
 

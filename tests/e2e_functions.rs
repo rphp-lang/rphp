@@ -1,8 +1,8 @@
 /// E2E tests: user-defined functions, internal functions, argument validation.
 mod common;
 use common::{
-    make_eg_with_capture, run_php, run_php_expect_error, run_php_with_functions,
-    run_php_with_source_context,
+    run_php, run_php_expect_error, run_php_expect_error_with_source_context,
+    run_php_with_functions, run_php_with_source_context,
 };
 
 #[test]
@@ -115,10 +115,7 @@ echo StaticValues::values()[0];
     assert_eq!(out, "value:dynamic:static");
 }
 
-use rphp::compiler::compile::Compiler;
-use rphp::compiler::{make_internal_function, make_user_function};
-use rphp::lexer::Lexer;
-use rphp::parser::Parser;
+use rphp::compiler::make_internal_function;
 use rphp::runtime::ExecutorGlobals;
 use rphp::value::Value;
 use rphp::vm::execute;
@@ -595,26 +592,30 @@ try {
 
 #[test]
 fn test_e2e_redeclare_function() {
-    let tokens = Lexer::new("<?php function foo() { return 1; } function foo() { return 2; }")
-        .tokenize()
-        .unwrap();
-    let stmts = Parser::new(tokens).parse().unwrap();
-    let result = Compiler::new().compile(&stmts).unwrap();
-    let main_func = make_user_function(result.main);
-    let (mut eg, _buf) = make_eg_with_capture();
-    let mut err_msg = None;
-    for (name, func) in &result.functions {
-        if let Err(e) = eg.register_function(name, &func.common as *const FunctionCommon) {
-            err_msg = Some(e);
-            break;
-        }
+    for (source, expected) in [
+        (
+            "<?php\nfunction OriginalName() {}\nfunction oRIGINALnAME() {}",
+            "Cannot redeclare function oRIGINALnAME() (previously declared in /virtual/function-redeclaration.php:2) in /virtual/function-redeclaration.php on line 3",
+        ),
+        (
+            "<?php\nnamespace Fixture;\nfunction OriginalName() {}\nfunction oRIGINALnAME() {}",
+            "Cannot redeclare function Fixture\\oRIGINALnAME() (previously declared in /virtual/function-redeclaration.php:3) in /virtual/function-redeclaration.php on line 4",
+        ),
+        (
+            "<?php\nfunction strlen() {}",
+            "Cannot redeclare function strlen() in /virtual/function-redeclaration.php on line 2",
+        ),
+    ] {
+        assert_eq!(
+            run_php_expect_error_with_source_context(
+                source,
+                "/virtual/function-redeclaration.php",
+                "/virtual",
+            )
+            .to_string(),
+            expected
+        );
     }
-    assert!(err_msg.is_some(), "Expected redeclare error");
-    assert!(
-        err_msg.unwrap().contains("Cannot redeclare"),
-        "Error should mention 'Cannot redeclare'"
-    );
-    drop(main_func);
 }
 
 #[test]

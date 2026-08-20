@@ -13,7 +13,7 @@ use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
 use crate::parser::Visibility;
 use crate::value::{ClosureStaticVars, ObjectLayout, PhpArray, Value};
 use crate::vm::frame::ExecuteData;
-use crate::vm::function::FunctionCommon;
+use crate::vm::function::{Function, FunctionCommon};
 use crate::vm::stack::VmStack;
 use crate::vm::stats;
 use crate::vm::virtual_aggregate_cache::{
@@ -5878,11 +5878,50 @@ impl ExecutorGlobals {
         func: *const FunctionCommon,
     ) -> Result<(), String> {
         let key = name.to_lowercase();
-        if self.function_table.contains_key(&key) {
-            return Err(format!("Cannot redeclare {}()", name));
+        if let Some(&previous) = self.function_table.get(&key) {
+            return Err(Self::function_redeclaration_error(previous, func, name));
         }
         self.function_table.insert(key, func);
         Ok(())
+    }
+
+    #[cold]
+    fn function_declaration_location(function: *const FunctionCommon) -> Option<(String, usize)> {
+        if function.is_null() {
+            return None;
+        }
+        // SAFETY: function-table entries and registration candidates point to
+        // live FunctionCommon headers owned by the executor, a compiled unit,
+        // or the startup registry. The discriminant selects the enclosing
+        // representation before user metadata is accessed.
+        let function = unsafe { Function::from_common_ptr(function) };
+        function.dispatch(
+            |user| {
+                user.op_array
+                    .declaration_line()
+                    .filter(|_| !user.op_array.source_file.is_empty())
+                    .map(|line| (user.op_array.source_file.to_string(), line))
+            },
+            |_| None,
+        )
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn function_redeclaration_error(
+        previous: *const FunctionCommon,
+        current: *const FunctionCommon,
+        current_name: &str,
+    ) -> String {
+        let previous_location = Self::function_declaration_location(previous)
+            .map_or_else(String::new, |(file, line)| {
+                format!(" (previously declared in {file}:{line})")
+            });
+        let current_location = Self::function_declaration_location(current)
+            .map_or_else(String::new, |(file, line)| {
+                format!(" in {file} on line {line}")
+            });
+        format!("Cannot redeclare function {current_name}(){previous_location}{current_location}")
     }
 
     /// Record one successfully compiled main/include file exactly once while

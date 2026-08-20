@@ -11,6 +11,35 @@ pub(crate) enum IncludeFileOutcome {
     Thrown(Value),
 }
 
+fn collect_unconditional_function_names(
+    statements: &[crate::parser::Stmt],
+    namespace: Option<&str>,
+    names: &mut std::collections::HashSet<String>,
+) {
+    for statement in statements {
+        match statement {
+            crate::parser::Stmt::Function { name, .. } => {
+                let name = namespace.map_or_else(
+                    || name.trim_start_matches('\\').to_string(),
+                    |namespace| format!("{namespace}\\{name}"),
+                );
+                names.insert(name.to_lowercase());
+            }
+            crate::parser::Stmt::Namespace { name, body } => {
+                collect_unconditional_function_names(
+                    body,
+                    (!name.is_empty()).then_some(name.as_str()),
+                    names,
+                );
+            }
+            crate::parser::Stmt::Block(body) => {
+                collect_unconditional_function_names(body, namespace, names);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn runtime_class_dependency_exception<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -474,11 +503,17 @@ fn execute_source_unit(
         .relocate_generic_use_sites(generic_use_site_base)
         .map_err(VmError::Fatal)?;
 
+    let mut unconditional_function_names = std::collections::HashSet::new();
+    collect_unconditional_function_names(&stmts, None, &mut unconditional_function_names);
     for (name, func) in compile_result.functions {
         let boxed = Box::new(func);
         let ptr = &boxed.common as *const FunctionCommon;
         eg.included_functions.push(boxed);
-        let _ = eg.register_function(&name, ptr);
+        if let Err(error) = eg.register_function(&name, ptr)
+            && unconditional_function_names.contains(&name.to_lowercase())
+        {
+            return Err(VmError::Fatal(error));
+        }
     }
     for (declaration_key, class_def) in
         std::mem::take(&mut compile_result.runtime_class_defs)
