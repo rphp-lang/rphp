@@ -8,15 +8,51 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `9e9638f2`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,708 pass, 1,591 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `77781600`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,710 pass, 1,589 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
-headline pass rate is 69.975% and the whole-corpus rate is 66.226%; 4,708 of
-5,299 attempted cases reach runtime (88.847%). Relative to exact base
-`b4790c97`, the pass-set delta is +15/-0: all 3,693 prior passes remain passes,
-all additions move from compile failure to exact pass, and no other status or
+headline pass rate is 70.013% and the whole-corpus rate is 66.262%; 4,710 of
+5,299 attempted cases reach runtime (88.885%). Relative to exact base
+`76a71d59`, the pass-set delta is +2/-0: all 3,708 prior passes remain passes,
+both additions move from compile failure to exact pass, and no other status or
 failure category changes. Two final merged manifests and summaries are
 byte-for-byte identical. Their SHA-256 values are
+`56c2256263454cf918b8458dfdc6902b4ed26f81e29f1c52d461781dbd3fed56`
+and `a2f70b006b5d89cc38e80d627b2eaad351957f3e0958d3f642b6b1e5390d53f2`.
+
+An inherited method that changes staticness now reports PHP 8.5's dedicated
+`Cannot make static/non static method ...` fatal instead of the generic
+signature-compatibility diagnostic. This diagnostic has priority over a
+simultaneous visibility violation, names the original abstract parent or trait
+requirement, names the class being linked, and preserves the implementation
+source location. The established contract validation remains responsible for
+detecting the mismatch; only its cold diagnostic selection changes.
+
+One original E2E regression covers both staticness directions, priority over
+narrowed visibility and abstract-trait ownership. The exact full-corpus
+additions are `Zend/tests/traits/abstract_method_5.phpt` and
+`Zend/tests/traits/bug78776.phpt`. The adjacent three-case focused gate retains
+`Zend/tests/inter_007.phpt` as an explicit output failure because conflicting
+staticness between two inherited interface requirements is not yet detected.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four Symfony
+S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. No separate hot
+runtime benchmark applies: the change creates no metadata or layout change and
+formats a different fatal only after cold contract validation has already
+failed; S3 exercises the affected class-link path end to end.
+
+In the preceding method-default diagnostic checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`9e9638f2`. Across all 5,599 unmodified `Zend/tests` and `tests/lang` cases,
+3,708 pass, 1,591 fail, 115 skip, none remain XFAIL, 185 are unsupported, and
+none time out or crash. The headline pass rate is 69.975% and the whole-corpus
+rate is 66.226%; 4,708 of 5,299 attempted cases reach runtime (88.847%).
+Relative to exact base `b4790c97`, the pass-set delta is +15/-0: all 3,693
+prior passes remain passes, all additions move from compile failure to exact
+pass, and no other status or failure category changes. Two final merged
+manifests and summaries are byte-for-byte identical. Their SHA-256 values are
 `b5fa4e7e93f4ebcaaf384260dcb125aa0076349151e796aa085ec7883920d024`
 and `104c71a475e79071efd292a7987ef8e75263f17909b8b2393bed252a77c77c6c`.
 
