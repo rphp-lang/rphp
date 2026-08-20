@@ -487,6 +487,55 @@ fn malformed_numeric_separators_report_the_source_identifier_and_line() {
 }
 
 #[test]
+fn group_use_comma_diagnostics_follow_the_active_item_state() {
+    let cases = [
+        (
+            "use Vendor\\{};",
+            "syntax error, unexpected token \"}\", expecting identifier or namespaced name or \"function\" or \"const\"",
+        ),
+        (
+            "use function Vendor\\{};",
+            "syntax error, unexpected token \"}\", expecting identifier or namespaced name",
+        ),
+        (
+            "use Vendor\\{,Name};",
+            "syntax error, unexpected token \",\", expecting identifier or namespaced name or \"function\" or \"const\"",
+        ),
+        (
+            "use const Vendor\\{,NAME};",
+            "syntax error, unexpected token \",\", expecting identifier or namespaced name",
+        ),
+        (
+            "use Vendor\\{function ,};",
+            "syntax error, unexpected token \",\", expecting identifier or namespaced name",
+        ),
+        (
+            "use Vendor\\{Name,,Other};",
+            "syntax error, unexpected token \",\", expecting \"}\"",
+        ),
+    ];
+
+    for (declaration, expected) in cases {
+        let source = format!("<?php\n{declaration}");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let error = Parser::new(tokens)
+            .with_source_name("/fixture/group-use.php")
+            .parse()
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            format!("{expected} in /fixture/group-use.php on line 2")
+        );
+    }
+
+    let tokens = Lexer::new("<?php use Vendor\\{Name, function helper, const VALUE,};")
+        .tokenize()
+        .unwrap();
+    assert!(Parser::new(tokens).parse().is_ok());
+}
+
+#[test]
 fn document_string_parse_tokens_receive_the_parser_source_location() {
     let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
         .tokenize()

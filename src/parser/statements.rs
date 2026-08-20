@@ -145,6 +145,23 @@ impl Parser {
         format!("{message}{location} on line {line}")
     }
 
+    fn group_use_missing_item_error(
+        &self,
+        kind: UseKind,
+        token: &str,
+        line: usize,
+    ) -> String {
+        let expectation = if kind == UseKind::Class {
+            "identifier or namespaced name or \"function\" or \"const\""
+        } else {
+            "identifier or namespaced name"
+        };
+        self.source_error(
+            &format!("syntax error, unexpected token \"{token}\", expecting {expectation}"),
+            line,
+        )
+    }
+
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         if let Token::Identifier(name, _) = self.peek() {
             if self.peek_at(1) == Token::Colon {
@@ -267,7 +284,10 @@ impl Parser {
                 let mut imports = Vec::new();
                 if grouped {
                     if self.peek() == Token::RBrace {
-                        return Err("Group use declaration cannot be empty".to_string());
+                        return Err(self.group_use_missing_item_error(kind, "}", use_line));
+                    }
+                    if self.peek() == Token::Comma {
+                        return Err(self.group_use_missing_item_error(kind, ",", use_line));
                     }
                     loop {
                         let item_kind = if matches!(self.peek(), Token::Function(_)) {
@@ -291,6 +311,16 @@ impl Parser {
                         } else {
                             kind
                         };
+                        if self.peek() == Token::RBrace {
+                            return Err(self.group_use_missing_item_error(
+                                item_kind, "}", use_line,
+                            ));
+                        }
+                        if self.peek() == Token::Comma {
+                            return Err(self.group_use_missing_item_error(
+                                item_kind, ",", use_line,
+                            ));
+                        }
                         if self.peek() == Token::Backslash {
                             return Err(
                                 "Group use item cannot start with a namespace separator"
@@ -325,6 +355,12 @@ impl Parser {
                         self.advance();
                         if self.peek() == Token::RBrace {
                             break;
+                        }
+                        if self.peek() == Token::Comma {
+                            return Err(self.source_error(
+                                "syntax error, unexpected token \",\", expecting \"}\"",
+                                use_line,
+                            ));
                         }
                     }
                     self.expect(&Token::RBrace)?;
