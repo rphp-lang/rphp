@@ -2212,6 +2212,110 @@ var_dump(-counted_zero(), $calls);
 }
 
 #[test]
+fn explicit_integer_conversions_warn_and_preserve_php_low_bits() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) { echo "W|$message\n"; });
+foreach ([INF, -INF, NAN, 1.0E+20, -4.0E+21, 3.5] as $value) {
+    var_dump((int) $value, intval($value));
+    $copy = $value;
+    var_dump(settype($copy, "integer"), $copy);
+}
+"#,
+        ),
+        concat!(
+            "W|The float INF is not representable as an int, cast occurred\n",
+            "W|The float INF is not representable as an int, cast occurred\n",
+            "int(0)\nint(0)\n",
+            "W|The float INF is not representable as an int, cast occurred\n",
+            "bool(true)\nint(0)\n",
+            "W|The float -INF is not representable as an int, cast occurred\n",
+            "W|The float -INF is not representable as an int, cast occurred\n",
+            "int(0)\nint(0)\n",
+            "W|The float -INF is not representable as an int, cast occurred\n",
+            "bool(true)\nint(0)\n",
+            "W|The float NAN is not representable as an int, cast occurred\n",
+            "W|The float NAN is not representable as an int, cast occurred\n",
+            "int(0)\nint(0)\n",
+            "W|The float NAN is not representable as an int, cast occurred\n",
+            "bool(true)\nint(0)\n",
+            "W|The float 1.0E+20 is not representable as an int, cast occurred\n",
+            "W|The float 1.0E+20 is not representable as an int, cast occurred\n",
+            "int(7766279631452241920)\nint(7766279631452241920)\n",
+            "W|The float 1.0E+20 is not representable as an int, cast occurred\n",
+            "bool(true)\nint(7766279631452241920)\n",
+            "W|The float -4.0E+21 is not representable as an int, cast occurred\n",
+            "W|The float -4.0E+21 is not representable as an int, cast occurred\n",
+            "int(2943463994972700672)\nint(2943463994972700672)\n",
+            "W|The float -4.0E+21 is not representable as an int, cast occurred\n",
+            "bool(true)\nint(2943463994972700672)\n",
+            "int(3)\nint(3)\nbool(true)\nint(3)\n",
+        )
+    );
+}
+
+#[test]
+fn explicit_numeric_casts_cover_containers_resources_and_throwing_handlers() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) { echo "W|$message\n"; });
+foreach ([[], [1], new stdClass] as $value) {
+    var_dump((int) $value, (float) $value, intval($value), floatval($value));
+}
+$resource = fopen("php://memory", "r");
+var_dump(
+    (int) $resource === intval($resource),
+    (float) $resource === floatval($resource),
+    (float) $resource === (float) (int) $resource,
+);
+$nan = NAN;
+var_dump((string) $nan, strval($nan));
+var_dump(settype($nan, "string"), $nan);
+restore_error_handler();
+set_error_handler(function ($severity, $message) {
+    throw new RuntimeException("stop|$message");
+});
+foreach ([INF, new stdClass] as $value) {
+    try {
+        var_dump((int) $value);
+    } catch (Throwable $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+$value = INF;
+try {
+    settype($value, "int");
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump($value);
+"#,
+        ),
+        concat!(
+            "int(0)\nfloat(0)\nint(0)\nfloat(0)\n",
+            "int(1)\nfloat(1)\nint(1)\nfloat(1)\n",
+            "W|Object of class stdClass could not be converted to int\n",
+            "W|Object of class stdClass could not be converted to float\n",
+            "W|Object of class stdClass could not be converted to int\n",
+            "W|Object of class stdClass could not be converted to float\n",
+            "int(1)\nfloat(1)\nint(1)\nfloat(1)\n",
+            "bool(true)\nbool(true)\nbool(true)\n",
+            "W|unexpected NAN value was coerced to string\n",
+            "W|unexpected NAN value was coerced to string\n",
+            "string(3) \"NAN\"\nstring(3) \"NAN\"\n",
+            "W|unexpected NAN value was coerced to string\n",
+            "bool(true)\nstring(3) \"NAN\"\n",
+            "stop|The float INF is not representable as an int, cast occurred\n",
+            "stop|Object of class stdClass could not be converted to int\n",
+            "stop|The float INF is not representable as an int, cast occurred\n",
+            "int(0)\n",
+        )
+    );
+}
+
+#[test]
 fn noncanonical_casts_deprecate_before_execution_and_keep_values() {
     assert_eq!(
         run_php_with_source_context(

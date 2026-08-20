@@ -908,17 +908,22 @@ pub(crate) fn integer_operator_operand(value: &Value) -> Result<IntegerOperatorO
 #[inline]
 pub(crate) fn explicit_long_conversion(value: &Value) -> i64 {
     let value = value.dereferenced();
-    if value.value_type() == ValueType::String {
-        let text = value.as_str().unwrap();
-        let integer = text
-            .trim_matches(|character: char| character.is_ascii_whitespace())
-            .parse::<i64>();
-        if let Ok(integer) = integer {
-            return integer;
+    match value.value_type() {
+        ValueType::Double => php_float_to_long(value.as_double().unwrap()),
+        ValueType::String => {
+            let text = value.as_str().unwrap();
+            let integer = text
+                .trim_matches(|character: char| character.is_ascii_whitespace())
+                .parse::<i64>();
+            if let Ok(integer) = integer {
+                return integer;
+            }
+            integer_operator_operand(value).map_or(0, |operand| operand.value)
         }
-        return integer_operator_operand(value).map_or(0, |operand| operand.value);
+        ValueType::Array => i64::from(!value.as_array().unwrap().is_empty()),
+        ValueType::Object | ValueType::Closure => 1,
+        _ => value.to_long_val(),
     }
-    value.to_long_val()
 }
 
 /// Convert an explicit float-cast operand. String casts accept PHP's numeric
@@ -926,17 +931,58 @@ pub(crate) fn explicit_long_conversion(value: &Value) -> i64 {
 #[inline]
 pub(crate) fn explicit_float_conversion(value: &Value) -> f64 {
     let value = value.dereferenced();
-    if value.value_type() == ValueType::String {
-        let text = value.as_str().unwrap();
-        let trimmed = text.trim_matches(|character: char| character.is_ascii_whitespace());
-        if trimmed.as_bytes().iter().any(u8::is_ascii_digit)
-            && let Ok(number) = trimmed.parse::<f64>()
-        {
-            return number;
+    match value.value_type() {
+        ValueType::String => {
+            let text = value.as_str().unwrap();
+            let trimmed = text.trim_matches(|character: char| character.is_ascii_whitespace());
+            if trimmed.as_bytes().iter().any(u8::is_ascii_digit)
+                && let Ok(number) = trimmed.parse::<f64>()
+            {
+                return number;
+            }
+            parse_php_numeric_prefix(text).map_or(0.0, |(parsed, _)| parsed.number)
         }
-        return parse_php_numeric_prefix(text).map_or(0.0, |(parsed, _)| parsed.number);
+        ValueType::Array => f64::from(!value.as_array().unwrap().is_empty()),
+        ValueType::Object | ValueType::Closure => 1.0,
+        _ => value.to_float_val(),
     }
-    value.to_float_val()
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ExplicitNumericCastTarget {
+    Int,
+    Float,
+}
+
+/// Return the PHP warning for an explicit numeric conversion, if any. Keep the
+/// diagnostic separate from the scalar result so handlers run before the
+/// result becomes observable and may interrupt the conversion by throwing.
+#[inline]
+pub(crate) fn explicit_numeric_cast_warning(
+    value: &Value,
+    target: ExplicitNumericCastTarget,
+) -> Option<String> {
+    let value = value.dereferenced();
+    if matches!(target, ExplicitNumericCastTarget::Int)
+        && let Some(number) = value.as_double()
+        && (!number.is_finite() || !(-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number))
+    {
+        return Some(format!(
+            "The float {} is not representable as an int, cast occurred",
+            value.echo_to_string_with_precision(-1)
+        ));
+    }
+    if matches!(value.value_type(), ValueType::Object | ValueType::Closure) {
+        let target = match target {
+            ExplicitNumericCastTarget::Int => "int",
+            ExplicitNumericCastTarget::Float => "float",
+        };
+        return Some(format!(
+            "Object of class {} could not be converted to {target}",
+            value.diagnostic_type_name()
+        ));
+    }
+    None
 }
 
 #[inline]

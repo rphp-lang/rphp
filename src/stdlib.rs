@@ -25,12 +25,12 @@ use crate::value::{
     ArrayKey, ClosureStaticVars, PhpArray, PhpClosure, PhpObject, Value, ValueType,
 };
 use crate::vm::execute::{
-    ScalarLongSortOrder, VmError, call_function, call_function_iter,
+    ExplicitNumericCastTarget, ScalarLongSortOrder, VmError, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, check_type_hint, explicit_float_conversion,
-    explicit_long_conversion, prepare_scalar_long_callback, try_execute_scalar_long_callback,
-    values_identical,
+    explicit_long_conversion, explicit_numeric_cast_warning, prepare_scalar_long_callback,
+    try_execute_scalar_long_callback, values_identical,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -3355,9 +3355,17 @@ fn format_sprintf_values(
 fn fn_intval(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::long(explicit_long_conversion(arg!(ed, 0))));
+    let argument = arg!(ed, 0);
+    let converted = explicit_long_conversion(argument);
+    if let Some(message) = explicit_numeric_cast_warning(argument, ExplicitNumericCastTarget::Int) {
+        report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(rv, Value::long(converted));
 }
 
 fn fn_strval(
@@ -3366,6 +3374,18 @@ fn fn_strval(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let value = arg!(ed, 0);
+    if value.as_double().is_some_and(f64::is_nan) {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "unexpected NAN value was coerced to string",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
     let Some(rendered) = internal_value_to_string(ed, eg, value)? else {
         return Ok(());
     };
@@ -3375,9 +3395,18 @@ fn fn_strval(
 fn fn_floatval(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::double(explicit_float_conversion(arg!(ed, 0))));
+    let argument = arg!(ed, 0);
+    let converted = explicit_float_conversion(argument);
+    if let Some(message) = explicit_numeric_cast_warning(argument, ExplicitNumericCastTarget::Float)
+    {
+        report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(rv, Value::double(converted));
 }
 
 fn fn_boolval(
@@ -3430,57 +3459,21 @@ fn fn_settype(
     };
     let original = clone_argument();
     let original_is_nan = original.as_double().is_some_and(f64::is_nan);
-    if original_is_nan {
-        let message = if target_type == "int" {
-            "The float NAN is not representable as an int, cast occurred".to_string()
-        } else if target_type != "float" {
-            format!("unexpected NAN value was coerced to {target_type}")
-        } else {
-            String::new()
-        };
-        if !message.is_empty() {
-            report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
-            if eg.exception.is_some() {
-                return Ok(());
-            }
-        }
-    } else if matches!(
-        original.value_type(),
-        ValueType::Object | ValueType::Closure
-    ) && matches!(target_type, "int" | "float")
-    {
-        let class_name = original.diagnostic_type_name();
-        report_internal_diagnostic(
-            eg,
-            ed,
-            2,
-            "Warning",
-            &format!("Object of class {class_name} could not be converted to {target_type}"),
-        )?;
-        if eg.exception.is_some() {
-            return Ok(());
-        }
+    let numeric_warning = match target_type {
+        "int" => explicit_numeric_cast_warning(&original, ExplicitNumericCastTarget::Int),
+        "float" => explicit_numeric_cast_warning(&original, ExplicitNumericCastTarget::Float),
+        _ => None,
+    };
+    let nan_warning = (original_is_nan && !matches!(target_type, "int" | "float"))
+        .then(|| format!("unexpected NAN value was coerced to {target_type}"));
+    if let Some(message) = numeric_warning.or(nan_warning) {
+        report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
     }
 
     let live = matches!(target_type, "array" | "object").then(clone_argument);
     let new_val = match target_type {
-        "int" => {
-            let value = match original.value_type() {
-                ValueType::Object | ValueType::Closure => 1,
-                ValueType::Array => i64::from(!original.as_array().unwrap().is_empty()),
-                ValueType::Double if !original.as_double().unwrap().is_finite() => 0,
-                _ => original.to_long_val(),
-            };
-            Value::long(value)
-        }
-        "float" => {
-            let value = match original.value_type() {
-                ValueType::Object | ValueType::Closure => 1.0,
-                ValueType::Array => f64::from(!original.as_array().unwrap().is_empty()),
-                _ => explicit_float_conversion(&original),
-            };
-            Value::double(value)
-        }
+        "int" => Value::long(explicit_long_conversion(&original)),
+        "float" => Value::double(explicit_float_conversion(&original)),
         "string" => {
             let Some(rendered) = internal_value_to_string(ed, eg, &original)? else {
                 return Ok(());

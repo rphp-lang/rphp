@@ -2744,9 +2744,40 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 let casted = match opline.extended_value {
-                    0 => Value::long(explicit_long_conversion(val)), // (int)
-                    1 => Value::double(explicit_float_conversion(val)), // (float)
+                    0 => {                                   // (int)
+                        let converted = explicit_long_conversion(val);
+                        if let Some(message) = explicit_numeric_cast_warning(
+                            val,
+                            ExplicitNumericCastTarget::Int,
+                        ) {
+                            report_php_warning(eg, frame, op_array, opline, &message, false)?;
+                            resume_pending_exception!();
+                        }
+                        Value::long(converted)
+                    }
+                    1 => {                                   // (float)
+                        let converted = explicit_float_conversion(val);
+                        if let Some(message) = explicit_numeric_cast_warning(
+                            val,
+                            ExplicitNumericCastTarget::Float,
+                        ) {
+                            report_php_warning(eg, frame, op_array, opline, &message, false)?;
+                            resume_pending_exception!();
+                        }
+                        Value::double(converted)
+                    }
                     2 => {                                   // (string)
+                        if val.as_double().is_some_and(f64::is_nan) {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "unexpected NAN value was coerced to string",
+                                false,
+                            )?;
+                            resume_pending_exception!();
+                        }
                         report_array_to_string_conversion!(val);
                         if matches!(val.value_type(), ValueType::Object | ValueType::Closure) {
                             if val.value_type() == ValueType::Closure {

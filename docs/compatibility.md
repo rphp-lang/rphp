@@ -9,6 +9,59 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,617 pass, 1,680 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+68.284% and the whole-corpus rate is 64.601%; 4,701 of 5,297 attempted cases
+reach runtime (88.748%). Relative to exact base `5a0a52e1`, the pass-set delta
+is +8/-0: all 3,609 prior passes remain passes and no other status or failure
+category moves. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`1897e8bd738e54867c8994d7aaec5daaa7cb6906b6edc97bb85ec5ea25048f7e`.
+
+PHP 8.5 explicit float-to-integer conversion now shares one checked contract
+across `(int)`, `intval()` and `settype(..., "int")`. Representable values
+truncate normally; finite values outside the AMD64 signed range preserve their
+low 64 bits, while INF and NAN become zero. Every non-representable float emits
+the exact cast warning before its result. Numeric strings retain their
+separate diagnostic-free explicit-conversion rules, including saturation for
+out-of-range strings.
+
+Explicit integer and float conversion of an empty or non-empty array now
+produces zero or one. Objects produce one after the exact class-aware warning,
+and resources retain their numeric ID. These rules apply consistently to cast
+syntax, `intval()`/`floatval()` and `settype()`. A throwing warning handler
+interrupts an ordinary cast or conversion call, while `settype()` still
+commits its by-reference scalar write before propagating the handler exception.
+PHP 8.5's adjacent `(string) NAN`, `strval(NAN)` and string `settype()` warning
+is also preserved; the wider NAN-to-bool/array/object diagnostic family remains
+separate work.
+
+Original E2E coverage exercises ±INF, NAN, both signs of finite overflow, an
+ordinary fractional value, arrays, objects, resources, all explicit APIs and
+throwing handlers. The exact full-corpus additions are `Zend/tests/bug33999.phpt`,
+`Zend/tests/int_overflow_64bit.phpt`,
+`Zend/tests/type_coercion/float_to_int/dval_to_lval_64.phpt`,
+`explicit_casts_should_not_warn.phpt`,
+`warning_float_does_not_fit_zend_long_arrays.phpt`,
+`Zend/tests/type_coercion/int_special_values.phpt`,
+`Zend/tests/type_coercion/type_casts/cast_to_double.phpt` and
+`cast_to_int.phpt`. The unplanned `bug33999`, integer-overflow and array-key
+overflow gains follow from the same object and explicit-cast boundary; every
+other selected control retains its prior outcome.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. On an AMD Ryzen
+9 7950X pinned to one performance-governor CPU, 32 alternating release A/B
+pairs with two warmups per binary, JIT and quick loops disabled execute five
+million ordinary dynamic double-to-integer casts with identical checksums.
+Against the exact base binary, the candidate is +3.359% by independent medians
+and +2.987% by the paired-ratio median, within the +5% gate.
+
+In the preceding non-canonical-cast checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,609 pass, 1,688 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 68.133% and the whole-corpus rate is 64.458%; 4,701 of 5,297 attempted cases
