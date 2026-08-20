@@ -2291,6 +2291,54 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
     }
 }
 
+fn relative_static_expression_line(expression: &Expr) -> Option<usize> {
+    match expression {
+        Expr::ClassConstant {
+            class_name, line, ..
+        }
+        | Expr::StaticCall {
+            class_name, line, ..
+        }
+        | Expr::StaticProperty {
+            class_name, line, ..
+        } if class_name.eq_ignore_ascii_case("static") => Some(*line),
+        Expr::ArrayLiteral(elements) => elements.iter().find_map(|element| {
+            element
+                .key
+                .as_ref()
+                .and_then(relative_static_expression_line)
+                .or_else(|| relative_static_expression_line(&element.value))
+        }),
+        _ => None,
+    }
+}
+
+fn forbidden_static_constant_expression(expression: &Expr) -> Option<(&'static str, usize)> {
+    match expression {
+        Expr::FirstClassCallable(callable) => relative_static_expression_line(callable)
+            .map(|line| ("\"static\" is not allowed in compile-time constants", line)),
+        Expr::ClassConstant {
+            class_name,
+            constant,
+            line,
+        } if class_name.eq_ignore_ascii_case("static")
+            && constant.eq_ignore_ascii_case("class") =>
+        {
+            Some((
+                "static::class cannot be used for compile-time class name resolution",
+                *line,
+            ))
+        }
+        Expr::ClassConstant {
+            class_name, line, ..
+        } if class_name.eq_ignore_ascii_case("static") => Some((
+            "\"static::\" is not allowed in compile-time constants",
+            *line,
+        )),
+        _ => None,
+    }
+}
+
 /// Trait property defaults using the consuming class must be re-evaluated at
 /// each trait-composition boundary. `self::class` has the same rebinding
 /// contract as `__CLASS__`; other declaration magic constants retain their
@@ -2745,6 +2793,10 @@ pub struct Compiler {
     /// Trait method op arrays are shared by every consuming class, so their
     /// self/parent targets must remain dynamically keyed.
     dynamic_static_scope: bool,
+    /// Closures declared without a lexical class may acquire one through
+    /// bindTo()/call(). Keep their self/parent accesses late-bound without
+    /// changing lexical magic constants such as `__CLASS__`.
+    bindable_closure_scope: bool,
     /// True if this function body contains a yield expression (makes it a generator)
     contains_yield: bool,
     /// CVs bound to global variables
@@ -2958,6 +3010,7 @@ impl Compiler {
             lexical_static_class: None,
             lexical_static_parent: None,
             dynamic_static_scope: false,
+            bindable_closure_scope: false,
             contains_yield: false,
             global_vars: Vec::new(),
             static_vars: Vec::new(),
@@ -3140,6 +3193,7 @@ impl Compiler {
         child.lexical_static_class = self.lexical_static_class.clone();
         child.lexical_static_parent = self.lexical_static_parent.clone();
         child.dynamic_static_scope = self.dynamic_static_scope;
+        child.bindable_closure_scope = self.bindable_closure_scope;
         child.source_file = self.source_file.clone();
         child.source_directory = self.source_directory.clone();
         child.known_constants = self.known_constants.clone();
@@ -6363,17 +6417,67 @@ impl Compiler {
         compiler.instructions[bind_idx].op2 = skip_label;
     }
 
+    fn relative_scope_is_dynamic(&self) -> bool {
+        self.dynamic_static_scope
+            || self.bindable_closure_scope
+            || self.lexical_static_class.is_none()
+    }
+
+    fn unscoped_named_function(&self) -> bool {
+        !self.current_function_name.is_empty()
+            && self.lexical_static_class.is_none()
+            && !self.dynamic_static_scope
+            && !self.bindable_closure_scope
+    }
+
+    fn defer_unscoped_relative_access(&mut self, expr: &Expr) {
+        if !self.unscoped_named_function() || self.deferred_error.is_some() {
+            return;
+        }
+        let relative = match expr {
+            Expr::New {
+                class_name, line, ..
+            }
+            | Expr::StaticCall {
+                class_name, line, ..
+            }
+            | Expr::StaticProperty {
+                class_name, line, ..
+            }
+            | Expr::DynamicNamedStaticProperty {
+                class_name, line, ..
+            }
+            | Expr::ClassConstant {
+                class_name, line, ..
+            } if matches!(
+                class_name.to_ascii_lowercase().as_str(),
+                "self" | "parent" | "static"
+            ) =>
+            {
+                Some((class_name.to_ascii_lowercase(), *line))
+            }
+            _ => None,
+        };
+        if let Some((relative, line)) = relative {
+            self.deferred_error = Some(self.goto_error(
+                &format!("Cannot use \"{relative}\" when no class scope is active"),
+                line,
+            ));
+        }
+    }
+
     fn resolve_static_member_owner(&self, class_name: &str) -> (String, bool) {
         let pseudo_class = class_name.to_ascii_lowercase();
         let dynamic_static_scope = pseudo_class == "static"
-            || (self.dynamic_static_scope && matches!(pseudo_class.as_str(), "self" | "parent"));
+            || (self.relative_scope_is_dynamic()
+                && matches!(pseudo_class.as_str(), "self" | "parent"));
         let resolved = match pseudo_class.as_str() {
             "static" => class_name.to_string(),
-            "self" if !self.dynamic_static_scope => self
+            "self" if !self.relative_scope_is_dynamic() => self
                 .lexical_static_class
                 .clone()
                 .unwrap_or_else(|| class_name.to_string()),
-            "parent" if !self.dynamic_static_scope => self
+            "parent" if !self.relative_scope_is_dynamic() => self
                 .lexical_static_parent
                 .clone()
                 .unwrap_or_else(|| class_name.to_string()),
@@ -6891,6 +6995,7 @@ impl Compiler {
     }
 
     fn compile_expr(&mut self, expr: &Expr) -> (u16, OpType) {
+        self.defer_unscoped_relative_access(expr);
         match expr {
             Expr::Integer(n) => {
                 let idx = self.add_literal(Value::long(*n));
@@ -8700,6 +8805,8 @@ impl Compiler {
                 );
                 // Compile closure body into a separate function
                 let mut func_compiler = self.child_compiler();
+                func_compiler.bindable_closure_scope =
+                    self.lexical_static_class.is_none() || self.bindable_closure_scope;
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 func_compiler.current_function_name = closure_name.clone();
                 func_compiler.returns_reference_context = *returns_by_ref;
@@ -8868,6 +8975,7 @@ impl Compiler {
                 // scope even when another object invokes it later. Trait bodies
                 // remain dynamically scoped to their concrete consumer.
                 if !self.dynamic_static_scope
+                    && !self.bindable_closure_scope
                     && let Some(scope) = self.lexical_static_class.clone()
                 {
                     create.op2 = self.add_literal(Value::string(scope));
@@ -9505,11 +9613,11 @@ impl Compiler {
                     return (tmp, OpType::Tmp);
                 }
                 let generic_class = match pseudo_class.as_str() {
-                    "self" if !self.dynamic_static_scope => self
+                    "self" if !self.relative_scope_is_dynamic() => self
                         .lexical_static_class
                         .as_ref()
                         .unwrap_or(&resolved_class),
-                    "parent" if !self.dynamic_static_scope => self
+                    "parent" if !self.relative_scope_is_dynamic() => self
                         .lexical_static_parent
                         .as_ref()
                         .unwrap_or(&resolved_class),
@@ -9523,7 +9631,7 @@ impl Compiler {
                     .iter()
                     .any(CallArg::contains_yield)
                     .then(|| self.compile_call_args(args, 0, true));
-                let dynamic_static_scope = (self.dynamic_static_scope
+                let dynamic_static_scope = (self.relative_scope_is_dynamic()
                     && matches!(pseudo_class.as_str(), "self" | "parent"))
                     || pseudo_class == "static";
                 let runtime_generic_check = self.emit_generic_check(

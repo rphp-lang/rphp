@@ -521,7 +521,7 @@ impl Parser {
                     .iter()
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
-                let return_type = self.parse_return_type()?;
+                let return_type = self.parse_return_type(line, false)?;
                 let body = self.parse_method_body(&modifiers, &method_name, line, false)?;
                 if modifiers.is_abstract {
                     self.compile_error(
@@ -809,7 +809,7 @@ impl Parser {
                     .iter()
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
-                let return_type = self.parse_return_type()?;
+                let return_type = self.parse_return_type(line, false)?;
                 let body = self.parse_method_body(&modifiers, &method_name, line, false)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
@@ -994,7 +994,7 @@ impl Parser {
                     .iter()
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
-                let return_type = self.parse_return_type()?;
+                let return_type = self.parse_return_type(line, false)?;
                 let body = self.parse_method_body(&modifiers, &method_name, line, true)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
@@ -1119,7 +1119,7 @@ impl Parser {
                     .iter()
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
-                let return_type = self.parse_return_type()?;
+                let return_type = self.parse_return_type(line, false)?;
                 self.expect(&Token::Semicolon)?; // interface methods end with ;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
@@ -1297,7 +1297,7 @@ impl Parser {
                     self.expect_lparen()?;
                     let params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
-                    let return_type = self.parse_return_type()?;
+                    let return_type = self.parse_return_type(line, false)?;
                     self.expect(&Token::LBrace)?;
                     let mut body = Vec::new();
                     while self.peek() != Token::RBrace && !self.at_eof() {
@@ -1698,7 +1698,7 @@ impl Parser {
         self.expect_lparen()?;
         let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
-        let return_type = self.parse_return_type()?;
+        let return_type = self.parse_return_type(line, true)?;
         self.expect(&Token::DoubleArrow)?;
         let expr = self.parse_expr()?;
         self.pop_generic_scope();
@@ -2036,7 +2036,7 @@ impl Parser {
             self.expect(&Token::RParen)?;
         }
 
-        let return_type = self.parse_return_type()?;
+        let return_type = self.parse_return_type(line, true)?;
 
         self.expect(&Token::LBrace)?;
         let mut body = Vec::new();

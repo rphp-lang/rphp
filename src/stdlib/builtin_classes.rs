@@ -295,6 +295,11 @@ fn bind_closure_value(
                 return Ok(());
             }
         };
+    } else if let Some(object) = rebound.bound_this.as_ref().and_then(Value::as_object) {
+        // With the default scope argument, a previously unscoped closure uses
+        // the newly bound receiver as its late-static class. This is distinct
+        // from an explicit null scope, which deliberately clears the class.
+        rebound.called_scope_class_id = object.class_id;
     }
 
     ret!(rv, Value::closure(rebound));

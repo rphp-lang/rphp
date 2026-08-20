@@ -6,6 +6,71 @@ use common::{
 };
 
 #[test]
+fn global_relative_class_operations_raise_catchable_scope_errors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([
+    fn() => static::MISSING,
+    fn() => parent::MISSING,
+    fn() => self::MISSING,
+    fn() => new static,
+    fn() => static::missing(),
+    fn() => static::$missing,
+] as $operation) {
+    try { $operation(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+        ),
+        "Cannot access \"static\" when no class scope is active\n\
+Cannot access \"parent\" when no class scope is active\n\
+Cannot access \"self\" when no class scope is active\n\
+Cannot access \"static\" when no class scope is active\n\
+Cannot access \"static\" when no class scope is active\n\
+Cannot access \"static\" when no class scope is active\n",
+    );
+}
+
+#[test]
+fn named_functions_reject_relative_class_operations_at_compile_time() {
+    for (relative, expression) in [
+        ("static", "static::missing()"),
+        ("self", "self::MISSING"),
+        ("parent", "new parent"),
+    ] {
+        let error = run_php_expect_error(&format!(
+            "<?php function invalid() {{ {expression}; }} echo 'unreachable';"
+        ));
+        assert!(
+            error.to_string().contains(&format!(
+                "Cannot use \"{relative}\" when no class scope is active"
+            )),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn global_static_class_errors_retain_the_source_origin() {
+    let error = run_php_expect_error_with_source_context(
+        "<?php\n\n$value = static::class;",
+        "/virtual/static-class.php",
+        "/virtual",
+    );
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains(
+            "Uncaught Error: Cannot use \"static\" in the global scope in /virtual/static-class.php:3"
+        ),
+        "unexpected error: {error}"
+    );
+    assert!(
+        rendered.contains("thrown in /virtual/static-class.php on line 3"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn class_like_redeclarations_keep_the_original_kind_spelling_and_origin() {
     for (source, expected) in [
         (

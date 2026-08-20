@@ -1,4 +1,39 @@
 impl Parser {
+    fn closest_token_source_line(&self) -> usize {
+        self.tokens[..self.pos]
+            .iter()
+            .rev()
+            .find_map(|token| match token {
+                Token::This(line)
+                | Token::Variable(_, line)
+                | Token::Identifier(_, line)
+                | Token::Dollar(line)
+                | Token::LParen(line)
+                | Token::LBracket(line)
+                | Token::Fn(line)
+                | Token::Use(line)
+                | Token::DotDotDot(line)
+                | Token::PipeGreater(line)
+                | Token::Function(line)
+                | Token::Match(line)
+                | Token::Yield(line)
+                | Token::Clone(line)
+                | Token::AttributeStart(line)
+                | Token::ParseError(_, line)
+                | Token::CompileError(_, line)
+                | Token::CompileWarning(_, line)
+                | Token::CompileDeprecation(_, line)
+                | Token::MagicConstant { line, .. }
+                | Token::Goto { line, .. }
+                | Token::Echo { line }
+                | Token::Return { line }
+                | Token::Foreach { line } => Some(*line),
+                Token::New(line) | Token::Throw(line) => Some(*line as usize),
+                _ => None,
+            })
+            .unwrap_or(1)
+    }
+
     /// Consume PHP's marker for a function or method returning by reference.
     pub(super) fn consume_reference_return_marker(&mut self) {
         if self.peek() == Token::Ampersand {
@@ -603,7 +638,11 @@ impl Parser {
         is_alias
     }
 
-    fn parse_return_type(&mut self) -> Result<Option<TypeHint>, String> {
+    fn parse_return_type(
+        &mut self,
+        declaration_line: usize,
+        bindable_closure: bool,
+    ) -> Result<Option<TypeHint>, String> {
         if self.peek() == Token::Colon {
             self.advance(); // consume ':'
             // Handle nullable return types: ?: type
@@ -615,8 +654,14 @@ impl Parser {
                 let hint = self.parse_base_type_hint()?;
                 self.maybe_parse_compound_type(hint)?
             };
-            if Self::type_hint_uses_static(&hint) && !self.class_scope_active {
-                return Err("Cannot use \"static\" when no class scope is active".to_string());
+            if Self::type_hint_uses_static(&hint)
+                && !self.class_scope_active
+                && !bindable_closure
+            {
+                self.compile_error(
+                    "Cannot use \"static\" when no class scope is active",
+                    declaration_line,
+                );
             }
             Ok(Some(hint))
         } else {

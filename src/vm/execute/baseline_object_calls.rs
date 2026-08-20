@@ -213,9 +213,23 @@ fn op_new_obj<'a>(
         // their evaluated name before autoload can re-enter the VM.
         stats::inc_newobj_class_name_materialization();
         owned_name = if dynamic_static_scope {
-            resolve_static_call_class(eg, frame, raw_name, true).ok_or_else(|| {
-                VmError::Fatal(format!("Cannot access {raw_name} when no class scope is active"))
-            })?
+            let Some(resolved) = resolve_static_call_class(eg, frame, raw_name, true) else {
+                let error = make_error_value(
+                    "Error",
+                    &format!(
+                        "Cannot access \"{}\" when no class scope is active",
+                        raw_name.to_ascii_lowercase()
+                    ),
+                );
+                attach_throwable_origin(&error, eg, frame, op_array, ip);
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            };
+            resolved
         } else if dynamic_class_name && class_operand.value_type() == ValueType::Object {
             class_operand
                 .as_object()
@@ -4102,9 +4116,17 @@ fn op_init_late_static_call<'a>(
         (cache.func, cache.method_trait_scope_class_id())
     } else {
         let Some(class_definition) = eg.class_by_id(class_id) else {
-            return Err(VmError::Fatal(
-                "Cannot access \"static\" when no class scope is active".into(),
-            ));
+            let error = make_error_value(
+                "Error",
+                "Cannot access \"static\" when no class scope is active",
+            );
+            attach_throwable_origin(&error, eg, frame, op_array, ip);
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
         };
         let method_name = unsafe {
             &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)

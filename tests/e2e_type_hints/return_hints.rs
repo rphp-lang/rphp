@@ -1003,3 +1003,39 @@ fn enums_allow_invocation_magic_but_reject_state_and_lifecycle_magic() {
         );
     }
 }
+#[test]
+fn late_static_return_errors_name_the_resolved_called_class() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class StaticReturnBase {
+    public function invalid(): static|array { return new StaticReturnBase; }
+}
+class StaticReturnChild extends StaticReturnBase {}
+try { (new StaticReturnChild)->invalid(); }
+catch (TypeError $error) { echo $error->getMessage(); }
+"#,
+        ),
+        "StaticReturnBase::invalid(): Return value must be of type StaticReturnChild|array, StaticReturnBase returned",
+    );
+}
+
+#[test]
+fn object_binding_supplies_a_global_closures_late_static_return_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BoundStaticReturn {}
+$closure = function ($value): static { return $value; };
+try { $closure(new stdClass); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+$bound = $closure->bindTo(new BoundStaticReturn);
+echo get_class($bound(new BoundStaticReturn));
+"#,
+        ),
+        concat!(
+            "{closure}(): Return value must be of type static, stdClass returned\n",
+            "BoundStaticReturn",
+        ),
+    );
+}

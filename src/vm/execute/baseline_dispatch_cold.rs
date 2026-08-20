@@ -2376,6 +2376,31 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class)
     };
 
+    if class_id == 0 && scoped_owner {
+        let message = if constant.is_some_and(|name| name.eq_ignore_ascii_case("class")) {
+            format!(
+                "Cannot use \"{}\" in the global scope",
+                raw_class.to_ascii_lowercase()
+            )
+        } else {
+            format!(
+                "Cannot access \"{}\" when no class scope is active",
+                raw_class.to_ascii_lowercase()
+            )
+        };
+        let error = make_error_value("Error", &message);
+        let instruction_index = unsafe {
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+        };
+        attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
+
     let Some(class) = eg.class_by_id(class_id) else {
         return Ok(static_property_throw(
             eg,

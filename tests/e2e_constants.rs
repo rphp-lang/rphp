@@ -1694,3 +1694,26 @@ fn deferred_class_constant_retains_its_source_file_magic_constant() {
         "/virtual/deferred-source.php-ready"
     );
 }
+#[test]
+fn relative_static_constant_expressions_use_php_specific_diagnostics() {
+    for (source, expected) in [
+        (
+            "<?php class InvalidStaticClassName { const VALUE = static::class; }",
+            "static::class cannot be used for compile-time class name resolution",
+        ),
+        (
+            "<?php const INVALID_STATIC_FETCH = static::VALUE;",
+            "\"static::\" is not allowed in compile-time constants",
+        ),
+        (
+            "<?php class InvalidStaticCallable { const VALUE = static::method(...); }",
+            "\"static\" is not allowed in compile-time constants",
+        ),
+    ] {
+        let error = run_php_expect_error(source);
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error: {error}"
+        );
+    }
+}

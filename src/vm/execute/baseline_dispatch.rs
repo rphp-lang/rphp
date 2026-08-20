@@ -1,6 +1,37 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 #[cold]
+fn return_type_diagnostic_name(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    hint: &ParamTypeHint,
+) -> String {
+    let Some(class_name) = eg
+        .class_by_id(late_static_call_class_id(eg, frame))
+        .map(|class| class.name.clone())
+    else {
+        return hint.diagnostic_display_name();
+    };
+    fn resolve_static(hint: &mut ParamTypeHint, class_name: &str) {
+        match hint {
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("static") => {
+                *name = class_name.to_string();
+            }
+            ParamTypeHint::Nullable(inner) => resolve_static(inner, class_name),
+            ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
+                for part in parts {
+                    resolve_static(part, class_name);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut resolved = hint.clone();
+    resolve_static(&mut resolved, &class_name);
+    resolved.diagnostic_display_name()
+}
+
+#[cold]
 fn return_type_error_value(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -14,7 +45,7 @@ fn return_type_error_value(
         "TypeError",
         &format!(
             "{function_name}(): Return value must be of type {}, {outcome}",
-            hint.diagnostic_display_name()
+            return_type_diagnostic_name(eg, frame, hint)
         ),
     );
     let instruction_index = op_array

@@ -11,8 +11,9 @@ pub struct Parser {
     /// that do not have one keep the historical context-free errors.
     source_name: Option<String>,
     in_class_body: bool,
-    /// Whether relative return types such as `static` have an active PHP
-    /// class scope. Closures inherit it; named functions do not.
+    /// Whether declarations currently have a lexical PHP class scope.
+    /// Bindable closures may accept relative return types without one, while
+    /// named functions deliberately clear this state.
     class_scope_active: bool,
     generic_scopes: Vec<Vec<GenericParameter>>,
     /// PHP compile-time semantic errors discovered while parsing must survive

@@ -2084,6 +2084,7 @@ impl Compiler {
                 func_compiler.lexical_static_class = None;
                 func_compiler.lexical_static_parent = None;
                 func_compiler.dynamic_static_scope = false;
+                func_compiler.bindable_closure_scope = false;
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 let resolved_name = self.resolve_declaration_name(name);
                 self.validate_declaration_import(
@@ -3433,6 +3434,18 @@ impl Compiler {
                 self.validate_override_target(attributes, "constant", false)?;
                 let reflected_attributes = self.compile_attributes(attributes, 64);
                 for (name, value) in declarations {
+                if let Some((message, expression_line)) =
+                    forbidden_static_constant_expression(value)
+                {
+                    return Err(self.goto_error(
+                        message,
+                        if expression_line == 0 {
+                            *line
+                        } else {
+                            expression_line
+                        },
+                    ));
+                }
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
                 // Also record known compile-time constants for property default resolution.
@@ -3907,6 +3920,7 @@ impl Compiler {
                     func_compiler.lexical_static_class = Some(resolved_class.clone());
                     func_compiler.lexical_static_parent = resolved_parent.clone();
                     func_compiler.dynamic_static_scope = false;
+                    func_compiler.bindable_closure_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_class, method.name);
                     func_compiler.current_property_name = hook_property.clone();
@@ -4621,6 +4635,7 @@ impl Compiler {
                     func_compiler.lexical_static_class = Some(resolved_iface.clone());
                     func_compiler.lexical_static_parent = None;
                     func_compiler.dynamic_static_scope = false;
+                    func_compiler.bindable_closure_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_iface, method.name);
                     func_compiler.current_property_name = hook_property.clone();
@@ -4927,6 +4942,7 @@ impl Compiler {
                     func_compiler.lexical_static_class = Some(resolved_trait.clone());
                     func_compiler.lexical_static_parent = None;
                     func_compiler.dynamic_static_scope = true;
+                    func_compiler.bindable_closure_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_trait, method.name);
                     func_compiler.current_property_name = hook_property.clone();
@@ -5822,6 +5838,7 @@ impl Compiler {
                     func_compiler.lexical_static_class = Some(resolved_enum.clone());
                     func_compiler.lexical_static_parent = None;
                     func_compiler.dynamic_static_scope = false;
+                    func_compiler.bindable_closure_scope = false;
                     func_compiler.current_function_name =
                         format!("{}::{}", resolved_enum, method.name);
                     func_compiler.returns_reference_context = method.returns_by_ref;
@@ -6104,6 +6121,9 @@ impl Compiler {
         let mut names = std::collections::HashSet::new();
         for constant in constants {
             self.validate_override_target(&constant.attributes, "class constant", false)?;
+            if let Some((message, line)) = forbidden_static_constant_expression(&constant.value) {
+                return Err(self.goto_error(message, line));
+            }
             if !names.insert(constant.name.as_str()) {
                 return Err(format!(
                     "Cannot redefine class constant {}::{}",

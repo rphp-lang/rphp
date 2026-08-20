@@ -999,7 +999,7 @@ impl Parser {
                 self.expect_lparen()?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
-                let return_type = self.parse_return_type()?;
+                let return_type = self.parse_return_type(line, false)?;
                 self.expect(&Token::LBrace)?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {

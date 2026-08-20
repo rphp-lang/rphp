@@ -1368,16 +1368,20 @@ fn test_abstract_method_modifier_boundaries() {
 }
 
 #[test]
-fn test_static_return_type_requires_a_real_class_scope() {
+fn test_relative_static_scope_is_deferred_to_the_right_phase() {
     let parse = |source: &str| {
         let tokens = Lexer::new(source).tokenize().unwrap();
         Parser::new(tokens).parse()
     };
+    let assert_static_return_error = |statements: Vec<Stmt>| {
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, .. }))
+                if message == "Cannot use \"static\" when no class scope is active"
+        ));
+    };
 
-    assert_eq!(
-        parse("<?php function invalid(): static {}").unwrap_err(),
-        "Cannot use \"static\" when no class scope is active"
-    );
+    assert_static_return_error(parse("<?php function invalid(): static {}").unwrap());
     parse("<?php class C { public function valid(): static { return $this; } }").unwrap();
     parse(
         "<?php class C { public function valid(): static { $f = function(): static { return $this; }; return $f(); } }",
@@ -1387,18 +1391,15 @@ fn test_static_return_type_requires_a_real_class_scope() {
         "<?php class C { public function valid(): static { $f = static function(): static { return new static(); }; return $f(); } }",
     )
     .unwrap();
-    assert_eq!(
+    assert_static_return_error(
         parse(
             "<?php class C { public function invalid(): static { function nested(): static {} return $this; } }",
         )
-        .unwrap_err(),
-        "Cannot use \"static\" when no class scope is active"
+        .unwrap(),
     );
+    parse("<?php $closure = function (): static {}; $arrow = fn(): static => new static;").unwrap();
 
-    assert_eq!(
-        parse("<?php static::value();").unwrap_err(),
-        "Cannot use \"static\" when no class scope is active"
-    );
+    parse("<?php static::value(); static::$value; static::VALUE; new static;").unwrap();
     parse("<?php class C { public static function call() { return static::value(); } }").unwrap();
     parse(
         "<?php class C { public static $value = 1; public static function read() { return static::$value; } }",
@@ -1408,13 +1409,10 @@ fn test_static_return_type_requires_a_real_class_scope() {
         "<?php class C { public static $value = 1; public static function write() { static::$value = 2; static::$value += 1; } } C::$value = 3; C::$value .= 'x';",
     )
     .unwrap();
-    assert_eq!(
-        parse(
-            "<?php class C { public static function call() { function nested() { return static::value(); } } }",
-        )
-        .unwrap_err(),
-        "Cannot use \"static\" when no class scope is active"
-    );
+    parse(
+        "<?php class C { public static function call() { function nested() { return static::value(); } } }",
+    )
+    .unwrap();
 }
 
 #[test]

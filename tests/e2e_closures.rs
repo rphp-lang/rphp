@@ -3,6 +3,41 @@ mod common;
 use common::{run_php, run_php_with_source_context};
 
 #[test]
+fn global_closures_resolve_relative_classes_from_the_bound_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BoundParent {}
+class BoundScope extends BoundParent {}
+$closure = function () {
+    echo self::class, '|', static::class, '|', parent::class;
+};
+$closure->bindTo(null, BoundScope::class)();
+"#,
+        ),
+        "BoundScope|BoundScope|BoundParent",
+    );
+}
+
+#[test]
+fn class_closures_keep_lexical_self_and_forward_late_static_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ClosureBase {
+    public static function make() {
+        return function () { echo self::class, '|', static::class; };
+    }
+}
+class ClosureChild extends ClosureBase {}
+ClosureChild::make()();
+"#,
+        ),
+        "ClosureBase|ClosureChild",
+    );
+}
+
+#[test]
 fn closure_magic_names_include_the_lexical_source_identity() {
     assert_eq!(
         run_php_with_source_context(

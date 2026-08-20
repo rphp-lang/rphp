@@ -1308,6 +1308,7 @@ impl Parser {
                 }
             }
             Token::Static => {
+                let line = self.closest_token_source_line();
                 if matches!(self.peek_at(1), Token::Function(_)) {
                     self.advance(); // consume 'static'
                     return self.parse_closure(true);
@@ -1316,10 +1317,8 @@ impl Parser {
                     self.advance(); // consume 'static'
                     return self.parse_arrow_function(true);
                 }
-                if !self.class_scope_active {
-                    return Err("Cannot use \"static\" when no class scope is active".into());
-                }
                 self.advance();
+                self.last_primary_line = Some(line);
                 if self.peek() != Token::DoubleColon {
                     return Err(format!(
                         "Expected :: after static, got {:?}",
@@ -1534,7 +1533,7 @@ impl Parser {
                         };
                         (class_name, self.last_primary_line.unwrap_or(line))
                     }
-                    Token::Static if self.class_scope_active => {
+                    Token::Static => {
                         self.advance();
                         ("static".to_string(), line)
                     }
