@@ -8,7 +8,61 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `8e41909f`. Across all 5,599
+8.5.6 commit `fcc29c8` and candidate commit `0ecb4823`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,758 pass, 1,541 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.919% and the whole-corpus rate is 67.119%; 4,709 of
+5,299 attempted cases reach runtime (88.866%). Relative to exact base
+`8e41909f`, the pass-set delta is +6/-0: every prior pass remains a pass. The
+only other category transition is `Zend/tests/generators/bug71013.phpt`, which
+advances from the former unsupported-delegate fatal to its independent
+destructor-order output mismatch and remains a visible failure. Two sequential
+final full runs have byte-identical merged manifests and summaries. Their
+SHA-256 values are
+`9705084126b027adf0ccc8ceaee95dbcfbde4039829c72094e34d0dadbf35c4e`
+and `ce6b111d6cf07d10197fab995085b859e0bf8678f323bc72481f69bbe278f3b3`.
+
+`yield from` now accepts the full core Traversable boundary rather than only
+arrays and direct Generator objects. User Iterator delegates advance lazily in
+PHP's `rewind`, `valid`, `current`, `key`, then `next` order, preserve yielded
+keys, ignore sent values, and inject a supplied exception back into the parent
+generator. IteratorAggregate is resolved with cycle and invalid-result checks.
+When its iterator is a Generator, the existing iterative delegation engine is
+reused while applying Iterator semantics: sent values are not forwarded,
+throws re-enter the parent, the inner return value is discarded, and already
+advanced or closed generators fail at the rewind boundary. Direct
+`yield from Generator` keeps its existing send, throw and return-value
+forwarding. Core ArrayIterator-family values, including subclasses, use their
+registered iterable storage, and a retained user Iterator participates in the
+request-local generator cycle graph.
+
+Eight original E2E regressions cover lazy protocol order and keys, null
+Traversable returns, Iterator and IteratorAggregate send/throw boundaries,
+protocol exceptions, invalid aggregate results, Generator iterator lifecycle,
+and an ArrayIterator subclass. The six exact full-corpus additions are
+`Zend/tests/generators/gh15275-003.phpt`, `gh15275-004.phpt`,
+`gh15275-005.phpt`, `yield_from_iterator.phpt`,
+`yield_from_iterator_agregate.phpt` and `yield_from_valid_exception.phpt`.
+The remaining generator/fiber cases that previously stopped at the same
+missing-delegate fatal now expose their separate fiber, GC or destructor
+lifecycle gaps; this checkpoint does not claim those contracts, live mutation
+of the current built-in iterator snapshot, or by-reference delegation.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. Refactoring the duplicated suspension path reduces the production
+inventory from 1,618 to 1,613 unsafe blocks while retaining 289 unsafe
+functions. Two independent CPU-2, four-warmup, 200-pair order-balanced direct
+generator-resume gates retain checksum `19999900000` and measure +0.922% and
++0.720%, both below the +1% regression ceiling. No speedup is claimed. The
+exact base and candidate binary SHA-256 values are
+`3491dac6f4901f6d79794b677c8e34f55d371217ce7c63e6e0f9c29fbee37be5`
+and `f565434ee3a6528a50158819988015e0a361b95faca13e91720aa8f1e01a4847`.
+
+In the preceding empty-constant-name checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`8e41909f`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,752 pass, 1,547 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 70.806% and the whole-corpus rate is 67.012%; 4,709 of
