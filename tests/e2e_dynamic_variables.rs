@@ -1,6 +1,6 @@
 mod common;
 
-use common::run_php;
+use common::{run_php, run_php_expect_error_with_source_context};
 
 #[test]
 fn dynamic_variables_share_statically_named_slots_in_global_and_function_scopes() {
@@ -276,6 +276,38 @@ class IndirectThisFixture {
         output,
         "bool(true)\nCannot re-assign $this\nCannot re-assign $this\n"
     );
+}
+
+#[test]
+fn literal_this_write_targets_fail_during_compilation_with_the_target_line() {
+    for statement in [
+        "$this = replacement();",
+        "$this = isset(replacement());",
+        "$this =& $replacement;",
+        "$this ??= replacement();",
+        "$this ??= isset(replacement());",
+        "foreach ($values as $this) {}",
+        "foreach ($values as $this => $value) {}",
+        "foreach ($values as &$this) {}",
+        "foreach ($values as list($this)) {}",
+        "foreach ($values as [&$this]) {}",
+        "try {} catch (Exception $this) {}",
+    ] {
+        let source = format!(
+            "<?php\nclass Subject {{\n    public function unreachable() {{\n        {statement}\n    }}\n}}"
+        );
+        let error = run_php_expect_error_with_source_context(
+            &source,
+            "/virtual/this-write-target.php",
+            "/virtual",
+        );
+
+        assert_eq!(
+            format!("{error:?}"),
+            "Fatal(\"Cannot re-assign $this in /virtual/this-write-target.php on line 4\")",
+            "unexpected diagnostic for {statement}"
+        );
+    }
 }
 
 #[test]

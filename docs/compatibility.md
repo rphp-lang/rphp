@@ -9,17 +9,47 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,507 pass, 1,790 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,516 pass, 1,781 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-66.207% and the whole-corpus rate is 62.636%; 4,632 of 5,297 attempted cases
-reach runtime (87.446%). Relative to exact base `88d7c461`, the pass-set delta
-is +4/-0: all 3,503 prior passes remain passes and no other status, failure
-category or stage moves. Two final manifests and summaries are byte-for-byte
-identical. The manifest SHA-256 is
-`b5e8fc6bc92be207b269ba84496c998151c283801bbfce40da6140ecbbd30ff9`.
+66.377% and the whole-corpus rate is 62.797%; 4,635 of 5,297 attempted cases
+reach runtime (87.502%). Relative to exact base `68ce5826`, the pass-set delta
+is +9/-0: all 3,507 prior passes remain passes and no other status, failure
+category or stage moves. Two final merged manifests and summaries are
+byte-for-byte identical. The manifest SHA-256 is
+`9e53ee42f0d0a60f417d27ba80f40cabb2dacc1f81a54d712001b649338d5208`.
 
-A positional argument following a named argument now records PHP 8.5's
-compile-time fatal error instead of terminating parsing. The shared argument
+Literal writes to `$this` now produce PHP 8.5's compile-time fatal
+`Cannot re-assign $this` with the target's physical source line. The parser
+consumes the complete construct while retaining the first deferred error, so
+the diagnostic survives dead-code elimination and takes priority over a later
+compile error in the right-hand side. Direct and reference assignment, `??=`,
+foreach keys, values, references and destructuring targets, and catch variables
+share the same boundary. Property writes through `$this->property` remain
+ordinary writable targets.
+
+Original parser and source-aware E2E regressions cover every admitted grammar
+shape, uncalled method bodies, RHS diagnostic priority and exact source
+location. The exact full-corpus additions are
+`Zend/tests/coalesce/assign_coalesce_005.phpt`,
+`Zend/tests/errmsg/errmsg_003.phpt`, all four
+`Zend/tests/foreach/this_in_foreach_00*.phpt` cases,
+`Zend/tests/this-reserved/030.phpt`,
+`Zend/tests/this-reserved/this_in_catch.phpt` and
+`tests/lang/bug24573.phpt`. No other status, category or stage moves. Dynamic
+`$$name` rebinding remains a separate runtime `Error` contract, while compound
+operations and array dimensions on the receiver are not reclassified by this
+checkpoint.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at 1,623 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies because the change is confined to PHP-invalid
+compile-time write targets and leaves successful bytecode unchanged.
+
+In the preceding positional-argument checkpoint, an argument following a named
+argument records PHP 8.5's compile-time fatal error instead of terminating
+parsing. The shared argument
 parser consumes the remaining source and retains the first deferred error, so
 dead branches, nested calls, attributes and `new` expressions in constant
 initializers all fail at the same compile boundary. Valid positional, named and

@@ -583,6 +583,11 @@ impl Parser {
                     Token::Variable(n, _) => Some(n),
                     _ => unreachable!(),
                 },
+                Token::This(line) => {
+                    self.advance();
+                    let _ = self.compile_error("Cannot re-assign $this", line);
+                    Some("this".to_string())
+                }
                 Token::RParen => None,
                 ref other => {
                     return Err(format!(

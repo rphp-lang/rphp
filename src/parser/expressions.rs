@@ -193,6 +193,12 @@ impl Parser {
         } else {
             false
         };
+        let this_reassignment = match &target {
+            Expr::Variable { name, line } if name == "this" => {
+                Some(self.compile_error("Cannot re-assign $this", *line))
+            }
+            _ => None,
+        };
         let expr = Box::new(self.parse_assignment_or_yield()?);
         if let Expr::Cast {
             cast_type: CastType::Void,
@@ -207,6 +213,9 @@ impl Parser {
         }
         if let Some(line) = Self::nullsafe_chain_line(&target) {
             return Ok(self.nullsafe_write_error(line));
+        }
+        if let Some(error) = this_reassignment {
+            return Ok(error);
         }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
@@ -288,9 +297,18 @@ impl Parser {
             return Err("Invalid null-coalescing assignment target".into());
         }
         self.expect(&Token::QuestionQuestionAssign)?;
+        let this_reassignment = match &target {
+            Expr::Variable { name, line } if name == "this" => {
+                Some(self.compile_error("Cannot re-assign $this", *line))
+            }
+            _ => None,
+        };
         let expr = self.parse_assignment_or_yield()?;
         if let Some(line) = nullsafe_line {
             return Ok(self.nullsafe_write_error(line));
+        }
+        if let Some(error) = this_reassignment {
+            return Ok(error);
         }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));

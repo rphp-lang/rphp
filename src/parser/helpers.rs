@@ -1173,6 +1173,9 @@ impl Parser {
             return Ok(ForeachTarget::Target(self.nullsafe_write_error(line)));
         }
         match expr {
+            Expr::Variable { ref name, line } if name == "this" => Ok(
+                ForeachTarget::Target(self.compile_error("Cannot re-assign $this", line)),
+            ),
             Expr::Variable { name, .. } => Ok(ForeachTarget::Variable(name)),
             target @ Expr::DynamicVariable { .. } => Ok(ForeachTarget::Target(target)),
             Expr::Globals { line } => Ok(ForeachTarget::Target(
@@ -1316,9 +1319,8 @@ impl Parser {
             ));
         }
         match target {
-            Expr::Variable { ref name, .. } if name == "this" => {
-                Err("Cannot re-assign $this".into())
-            }
+            Expr::Variable { ref name, line } if name == "this" => Ok(self
+                .compile_error("Cannot re-assign $this", line)),
             Expr::Globals { line } => Ok(self.compile_error(
                 "Cannot assign reference to non referenceable value",
                 line,
@@ -1449,9 +1451,12 @@ impl Parser {
                     )));
                 } else {
                     match target {
-                        Expr::Variable { name: var, .. } if var == "this" => {
-                            return Err("Cannot re-assign $this".into());
-                        }
+                        Expr::Variable {
+                            name: var,
+                            line,
+                        } if var == "this" => targets.push(ListTarget::Target(
+                            self.compile_error("Cannot re-assign $this", line),
+                        )),
                         Expr::Variable { name: var, .. } => {
                             targets.push(ListTarget::Variable(var))
                         }

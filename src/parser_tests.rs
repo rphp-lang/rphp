@@ -615,6 +615,36 @@ fn positional_after_named_is_a_deferred_compile_error() {
 }
 
 #[test]
+fn literal_this_write_targets_are_deferred_compile_errors() {
+    for statement in [
+        "$this = replacement();",
+        "$this = isset(replacement());",
+        "$this =& $replacement;",
+        "$this ??= replacement();",
+        "$this ??= isset(replacement());",
+        "foreach ($values as $this) {}",
+        "foreach ($values as $this => $value) {}",
+        "foreach ($values as &$this) {}",
+        "foreach ($values as list($this)) {}",
+        "foreach ($values as [&$this]) {}",
+        "try {} catch (Exception $this) {}",
+    ] {
+        let source = format!("<?php\nif (false) {{\n    {statement}\n}}");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+
+        assert!(
+            matches!(
+                statements.last(),
+                Some(Stmt::ExprStmt(Expr::CompileError { message, line: 3 }))
+                    if message == "Cannot re-assign $this"
+            ),
+            "unexpected AST for {statement}: {statements:#?}"
+        );
+    }
+}
+
+#[test]
 fn document_string_parse_tokens_receive_the_parser_source_location() {
     let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
         .tokenize()
