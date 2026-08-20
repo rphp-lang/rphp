@@ -1,5 +1,5 @@
 mod common;
-use common::run_php;
+use common::{run_php, run_php_expect_error_with_source_context};
 
 // ─── Basic namespace ──────────────────────────────────────────────
 
@@ -40,6 +40,109 @@ echo $u->name;
 }
 
 // ─── Use declaration ──────────────────────────────────────────────
+
+#[test]
+fn declarations_reject_same_kind_local_import_aliases() {
+    for (source, expected) in [
+        (
+            "<?php\nnamespace Fixture;\nuse Vendor\\Thing as Shared;\ninterface sHARED {}",
+            "Cannot redeclare class Fixture\\sHARED (previously declared as local import) in /virtual/import-collision.php on line 4",
+        ),
+        (
+            "<?php\nnamespace Fixture;\nuse function Vendor\\helper as Shared;\nfunction sHARED() {}",
+            "Cannot redeclare function Fixture\\sHARED() (previously declared as local import) in /virtual/import-collision.php on line 4",
+        ),
+        (
+            "<?php\nnamespace Fixture;\nuse const Vendor\\VALUE as Shared;\nconst Shared = 42;",
+            "Cannot declare const Fixture\\Shared because the name is already in use in /virtual/import-collision.php on line 4",
+        ),
+        (
+            "<?php\nnamespace Fixture;\nuse const Vendor\\VALUE as Shared;\nconst First = 1,\n    Shared = 42;",
+            "Cannot declare const Fixture\\Shared because the name is already in use in /virtual/import-collision.php on line 4",
+        ),
+    ] {
+        assert_eq!(
+            run_php_expect_error_with_source_context(
+                source,
+                "/virtual/import-collision.php",
+                "/virtual",
+            )
+            .to_string(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn imports_reject_prior_and_duplicate_same_kind_symbols() {
+    for (source, expected) in [
+        (
+            "<?php\nnamespace Fixture;\nclass Shared {}\nuse Vendor\\Thing as Shared;",
+            "Cannot use Vendor\\Thing as Shared because the name is already in use in /virtual/import-collision.php on line 4",
+        ),
+        (
+            "<?php\nnamespace Fixture;\nif (false) { function Shared() {} }\nuse function Vendor\\helper as SHARED;",
+            "Cannot use function Vendor\\helper as SHARED because the name is already in use in /virtual/import-collision.php on line 4",
+        ),
+        (
+            "<?php\nnamespace Fixture;\nconst Shared = 42;\nuse const Vendor\\VALUE as Shared;",
+            "Cannot use const Vendor\\VALUE as Shared because the name is already in use in /virtual/import-collision.php on line 4",
+        ),
+        (
+            "<?php\nnamespace Fixture;\nuse function Vendor\\first as Shared, Vendor\\second as SHARED;",
+            "Cannot use function Vendor\\second as SHARED because the name is already in use in /virtual/import-collision.php on line 3",
+        ),
+    ] {
+        assert_eq!(
+            run_php_expect_error_with_source_context(
+                source,
+                "/virtual/import-collision.php",
+                "/virtual",
+            )
+            .to_string(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn import_collision_namespaces_reset_and_remain_kind_sensitive() {
+    let output = run_php(
+        r#"<?php
+namespace Fixture {
+    class Shared {}
+    function shared() {}
+    const Shared = 1;
+}
+namespace Fixture {
+    use Vendor\Thing as Shared;
+    use function Vendor\helper as Shared;
+    use const Vendor\VALUE as Shared;
+}
+namespace SelfImport {
+    use selfimport\ImportedClass as IMPORTEDCLASS;
+    class ImportedClass {}
+    function DeclaredFunction() {}
+    use function SelfImport\DeclaredFunction;
+    use const SelfImport\ImportedConstant;
+    const ImportedConstant = 1;
+    class DeclaredClass {}
+    use SelfImport\DeclaredClass;
+    const DeclaredConstant = 2;
+    use const SelfImport\DeclaredConstant;
+}
+namespace Control {
+    use Vendor\Thing as Shared;
+    use function Vendor\helper as Shared;
+    use const Vendor\VALUE as Shared;
+    const shared = 42;
+    echo shared;
+}
+"#,
+    );
+
+    assert_eq!(output, "42");
+}
 
 #[test]
 fn namespace_use_class() {

@@ -961,6 +961,7 @@ pub enum Stmt {
         imports: Vec<(UseKind, String, String)>, // (kind, fully_qualified, alias)
     },
     Const {
+        line: usize,
         attributes: Vec<Attribute>,
         // const FOO = expr, BAR = expr;
         declarations: Vec<(String, Expr)>,

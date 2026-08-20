@@ -441,10 +441,12 @@ impl Parser {
             Token::Const => {
                 self.advance(); // consume 'const'
                 let mut declarations = Vec::new();
+                let mut const_line = 0;
                 loop {
-                    let name = match self.advance() {
-                        Token::Identifier(n, _) | Token::MagicConstant { name: n, .. } => n,
-                        Token::Goto { name, .. } => name,
+                    let (name, line) = match self.advance() {
+                        Token::Identifier(name, line)
+                        | Token::MagicConstant { name, line }
+                        | Token::Goto { name, line } => (name, line),
                         other => {
                             return Err(format!(
                                 "Expected constant name after 'const', got {:?}",
@@ -452,6 +454,9 @@ impl Parser {
                             ));
                         }
                     };
+                    if const_line == 0 {
+                        const_line = line;
+                    }
                     self.expect(&Token::Assign)?;
                     declarations.push((name, self.parse_expr()?));
                     if self.peek() != Token::Comma {
@@ -461,6 +466,7 @@ impl Parser {
                 }
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Const {
+                    line: const_line,
                     attributes: Vec::new(),
                     declarations,
                 })

@@ -1971,11 +1971,12 @@ impl Compiler {
                     // statements never pay for this recursive source scan.
                     self.contains_yield |= then_body.iter().any(Stmt::contains_yield)
                         || else_body.iter().any(Stmt::contains_yield);
-                    let body = if value.is_truthy() {
-                        then_body
+                    let (body, elided_body) = if value.is_truthy() {
+                        (then_body, else_body)
                     } else {
-                        else_body
+                        (else_body, then_body)
                     };
+                    self.record_elided_declarations(elided_body)?;
                     for statement in body {
                         self.compile_stmt(statement)?;
                     }
@@ -2084,7 +2085,13 @@ impl Compiler {
                 func_compiler.lexical_static_parent = None;
                 func_compiler.dynamic_static_scope = false;
                 func_compiler.known_ref_args = self.build_known_ref_args();
-                let resolved_name = self.resolve_function_declaration_name(name);
+                let resolved_name = self.resolve_declaration_name(name);
+                self.validate_declaration_import(
+                    UseKind::Function,
+                    name,
+                    &resolved_name,
+                    *line,
+                )?;
                 self.record_generic_declaration(
                     crate::generics::GenericDeclarationKind::Function,
                     resolved_name.clone(),
@@ -3359,19 +3366,34 @@ impl Compiler {
             Stmt::Namespace { name, body } => {
                 let prev_ns = self.current_namespace.clone();
                 let prev_use_map = self.use_map.clone();
+                let prev_class_import_map = self.class_import_map.clone();
                 let prev_function_use_map = self.function_use_map.clone();
                 let prev_constant_use_map = self.constant_use_map.clone();
+                let prev_class_declaration_scope_start = self.class_declaration_scope_start;
+                let prev_function_declaration_scope_start = self.function_declaration_scope_start;
+                let prev_constant_declaration_scope_start = self.constant_declaration_scope_start;
+                let prev_elided_declaration_scope_start = self.elided_declaration_scope_start;
                 self.current_namespace = (!name.is_empty()).then_some(name.clone());
                 self.use_map.clear();
+                self.class_import_map.clear();
                 self.function_use_map.clear();
                 self.constant_use_map.clear();
+                self.class_declaration_scope_start = self.class_defs.len();
+                self.function_declaration_scope_start = self.functions.len();
+                self.constant_declaration_scope_start = self.constant_declaration_names.len();
+                self.elided_declaration_scope_start = self.elided_declaration_names.len();
                 for stmt in body {
                     self.compile_stmt(stmt)?;
                 }
                 self.current_namespace = prev_ns;
                 self.use_map = prev_use_map;
+                self.class_import_map = prev_class_import_map;
                 self.function_use_map = prev_function_use_map;
                 self.constant_use_map = prev_constant_use_map;
+                self.class_declaration_scope_start = prev_class_declaration_scope_start;
+                self.function_declaration_scope_start = prev_function_declaration_scope_start;
+                self.constant_declaration_scope_start = prev_constant_declaration_scope_start;
+                self.elided_declaration_scope_start = prev_elided_declaration_scope_start;
             }
             Stmt::UseDecl { line, imports } => {
                 for (kind, fqn, alias) in imports {
@@ -3386,19 +3408,25 @@ impl Compiler {
                                     *line,
                                 ));
                             }
+                            self.validate_import_alias(*kind, &fqn, alias, *line)?;
+                            self.class_import_map
+                                .insert(alias.to_ascii_lowercase(), fqn.clone());
                             self.use_map.insert(alias.clone(), fqn);
                         }
                         UseKind::Function => {
+                            self.validate_import_alias(*kind, &fqn, alias, *line)?;
                             self.function_use_map
                                 .insert(alias.to_ascii_lowercase(), fqn);
                         }
                         UseKind::Const => {
+                            self.validate_import_alias(*kind, &fqn, alias, *line)?;
                             self.constant_use_map.insert(alias.clone(), fqn);
                         }
                     }
                 }
             }
             Stmt::Const {
+                line,
                 attributes,
                 declarations,
             } => {
@@ -3412,6 +3440,14 @@ impl Compiler {
                     .current_namespace
                     .as_ref()
                     .map_or_else(|| name.clone(), |namespace| format!("{namespace}\\{name}"));
+                self.validate_declaration_import(
+                    UseKind::Const,
+                    name,
+                    &declaration_name,
+                    *line,
+                )?;
+                self.constant_declaration_names
+                    .push(declaration_name.clone());
                 self.constant_attributes
                     .borrow_mut()
                     .insert(declaration_name.clone(), reflected_attributes.clone());
@@ -3579,7 +3615,15 @@ impl Compiler {
                 generic_params,
             } => {
                 self.validate_class_like_name(name, "class", *class_line)?;
-                let resolved_class = self.resolve_name(name);
+                let resolved_class = self.resolve_declaration_name(name);
+                if !resolved_class.starts_with("class@anonymous#") {
+                    self.validate_declaration_import(
+                        UseKind::Class,
+                        name,
+                        &resolved_class,
+                        *class_line,
+                    )?;
+                }
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
@@ -4499,7 +4543,13 @@ impl Compiler {
                 generic_params,
             } => {
                 self.validate_class_like_name(name, "interface", *interface_line)?;
-                let resolved_iface = self.resolve_name(name);
+                let resolved_iface = self.resolve_declaration_name(name);
+                self.validate_declaration_import(
+                    UseKind::Class,
+                    name,
+                    &resolved_iface,
+                    *interface_line,
+                )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
@@ -4809,7 +4859,13 @@ impl Compiler {
                 generic_params,
             } => {
                 self.validate_class_like_name(name, "trait", *trait_line)?;
-                let resolved_trait = self.resolve_name(name);
+                let resolved_trait = self.resolve_declaration_name(name);
+                self.validate_declaration_import(
+                    UseKind::Class,
+                    name,
+                    &resolved_trait,
+                    *trait_line,
+                )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
                 if !generic_params.is_empty()
@@ -5321,7 +5377,13 @@ impl Compiler {
                 methods,
             } => {
                 self.validate_class_like_name(name, "enum", *enum_line)?;
-                let resolved_enum = self.resolve_name(name);
+                let resolved_enum = self.resolve_declaration_name(name);
+                self.validate_declaration_import(
+                    UseKind::Class,
+                    name,
+                    &resolved_enum,
+                    *enum_line,
+                )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {

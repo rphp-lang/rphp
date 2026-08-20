@@ -2716,10 +2716,28 @@ pub struct Compiler {
     current_namespace: Option<String>,
     /// Use aliases: alias → fully qualified name
     use_map: HashMap<String, String>,
+    /// Class-like aliases are case-insensitive. Keep a normalized cold index
+    /// so collision validation does not turn import-heavy files quadratic.
+    class_import_map: HashMap<String, String>,
     /// Function imports have a distinct, case-insensitive alias namespace.
     function_use_map: HashMap<String, String>,
     /// Constant imports have a distinct, case-sensitive alias namespace.
     constant_use_map: HashMap<String, String>,
+    /// Declaration ranges belonging to the current lexical namespace block.
+    /// Class/function definitions already live in their compiler vectors, so
+    /// imports that follow a declaration can inspect those cold ranges without
+    /// adding metadata to every declaration.
+    class_declaration_scope_start: usize,
+    function_declaration_scope_start: usize,
+    /// Source constants do not otherwise retain one ordered declaration list.
+    /// Keep their qualified names only for compile-time import collision checks.
+    constant_declaration_names: Vec<String>,
+    constant_declaration_scope_start: usize,
+    /// Names found in a compile-time-elided conditional branch still
+    /// participate in PHP's lexical import collision checks, even though no
+    /// runtime declaration bytecode is emitted for that branch.
+    elided_declaration_names: Vec<(UseKind, String)>,
+    elided_declaration_scope_start: usize,
     /// Lexical class targets used only by generic owner metadata. Static-call
     /// bytecode keeps the original pseudo name for PHP forwarding semantics.
     lexical_static_class: Option<String>,
@@ -2928,8 +2946,15 @@ impl Compiler {
             zend_assertions: 1,
             current_namespace: None,
             use_map: HashMap::new(),
+            class_import_map: HashMap::new(),
             function_use_map: HashMap::new(),
             constant_use_map: HashMap::new(),
+            class_declaration_scope_start: 0,
+            function_declaration_scope_start: 0,
+            constant_declaration_names: Vec::new(),
+            constant_declaration_scope_start: 0,
+            elided_declaration_names: Vec::new(),
+            elided_declaration_scope_start: 0,
             lexical_static_class: None,
             lexical_static_parent: None,
             dynamic_static_scope: false,
@@ -3109,6 +3134,7 @@ impl Compiler {
         child.zend_assertions = self.zend_assertions;
         child.current_namespace = self.current_namespace.clone();
         child.use_map = self.use_map.clone();
+        child.class_import_map = self.class_import_map.clone();
         child.function_use_map = self.function_use_map.clone();
         child.constant_use_map = self.constant_use_map.clone();
         child.lexical_static_class = self.lexical_static_class.clone();
@@ -3724,7 +3750,7 @@ impl Compiler {
         name.to_string()
     }
 
-    fn resolve_function_declaration_name(&self, name: &str) -> String {
+    fn resolve_declaration_name(&self, name: &str) -> String {
         if let Some(fully_qualified) = name.strip_prefix('\\') {
             return fully_qualified.to_string();
         }
@@ -3732,6 +3758,196 @@ impl Compiler {
             return format!("{namespace}\\{name}");
         }
         name.to_string()
+    }
+
+    fn class_import_exists(&self, alias: &str) -> bool {
+        self.class_import_map
+            .contains_key(&alias.to_ascii_lowercase())
+    }
+
+    fn imported_name(&self, kind: UseKind, alias: &str) -> Option<&str> {
+        match kind {
+            UseKind::Class => self
+                .class_import_map
+                .get(&alias.to_ascii_lowercase())
+                .map(String::as_str),
+            UseKind::Function => self
+                .function_use_map
+                .get(&alias.to_ascii_lowercase())
+                .map(String::as_str),
+            UseKind::Const => self.constant_use_map.get(alias).map(String::as_str),
+        }
+    }
+
+    fn imported_name_matches_declaration(kind: UseKind, imported: &str, declared: &str) -> bool {
+        match kind {
+            UseKind::Class | UseKind::Function => imported.eq_ignore_ascii_case(declared),
+            UseKind::Const => imported == declared,
+        }
+    }
+
+    fn class_declaration_exists_in_scope(&self, qualified_name: &str) -> bool {
+        self.class_defs[self.class_declaration_scope_start..]
+            .iter()
+            .any(|class| class.name.eq_ignore_ascii_case(qualified_name))
+    }
+
+    fn function_declaration_exists_in_scope(&self, qualified_name: &str) -> bool {
+        self.functions[self.function_declaration_scope_start..]
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(qualified_name))
+    }
+
+    fn constant_declaration_exists_in_scope(&self, qualified_name: &str) -> bool {
+        self.constant_declaration_names[self.constant_declaration_scope_start..]
+            .iter()
+            .any(|name| name == qualified_name)
+    }
+
+    fn elided_declaration_exists_in_scope(&self, kind: UseKind, qualified_name: &str) -> bool {
+        self.elided_declaration_names[self.elided_declaration_scope_start..]
+            .iter()
+            .any(|(declared_kind, name)| {
+                if *declared_kind != kind {
+                    return false;
+                }
+                match kind {
+                    UseKind::Class | UseKind::Function => name.eq_ignore_ascii_case(qualified_name),
+                    UseKind::Const => name == qualified_name,
+                }
+            })
+    }
+
+    fn validate_import_alias(
+        &self,
+        kind: UseKind,
+        fully_qualified_name: &str,
+        alias: &str,
+        line: usize,
+    ) -> Result<(), String> {
+        let declaration_name = self.resolve_declaration_name(alias);
+        let duplicate_import = match kind {
+            UseKind::Class => self.class_import_exists(alias),
+            UseKind::Function => self
+                .function_use_map
+                .contains_key(&alias.to_ascii_lowercase()),
+            UseKind::Const => self.constant_use_map.contains_key(alias),
+        };
+        let declaration_collision = match kind {
+            UseKind::Class => {
+                self.class_declaration_exists_in_scope(&declaration_name)
+                    || self.elided_declaration_exists_in_scope(kind, &declaration_name)
+            }
+            UseKind::Function => {
+                self.function_declaration_exists_in_scope(&declaration_name)
+                    || self.elided_declaration_exists_in_scope(kind, &declaration_name)
+            }
+            UseKind::Const => {
+                self.constant_declaration_exists_in_scope(&declaration_name)
+                    || self.elided_declaration_exists_in_scope(kind, &declaration_name)
+            }
+        };
+        let collision = duplicate_import
+            || (declaration_collision
+                && !Self::imported_name_matches_declaration(
+                    kind,
+                    fully_qualified_name,
+                    &declaration_name,
+                ));
+        if !collision {
+            return Ok(());
+        }
+        let kind_prefix = match kind {
+            UseKind::Class => "",
+            UseKind::Function => "function ",
+            UseKind::Const => "const ",
+        };
+        Err(self.goto_error(
+            &format!(
+                "Cannot use {kind_prefix}{fully_qualified_name} as {alias} because the name is already in use"
+            ),
+            line,
+        ))
+    }
+
+    fn validate_declaration_import(
+        &self,
+        kind: UseKind,
+        source_name: &str,
+        declaration_name: &str,
+        line: usize,
+    ) -> Result<(), String> {
+        let Some(imported_name) = self.imported_name(kind, source_name) else {
+            return Ok(());
+        };
+        if Self::imported_name_matches_declaration(kind, imported_name, declaration_name) {
+            return Ok(());
+        }
+        let message = match kind {
+            UseKind::Class => format!(
+                "Cannot redeclare class {declaration_name} (previously declared as local import)"
+            ),
+            UseKind::Function => format!(
+                "Cannot redeclare function {declaration_name}() (previously declared as local import)"
+            ),
+            UseKind::Const => {
+                format!(
+                    "Cannot declare const {declaration_name} because the name is already in use"
+                )
+            }
+        };
+        Err(self.goto_error(&message, line))
+    }
+
+    fn record_elided_declarations(&mut self, statements: &[Stmt]) -> Result<(), String> {
+        for statement in statements {
+            let declaration = match statement {
+                Stmt::Function { line, name, .. } => {
+                    Some((UseKind::Function, name.as_str(), *line))
+                }
+                Stmt::Class { line, name, .. }
+                | Stmt::Interface { line, name, .. }
+                | Stmt::Trait { line, name, .. }
+                | Stmt::Enum { line, name, .. } => Some((UseKind::Class, name.as_str(), *line)),
+                _ => None,
+            };
+            if let Some((kind, source_name, line)) = declaration {
+                let declaration_name = self.resolve_declaration_name(source_name);
+                if !declaration_name.starts_with("class@anonymous#") {
+                    self.validate_declaration_import(kind, source_name, &declaration_name, line)?;
+                    self.elided_declaration_names.push((kind, declaration_name));
+                }
+                continue;
+            }
+            match statement {
+                Stmt::Const {
+                    line, declarations, ..
+                } => {
+                    for (name, _) in declarations {
+                        let declaration_name = self.resolve_declaration_name(name);
+                        self.validate_declaration_import(
+                            UseKind::Const,
+                            name,
+                            &declaration_name,
+                            *line,
+                        )?;
+                        self.elided_declaration_names
+                            .push((UseKind::Const, declaration_name));
+                    }
+                }
+                Stmt::Block(body) => self.record_elided_declarations(body)?,
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    self.record_elided_declarations(then_body)?;
+                    self.record_elided_declarations(else_body)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn resolve_constant_name(&self, name: &str) -> (String, Option<String>) {
