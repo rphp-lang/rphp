@@ -8,8 +8,49 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `71ff2ab6`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,712 pass, 1,587 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `f6f94519`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,713 pass, 1,586 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.070% and the whole-corpus rate is 66.315%; 4,710 of
+5,299 attempted cases reach runtime (88.885%). Relative to exact base
+`04124356`, the pass-set delta is +1/-0: all 3,712 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`1f077f77aee77aa7e005836b9cbce7140e218e3ffb15d7fbe07c5b1f4028308d`
+and `fd4f61da740b7424193617a8b7126a5e60a41bdc3e31d8e840ce8e0cce010a7d`.
+
+Parent interfaces that contribute the same case-insensitive method name with
+incompatible staticness now fail while the child interface is linked. The
+first effective inherited declaration, or an explicit declaration on the
+child, remains the implementation side of PHP's diagnostic. Method spelling
+therefore follows that implementation while the conflicting requirement
+retains its declaring interface as owner. Interface collection is alias-aware,
+and an explicit `class_alias()` that publishes a previously unresolved edge
+rechecks affected interface contracts in stable class-registration order after
+preserving the existing duplicate-interface-identity diagnostic priority.
+
+One original E2E regression covers the aliased and case-mismatched form, both
+staticness directions, an explicit child declaration and a compatible repeated
+non-static contract. The exact full-corpus addition is
+`Zend/tests/inter_007.phpt`, which also passes in 32 consecutive focused runs.
+Complete inherited-interface arity, reference and parameter/return-type
+compatibility, including delayed variance dependencies, remains a separate
+semantic slice and is not claimed by this checkpoint.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,617 unsafe blocks and 289 unsafe
+functions. No separate hot runtime performance gate applies: validation runs
+only during cold interface declaration or an explicit `class_alias()`, scans
+no successful method dispatch, adds no metadata or layout, and leaves the
+successful dispatch path unchanged; S3 exercises the surrounding link path
+end to end.
+
+In the preceding inherited-trait diagnostic checkpoint, the measured AMD64
+PHP 8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate
+commit `71ff2ab6`. Across all 5,599 unmodified `Zend/tests` and `tests/lang`
+cases, 3,712 pass, 1,587 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 70.051% and the whole-corpus rate is 66.298%; 4,710 of
 5,299 attempted cases reach runtime (88.885%). Relative to exact base
