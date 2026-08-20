@@ -72,7 +72,12 @@ fn coerce_property_value(value: &Value, hint: &ParamTypeHint, weak: bool) -> Opt
             _ => None,
         },
         ParamTypeHint::Int if weak => match value.value_type() {
-            ValueType::Double => Some(Value::long(value.as_double()? as i64)),
+            ValueType::Double => {
+                let number = value.as_double()?;
+                (number.is_finite()
+                    && (-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number))
+                .then(|| Value::long(number as i64))
+            }
             ValueType::True | ValueType::False => Some(Value::long(i64::from(value.is_truthy()))),
             ValueType::String => {
                 let numeric = value.as_str()?.trim();

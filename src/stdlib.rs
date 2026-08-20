@@ -3412,9 +3412,23 @@ fn fn_floatval(
 fn fn_boolval(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::bool(arg!(ed, 0).is_truthy()));
+    let argument = arg!(ed, 0);
+    let converted = argument.is_truthy();
+    if argument.as_double().is_some_and(f64::is_nan) {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "unexpected NAN value was coerced to bool",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(rv, Value::bool(converted));
 }
 
 fn fn_settype(

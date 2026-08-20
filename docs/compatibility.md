@@ -9,6 +9,51 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,620 pass, 1,677 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+68.341% and the whole-corpus rate is 64.654%; 4,701 of 5,297 attempted cases
+reach runtime (88.748%). Relative to exact base `e68b0b8f`, the pass-set delta
+is +3/-0: all 3,617 prior passes remain passes and no other status or failure
+category moves. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`c5befe463edd76f7c47c4edeb81c038ff2767af83b81b5944e2fdd65b7b9b418`.
+
+PHP 8.5 NAN conversion warnings now cover weak boolean and string arguments
+plus explicit bool, string, array and object casts. `boolval()`, `strval()` and
+the existing `settype()` conversions follow the same diagnostic contract.
+References are transparent, union coercion retains PHP precedence, and an
+exact float union member accepts NAN without a warning. Reentrant cast ordering
+is conversion-specific: string captures the original NAN text, bool and array
+read the live value after the handler, and object conversion allocates its
+result before the handler but writes the live scalar property afterward. A
+throwing handler interrupts a cast or call without exposing a partial result.
+
+Weak NAN-to-integer calls and typed writes no longer silently saturate to zero.
+The shared scalar guard rejects every non-finite or out-of-AMD64-range float
+before an integer write, preserving the prior property value and PHP's
+`TypeError`. Original E2E coverage exercises ordinary, union and reference
+arguments, every explicit boundary, handler interruption and the exact-float
+control. The full-corpus additions are
+`Zend/tests/type_coercion/nan_to_other.phpt`,
+`Zend/tests/type_declarations/typed_properties_038.phpt` and
+`typed_properties_075.phpt`. NAN comparison ordering remains a separate visible
+failure in `nan_comp_op.phpt`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. On an AMD Ryzen
+9 7950X pinned to one performance-governor CPU, three 32-pair alternating
+release A/B controls with two warmups per binary, JIT and quick loops disabled
+execute five million ordinary operations with identical checksums. Dynamic
+bool casts measure +2.227% independently and +1.883% paired; weak bool calls
+measure -5.272% and -5.247%; weak typed-property writes measure -5.595% and
+-5.612%. Every median remains within the +5% gate. Favorable medians are
+control evidence, not an optimization claim.
+
+In the preceding explicit-numeric-cast checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,617 pass, 1,680 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 68.284% and the whole-corpus rate is 64.601%; 4,701 of 5,297 attempted cases

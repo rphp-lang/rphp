@@ -998,6 +998,20 @@ fn return_hint_contains(hint: &ParamTypeHint, expected: &ParamTypeHint) -> bool 
 }
 
 #[inline]
+fn weak_nan_call_target(value: &Value, hint: &ParamTypeHint, strict: bool) -> Option<&'static str> {
+    if strict || !value.dereferenced().as_double().is_some_and(f64::is_nan) {
+        return None;
+    }
+    if return_hint_contains(hint, &ParamTypeHint::Float) {
+        return None;
+    }
+    if return_hint_contains(hint, &ParamTypeHint::String) {
+        return Some("string");
+    }
+    return_hint_contains(hint, &ParamTypeHint::Bool).then_some("bool")
+}
+
+#[inline]
 fn weak_return_float_to_int(number: f64) -> Option<(i64, bool)> {
     let upper_exclusive = -(i64::MIN as f64);
     if !number.is_finite() || number < i64::MIN as f64 || number >= upper_exclusive {
@@ -3288,6 +3302,26 @@ fn execute_full_call<'a>(
                 )? {
                     CallArgumentPreparation::Exact => continue,
                     CallArgumentPreparation::Coerced(prepared) => {
+                        if let Some(target) =
+                            weak_nan_call_target(&value, hint, op_array.strict_types)
+                        {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                &format!("unexpected NAN value was coerced to {target}"),
+                                false,
+                            )?;
+                            if let Some(exception) = eg.exception.take() {
+                                cleanup_frame_slots(call);
+                                pop_vm_call_frame(eg, call);
+                                return Ok(match throw_in_frame(eg, frame, exception) {
+                                    ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                                });
+                            }
+                        }
                         let slot = (*call).cv_mut(cv_idx) as *mut Value;
                         if (*slot).is_reference() {
                             slot_set((*slot).as_ref_ptr(), prepared);

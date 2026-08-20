@@ -2316,6 +2316,101 @@ var_dump($value);
 }
 
 #[test]
+fn nan_coercion_warnings_cover_weak_calls_casts_and_throwing_handlers() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($severity, $message) { echo "W|$message\n"; });
+function accept_bool(bool $value) { var_dump($value); }
+function accept_string(string $value) { var_dump($value); }
+function accept_union(string|bool $value) { var_dump($value); }
+function accept_float_union(float|string $value) { var_dump($value); }
+function accept_int(int $value) { echo "BAD-int\n"; }
+$nan = NAN;
+accept_bool($nan);
+accept_string($nan);
+accept_union($nan);
+accept_float_union($nan);
+var_dump((bool) $nan, boolval($nan));
+$array = (array) $nan;
+var_dump(count($array), $array[0]);
+$object = (object) $nan;
+echo get_class($object), "\n";
+var_dump($object->scalar);
+$reference = &$nan;
+var_dump((bool) $reference);
+try {
+    accept_int($nan);
+} catch (Throwable $error) {
+    echo get_class($error), "\n";
+}
+restore_error_handler();
+$source = NAN;
+$replacement = 42;
+set_error_handler(function ($severity, $message) use (&$source, &$replacement) {
+    $source = $replacement;
+    echo "R|$message\n";
+});
+$string = (string) $source;
+var_dump($source, $string);
+$source = NAN;
+$replacement = 0;
+$bool = (bool) $source;
+var_dump($source, $bool);
+$source = NAN;
+$replacement = 42;
+$array = (array) $source;
+var_dump($array[0]);
+$source = NAN;
+$replacement = 43;
+$object = (object) $source;
+var_dump($object->scalar);
+restore_error_handler();
+set_error_handler(function ($severity, $message) {
+    throw new RuntimeException("stop|$message");
+});
+try {
+    accept_bool($nan);
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    $array = (array) $nan;
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    boolval($nan);
+} catch (Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "W|unexpected NAN value was coerced to bool\nbool(true)\n",
+            "W|unexpected NAN value was coerced to string\nstring(3) \"NAN\"\n",
+            "W|unexpected NAN value was coerced to string\nstring(3) \"NAN\"\n",
+            "float(NAN)\n",
+            "W|unexpected NAN value was coerced to bool\n",
+            "W|unexpected NAN value was coerced to bool\n",
+            "bool(true)\nbool(true)\n",
+            "W|unexpected NAN value was coerced to array\nint(1)\nfloat(NAN)\n",
+            "W|unexpected NAN value was coerced to object\nstdClass\nfloat(NAN)\n",
+            "W|unexpected NAN value was coerced to bool\nbool(true)\n",
+            "TypeError\n",
+            "R|unexpected NAN value was coerced to string\n",
+            "int(42)\nstring(3) \"NAN\"\n",
+            "R|unexpected NAN value was coerced to bool\nint(0)\nbool(false)\n",
+            "R|unexpected NAN value was coerced to array\nint(42)\n",
+            "R|unexpected NAN value was coerced to object\nint(43)\n",
+            "stop|unexpected NAN value was coerced to bool\n",
+            "stop|unexpected NAN value was coerced to array\n",
+            "stop|unexpected NAN value was coerced to bool\n",
+        )
+    );
+}
+
+#[test]
 fn noncanonical_casts_deprecate_before_execution_and_keep_values() {
     assert_eq!(
         run_php_with_source_context(

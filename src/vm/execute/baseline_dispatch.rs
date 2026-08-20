@@ -2742,12 +2742,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Cast => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let source = val.dereferenced();
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 let casted = match opline.extended_value {
                     0 => {                                   // (int)
-                        let converted = explicit_long_conversion(val);
+                        let converted = explicit_long_conversion(source);
                         if let Some(message) = explicit_numeric_cast_warning(
-                            val,
+                            source,
                             ExplicitNumericCastTarget::Int,
                         ) {
                             report_php_warning(eg, frame, op_array, opline, &message, false)?;
@@ -2756,9 +2757,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         Value::long(converted)
                     }
                     1 => {                                   // (float)
-                        let converted = explicit_float_conversion(val);
+                        let converted = explicit_float_conversion(source);
                         if let Some(message) = explicit_numeric_cast_warning(
-                            val,
+                            source,
                             ExplicitNumericCastTarget::Float,
                         ) {
                             report_php_warning(eg, frame, op_array, opline, &message, false)?;
@@ -2767,7 +2768,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         Value::double(converted)
                     }
                     2 => {                                   // (string)
-                        if val.as_double().is_some_and(f64::is_nan) {
+                        if source.as_double().is_some_and(f64::is_nan) {
+                            let converted =
+                                Value::string(source.echo_to_string_with_precision(eg.precision));
                             report_php_warning(
                                 eg,
                                 frame,
@@ -2777,20 +2780,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 false,
                             )?;
                             resume_pending_exception!();
-                        }
-                        report_array_to_string_conversion!(val);
-                        if matches!(val.value_type(), ValueType::Object | ValueType::Closure) {
-                            if val.value_type() == ValueType::Closure {
+                            converted
+                        } else if matches!(source.value_type(), ValueType::Object | ValueType::Closure) {
+                            if source.value_type() == ValueType::Closure {
                                 throw_operator!(
                                     "Error",
                                     "Object of class Closure could not be converted to string"
                                 );
                             }
-                            let class_name = val
+                            let class_name = source
                                 .as_object()
                                 .map(|object| object.class_name.to_string())
                                 .unwrap_or_else(|| "object".to_string());
-                            let conversion = call_magic_method(eg, val, "__tostring", &[])?;
+                            let conversion = call_magic_method(eg, source, "__tostring", &[])?;
                             resume_pending_exception!();
                             if let Some(result) = conversion {
                                 let Some(rendered) = result.as_str() else {
@@ -2811,47 +2813,95 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 );
                             }
                         } else {
-                            Value::string(val.echo_to_string_with_precision(eg.precision))
+                            report_array_to_string_conversion!(source);
+                            Value::string(source.echo_to_string_with_precision(eg.precision))
                         }
                     }
-                    3 => Value::bool(val.is_truthy()),      // (bool)
+                    3 => {                                   // (bool)
+                        if source.as_double().is_some_and(f64::is_nan) {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "unexpected NAN value was coerced to bool",
+                                false,
+                            )?;
+                            resume_pending_exception!();
+                        }
+                        Value::bool(val.dereferenced().is_truthy())
+                    }
                     4 => {                                   // (array)
-                        match val.value_type() {
-                            ValueType::Array => val.clone(),
-                            ValueType::Object => cast_object_to_array(val, eg),
-                            ValueType::Null | ValueType::Undef => Value::array(PhpArray::new()),
-                            _ => {
-                                let mut arr = PhpArray::new();
-                                arr.push(val.clone());
-                                Value::array(arr)
+                        if source.as_double().is_some_and(f64::is_nan) {
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "unexpected NAN value was coerced to array",
+                                false,
+                            )?;
+                            resume_pending_exception!();
+                            let mut array = PhpArray::new();
+                            array.push(val.dereferenced().clone());
+                            Value::array(array)
+                        } else {
+                            match source.value_type() {
+                                ValueType::Array => source.clone(),
+                                ValueType::Object => cast_object_to_array(source, eg),
+                                ValueType::Null | ValueType::Undef => Value::array(PhpArray::new()),
+                                _ => {
+                                    let mut array = PhpArray::new();
+                                    array.push(source.clone());
+                                    Value::array(array)
+                                }
                             }
                         }
                     }
                     5 => {                                   // (object)
-                        match val.value_type() {
-                            ValueType::Object => val.clone(),
-                            ValueType::Array => {
-                                let mut object = PhpObject::std_class(HashMap::new());
-                                for (key, value) in val.as_array().unwrap().iter() {
-                                    let key = match key {
-                                        ArrayKey::Int(key) => key.to_string(),
-                                        ArrayKey::String(key) => key,
-                                    };
-                                    object.set_property(&key, value.clone());
+                        if source.as_double().is_some_and(f64::is_nan) {
+                            let converted =
+                                Value::object(PhpObject::std_class(HashMap::new()));
+                            report_php_warning(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                "unexpected NAN value was coerced to object",
+                                false,
+                            )?;
+                            resume_pending_exception!();
+                            converted.as_object_mut().unwrap().set_property(
+                                "scalar",
+                                val.dereferenced().clone(),
+                            );
+                            converted
+                        } else {
+                            match source.value_type() {
+                                ValueType::Object => source.clone(),
+                                ValueType::Array => {
+                                    let mut object = PhpObject::std_class(HashMap::new());
+                                    for (key, value) in source.as_array().unwrap().iter() {
+                                        let key = match key {
+                                            ArrayKey::Int(key) => key.to_string(),
+                                            ArrayKey::String(key) => key,
+                                        };
+                                        object.set_property(&key, value.clone());
+                                    }
+                                    Value::object(object)
                                 }
-                                Value::object(object)
-                            }
-                            ValueType::Null | ValueType::Undef => {
-                                Value::object(PhpObject::std_class(HashMap::new()))
-                            }
-                            _ => {
-                                let mut properties = HashMap::with_capacity(1);
-                                properties.insert("scalar".to_string(), val.clone());
-                                Value::object(PhpObject::std_class(properties))
+                                ValueType::Null | ValueType::Undef => {
+                                    Value::object(PhpObject::std_class(HashMap::new()))
+                                }
+                                _ => {
+                                    let mut properties = HashMap::with_capacity(1);
+                                    properties.insert("scalar".to_string(), source.clone());
+                                    Value::object(PhpObject::std_class(properties))
+                                }
                             }
                         }
                     }
-                    _ => val.clone(),
+                    _ => source.clone(),
                 };
                 unsafe { frame_tmp_set(frame, result_ptr, casted) };
             }
