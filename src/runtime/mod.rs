@@ -222,6 +222,7 @@ struct ActiveRuntimeClassRelation {
     parent: Option<String>,
     implements: Vec<String>,
     has_to_string: bool,
+    outstanding_variance_dependencies: Vec<String>,
 }
 
 impl ActiveRuntimeClassRelation {
@@ -233,6 +234,7 @@ impl ActiveRuntimeClassRelation {
                 .methods
                 .iter()
                 .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__toString")),
+            outstanding_variance_dependencies: Vec::new(),
         }
     }
 }
@@ -3342,6 +3344,22 @@ impl ExecutorGlobals {
             .contains_key(&class_name.to_ascii_lowercase())
     }
 
+    pub(crate) fn active_parent_link_dependencies(
+        &self,
+        class_def: &ClassDef,
+    ) -> Option<(String, Vec<String>)> {
+        let parent = class_def.parent.as_ref()?;
+        let relation = self
+            .active_runtime_class_relations
+            .get(&parent.to_ascii_lowercase())?;
+        (!relation.outstanding_variance_dependencies.is_empty()).then(|| {
+            (
+                parent.clone(),
+                relation.outstanding_variance_dependencies.clone(),
+            )
+        })
+    }
+
     pub(crate) fn mark_runtime_class_declared(
         &mut self,
         declaration_key: String,
@@ -3681,7 +3699,18 @@ impl ExecutorGlobals {
     pub(crate) fn register_provisional_runtime_class(
         &mut self,
         class_def: ClassDef,
+        outstanding_variance_dependencies: Vec<String>,
     ) -> Result<(), String> {
+        let relation = self
+            .active_runtime_class_relations
+            .get_mut(&class_def.name.to_ascii_lowercase())
+            .ok_or_else(|| {
+                format!(
+                    "Runtime class {} is not active during provisional linking",
+                    class_def.name
+                )
+            })?;
+        relation.outstanding_variance_dependencies = outstanding_variance_dependencies;
         self.register_class_mode(class_def, true)?;
         self.retry_pending_named_classes()
     }

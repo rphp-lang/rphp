@@ -88,14 +88,42 @@ fn op_declare_class<'a>(
             });
         }
     }
+    let class_name = class_def.name.clone();
+    if let Some((active_parent, outstanding_dependencies)) =
+        eg.active_parent_link_dependencies(&class_def)
+    {
+        for dependency in outstanding_dependencies {
+            if eg.find_class(&dependency).is_some()
+                || eg.runtime_class_link_is_active(&dependency)
+            {
+                continue;
+            }
+            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            if let Some(exception) = eg.exception.take() {
+                eg.abort_runtime_class_link(&class_name);
+                return Err(VmError::Fatal(format_uncaught_throwable(eg, &exception)));
+            }
+            if let Err(error) = eg.finalize_provisional_runtime_class(&active_parent) {
+                eg.abort_runtime_class_link(&class_name);
+                return Err(VmError::Fatal(error));
+            }
+        }
+    }
     let (method_variance_dependencies, requires_provisional_publication) =
         eg.method_variance_dependency_plan(&class_def);
     let property_variance_dependencies =
         crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def);
-    let class_name = class_def.name.clone();
 
-    if requires_provisional_publication && method_variance_dependencies.len() == 1 {
-        if let Err(error) = eg.register_provisional_runtime_class(class_def) {
+    if requires_provisional_publication && !method_variance_dependencies.is_empty() {
+        let outstanding_variance_dependencies = method_variance_dependencies
+            .iter()
+            .chain(&property_variance_dependencies)
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Err(error) = eg.register_provisional_runtime_class(
+            class_def,
+            outstanding_variance_dependencies,
+        ) {
             eg.abort_runtime_class_link(&class_name);
             return Err(VmError::Fatal(error));
         }
@@ -110,6 +138,10 @@ fn op_declare_class<'a>(
             if let Some(exception) = eg.exception.take() {
                 eg.abort_runtime_class_link(&class_name);
                 return Err(VmError::Fatal(format_uncaught_throwable(eg, &exception)));
+            }
+            if let Err(error) = eg.finalize_provisional_runtime_class(&class_name) {
+                eg.abort_runtime_class_link(&class_name);
+                return Err(VmError::Fatal(error));
             }
         }
         if let Err(error) = eg.finalize_provisional_runtime_class(&class_name) {

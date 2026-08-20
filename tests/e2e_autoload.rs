@@ -1,6 +1,9 @@
 mod common;
 
-use common::{run_php, run_php_expect_error_with_source_context, run_php_with_source_context};
+use common::{
+    run_php, run_php_expect_error, run_php_expect_error_with_source_context,
+    run_php_with_source_context,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -1592,5 +1595,69 @@ echo 'done';
 "#,
         ),
         "load:DeferredSelfConsumer|load:DeferredSelfTrait|load:DeferredSelfChild|done"
+    );
+}
+
+#[test]
+fn suspended_parent_link_finishes_the_deepest_dependency_first() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class QueueRoot {
+    public function makeLeft(): QueueParent {}
+    public function makeRight(): QueueParent {}
+}
+spl_autoload_register(function (string $name): void {
+    echo "load:$name|";
+    if ($name === 'QueueParent') {
+        class QueueParent extends QueueRoot {
+            public function makeLeft(): QueueLeft {}
+            public function makeRight(): QueueRight {}
+        }
+    } elseif ($name === 'QueueLeft') {
+        class QueueLeft extends QueueParent {}
+        echo 'left|';
+    } else {
+        class QueueRight extends QueueParent {}
+        echo 'right|';
+    }
+});
+new QueueParent;
+echo 'done';
+"#,
+        ),
+        "load:QueueParent|load:QueueLeft|load:QueueRight|right|left|done"
+    );
+}
+
+#[test]
+fn suspended_parent_link_reports_the_nested_invalid_contract() {
+    let error = run_php_expect_error(
+        r#"<?php
+class BrokenQueueRoot {
+    public function makeLeft(): BrokenQueueParent {}
+    public function makeRight(): BrokenQueueParent {}
+}
+spl_autoload_register(function (string $name): void {
+    if ($name === 'BrokenQueueParent') {
+        class BrokenQueueParent extends BrokenQueueRoot {
+            public function makeLeft(): BrokenQueueLeft {}
+            public function makeRight(): BrokenQueueRight {}
+        }
+    } elseif ($name === 'BrokenQueueLeft') {
+        class BrokenQueueLeft extends BrokenQueueParent {}
+    } else {
+        class BrokenQueueRight extends BrokenQueueRoot {}
+    }
+});
+new BrokenQueueParent;
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains(
+            "BrokenQueueParent::makeRight(): BrokenQueueRight must be compatible with BrokenQueueRoot::makeRight(): BrokenQueueParent"
+        ),
+        "{rendered}"
     );
 }
