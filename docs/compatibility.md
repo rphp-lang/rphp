@@ -20,7 +20,7 @@ which advance from an early output mismatch to their later runtime gaps after
 the containing conditional declaration begins at the correct stage. Two final
 merged manifests and summaries are byte-for-byte identical. Their SHA-256
 values are `6f20b8c3151b1bb66b87277dd28159f22792d7cb5883061bc580d7bf44f3e6c7`
-and `9d0b330b0e64819c76a99fc56f5777c3fea690cbf997749d739e20ed11c85ddd`.
+and `6e8ccc7fc175a144792fbecd91796729fb2035975d67fcc4da91d7e250779cbf`.
 
 Class, interface, trait and enum declarations nested in `if`, loop, `switch`
 or `try` control flow now remain unpublished until execution reaches their
