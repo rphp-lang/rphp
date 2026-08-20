@@ -2302,6 +2302,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     let dynamic_name = opline._pad & CLASS_CONST_DYNAMIC_NAME != 0;
     let compile_time_name = opline._pad & CLASS_CONST_COMPILE_TIME_NAME != 0;
     let constant_expression = opline._pad & CLASS_CONST_CONSTANT_EXPRESSION != 0;
+    let dynamic_call_owner = opline._pad & CLASS_CONST_DYNAMIC_CALL_OWNER != 0;
     let raw_class = class_value.as_str().unwrap_or("");
     let constant = constant_value.as_str();
 
@@ -2377,7 +2378,9 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     };
 
     if class_id == 0 && scoped_owner {
-        let message = if constant.is_some_and(|name| name.eq_ignore_ascii_case("class")) {
+        let message = if constant.is_some_and(|name| name.eq_ignore_ascii_case("class"))
+            && !dynamic_call_owner
+        {
             format!(
                 "Cannot use \"{}\" in the global scope",
                 raw_class.to_ascii_lowercase()

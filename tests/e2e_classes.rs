@@ -10,12 +10,14 @@ fn global_relative_class_operations_raise_catchable_scope_errors() {
     assert_eq!(
         run_php(
             r#"<?php
+$method = 'missing';
 foreach ([
     fn() => static::MISSING,
     fn() => parent::MISSING,
     fn() => self::MISSING,
     fn() => new static,
     fn() => static::missing(),
+    fn() => self::{$method}(),
     fn() => static::$missing,
 ] as $operation) {
     try { $operation(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
@@ -27,6 +29,7 @@ Cannot access \"parent\" when no class scope is active\n\
 Cannot access \"self\" when no class scope is active\n\
 Cannot access \"static\" when no class scope is active\n\
 Cannot access \"static\" when no class scope is active\n\
+Cannot access \"self\" when no class scope is active\n\
 Cannot access \"static\" when no class scope is active\n",
     );
 }

@@ -35,19 +35,20 @@ use crate::vm::instruction::{
     CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
     CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER,
-    CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY,
-    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_SILENT,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
-    FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
-    FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache,
-    Instruction, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
-    NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType,
-    PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
-    REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
-    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
+    CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS,
+    FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_ISSET,
+    FETCH_DIM_MUTABLE, FETCH_DIM_SILENT, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
+    FETCH_DYNAMIC_SILENT, FETCH_OBJ_COMPOUND, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC,
+    FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
+    INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction, KnownScalarType,
+    NEW_FLAG_DYNAMIC_CLASS_NAME, NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_UNPACKED_ARGUMENTS,
+    OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType, PROPERTY_INCDEC_DECREMENT,
+    PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
+    SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT,
+    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
+    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
+    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -9780,11 +9781,44 @@ impl Compiler {
                 callable,
                 args,
                 generic_args,
+                method_syntax,
                 line,
-                ..
             } => {
                 // Compile the callable expression (e.g. $var, $arr[0])
+                let dynamic_relative_owner = *method_syntax
+                    && matches!(
+                        callable.as_ref(),
+                        Expr::ArrayLiteral(elements)
+                            if matches!(
+                                elements.first().map(|element| &element.value),
+                                Some(Expr::ClassConstant {
+                                    class_name,
+                                    constant,
+                                    ..
+                                }) if constant.eq_ignore_ascii_case("class")
+                                    && (class_name.eq_ignore_ascii_case("static")
+                                        || (self.relative_scope_is_dynamic()
+                                            && matches!(
+                                                class_name.to_ascii_lowercase().as_str(),
+                                                "self" | "parent"
+                                            )))
+                            )
+                    );
+                let callable_start = self.instructions.len();
                 let (callable_op, callable_type) = self.compile_expr(callable);
+                if dynamic_relative_owner
+                    && let Some(fetch) =
+                        self.instructions[callable_start..]
+                            .iter_mut()
+                            .find(|instruction| {
+                                matches!(
+                                    instruction.opcode,
+                                    OpCode::FetchClassConst | OpCode::FetchLateClassConst
+                                )
+                            })
+                {
+                    fetch._pad |= CLASS_CONST_DYNAMIC_CALL_OWNER;
+                }
                 let receiver_patches =
                     self.take_nullsafe_receiver_patches(callable_op, callable_type);
                 let (tmp, result_type) = self.compile_dynamic_call_from_operand(
