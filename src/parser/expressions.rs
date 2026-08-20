@@ -881,21 +881,56 @@ impl Parser {
                 // Check for a PHP type cast, including PHP 8.5's explicit
                 // discard marker `(void)`.
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
-                let cast_type = match &next {
-                    Token::Identifier(name, _) => match name.as_str() {
-                        "int" | "integer" => Some(CastType::Int),
-                        "float" | "double" | "real" => Some(CastType::Float),
-                        "string" => Some(CastType::String),
-                        "bool" | "boolean" => Some(CastType::Bool),
-                        "object" => Some(CastType::Object),
-                        "void" => Some(CastType::Void),
-                        _ => None,
+                let (cast_type, deprecation) = match &next {
+                    Token::Identifier(name, _) => match name.to_ascii_lowercase().as_str() {
+                        "int" => (Some(CastType::Int), None),
+                        "integer" => (
+                            Some(CastType::Int),
+                            Some(
+                                "Non-canonical cast (integer) is deprecated, use the (int) cast instead",
+                            ),
+                        ),
+                        "float" => (Some(CastType::Float), None),
+                        "double" => (
+                            Some(CastType::Float),
+                            Some(
+                                "Non-canonical cast (double) is deprecated, use the (float) cast instead",
+                            ),
+                        ),
+                        "real" => (Some(CastType::Float), None),
+                        "string" => (Some(CastType::String), None),
+                        "binary" => (
+                            Some(CastType::String),
+                            Some(
+                                "Non-canonical cast (binary) is deprecated, use the (string) cast instead",
+                            ),
+                        ),
+                        "bool" => (Some(CastType::Bool), None),
+                        "boolean" => (
+                            Some(CastType::Bool),
+                            Some(
+                                "Non-canonical cast (boolean) is deprecated, use the (bool) cast instead",
+                            ),
+                        ),
+                        "object" => (Some(CastType::Object), None),
+                        "void" => (Some(CastType::Void), None),
+                        _ => (None, None),
                     },
-                    Token::ArrayKw => Some(CastType::Array),
-                    _ => None,
+                    Token::ArrayKw => (Some(CastType::Array), None),
+                    _ => (None, None),
                 };
                 if let Some(ct) = cast_type {
                     if self.tokens.get(self.pos + 2) == Some(&Token::RParen) {
+                        if matches!(&next, Token::Identifier(name, _) if name.eq_ignore_ascii_case("real")) {
+                            return Err(self.source_error(
+                                "The (real) cast has been removed, use (float) instead",
+                                line,
+                            ));
+                        }
+                        if let Some(message) = deprecation {
+                            self.deferred_compile_deprecations
+                                .push((message.to_string(), line));
+                        }
                         self.advance(); // (
                         self.advance(); // type keyword
                         self.advance(); // )

@@ -2212,6 +2212,32 @@ var_dump(-counted_zero(), $calls);
 }
 
 #[test]
+fn noncanonical_casts_deprecate_before_execution_and_keep_values() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+var_dump((binary) 42);
+var_dump((boolean) 42);
+var_dump((double) 42);
+var_dump((integer) "42");
+"#,
+            "/virtual/noncanonical-casts.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nDeprecated: Non-canonical cast (binary) is deprecated, use the (string) cast instead in /virtual/noncanonical-casts.php on line 2\n",
+            "\nDeprecated: Non-canonical cast (boolean) is deprecated, use the (bool) cast instead in /virtual/noncanonical-casts.php on line 3\n",
+            "\nDeprecated: Non-canonical cast (double) is deprecated, use the (float) cast instead in /virtual/noncanonical-casts.php on line 4\n",
+            "\nDeprecated: Non-canonical cast (integer) is deprecated, use the (int) cast instead in /virtual/noncanonical-casts.php on line 5\n",
+            "string(2) \"42\"\n",
+            "bool(true)\n",
+            "float(42)\n",
+            "int(42)\n",
+        )
+    );
+}
+
+#[test]
 fn test_cast_int_from_bool_true() {
     assert_eq!(run_php("<?php echo (int)true;"), "1");
 }
@@ -2324,17 +2350,26 @@ fn test_cast_object_keeps_object_identity() {
 
 #[test]
 fn test_cast_integer_keyword() {
-    assert_eq!(run_php("<?php echo (integer)3.7;"), "3");
+    assert_eq!(
+        run_php("<?php echo (integer)3.7;"),
+        "\nDeprecated: Non-canonical cast (integer) is deprecated, use the (int) cast instead in  on line 1\n3"
+    );
 }
 
 #[test]
 fn test_cast_double_keyword() {
-    assert_eq!(run_php("<?php $x = (double)42; echo $x + 0.5;"), "42.5");
+    assert_eq!(
+        run_php("<?php $x = (double)42; echo $x + 0.5;"),
+        "\nDeprecated: Non-canonical cast (double) is deprecated, use the (float) cast instead in  on line 1\n42.5"
+    );
 }
 
 #[test]
 fn test_cast_boolean_keyword() {
-    assert_eq!(run_php("<?php echo (boolean)1 ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo (boolean)1 ? 'yes' : 'no';"),
+        "\nDeprecated: Non-canonical cast (boolean) is deprecated, use the (bool) cast instead in  on line 1\nyes"
+    );
 }
 
 // ========== Practical combined ==========

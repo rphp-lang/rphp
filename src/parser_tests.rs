@@ -758,6 +758,57 @@ fn first_strict_types_block_is_a_deferred_compile_error() {
 }
 
 #[test]
+fn noncanonical_cast_deprecations_survive_dead_code_and_real_is_removed() {
+    let tokens = Lexer::new(
+        "<?php\nif (false) { (integer) '42'; }\n(binary) 42;\n(boolean) 42;\n(double) 42;",
+    )
+    .tokenize()
+    .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let diagnostics: Vec<_> = statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Stmt::ExprStmt(Expr::CompileDeprecation { message, line }) => {
+                Some((message.as_str(), *line))
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        diagnostics,
+        [
+            (
+                "Non-canonical cast (integer) is deprecated, use the (int) cast instead",
+                2,
+            ),
+            (
+                "Non-canonical cast (binary) is deprecated, use the (string) cast instead",
+                3,
+            ),
+            (
+                "Non-canonical cast (boolean) is deprecated, use the (bool) cast instead",
+                4,
+            ),
+            (
+                "Non-canonical cast (double) is deprecated, use the (float) cast instead",
+                5,
+            ),
+        ]
+    );
+
+    let tokens = Lexer::new("<?php\n(real) 42;").tokenize().unwrap();
+    let error = Parser::new(tokens)
+        .with_source_name("/virtual/removed-real-cast.php")
+        .parse()
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "The (real) cast has been removed, use (float) instead in /virtual/removed-real-cast.php on line 2"
+    );
+}
+
+#[test]
 fn document_string_parse_tokens_receive_the_parser_source_location() {
     let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
         .tokenize()

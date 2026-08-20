@@ -9,6 +9,42 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,609 pass, 1,688 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+68.133% and the whole-corpus rate is 64.458%; 4,701 of 5,297 attempted cases
+reach runtime (88.748%). Relative to exact base `b2b40557`, the pass-set delta
+is +5/-0: all 3,604 prior passes remain passes and no other status or failure
+category moves. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`ced938e9733fe3996935387d05e38bb696a28948936c48cd99be6a02eba555cb`.
+
+PHP 8.5 non-canonical `(binary)`, `(boolean)`, `(double)` and `(integer)`
+casts now retain their established string, boolean, float and integer values
+while emitting the exact compile-time deprecation and canonical replacement.
+The diagnostics are collected across the complete source unit, survive dead-
+branch elimination and execute in source order only after a successful parse.
+Cast spellings remain case-insensitive. The removed `(real)` spelling instead
+produces PHP 8.5's source-aware parser error directing callers to `(float)`.
+
+Original parser and E2E coverage verifies the four deprecations, their lines
+and ordering, a dead-code cast, unchanged values and the removed-cast error.
+The exact full-corpus additions are
+`Zend/tests/type_coercion/type_casts/non_canonical_binary_cast.phpt`,
+`non_canonical_boolean_cast.phpt`, `non_canonical_double_cast.phpt`,
+`non_canonical_integer_cast.phpt` and `real_cast.phpt`; all other selected
+controls keep their prior outcome. Runtime cast semantics are unchanged.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies: the change is confined to cold parser diagnostics,
+and every successfully compiled alias emits the same cast opcode as its
+canonical spelling.
+
+In the preceding unary-signed-zero checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,604 pass, 1,693 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 68.039% and the whole-corpus rate is 64.369%; 4,701 of 5,297 attempted cases

@@ -37,6 +37,7 @@ impl Parser {
             class_scope_active: false,
             generic_scopes: Vec::new(),
             deferred_compile_error: None,
+            deferred_compile_deprecations: Vec::new(),
             strict_types_allowed: true,
             empty_dimension_unset_context: false,
             preserve_empty_dimension_suffix: false,
@@ -81,6 +82,10 @@ impl Parser {
         while !self.at_eof() {
             stmts.push(self.parse_stmt()?);
         }
+
+        stmts.extend(self.deferred_compile_deprecations.drain(..).map(
+            |(message, line)| Stmt::ExprStmt(Expr::CompileDeprecation { message, line }),
+        ));
 
         if let Some((message, line)) = self.deferred_compile_error.take() {
             stmts.push(Stmt::ExprStmt(Expr::CompileError { message, line }));
