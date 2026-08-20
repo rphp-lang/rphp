@@ -44,6 +44,46 @@ echo ("a" <=> "b") . " " . ("b" <=> "b") . " " . ("c" <=> "b");
 }
 
 #[test]
+fn integer_only_operators_share_php_85_checked_coercion() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo $level, ":", $message, "\n";
+});
+
+var_dump(6.0 % 2);
+var_dump("9.0" % 2);
+var_dump(6.5 % 2);
+var_dump("9.5" % 2);
+var_dump("123tail" % 10);
+var_dump(1.5 | 2);
+var_dump("1.5" << 1);
+var_dump(NAN % 3);
+var_dump(9.223372036854776e18 % 3);
+var_dump("1e309" % 3);
+
+$slot = "45tail";
+$slot %= 7;
+var_dump($slot);
+
+try {
+    var_dump([] % []);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    var_dump(1 % 0);
+} catch (DivisionByZeroError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        "int(0)\nint(1)\n8192:Implicit conversion from float 6.5 to int loses precision\nint(0)\n8192:Implicit conversion from float-string \"9.5\" to int loses precision\nint(1)\n2:A non-numeric value encountered\nint(3)\n8192:Implicit conversion from float 1.5 to int loses precision\nint(3)\n8192:Implicit conversion from float-string \"1.5\" to int loses precision\nint(2)\n2:The float NAN is not representable as an int, cast occurred\n8192:Implicit conversion from float NAN to int loses precision\nint(0)\n2:The float 9.223372036854776E+18 is not representable as an int, cast occurred\nint(-2)\n8192:Implicit conversion from float-string \"1e309\" to int loses precision\nint(0)\n2:A non-numeric value encountered\nint(3)\nUnsupported operand types: array % array\nModulo by zero\n"
+    );
+}
+
+#[test]
 fn compound_and_cross_type_comparisons_follow_php_85_ordering() {
     assert_eq!(
         run_php(

@@ -296,7 +296,7 @@ echo runReferenceWrapper($callback, 100000);
 }
 
 #[test]
-fn indirect_closure_overflow_resumes_the_canonical_method_call() {
+fn indirect_closure_overflow_resumes_with_checked_modulo_coercion() {
     let source = r#"<?php
 final class Transform {
     public $callback;
@@ -334,14 +334,17 @@ runOverflowTransform($transform);
         globals.register_class(class_def).unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
+    let result = execute::execute(&mut globals, &main).unwrap();
     drop(globals);
-    assert!(matches!(
-        error,
-        execute::VmError::Fatal(message)
-            if message == "Unsupported operand types for %"
-    ));
-    assert!(output.lock().unwrap().is_empty());
+    assert_eq!(result.value_type(), rphp::value::ValueType::Null);
+    let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        output
+            .matches("is not representable as an int, cast occurred")
+            .count(),
+        7
+    );
+    assert!(!output.contains("Unsupported operand types"));
 
     let plan = closure_ops_plan(&functions, "runOverflowTransform");
     assert_eq!(plan.native_jit().native_entries(), 1);
@@ -349,7 +352,7 @@ runOverflowTransform($transform);
 }
 
 #[test]
-fn captured_argument_overflow_replays_from_the_virtual_alias() {
+fn captured_argument_overflow_replays_checked_modulo_from_the_virtual_alias() {
     let source = r#"<?php
 function invokeCapturedOverflow(Closure $callback, int $value): int {
     return $callback($value);
@@ -381,14 +384,17 @@ runCapturedOverflow();
             .unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
+    let result = execute::execute(&mut globals, &main).unwrap();
     drop(globals);
-    assert!(matches!(
-        error,
-        execute::VmError::Fatal(message)
-            if message == "Unsupported operand types for %"
-    ));
-    assert!(output.lock().unwrap().is_empty());
+    assert_eq!(result.value_type(), rphp::value::ValueType::Null);
+    let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        output
+            .matches("is not representable as an int, cast occurred")
+            .count(),
+        7
+    );
+    assert!(!output.contains("Unsupported operand types"));
 
     let plan = closure_ops_plan(&functions, "runCapturedOverflow");
     assert_eq!(plan.native_jit().native_entries(), 1);

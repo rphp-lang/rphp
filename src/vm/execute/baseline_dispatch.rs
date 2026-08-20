@@ -730,36 +730,75 @@ fn decrement_php_value(value: &Value) -> Option<(Value, Option<IncDecDiagnostic>
     }
 }
 
-#[inline]
-fn shift_operand_long(value: &Value) -> Result<(i64, bool), ()> {
-    let value = value.dereferenced();
-    if value.value_type() != ValueType::String {
-        return match value.value_type() {
-            ValueType::Long
-            | ValueType::Double
-            | ValueType::True
-            | ValueType::False
-            | ValueType::Null
-            | ValueType::Undef
-            | ValueType::Resource => Ok((value.to_long_val(), false)),
-            _ => Err(()),
+#[cold]
+fn report_integer_operator_diagnostics(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    source: &Value,
+    operand: IntegerOperatorOperand,
+) -> Result<(), VmError> {
+    let source = source.dereferenced();
+    if operand.leading_numeric {
+        report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            "A non-numeric value encountered",
+            false,
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    if operand.non_representable_float {
+        report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            &format!(
+                "The float {} is not representable as an int, cast occurred",
+                source.echo_to_string_with_precision(-1)
+            ),
+            false,
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    if operand.loses_precision {
+        let message = if operand.float_string {
+            format!(
+                "Implicit conversion from float-string \"{}\" to int loses precision",
+                source.as_str().unwrap_or("")
+            )
+        } else {
+            format!(
+                "Implicit conversion from float {} to int loses precision",
+                source.echo_to_string_with_precision(-1)
+            )
         };
+        report_php_deprecation(eg, frame, op_array, opline, &message)?;
     }
+    Ok(())
+}
 
-    let text = value.as_str().unwrap().trim();
-    if let Ok(number) = text.parse::<i64>() {
-        return Ok((number, false));
-    }
-    let bytes = text.as_bytes();
-    let mut end = usize::from(bytes.first().is_some_and(|byte| matches!(byte, b'+' | b'-')));
-    let digit_start = end;
-    while end < bytes.len() && bytes[end].is_ascii_digit() {
-        end += 1;
-    }
-    if end == digit_start {
-        return Err(());
-    }
-    text[..end].parse::<i64>().map(|number| (number, true)).map_err(|_| ())
+#[inline]
+fn prepare_integer_operator_operand(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    source: &Value,
+) -> Result<Option<i64>, VmError> {
+    let Ok(operand) = integer_operator_operand(source) else {
+        return Ok(None);
+    };
+    report_integer_operator_diagnostics(eg, frame, op_array, opline, source, operand)?;
+    Ok(Some(operand.value))
 }
 
 #[cold]
@@ -2325,17 +2364,48 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) =
-                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                let (left, right) = if let (Some(left), Some(right)) =
+                    (op1.as_long(), op2.as_long())
                 {
-                    if l2 == 0 {
-                        throw_operator!("DivisionByZeroError", "Modulo by zero");
-                    }
-                    let remainder = l1.checked_rem(l2).unwrap_or(0);
-                    unsafe { frame_tmp_set_long(frame, result_ptr, remainder) };
+                    (left, right)
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for %".into()));
+                    let Ok(left) = integer_operator_operand(op1) else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} % {}",
+                                op1.dereferenced().diagnostic_type_name(),
+                                op2.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    report_integer_operator_diagnostics(
+                        eg, frame, op_array, opline, op1, left,
+                    )?;
+                    resume_pending_exception!();
+                    let Ok(right) = integer_operator_operand(op2) else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} % {}",
+                                op1.dereferenced().diagnostic_type_name(),
+                                op2.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    report_integer_operator_diagnostics(
+                        eg, frame, op_array, opline, op2, right,
+                    )?;
+                    resume_pending_exception!();
+                    (left.value, right.value)
+                };
+                if right == 0 {
+                    throw_operator!("DivisionByZeroError", "Modulo by zero");
                 }
+                let remainder = left.checked_rem(right).unwrap_or(0);
+                // SAFETY: `result_ptr` is the current instruction's resolved
+                // result slot, and both operand borrows are finished here.
+                unsafe { frame_tmp_set_long(frame, result_ptr, remainder) };
             }
 
             OpCode::Concat_StringString => {
@@ -2434,21 +2504,63 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                unsafe {
-                    if op1.value_type() == ValueType::Long && op2.value_type() == ValueType::Long {
-                        let left = op1.raw_long();
-                        let right = op2.raw_long();
-                        let value = match opline.opcode {
-                            OpCode::BitwiseAnd => left & right,
-                            OpCode::BitwiseOr => left | right,
-                            OpCode::BitwiseXor => left ^ right,
-                            _ => unreachable!(),
-                        };
-                        frame_tmp_set_long(frame, result_ptr, value);
-                    } else {
-                        let value = bitwise_binary_value(op1, op2, opline.opcode);
-                        frame_tmp_set(frame, result_ptr, value);
-                    }
+                if op1.value_type() == ValueType::Long && op2.value_type() == ValueType::Long {
+                    // SAFETY: the exact Long guards make both raw payload reads
+                    // valid, and `result_ptr` names this instruction's result slot.
+                    let left = unsafe { op1.raw_long() };
+                    let right = unsafe { op2.raw_long() };
+                    let value = match opline.opcode {
+                        OpCode::BitwiseAnd => left & right,
+                        OpCode::BitwiseOr => left | right,
+                        OpCode::BitwiseXor => left ^ right,
+                        _ => unreachable!(),
+                    };
+                    unsafe { frame_tmp_set_long(frame, result_ptr, value) };
+                } else if op1.dereferenced().as_str().is_some()
+                    && op2.dereferenced().as_str().is_some()
+                {
+                    let value = bitwise_binary_value(op1, op2, opline.opcode);
+                    unsafe { frame_tmp_set(frame, result_ptr, value) };
+                } else {
+                    let symbol = match opline.opcode {
+                        OpCode::BitwiseAnd => "&",
+                        OpCode::BitwiseOr => "|",
+                        OpCode::BitwiseXor => "^",
+                        _ => unreachable!(),
+                    };
+                    let Some(left) = prepare_integer_operator_operand(
+                        eg, frame, op_array, opline, op1,
+                    )? else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} {symbol} {}",
+                                op1.dereferenced().diagnostic_type_name(),
+                                op2.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    resume_pending_exception!();
+                    let Some(right) = prepare_integer_operator_operand(
+                        eg, frame, op_array, opline, op2,
+                    )? else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} {symbol} {}",
+                                op1.dereferenced().diagnostic_type_name(),
+                                op2.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    resume_pending_exception!();
+                    let value = match opline.opcode {
+                        OpCode::BitwiseAnd => left & right,
+                        OpCode::BitwiseOr => left | right,
+                        OpCode::BitwiseXor => left ^ right,
+                        _ => unreachable!(),
+                    };
+                    unsafe { frame_tmp_set_long(frame, result_ptr, value) };
                 }
             }
 
@@ -2457,37 +2569,32 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let Ok((l1, warn_left)) = shift_operand_long(op1) else {
+                let Some(l1) = prepare_integer_operator_operand(
+                    eg, frame, op_array, opline, op1,
+                )? else {
                     throw_operator!(
                         "TypeError",
                         &format!(
                             "Unsupported operand types: {} << {}",
-                            op1.dereferenced().type_name(),
-                            op2.dereferenced().type_name()
+                            op1.dereferenced().diagnostic_type_name(),
+                            op2.dereferenced().diagnostic_type_name()
                         )
                     );
                 };
-                let Ok((l2, warn_right)) = shift_operand_long(op2) else {
+                resume_pending_exception!();
+                let Some(l2) = prepare_integer_operator_operand(
+                    eg, frame, op_array, opline, op2,
+                )? else {
                     throw_operator!(
                         "TypeError",
                         &format!(
                             "Unsupported operand types: {} << {}",
-                            op1.dereferenced().type_name(),
-                            op2.dereferenced().type_name()
+                            op1.dereferenced().diagnostic_type_name(),
+                            op2.dereferenced().diagnostic_type_name()
                         )
                     );
                 };
-                if warn_left || warn_right {
-                    report_php_warning(
-                        eg,
-                        frame,
-                        op_array,
-                        opline,
-                        "A non-numeric value encountered",
-                        false,
-                    )?;
-                    resume_pending_exception!();
-                }
+                resume_pending_exception!();
                 if l2 < 0 {
                     throw_operator!("ArithmeticError", "Bit shift by negative number");
                 }
@@ -2504,37 +2611,32 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                let Ok((l1, warn_left)) = shift_operand_long(op1) else {
+                let Some(l1) = prepare_integer_operator_operand(
+                    eg, frame, op_array, opline, op1,
+                )? else {
                     throw_operator!(
                         "TypeError",
                         &format!(
                             "Unsupported operand types: {} >> {}",
-                            op1.dereferenced().type_name(),
-                            op2.dereferenced().type_name()
+                            op1.dereferenced().diagnostic_type_name(),
+                            op2.dereferenced().diagnostic_type_name()
                         )
                     );
                 };
-                let Ok((l2, warn_right)) = shift_operand_long(op2) else {
+                resume_pending_exception!();
+                let Some(l2) = prepare_integer_operator_operand(
+                    eg, frame, op_array, opline, op2,
+                )? else {
                     throw_operator!(
                         "TypeError",
                         &format!(
                             "Unsupported operand types: {} >> {}",
-                            op1.dereferenced().type_name(),
-                            op2.dereferenced().type_name()
+                            op1.dereferenced().diagnostic_type_name(),
+                            op2.dereferenced().diagnostic_type_name()
                         )
                     );
                 };
-                if warn_left || warn_right {
-                    report_php_warning(
-                        eg,
-                        frame,
-                        op_array,
-                        opline,
-                        "A non-numeric value encountered",
-                        false,
-                    )?;
-                    resume_pending_exception!();
-                }
+                resume_pending_exception!();
                 if l2 < 0 {
                     throw_operator!("ArithmeticError", "Bit shift by negative number");
                 }
@@ -2549,8 +2651,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::BitwiseNot => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                let value = bitwise_not_value(val);
-                unsafe { frame_tmp_set(frame, result_ptr, value) };
+                if let Some(value) = val.dereferenced().as_long() {
+                    // SAFETY: `result_ptr` is the current instruction's resolved
+                    // result slot and the borrowed operand is only read by value.
+                    unsafe { frame_tmp_set_long(frame, result_ptr, !value) };
+                } else if val.dereferenced().as_str().is_some() {
+                    let value = bitwise_not_value(val);
+                    unsafe { frame_tmp_set(frame, result_ptr, value) };
+                } else {
+                    let Some(value) = prepare_integer_operator_operand(
+                        eg, frame, op_array, opline, val,
+                    )? else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Cannot perform bitwise not on {}",
+                                val.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    resume_pending_exception!();
+                    unsafe { frame_tmp_set_long(frame, result_ptr, !value) };
+                }
             }
 
             OpCode::IsEqual | OpCode::IsNotEqual | OpCode::IsSmaller | OpCode::IsSmallerOrEqual => {

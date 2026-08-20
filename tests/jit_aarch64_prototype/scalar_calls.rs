@@ -126,7 +126,7 @@ fn mixed_function_method_tree_enters_one_native_accumulate_region() {
 }
 
 #[test]
-fn native_scalar_function_overflow_resumes_canonical_root_call() {
+fn native_scalar_function_overflow_resumes_with_checked_modulo() {
     let source = "<?php function overflowNative(int $value): int { return ($value * 100000000000000000) % 7; } function runFunctionOverflow(): int { $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += overflowNative($i); } return $sum; } runFunctionOverflow();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
@@ -140,14 +140,17 @@ fn native_scalar_function_overflow_resumes_canonical_root_call() {
             .unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
+    let result = execute::execute(&mut globals, &main).unwrap();
     drop(globals);
-    assert!(matches!(
-        error,
-        execute::VmError::Fatal(message)
-            if message == "Unsupported operand types for %"
-    ));
-    assert!(output.lock().unwrap().is_empty());
+    assert_eq!(result.value_type(), rphp::value::ValueType::Null);
+    let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        output
+            .matches("is not representable as an int, cast occurred")
+            .count(),
+        7
+    );
+    assert!(!output.contains("Unsupported operand types"));
 
     let function = functions
         .iter()
@@ -388,7 +391,7 @@ fn conditional_scalar_method_skips_overflow_in_inactive_arm() {
 }
 
 #[test]
-fn conditional_scalar_method_selected_overflow_replays_canonical_call() {
+fn conditional_scalar_method_selected_overflow_uses_checked_modulo() {
     let source = "<?php class SelectedOverflowKernel { public function choose(int $value): int { if ($value < 90) { return $value + 1; } return ($value * 100000000000000000) % 7; } } function runSelectedOverflow(): int { $kernel = new SelectedOverflowKernel(); $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += $kernel->choose($i); } return $sum; } runSelectedOverflow();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
@@ -406,14 +409,17 @@ fn conditional_scalar_method_selected_overflow_replays_canonical_call() {
         globals.register_class(class_def).unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
+    let result = execute::execute(&mut globals, &main).unwrap();
     drop(globals);
-    assert!(matches!(
-        error,
-        execute::VmError::Fatal(message)
-            if message == "Unsupported operand types for %"
-    ));
-    assert!(output.lock().unwrap().is_empty());
+    assert_eq!(result.value_type(), rphp::value::ValueType::Null);
+    let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        output
+            .matches("is not representable as an int, cast occurred")
+            .count(),
+        7
+    );
+    assert!(!output.contains("Unsupported operand types"));
 
     let function = functions
         .iter()
@@ -522,7 +528,7 @@ fn nested_scalar_method_guard_rejects_changed_inner_target() {
 }
 
 #[test]
-fn nested_scalar_method_overflow_replays_the_root_call_tree() {
+fn nested_scalar_method_overflow_replays_checked_modulo_call_tree() {
     let source = "<?php class OuterOverflow { public function add($left, $right) { return $left + $right; } } class InnerOverflow { public function transform($value) { return ($value * 100000000000000000) % 7; } } function runNestedOverflow(): int { $outer = new OuterOverflow(); $inner = new InnerOverflow(); $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += $outer->add($i, $inner->transform($i)); } return $sum; } runNestedOverflow();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
@@ -540,14 +546,17 @@ fn nested_scalar_method_overflow_replays_the_root_call_tree() {
         globals.register_class(class_def).unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
+    let result = execute::execute(&mut globals, &main).unwrap();
     drop(globals);
-    assert!(matches!(
-        error,
-        execute::VmError::Fatal(message)
-            if message == "Unsupported operand types for %"
-    ));
-    assert!(output.lock().unwrap().is_empty());
+    assert_eq!(result.value_type(), rphp::value::ValueType::Null);
+    let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        output
+            .matches("is not representable as an int, cast occurred")
+            .count(),
+        7
+    );
+    assert!(!output.contains("Unsupported operand types"));
 
     let function = functions
         .iter()
@@ -612,7 +621,7 @@ fn native_scalar_method_guard_rejects_polymorphic_target() {
 }
 
 #[test]
-fn native_scalar_method_overflow_resumes_canonical_call() {
+fn native_scalar_method_overflow_resumes_with_checked_modulo() {
     let source = "<?php class OverflowKernel { public function transform(int $value): int { return ($value * 100000000000000000) % 7; } } function runOverflow(): int { $kernel = new OverflowKernel(); $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += $kernel->transform($i); } return $sum; } try { runOverflow(); } catch (TypeError $error) { echo 'caught'; }";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
@@ -630,14 +639,18 @@ fn native_scalar_method_overflow_resumes_canonical_call() {
         globals.register_class(class_def).unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
+    let result = execute::execute(&mut globals, &main).unwrap();
     drop(globals);
-    assert!(matches!(
-        error,
-        execute::VmError::Fatal(message)
-            if message == "Unsupported operand types for %"
-    ));
-    assert!(output.lock().unwrap().is_empty());
+    assert_eq!(result.value_type(), rphp::value::ValueType::Null);
+    let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        output
+            .matches("is not representable as an int, cast occurred")
+            .count(),
+        7
+    );
+    assert!(!output.contains("Unsupported operand types"));
+    assert!(!output.contains("caught"));
 
     let function = functions
         .iter()

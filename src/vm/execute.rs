@@ -751,11 +751,11 @@ struct PhpNumericString {
     uses_float_syntax: bool,
 }
 
-/// Parse a complete PHP numeric string without accepting Rust's `NaN`/`inf`
-/// spellings. The conversion boundary needs to distinguish an out-of-range
-/// decimal integer from a float-syntax value such as `1e2`.
-fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString> {
-    let value = value.trim_matches(|character: char| character.is_ascii_whitespace());
+/// Parse the numeric prefix accepted by PHP arithmetic without accepting
+/// Rust's `NaN`/`inf` spellings. The boolean reports whether only PHP ASCII
+/// whitespace remains after that prefix.
+fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
+    let value = value.trim_start_matches(|character: char| character.is_ascii_whitespace());
     if value.is_empty() {
         return None;
     }
@@ -781,30 +781,125 @@ fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString> {
         return None;
     }
     if matches!(bytes.get(index), Some(b'e' | b'E')) {
-        uses_float_syntax = true;
-        index += 1;
-        if matches!(bytes.get(index), Some(b'+' | b'-')) {
-            index += 1;
+        let exponent_marker = index;
+        let mut exponent_end = index + 1;
+        if matches!(bytes.get(exponent_end), Some(b'+' | b'-')) {
+            exponent_end += 1;
         }
-        let exponent_start = index;
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
+        let exponent_start = exponent_end;
+        while bytes.get(exponent_end).is_some_and(u8::is_ascii_digit) {
+            exponent_end += 1;
         }
-        if index == exponent_start {
-            return None;
+        if exponent_end != exponent_start {
+            uses_float_syntax = true;
+            index = exponent_end;
+        } else {
+            index = exponent_marker;
         }
     }
-    if index != bytes.len() {
-        return None;
+    let numeric = &value[..index];
+    let number = numeric.parse::<f64>().ok()?;
+    let complete = value[index..]
+        .chars()
+        .all(|character| character.is_ascii_whitespace());
+    Some((
+        PhpNumericString {
+            number,
+            integer: (!uses_float_syntax)
+                .then(|| numeric.parse::<i64>().ok())
+                .flatten(),
+            uses_float_syntax,
+        },
+        complete,
+    ))
+}
+
+/// Parse a complete PHP numeric string. The conversion boundary needs to
+/// distinguish an out-of-range decimal integer from float syntax such as
+/// `1e2` while rejecting leading-numeric strings with trailing data.
+fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString> {
+    let (parsed, complete) = parse_php_numeric_prefix(value)?;
+    complete.then_some(parsed)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct IntegerOperatorOperand {
+    pub(crate) value: i64,
+    leading_numeric: bool,
+    non_representable_float: bool,
+    loses_precision: bool,
+    float_string: bool,
+}
+
+impl IntegerOperatorOperand {
+    #[inline]
+    pub(crate) fn emits_diagnostic(self) -> bool {
+        self.leading_numeric || self.non_representable_float || self.loses_precision
     }
-    let number = value.parse::<f64>().ok()?;
-    Some(PhpNumericString {
-        number,
-        integer: (!uses_float_syntax)
-            .then(|| value.parse::<i64>().ok())
-            .flatten(),
-        uses_float_syntax,
-    })
+}
+
+/// Convert one operand for PHP operators that consume integers. The checked
+/// descriptor keeps warning/deprecation decisions separate from the scalar
+/// value so compile-time folding can retain only diagnostic-free expressions.
+#[inline]
+pub(crate) fn integer_operator_operand(value: &Value) -> Result<IntegerOperatorOperand, ()> {
+    let value = value.dereferenced();
+    let exact = |value| IntegerOperatorOperand {
+        value,
+        leading_numeric: false,
+        non_representable_float: false,
+        loses_precision: false,
+        float_string: false,
+    };
+    match value.value_type() {
+        ValueType::Long => Ok(exact(value.as_long().unwrap())),
+        ValueType::True => Ok(exact(1)),
+        ValueType::False | ValueType::Null | ValueType::Undef => Ok(exact(0)),
+        ValueType::Resource => Ok(exact(value.as_resource_id().unwrap())),
+        ValueType::Double => {
+            let number = value.as_double().unwrap();
+            let integer = php_float_to_long(number);
+            let non_representable_float = !number.is_finite()
+                || !(-PHP_LONG_UPPER_BOUND..PHP_LONG_UPPER_BOUND).contains(&number);
+            Ok(IntegerOperatorOperand {
+                value: integer,
+                leading_numeric: false,
+                non_representable_float,
+                loses_precision: number.is_nan()
+                    || (!non_representable_float && integer as f64 != number),
+                float_string: false,
+            })
+        }
+        ValueType::String => {
+            let text = value.as_str().unwrap();
+            let (parsed, complete) = parse_php_numeric_prefix(text).ok_or(())?;
+            let integer = if let Some(integer) = parsed.integer {
+                integer
+            } else if parsed.uses_float_syntax {
+                if parsed.number.is_finite() {
+                    parsed.number as i64
+                } else {
+                    0
+                }
+            } else if text
+                .trim_start_matches(|character: char| character.is_ascii_whitespace())
+                .starts_with('-')
+            {
+                i64::MIN
+            } else {
+                i64::MAX
+            };
+            Ok(IntegerOperatorOperand {
+                value: integer,
+                leading_numeric: !complete,
+                non_representable_float: false,
+                loses_precision: parsed.uses_float_syntax
+                    && (!parsed.number.is_finite() || integer as f64 != parsed.number),
+                float_string: parsed.uses_float_syntax,
+            })
+        }
+        _ => Err(()),
+    }
 }
 
 #[inline]

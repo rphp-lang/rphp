@@ -172,7 +172,7 @@ fn nested_scalar_method_tree_enters_one_native_accumulate_region() {
 }
 
 #[test]
-fn scalar_call_overflow_side_exit_replays_canonical_root_call() {
+fn scalar_call_overflow_side_exit_replays_checked_modulo_root_call() {
     let source = "<?php function overflowNative(int $value): int { return ($value * 100000000000000000) % 7; } function runFunctionOverflow(): int { $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += overflowNative($i); } return $sum; } runFunctionOverflow();";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
@@ -186,14 +186,17 @@ fn scalar_call_overflow_side_exit_replays_canonical_root_call() {
             .unwrap();
     }
 
-    let error = execute::execute(&mut globals, &main).unwrap_err();
+    let result = execute::execute(&mut globals, &main).unwrap();
     drop(globals);
-    assert!(matches!(
-        error,
-        execute::VmError::Fatal(message)
-            if message == "Unsupported operand types for %"
-    ));
-    assert!(output.lock().unwrap().is_empty());
+    assert_eq!(result.value_type(), rphp::value::ValueType::Null);
+    let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        output
+            .matches("is not representable as an int, cast occurred")
+            .count(),
+        7
+    );
+    assert!(!output.contains("Unsupported operand types"));
 
     let function = functions
         .iter()

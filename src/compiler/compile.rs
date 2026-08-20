@@ -4965,6 +4965,12 @@ impl Compiler {
     ) -> Result<Value, String> {
         let integer_pair = || left.as_long().zip(right.as_long());
         let numeric_pair = || left.to_double().zip(right.to_double());
+        let integer_operator_pair = || {
+            let left = crate::vm::execute::integer_operator_operand(left).ok()?;
+            let right = crate::vm::execute::integer_operator_operand(right).ok()?;
+            (!left.emits_diagnostic() && !right.emits_diagnostic())
+                .then_some((left.value, right.value))
+        };
         let unsupported = || format!("unsupported operands for {:?} in constant expression", op);
 
         match op {
@@ -5020,7 +5026,7 @@ impl Compiler {
                 Ok(Value::double(left_number / right_number))
             }
             BinOp::Mod => {
-                let (left, right) = integer_pair().ok_or_else(unsupported)?;
+                let (left, right) = integer_operator_pair().ok_or_else(unsupported)?;
                 if right == 0 {
                     return Err("division by zero in constant expression".into());
                 }
@@ -5102,7 +5108,7 @@ impl Compiler {
                         preserve_longer_tail,
                     )));
                 }
-                let (left, right) = integer_pair().ok_or_else(unsupported)?;
+                let (left, right) = integer_operator_pair().ok_or_else(unsupported)?;
                 Ok(Value::long(match op {
                     BinOp::BitwiseAnd => left & right,
                     BinOp::BitwiseOr => left | right,
@@ -5111,7 +5117,7 @@ impl Compiler {
                 }))
             }
             BinOp::ShiftLeft | BinOp::ShiftRight => {
-                let (left, right) = integer_pair().ok_or_else(unsupported)?;
+                let (left, right) = integer_operator_pair().ok_or_else(unsupported)?;
                 let shift = u32::try_from(right)
                     .ok()
                     .filter(|shift| *shift < i64::BITS)

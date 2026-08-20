@@ -9,13 +9,75 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,569 pass, 1,728 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,597 pass, 1,700 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-67.378% and the whole-corpus rate is 63.744%; 4,684 of 5,297 attempted cases
-reach runtime (88.427%). Relative to exact base `1f6178d3`, the pass-set delta
-is +28/-0: all 3,541 prior passes remain passes and no status regresses. Two
+67.906% and the whole-corpus rate is 64.244%; 4,701 of 5,297 attempted cases
+reach runtime (88.748%). Relative to exact base `0c1c67e7`, the pass-set delta
+is +28/-0: all 3,569 prior passes remain passes and no status regresses. Two
 final merged manifests and summaries are byte-for-byte identical. The manifest
 SHA-256 is
+`1482a871c31cd810f7e14676be9a1e65ec2122f4f5f61134a28a1201eae36c41`.
+
+PHP 8.5 integer-only operators now share a checked scalar-conversion boundary.
+Modulo, bitwise AND/OR/XOR and shifts accept the same booleans, nulls,
+resources, floats, numeric strings and leading-numeric strings, including their
+compound-assignment forms. Bitwise NOT applies the same conversion outside its
+separate byte-string operation. Fractional floats and float-strings emit the
+exact implicit-conversion deprecation; non-representable floats emit PHP's
+cast warning, and `NAN` preserves the warning-then-deprecation order. A
+leading-numeric suffix warns before execution. Invalid arrays and objects
+produce the operator-specific catchable `TypeError`, while modulo diagnostics
+precede the zero-divisor exception. `PHP_INT_MIN % -1` remains defined.
+
+The checked descriptor separates the converted `i64` from its observable
+diagnostics. Constant evaluation therefore folds only diagnostic-free cases
+and leaves warning or deprecation cases for runtime. Existing Long/Long modulo
+and bitwise paths remain direct, and JIT side exits now resume the canonical
+warning-plus-conversion contract instead of preserving the former fatal.
+Original E2E coverage combines exact and fractional floats, float-strings,
+leading-numeric text, non-representable values, `NAN`, compound assignment,
+invalid operand types and modulo by zero. The focused 16-case upstream cluster
+moves from 0 to 11 exact passes; the other five execute their integer-operator
+sections correctly before reaching separately scoped behavior.
+
+The exact Zend additions are `bitwise_not_precision_exception.phpt`,
+`bug69957.phpt`, `mod_001.phpt`, `not_001.phpt`, `self_and.phpt`,
+`self_mod.phpt`, `self_or.phpt`, `self_xor.phpt`, `xor_001.phpt`, the five
+compatible float/float-string cases under `type_coercion/float_to_int`, both
+assignment-operator warning cases there, and
+`non-rep-float-as-int-extra1.phpt`. The eleven `tests/lang/operators`
+additions cover the AMD64 long variants of AND, NOT, OR, XOR, left shift,
+right shift and modulo plus three string-variation shift cases and the modulo
+string variation.
+
+Seven remaining failures move only beyond their former operator rejection.
+`int_conversion_exponents.phpt` reaches the separate scientific-string
+`(int)`/`intval()` boundary; `not_002.phpt` reaches fatal-backtrace formatting;
+the float-literal and float-variable warning cases reach independent string-
+offset semantics; their two float-string counterparts reach weak call/property
+conversion diagnostics; and `tests/lang/024.phpt` reaches an included-file parser
+boundary. These remain visible failures and are not claimed here.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory is 1,612 unsafe blocks and 289 unsafe functions. On an AMD Ryzen 9
+7950X pinned to one performance-governor CPU, 32 balanced release A/B pairs
+with JIT and quick loops disabled retain the ten-million-iteration Long modulo
+gate under its +1% ceiling: the candidate is -4.096% by independent medians,
+-3.995% by the paired-ratio median and -3.810% after balancing order-specific
+medians. Every sample has the identical checksum. Favorable medians are control
+evidence, not a broader optimization claim.
+
+In the preceding compound-comparison checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src 8.5.6 commit `fcc29c8`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,569 pass, 1,728 fail, 114
+skip, one is an upstream XFAIL, 187 are unsupported, and none time out or
+crash. The headline pass rate is 67.378% and the whole-corpus rate is 63.744%;
+4,684 of 5,297 attempted cases reach runtime (88.427%). Relative to exact base
+`1f6178d3`, the pass-set delta is +28/-0: all 3,541 prior passes remain passes
+and no status regresses. Two final merged manifests and summaries are byte-for-
+byte identical. The manifest SHA-256 is
 `8b7fc631ad7bb9e76c26bbf68f03209413daea4bd474723d99aaa5f64c6a6176`.
 
 PHP 8.5 loose equality, relational and spaceship operations now share a
