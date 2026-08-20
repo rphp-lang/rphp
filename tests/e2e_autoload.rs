@@ -1711,3 +1711,128 @@ new PendingParent;
         "Fatal(\"Could not check compatibility between PendingParent::produce(): PendingLeaf and PendingRoot::produce(): PendingParent, because class PendingLeaf is not available in nested-missing-variance-dependency.php on line 6\")"
     );
 }
+
+#[test]
+fn control_flow_class_like_declarations_publish_only_when_reached() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$run = true;
+echo (int) class_exists('FlowClass', false);
+echo (int) interface_exists('FlowInterface', false);
+echo (int) trait_exists('FlowTrait', false);
+echo (int) enum_exists('FlowEnum', false), '|';
+if ($run) { class FlowClass {} }
+for ($i = 0; $i < 1; $i++) { interface FlowInterface {} }
+switch (1) { case 1: trait FlowTrait {} break; }
+try { enum FlowEnum {} } catch (Throwable $error) {}
+echo (int) class_exists('FlowClass', false);
+echo (int) interface_exists('FlowInterface', false);
+echo (int) trait_exists('FlowTrait', false);
+echo (int) enum_exists('FlowEnum', false);
+"#,
+        ),
+        "0000|1111"
+    );
+}
+
+#[test]
+fn caught_control_flow_parent_load_can_retry_the_same_declaration() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function (string $name): void {
+    echo "load:$name|";
+    throw new Exception("missing:$name");
+});
+for ($attempt = 0; $attempt < 2; $attempt++) {
+    try {
+        class RetryFlowChild extends RetryFlowParent {}
+    } catch (Exception $error) {
+        echo $error->getMessage(), '|';
+    }
+}
+echo (int) class_exists('RetryFlowChild', false);
+"#,
+        ),
+        "load:RetryFlowParent|missing:RetryFlowParent|load:RetryFlowParent|missing:RetryFlowParent|0"
+    );
+}
+
+#[test]
+fn active_control_flow_declarations_stay_hidden_from_autoload() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function (string $name): void {
+    class UnlinkedClassChild extends UnlinkedClassParent {}
+});
+try {
+    class UnlinkedClassParent extends MissingClassParent {}
+} catch (Error $error) {
+    echo $error->getMessage(), '|';
+}
+"#,
+        ),
+        "Class \"UnlinkedClassParent\" not found|"
+    );
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function (string $name): void {
+    class UnlinkedInterfaceChild implements UnlinkedInterfaceParent {}
+});
+try {
+    interface UnlinkedInterfaceParent extends MissingInterfaceParent {}
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "Interface \"UnlinkedInterfaceParent\" not found"
+    );
+}
+
+#[test]
+fn linked_variance_dependent_makes_the_parent_load_exception_fatal() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+spl_autoload_register(function (string $name): void {
+    throw new Exception("missing:$name");
+});
+for ($attempt = 0; $attempt < 2; $attempt++) {
+    try {
+        class LockedFlowChild extends LockedFlowParent {}
+    } catch (Exception $error) {}
+}
+interface LockedFlowContract {}
+spl_autoload_register(function (string $name): void {
+    class LockedFlowBase {
+        public function make(): LockedFlowContract {}
+    }
+    class LockedFlowDependent extends LockedFlowBase {
+        public function make(): LockedFlowChild {}
+    }
+}, true, true);
+try {
+    class LockedFlowChild extends LockedFlowParent implements LockedFlowContract {}
+} catch (Exception $error) {
+    echo 'must not catch';
+}
+"#,
+        "variance-dependent-parent-exception.php",
+        "/tmp",
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains(
+            "During inheritance of LockedFlowChild with variance dependencies: Uncaught Exception: missing:LockedFlowParent"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("in variance-dependent-parent-exception.php on line 20"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("thrown in"), "{rendered}");
+}

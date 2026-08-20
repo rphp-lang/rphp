@@ -9,6 +9,52 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,662 pass, 1,636 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+69.120% and the whole-corpus rate is 65.405%; 4,712 of 5,298 attempted cases
+reach runtime (88.939%). Relative to exact base `5e35c679`, the pass-set delta
+is +7/-0: all 3,655 prior passes remain passes. The only non-pass changes are
+`Zend/tests/bug78406.phpt` and
+`Zend/tests/inheritance/deprecation_to_exception_during_inheritance_can_be_caught.phpt`,
+which advance from an early output mismatch to their later runtime gaps after
+the containing conditional declaration begins at the correct stage. Two final
+merged manifests and summaries are byte-for-byte identical. Their SHA-256
+values are `6f20b8c3151b1bb66b87277dd28159f22792d7cb5883061bc580d7bf44f3e6c7`
+and `9d0b330b0e64819c76a99fc56f5777c3fea690cbf997749d739e20ed11c85ddd`.
+
+Class, interface, trait and enum declarations nested in `if`, loop, `switch`
+or `try` control flow now remain unpublished until execution reaches their
+source marker. Unconditional top-level declarations and declarations inside a
+bare top-level block retain eager publication. A caught exception while
+autoloading a parent or interface restores the marker so a later loop
+iteration can retry the declaration, while an active class relation records
+when another class has already relied on it for method variance. At that point
+PHP can no longer unlink the active declaration: a later dependency-loader
+exception becomes the source-located `During inheritance ... with variance
+dependencies` fatal and cannot be caught by the surrounding declaration.
+
+Four original E2E regressions cover publication timing for every class-like
+kind, retry after a caught parent load, active declarations remaining hidden
+from reentrant class and interface autoload, and the fatal variance-dependent
+boundary. The exact full-corpus additions are
+`Zend/tests/autoload/bug63741.phpt`, `Zend/tests/bug35634.phpt`,
+`Zend/tests/bug78926.phpt`,
+`Zend/tests/type_declarations/variance/loading_exception1.phpt`,
+`loading_exception2.phpt`, `unlinked_parent_1.phpt` and
+`unlinked_parent_2.phpt`.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four Symfony
+S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. No separate hot
+runtime benchmark applies: the compiler flag is consumed only while preparing
+declarations, the relation state is read and written only during cold class
+linking or its exceptional dependency path, and S3 exercises the affected
+compile/autoload lifecycle end to end.
+
+In the preceding unavailable-variance diagnostic checkpoint, the measured
+AMD64 PHP 8.5 contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,655 pass, 1,643 fail, 115 skip, one is an upstream XFAIL,
 185 are unsupported, and none time out or crash. The headline pass rate is
 68.988% and the whole-corpus rate is 65.280%; 4,713 of 5,298 attempted cases

@@ -11,6 +11,36 @@ pub(crate) enum IncludeFileOutcome {
     Thrown(Value),
 }
 
+fn runtime_class_dependency_exception<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    declaration_key: String,
+    class_def: crate::compiler::compile::ClassDef,
+    exception: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    if eg.active_runtime_class_has_variance_dependents(&class_def.name) {
+        let mut exception = format_uncaught_throwable(eg, &exception);
+        if let Some(thrown_suffix) = exception.rfind("\n  thrown in ") {
+            exception.truncate(thrown_suffix);
+        }
+        let inheritance_location = class_def.source_file.as_ref().map_or_else(
+            String::new,
+            |file| format!(" in {file} on line {}", class_def.declaration_line),
+        );
+        return Err(VmError::Fatal(format!(
+            "During inheritance of {} with variance dependencies: {exception}{inheritance_location}",
+            class_def.name
+        )));
+    }
+    eg.restore_runtime_class_declaration(declaration_key, class_def);
+    Ok(match throw_in_frame(eg, frame, exception) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    })
+}
+
 #[cold]
 #[inline(never)]
 fn op_declare_class<'a>(
@@ -52,13 +82,13 @@ fn op_declare_class<'a>(
             && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?
         {
             if let Some(exception) = eg.exception.take() {
-                eg.restore_runtime_class_declaration(declaration_key, class_def);
-                return Ok(match throw_in_frame(eg, frame, exception) {
-                    ThrowResult::Handled(new_frame, new_op_array) => {
-                        ColdResult::NewFrame(new_frame, new_op_array)
-                    }
-                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                });
+                return runtime_class_dependency_exception(
+                    eg,
+                    frame,
+                    declaration_key,
+                    class_def,
+                    exception,
+                );
             }
             let error = make_error_value(
                 "Error",
@@ -79,13 +109,13 @@ fn op_declare_class<'a>(
             });
         }
         if let Some(exception) = eg.exception.take() {
-            eg.restore_runtime_class_declaration(declaration_key, class_def);
-            return Ok(match throw_in_frame(eg, frame, exception) {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    ColdResult::NewFrame(new_frame, new_op_array)
-                }
-                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-            });
+            return runtime_class_dependency_exception(
+                eg,
+                frame,
+                declaration_key,
+                class_def,
+                exception,
+            );
         }
     }
     let class_name = class_def.name.clone();

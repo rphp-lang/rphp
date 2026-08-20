@@ -223,6 +223,9 @@ struct ActiveRuntimeClassRelation {
     implements: Vec<String>,
     has_to_string: bool,
     outstanding_variance_dependencies: Vec<String>,
+    /// A class linked during this relation has already relied on it for a
+    /// method-variance proof, so PHP can no longer roll the declaration back.
+    has_variance_dependents: Cell<bool>,
 }
 
 impl ActiveRuntimeClassRelation {
@@ -235,6 +238,7 @@ impl ActiveRuntimeClassRelation {
                 .iter()
                 .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__toString")),
             outstanding_variance_dependencies: Vec::new(),
+            has_variance_dependents: Cell::new(false),
         }
     }
 }
@@ -3405,6 +3409,12 @@ impl ExecutorGlobals {
             .contains_key(&class_name.to_ascii_lowercase())
     }
 
+    pub(crate) fn active_runtime_class_has_variance_dependents(&self, class_name: &str) -> bool {
+        self.active_runtime_class_relations
+            .get(&class_name.to_ascii_lowercase())
+            .is_some_and(|relation| relation.has_variance_dependents.get())
+    }
+
     pub(crate) fn active_parent_link_dependencies(
         &self,
         class_def: &ClassDef,
@@ -5866,13 +5876,18 @@ impl ExecutorGlobals {
         else {
             return false;
         };
-        (canonical_target.eq_ignore_ascii_case("Stringable") && active.has_to_string)
+        let compatible = (canonical_target.eq_ignore_ascii_case("Stringable")
+            && active.has_to_string)
             || active.parent.as_deref().is_some_and(|parent| {
                 self.class_is_a_while_linking_inner(parent, target, linking_class, visited)
             })
             || active.implements.iter().any(|interface| {
                 self.class_is_a_while_linking_inner(interface, target, linking_class, visited)
-            })
+            });
+        if compatible {
+            active.has_variance_dependents.set(true);
+        }
+        compatible
     }
 
     fn variance_class_is_known(&self, class_name: &str, linking_class: Option<&ClassDef>) -> bool {

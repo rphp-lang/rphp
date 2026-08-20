@@ -1758,6 +1758,25 @@ impl Compiler {
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+        let previous_runtime_declarations = self.class_declarations_are_runtime;
+        if matches!(
+            stmt,
+            Stmt::If { .. }
+                | Stmt::While { .. }
+                | Stmt::DoWhile { .. }
+                | Stmt::For { .. }
+                | Stmt::Switch { .. }
+                | Stmt::Foreach { .. }
+                | Stmt::TryCatch { .. }
+        ) {
+            self.class_declarations_are_runtime = true;
+        }
+        let result = self.compile_stmt_inner(stmt);
+        self.class_declarations_are_runtime = previous_runtime_declarations;
+        result
+    }
+
+    fn compile_stmt_inner(&mut self, stmt: &Stmt) -> Result<(), String> {
         // Check for deferred errors from compile_expr (e.g. closure body errors)
         if let Some(err) = self.deferred_error.take() {
             return Err(err);
@@ -4454,7 +4473,7 @@ impl Compiler {
                         self.emit_named_class_declaration(&resolved_class, *class_line);
                     self.class_declaration_keys.push(Some((
                         declaration_key,
-                        self.child_class_declarations_are_runtime,
+                        self.class_declarations_are_runtime,
                     )));
                 }
                 if !uses.is_empty() && !resolved_class.starts_with("class@anonymous#") {
@@ -4764,7 +4783,7 @@ impl Compiler {
                     self.emit_named_class_declaration(&resolved_iface, *interface_line);
                 self.class_declaration_keys.push(Some((
                     declaration_key,
-                    self.child_class_declarations_are_runtime,
+                    self.class_declarations_are_runtime,
                 )));
             }
             Stmt::Trait {
@@ -5264,7 +5283,7 @@ impl Compiler {
                     self.emit_named_class_declaration(&resolved_trait, *trait_line);
                 self.class_declaration_keys.push(Some((
                     declaration_key,
-                    self.child_class_declarations_are_runtime,
+                    self.class_declarations_are_runtime,
                 )));
                 if !uses.is_empty() {
                     self.emit_deprecated_trait_uses(&resolved_trait, *trait_line);
@@ -5950,7 +5969,7 @@ impl Compiler {
                     self.emit_named_class_declaration(&resolved_enum, *enum_line);
                 self.class_declaration_keys.push(Some((
                     declaration_key,
-                    self.child_class_declarations_are_runtime,
+                    self.class_declarations_are_runtime,
                 )));
                 if !uses.is_empty() {
                     self.emit_deprecated_trait_uses(&resolved_enum, *enum_line);

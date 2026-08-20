@@ -2735,9 +2735,10 @@ pub struct Compiler {
     static_vars: Vec<(u32, String, Option<Value>)>,
     /// Explicit closure captures cannot be redeclared as static variables.
     closure_capture_names: HashSet<String>,
-    /// Named classes and enums compiled into a child op-array must not enter
-    /// the request class table until that op-array reaches their declaration.
-    child_class_declarations_are_runtime: bool,
+    /// Named class-like declarations compiled into a child op-array or beneath
+    /// control flow must not enter the request table until execution reaches
+    /// their declaration marker.
+    class_declarations_are_runtime: bool,
     /// Current function name (for static variable keying)
     current_function_name: String,
     /// Property name visible to PHP 8.5's `__PROPERTY__` magic constant while
@@ -2936,7 +2937,7 @@ impl Compiler {
             global_vars: Vec::new(),
             static_vars: Vec::new(),
             closure_capture_names: HashSet::new(),
-            child_class_declarations_are_runtime: false,
+            class_declarations_are_runtime: false,
             current_function_name: String::new(),
             current_property_name: None,
             returns_reference_context: false,
@@ -3095,7 +3096,7 @@ impl Compiler {
 
     fn child_compiler(&self) -> Self {
         let mut child = Self::new();
-        child.child_class_declarations_are_runtime = true;
+        child.class_declarations_are_runtime = true;
         child.generic_use_sites = Rc::clone(&self.generic_use_sites);
         child.compile_deprecations = Rc::clone(&self.compile_deprecations);
         child.constant_attributes = Rc::clone(&self.constant_attributes);
