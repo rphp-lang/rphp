@@ -8,6 +8,45 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `71ff2ab6`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,712 pass, 1,587 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.051% and the whole-corpus rate is 66.298%; 4,710 of
+5,299 attempted cases reach runtime (88.885%). Relative to exact base
+`a3446776`, the pass-set delta is +1/-0: all 3,711 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`23a73a998c760a88fdac62d1cfa127990356df26bbf5a99e380de4eaff42feea`
+and `96687be7416bc675b0ed4058bef8471a75b31f05b958930259c7abe52d54bf49`.
+
+A concrete method compiled in a trait retains the trait as its declaration
+owner after composition and inheritance. Cold incompatibility formatting now
+walks the existing class/trait composition hierarchy and attributes that
+method to the nearest class that actually consumed the trait. This covers a
+method inherited from a parent, the same trait recomposed by a nearer parent,
+a trait reached through another trait and the corresponding staticness fatal.
+Direct consumers retain their existing class attribution, while abstract trait
+requirements continue to name the trait that declared the requirement.
+
+The existing trait-diagnostic E2E regression now covers those four additional
+PHP 8.5.9 oracle boundaries. The exact full-corpus addition is
+`Zend/tests/traits/bug62358.phpt`, which also passes in 32 consecutive focused
+runs. Inherited narrowing of a concrete trait method's visibility remains an
+earlier contract-enforcement gap, and inherited trait `self`/`parent`
+pseudo-type binding in variance checks remains a separate semantic slice; this
+checkpoint does not claim either behavior.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,617 unsafe blocks and 289 unsafe
+functions. No separate runtime performance gate applies: the owner traversal
+runs only while formatting an already-failed class-link contract, adds no
+metadata or layout, and leaves successful linking and method dispatch
+unchanged; S3 exercises the surrounding class-link path end to end.
+
+In the preceding reentrant array-key diagnostic checkpoint, the measured
+AMD64 PHP 8.5 contract was pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `10586f82`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,711 pass, 1,588 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
