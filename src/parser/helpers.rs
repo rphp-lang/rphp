@@ -210,7 +210,10 @@ impl Parser {
                 }
                 // Positional argument
                 if seen_named {
-                    return Err("Cannot use positional argument after named argument".to_string());
+                    self.compile_error(
+                        "Cannot use positional argument after named argument",
+                        call_line,
+                    );
                 }
                 if seen_unpack {
                     return Err(

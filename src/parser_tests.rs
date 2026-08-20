@@ -601,6 +601,20 @@ fn invalid_isset_results_are_deferred_compile_errors() {
 }
 
 #[test]
+fn positional_after_named_is_a_deferred_compile_error() {
+    let tokens = Lexer::new("<?php\nif (false) {\n    dispatch(first: 1, $second, third: 3);\n}")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line: 3 }))
+            if message == "Cannot use positional argument after named argument"
+    ));
+}
+
+#[test]
 fn document_string_parse_tokens_receive_the_parser_source_location() {
     let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
         .tokenize()

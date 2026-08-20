@@ -9,19 +9,43 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,503 pass, 1,794 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,507 pass, 1,790 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-66.132% and the whole-corpus rate is 62.565%; 4,628 of 5,297 attempted cases
-reach runtime (87.370%). Relative to exact base `e4f50365`, the pass-set delta
-is +2/-0: all 3,501 prior passes remain passes and no other status, failure
+66.207% and the whole-corpus rate is 62.636%; 4,632 of 5,297 attempted cases
+reach runtime (87.446%). Relative to exact base `88d7c461`, the pass-set delta
+is +4/-0: all 3,503 prior passes remain passes and no other status, failure
 category or stage moves. Two final manifests and summaries are byte-for-byte
 identical. The manifest SHA-256 is
-`09ae8ca56b3c6dc1f0e5761205f7a0913f80cda28ee2a0213fa3064b2e548d15`.
+`b5e8fc6bc92be207b269ba84496c998151c283801bbfce40da6140ecbbd30ff9`.
 
-Applying `isset()` to a function result or any other non-variable expression
-now produces PHP 8.5's compile-time fatal diagnostic, including its
-`null !== expression` alternative, source file and physical line. The parser
-records the first invalid operand as a deferred compile error so dead branches
+A positional argument following a named argument now records PHP 8.5's
+compile-time fatal error instead of terminating parsing. The shared argument
+parser consumes the remaining source and retains the first deferred error, so
+dead branches, nested calls, attributes and `new` expressions in constant
+initializers all fail at the same compile boundary. Valid positional, named and
+unpacked argument lowering remains unchanged.
+
+Original parser and source-aware E2E regressions cover dead code, later named
+arguments, nested calls, attributes and constant initializers. The exact
+full-corpus additions are
+`Zend/tests/call_user_functions/call_user_func_array_array_slice_named_args.phpt`,
+`Zend/tests/constexpr/new_positional_after_named.phpt` and both selected
+`Zend/tests/named_params/*positional_after_named.phpt` cases. No other status,
+category or stage moves. Runtime construction of named argument arrays and the
+separate positional-after-unpack diagnostic remain outside this checkpoint.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at 1,623 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies because the change only defers an already-fatal
+parser branch and leaves successful call bytecode unchanged.
+
+In the preceding `isset()` checkpoint, applying `isset()` to a function result
+or any other non-variable expression produces PHP 8.5's compile-time fatal
+diagnostic, including its `null !== expression` alternative, source file and
+physical line. The parser records the first invalid operand as a deferred
+compile error so dead branches
 cannot suppress it, while still consuming the complete source unit. Valid
 single- and multi-target `isset()` execution is unchanged.
 
@@ -43,8 +67,8 @@ compile-time path and leaves valid `isset()` lowering and execution unchanged.
 In the preceding call-list checkpoint, function, constructor, method,
 invokable-object and closure calls share PHP 8.5's argument-list delimiter
 state with `isset()` and `unset()`. One trailing comma is valid after a
-positional, named or unpacked argument. A
-leading comma reports an unexpected token, while a second comma after a
+positional, named or unpacked argument. A leading comma reports an unexpected
+token, while a second comma after a
 completed item additionally reports that the closing parenthesis was expected.
 
 The positive call fixture also exposed that closure `__FUNCTION__` and
