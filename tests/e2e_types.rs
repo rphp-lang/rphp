@@ -2187,6 +2187,31 @@ var_dump((float) $reference, floatval($reference));
 }
 
 #[test]
+fn dynamic_unary_signs_preserve_ieee_zero_and_numeric_types() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function positive_zero(): float { return 0.0; }
+function negative_zero(): float { return -0.0; }
+function counted_zero(): float {
+    global $calls;
+    ++$calls;
+    return 0.0;
+}
+
+$values = [positive_zero(), negative_zero(), 2.5, -2.5, 42, PHP_INT_MIN, INF, -INF, NAN, "2.5"];
+foreach ($values as $value) {
+    var_dump(-$value, +$value);
+}
+$calls = 0;
+var_dump(-counted_zero(), $calls);
+"#,
+        ),
+        "float(-0)\nfloat(0)\nfloat(0)\nfloat(-0)\nfloat(-2.5)\nfloat(2.5)\nfloat(2.5)\nfloat(-2.5)\nint(-42)\nint(42)\nfloat(9.223372036854776E+18)\nint(-9223372036854775808)\nfloat(-INF)\nfloat(INF)\nfloat(INF)\nfloat(-INF)\nfloat(NAN)\nfloat(NAN)\nfloat(-2.5)\nfloat(2.5)\nfloat(-0)\nint(1)\n"
+    );
+}
+
+#[test]
 fn test_cast_int_from_bool_true() {
     assert_eq!(run_php("<?php echo (int)true;"), "1");
 }

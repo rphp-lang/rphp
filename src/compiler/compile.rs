@@ -7943,14 +7943,17 @@ impl Compiler {
                     }
                     _ => {}
                 }
-                let zero_idx = self.add_literal(Value::long(0));
+                // PHP lowers unary minus through multiplication. Keeping the
+                // operand first preserves its diagnostics, while `* -1`
+                // retains IEEE negative zero for a dynamic positive zero.
                 let (inner_op, inner_type) = self.compile_expr(inner);
+                let negative_one_idx = self.add_literal(Value::long(-1));
                 let tmp = self.alloc_tmp();
-                let mut instr = Instruction::new(OpCode::Sub);
-                instr.op1 = zero_idx;
-                instr.op1_type = OpType::Const;
-                instr.op2 = inner_op;
-                instr.op2_type = inner_type;
+                let mut instr = Instruction::new(OpCode::Mul);
+                instr.op1 = inner_op;
+                instr.op1_type = inner_type;
+                instr.op2 = negative_one_idx;
+                instr.op2_type = OpType::Const;
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
                 self.instructions.push(instr);

@@ -9,6 +9,46 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,604 pass, 1,693 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+68.039% and the whole-corpus rate is 64.369%; 4,701 of 5,297 attempted cases
+reach runtime (88.748%). Relative to exact base `34745ac7`, the pass-set delta
+is +3/-0: all 3,601 prior passes remain passes and no other status or failure
+category moves. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`888b346a7c22d3d057be4894bae20d3e30893a12872277354efe190f4f88ea83`.
+
+Dynamic PHP 8.5 unary minus now lowers through the same operand-first numeric
+multiplication contract as unary plus, using `value * -1` instead of
+`0 - value`. This preserves IEEE negative zero for a dynamic positive-zero
+operand and positive zero for a negative-zero operand, while retaining integer
+results, `PHP_INT_MIN` overflow promotion, numeric-string conversion, INF/NAN,
+evaluation order and single evaluation. Literal and constant-expression
+folding remain unchanged; runtime `-ZERO` now agrees with the already-correct
+constant `-ZERO` result.
+
+Original E2E coverage exercises both signs over ±0, ordinary floats and
+integers, `PHP_INT_MIN`, ±INF, NAN and a numeric string, then proves a dynamic
+operand is evaluated once. The exact full-corpus additions are
+`Zend/tests/bug52355.phpt`, `Zend/tests/bug70804.phpt` and
+`Zend/tests/unary_minus_const_expr_consistency.phpt`. The established explicit
+negative-zero cast control remains an exact pass. Trigonometric precision,
+float-to-integer low-bit behavior and float formatting remain separate work.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. On an AMD Ryzen
+9 7950X pinned to one performance-governor CPU, 32 alternating release A/B
+pairs with two warmups per binary, JIT and quick loops disabled execute five
+million dynamic double negations with identical checksums. Against the exact
+base binary, the candidate is -2.900% by independent medians and -2.857% by the
+paired-ratio median. Favorable medians are control evidence, not a broader
+optimization claim.
+
+In the preceding string-float-prefix checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,601 pass, 1,696 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 67.982% and the whole-corpus rate is 64.315%; 4,701 of 5,297 attempted cases
