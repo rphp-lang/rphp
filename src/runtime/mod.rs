@@ -2199,6 +2199,22 @@ impl ExecutorGlobals {
             .map_or_else(String::new, |file| {
                 format!(" in {file} on line {}", implementation.source_line)
             });
+        if implementation.is_static != required.is_static {
+            let required_kind = if required.is_static {
+                "static"
+            } else {
+                "non static"
+            };
+            let implementation_kind = if implementation.is_static {
+                "static"
+            } else {
+                "non static"
+            };
+            return Some(format!(
+                "Cannot make {required_kind} method {}::{}() {implementation_kind} in class {}{}",
+                required.owner, required.name, linking_class.name, location
+            ));
+        }
         if required.enforces_visibility
             && Self::method_visibility_rank(implementation.visibility)
                 < Self::method_visibility_rank(required.visibility)

@@ -191,6 +191,40 @@ class ArityTraitConsumer implements ArityTraitContract {
 }
 
 #[test]
+fn staticness_diagnostics_have_priority_and_keep_the_requirement_owner() {
+    let static_implementation = run_php_expect_error(
+        r#"<?php
+abstract class InstanceRequirement {
+    abstract public function run();
+}
+class StaticImplementation extends InstanceRequirement {
+    protected static function run() {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{static_implementation:?}"),
+        "Fatal(\"Cannot make non static method InstanceRequirement::run() static in class StaticImplementation\")"
+    );
+
+    let instance_implementation = run_php_expect_error(
+        r#"<?php
+trait StaticRequirement {
+    abstract public static function run();
+}
+class InstanceImplementation {
+    use StaticRequirement;
+    public function run() {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{instance_implementation:?}"),
+        "Fatal(\"Cannot make static method StaticRequirement::run() non static in class InstanceImplementation\")"
+    );
+}
+
+#[test]
 fn method_diagnostics_render_scalar_and_array_defaults() {
     let error = run_php_expect_error(
         r#"<?php
