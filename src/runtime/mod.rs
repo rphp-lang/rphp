@@ -2213,7 +2213,7 @@ impl ExecutorGlobals {
             return Some(format!(
                 "Cannot make {required_kind} method {}::{}() {implementation_kind} in class {}{}",
                 self.method_diagnostic_owner(required, Some(linking_class)),
-                required.name,
+                implementation.name,
                 linking_class.name,
                 location
             ));
@@ -3335,6 +3335,55 @@ impl ExecutorGlobals {
         Ok(())
     }
 
+    /// Parent interfaces may contribute the same abstract method only when
+    /// their effective declarations agree on staticness. The first effective
+    /// declaration (or an explicit declaration on the child interface) is the
+    /// implementation side of PHP's diagnostic.
+    #[cold]
+    fn validate_interface_method_staticness<'a>(
+        &'a self,
+        class_def: &'a ClassDef,
+    ) -> Result<(), String> {
+        if !class_def.is_interface {
+            return Ok(());
+        }
+
+        let mut effective = std::collections::HashMap::new();
+        for method in &class_def.methods {
+            let declaration = Self::method_declaration(class_def, method);
+            effective.insert(declaration.name.to_ascii_lowercase(), declaration);
+        }
+        for parent in &class_def.implements {
+            for requirement in self.collect_interface_methods(parent) {
+                let key = requirement.name.to_ascii_lowercase();
+                let Some(implementation) = effective.get(&key).copied() else {
+                    effective.insert(key, requirement);
+                    continue;
+                };
+                let linking_class = if implementation.owner.eq_ignore_ascii_case(&class_def.name) {
+                    class_def
+                } else {
+                    self.find_class(implementation.owner).unwrap_or(class_def)
+                };
+                let Some(error) = self.incompatible_method_contract_diagnostic(
+                    requirement,
+                    implementation,
+                    linking_class,
+                ) else {
+                    continue;
+                };
+                if implementation.is_static != requirement.is_static {
+                    return Err(error);
+                }
+                // Preserve the first conflicting contract as PHP's diagnostic
+                // boundary. Other interface-signature dimensions are separate
+                // checkpoints and must not be skipped to report a later method.
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
     #[cold]
     #[inline(never)]
     fn concrete_property_implements_hook(&self, class_def: &ClassDef, method_name: &str) -> bool {
@@ -3702,7 +3751,10 @@ impl ExecutorGlobals {
 
     #[cold]
     fn declaration_interface_contract(&mut self, class_def: &ClassDef) -> Result<(), String> {
-        if class_def.is_interface || class_def.is_trait {
+        if class_def.is_interface {
+            return self.validate_interface_method_staticness(class_def);
+        }
+        if class_def.is_trait {
             return Ok(());
         }
         let location = class_def
@@ -5163,9 +5215,30 @@ impl ExecutorGlobals {
         self.class_table.insert(alias.to_string(), class);
         self.retry_pending_named_classes()
             .map_err(ClassAliasRegistrationError::DelayedLink)?;
-        Ok(aliases_interface
+        let duplicate_error = aliases_interface
             .then(|| self.duplicate_interface_identity_error())
-            .flatten())
+            .flatten();
+        if duplicate_error.is_some() {
+            return Ok(duplicate_error);
+        }
+        if let Some(error) = aliases_interface
+            .then(|| self.interface_method_staticness_error())
+            .flatten()
+        {
+            return Err(ClassAliasRegistrationError::DelayedLink(error));
+        }
+        Ok(None)
+    }
+
+    /// Top-level declarations may be linked before a later runtime
+    /// `class_alias()` publishes one of their interface edges. Recheck the
+    /// staticness contract in declaration order on that alias boundary.
+    fn interface_method_staticness_error(&self) -> Option<String> {
+        (1..self.next_class_id).find_map(|class_id| {
+            self.class_by_id(class_id)
+                .filter(|class| class.is_interface)
+                .and_then(|class| self.validate_interface_method_staticness(class).err())
+        })
     }
 
     /// Runtime aliases can make two differently spelled interface edges refer
@@ -5439,7 +5512,7 @@ impl ExecutorGlobals {
         if !visited.insert(iface_name.to_ascii_lowercase()) {
             return;
         }
-        if let Some(iface_def) = self.class_table.get(iface_name) {
+        if let Some(iface_def) = self.find_class(iface_name) {
             for method in &iface_def.methods {
                 result.push(Self::method_declaration(iface_def, method));
             }

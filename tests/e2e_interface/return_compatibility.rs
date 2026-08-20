@@ -269,6 +269,76 @@ class NestedTraitChild extends NestedTraitConsumer {
 }
 
 #[test]
+fn inherited_interface_staticness_conflicts_use_the_effective_method_order() {
+    let aliased_error = run_php_expect_error(
+        r#"<?php
+interface StaticAliasContract {
+    public static function RUN();
+}
+interface InstanceAliasContract {
+    public function run();
+}
+class_alias('InstanceAliasContract', 'InstanceAlias');
+interface AliasedCombinedContract extends StaticAliasContract, InstanceAlias {}
+"#,
+    );
+    assert_eq!(
+        format!("{aliased_error:?}"),
+        "Fatal(\"Cannot make non static method InstanceAliasContract::RUN() static in class StaticAliasContract\")"
+    );
+
+    let reversed_error = run_php_expect_error(
+        r#"<?php
+interface InstanceFirstContract {
+    public function run();
+}
+interface StaticSecondContract {
+    public static function run();
+}
+interface ReversedCombinedContract extends InstanceFirstContract, StaticSecondContract {}
+"#,
+    );
+    assert_eq!(
+        format!("{reversed_error:?}"),
+        "Fatal(\"Cannot make static method StaticSecondContract::run() non static in class InstanceFirstContract\")"
+    );
+
+    let explicit_error = run_php_expect_error(
+        r#"<?php
+interface ExplicitStaticParent {
+    public static function run();
+}
+interface ExplicitInstanceParent {
+    public function run();
+}
+interface ExplicitCombinedContract extends ExplicitStaticParent, ExplicitInstanceParent {
+    public static function run();
+}
+"#,
+    );
+    assert_eq!(
+        format!("{explicit_error:?}"),
+        "Fatal(\"Cannot make non static method ExplicitInstanceParent::run() static in class ExplicitCombinedContract\")"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface CompatibleFirstContract {
+    public function run();
+}
+interface CompatibleSecondContract {
+    public function run();
+}
+interface CompatibleCombinedContract extends CompatibleFirstContract, CompatibleSecondContract {}
+echo "compatible\n";
+"#,
+        ),
+        "compatible\n"
+    );
+}
+
+#[test]
 fn staticness_diagnostics_have_priority_and_keep_the_requirement_owner() {
     let static_implementation = run_php_expect_error(
         r#"<?php
