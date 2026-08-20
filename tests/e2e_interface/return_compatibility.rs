@@ -188,6 +188,84 @@ class ArityTraitConsumer implements ArityTraitContract {
         format!("{signature_error:?}"),
         "Fatal(\"Declaration of ArityTraitConsumer::run() must be compatible with ArityTraitContract::run($value)\")"
     );
+
+    let inherited_error = run_php_expect_error(
+        r#"<?php
+trait InheritedTraitBody {
+    public function run() {}
+}
+class ParentTraitConsumer {
+    use InheritedTraitBody;
+}
+class ChildTraitConsumer extends ParentTraitConsumer {
+    public function run($value) {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{inherited_error:?}"),
+        "Fatal(\"Declaration of ChildTraitConsumer::run($value) must be compatible with ParentTraitConsumer::run()\")"
+    );
+
+    let inherited_staticness_error = run_php_expect_error(
+        r#"<?php
+trait StaticTraitBody {
+    public function run() {}
+}
+class StaticTraitParent {
+    use StaticTraitBody;
+}
+class StaticTraitChild extends StaticTraitParent {
+    public static function run() {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{inherited_staticness_error:?}"),
+        "Fatal(\"Cannot make non static method StaticTraitParent::run() static in class StaticTraitChild\")"
+    );
+
+    let recomposed_error = run_php_expect_error(
+        r#"<?php
+trait ReusedTraitBody {
+    public function run() {}
+}
+class FirstTraitConsumer {
+    use ReusedTraitBody;
+}
+class NearestTraitConsumer extends FirstTraitConsumer {
+    use ReusedTraitBody;
+}
+class ReusedTraitChild extends NearestTraitConsumer {
+    public function run($value) {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{recomposed_error:?}"),
+        "Fatal(\"Declaration of ReusedTraitChild::run($value) must be compatible with NearestTraitConsumer::run()\")"
+    );
+
+    let nested_error = run_php_expect_error(
+        r#"<?php
+trait NestedTraitBody {
+    public function run() {}
+}
+trait NestedTraitLayer {
+    use NestedTraitBody;
+}
+class NestedTraitConsumer {
+    use NestedTraitLayer;
+}
+class NestedTraitChild extends NestedTraitConsumer {
+    public function run($value) {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{nested_error:?}"),
+        "Fatal(\"Declaration of NestedTraitChild::run($value) must be compatible with NestedTraitConsumer::run()\")"
+    );
 }
 
 #[test]

@@ -2212,7 +2212,10 @@ impl ExecutorGlobals {
             };
             return Some(format!(
                 "Cannot make {required_kind} method {}::{}() {implementation_kind} in class {}{}",
-                required.owner, required.name, linking_class.name, location
+                self.method_diagnostic_owner(required, Some(linking_class)),
+                required.name,
+                linking_class.name,
+                location
             ));
         }
         if required.enforces_visibility
@@ -2566,7 +2569,7 @@ impl ExecutorGlobals {
     }
 
     fn method_diagnostic_owner<'a>(
-        &self,
+        &'a self,
         declaration: MethodDeclaration<'a>,
         linking_class: Option<&'a ClassDef>,
     ) -> &'a str {
@@ -2576,7 +2579,9 @@ impl ExecutorGlobals {
                 .find_class(declaration.owner)
                 .is_some_and(|definition| definition.is_trait)
         {
-            return linking_class.name.as_str();
+            return self
+                .trait_composition_scope_from_definition(linking_class, declaration.owner)
+                .unwrap_or(linking_class.name.as_str());
         }
         declaration.owner
     }
@@ -5360,6 +5365,15 @@ impl ExecutorGlobals {
         receiver_class: &str,
         trait_name: &str,
     ) -> Option<&'a str> {
+        let definition = self.class_table.get(receiver_class)?;
+        self.trait_composition_scope_from_definition(definition, trait_name)
+    }
+
+    fn trait_composition_scope_from_definition<'a>(
+        &'a self,
+        mut definition: &'a ClassDef,
+        trait_name: &str,
+    ) -> Option<&'a str> {
         fn uses_trait(eg: &ExecutorGlobals, uses: &[String], target: &str) -> bool {
             uses.iter().any(|used| {
                 used.eq_ignore_ascii_case(target)
@@ -5370,7 +5384,6 @@ impl ExecutorGlobals {
             })
         }
 
-        let mut definition = self.class_table.get(receiver_class)?;
         loop {
             if uses_trait(self, &definition.uses, trait_name) {
                 return Some(definition.name.as_str());
