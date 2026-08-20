@@ -2681,10 +2681,12 @@ pub struct Compiler {
     try_entries: Vec<TryEntry>,
     /// Class definitions
     class_defs: Vec<ClassDef>,
-    /// Unique runtime marker aligned one-for-one with `class_defs`. Only named
-    /// class/enum declarations need a marker; traits, interfaces and anonymous
-    /// classes retain their existing publication mechanisms.
-    class_declaration_keys: Vec<Option<String>>,
+    /// Unique runtime marker aligned one-for-one with `class_defs`, plus
+    /// whether the declaration belongs to a child op-array and therefore may
+    /// only be published when that function, method or closure executes. Only
+    /// named class/enum declarations need a marker; traits, interfaces and
+    /// anonymous classes retain their existing publication mechanisms.
+    class_declaration_keys: Vec<Option<(String, bool)>>,
     /// Source-unit constant attributes are shared by nested compilers and
     /// published into one cold executor side table after compilation.
     constant_attributes: Rc<RefCell<HashMap<String, Vec<AttributeDefinition>>>>,
@@ -2733,6 +2735,9 @@ pub struct Compiler {
     static_vars: Vec<(u32, String, Option<Value>)>,
     /// Explicit closure captures cannot be redeclared as static variables.
     closure_capture_names: HashSet<String>,
+    /// Named classes and enums compiled into a child op-array must not enter
+    /// the request class table until that op-array reaches their declaration.
+    child_class_declarations_are_runtime: bool,
     /// Current function name (for static variable keying)
     current_function_name: String,
     /// Property name visible to PHP 8.5's `__PROPERTY__` magic constant while
@@ -2931,6 +2936,7 @@ impl Compiler {
             global_vars: Vec::new(),
             static_vars: Vec::new(),
             closure_capture_names: HashSet::new(),
+            child_class_declarations_are_runtime: false,
             current_function_name: String::new(),
             current_property_name: None,
             returns_reference_context: false,
@@ -3089,6 +3095,7 @@ impl Compiler {
 
     fn child_compiler(&self) -> Self {
         let mut child = Self::new();
+        child.child_class_declarations_are_runtime = true;
         child.generic_use_sites = Rc::clone(&self.generic_use_sites);
         child.compile_deprecations = Rc::clone(&self.compile_deprecations);
         child.constant_attributes = Rc::clone(&self.constant_attributes);
@@ -4000,12 +4007,13 @@ impl Compiler {
         debug_assert_eq!(self.class_defs.len(), self.class_declaration_keys.len());
         let mut class_defs = Vec::with_capacity(self.class_defs.len());
         let mut runtime_class_defs = Vec::new();
-        for (class_def, declaration_key) in
-            self.class_defs.into_iter().zip(self.class_declaration_keys)
+        for (class_def, declaration) in self.class_defs.into_iter().zip(self.class_declaration_keys)
         {
-            if runtime_class_names.contains(&class_def.name.to_ascii_lowercase())
-                && let Some(declaration_key) = declaration_key
-            {
+            let declaration_is_runtime = declaration
+                .as_ref()
+                .is_some_and(|(_, child_runtime)| *child_runtime)
+                || runtime_class_names.contains(&class_def.name.to_ascii_lowercase());
+            if declaration_is_runtime && let Some((declaration_key, _)) = declaration {
                 runtime_class_defs.push((declaration_key, class_def));
             } else {
                 class_defs.push(class_def);

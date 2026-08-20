@@ -67,7 +67,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
         return Err(VmError::Fatal(format_uncaught_throwable(eg, &exc)));
     }
 
-    eg.finalize_pending_named_classes().map_err(VmError::Fatal)?;
+    eg.finalize_pending_named_classes()?;
 
     Ok(return_value)
 }

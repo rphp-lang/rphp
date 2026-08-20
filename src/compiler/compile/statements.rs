@@ -4452,7 +4452,10 @@ impl Compiler {
                 } else {
                     let declaration_key =
                         self.emit_named_class_declaration(&resolved_class, *class_line);
-                    self.class_declaration_keys.push(Some(declaration_key));
+                    self.class_declaration_keys.push(Some((
+                        declaration_key,
+                        self.child_class_declarations_are_runtime,
+                    )));
                 }
                 if !uses.is_empty() && !resolved_class.starts_with("class@anonymous#") {
                     self.emit_deprecated_trait_uses(&resolved_class, *class_line);
@@ -5935,7 +5938,10 @@ impl Compiler {
                 });
                 let declaration_key =
                     self.emit_named_class_declaration(&resolved_enum, *enum_line);
-                self.class_declaration_keys.push(Some(declaration_key));
+                self.class_declaration_keys.push(Some((
+                    declaration_key,
+                    self.child_class_declarations_are_runtime,
+                )));
                 if !uses.is_empty() {
                     self.emit_deprecated_trait_uses(&resolved_enum, *enum_line);
                 }

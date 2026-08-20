@@ -9,6 +9,51 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,647 pass, 1,651 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+68.837% and the whole-corpus rate is 65.137%; 4,710 of 5,298 attempted cases
+reach runtime (88.901%). Relative to exact base `55c3ffbe`, the pass-set delta
+is +7/-0: all 3,640 prior passes remain passes. Two final merged manifests and
+summaries are byte-for-byte identical. The manifest SHA-256 is
+`ac65ecb773ff70cb4799947bedb5ef56925b76c1288dae91e150d97820364978`.
+
+Named classes and enums compiled inside a function, method or closure now stay
+outside the public class table until their child op-array executes the source
+declaration. Runtime linking retains only hierarchy metadata for declarations
+active through reentrant autoload, so method variance can prove descendant
+relationships without making half-composed classes visible to `class_exists()`
+or ordinary lookup. A strict comparison used only for dependency discovery
+also creates outstanding autoload obligations for otherwise optimistic
+two-unknown class relations; the normal compatibility decision remains
+unchanged until those types load. Failed dependency loads restore the runtime
+declaration marker, permitting a later retry after a caught loader exception.
+
+Original E2E regressions cover function- and closure-local publication timing,
+an active descendant cycle whose root remains publicly invisible while
+linking, the reverse invalid cycle's exact declaration fatal, and retry after
+an autoloader exception. The exact full-corpus additions are
+`Zend/tests/constants/gh10709_2.phpt`, `Zend/tests/enum/enum_exists.phpt`, and
+`Zend/tests/type_declarations/variance/class_order_autoload1.phpt`,
+`class_order_autoload3.phpt`, `class_order_autoload5.phpt`,
+`class_order_autoload_error4.phpt` and `class_order_autoload_error5.phpt`.
+`class_order_autoload2.phpt` and `class_order_autoload6.phpt` still need
+provisional publication of a new child of the class currently linking;
+`class_order_autoload4.phpt` needs runtime publication for nested interfaces.
+The remaining loading-error, unlinked-parent and recursive abstract-trait cases
+retain separate diagnostic or transactional-linking work.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3.
+The production inventory remains 1,612 unsafe blocks and 289 unsafe functions.
+No runtime performance benchmark applies: the new work is confined to cold
+compilation metadata and runtime declaration/link validation, ordinary method
+execution is unchanged, and the cold-build S3 gate exercises the affected
+autoload path.
+
+In the preceding runtime method-variance autoload checkpoint, the measured
+AMD64 PHP 8.5 contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,640 pass, 1,658 fail, 115 skip, one is an upstream XFAIL,
 185 are unsupported, and none time out or crash. The headline pass rate is
 68.705% and the whole-corpus rate is 65.012%; 4,708 of 5,298 attempted cases

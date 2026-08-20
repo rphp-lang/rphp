@@ -1356,3 +1356,115 @@ class HardConsumer extends HardImplementation { use HardRequirement; }
         "Fatal(\"Declaration of HardImplementation::hard(): MissingHardType must be compatible with HardRequirement::hard(int $value): MissingHardType in method-variance-hard-error.php on line 9\")"
     );
 }
+
+#[test]
+fn nested_class_declarations_publish_only_when_their_op_array_executes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function publish_nested_class(): void {
+    class FunctionNestedClass {}
+}
+$publish = function (): void {
+    class ClosureNestedClass {}
+};
+echo (int) class_exists('FunctionNestedClass', false), ':';
+echo (int) class_exists('ClosureNestedClass', false), ';';
+publish_nested_class();
+$publish();
+echo (int) class_exists('FunctionNestedClass', false), ':';
+echo (int) class_exists('ClosureNestedClass', false);
+"#,
+        ),
+        "0:0;1:1"
+    );
+}
+
+#[test]
+fn reentrant_autoload_links_an_active_descendant_return_contract() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function (string $name): void {
+    echo "load:$name|";
+    if ($name === 'CycleAnchor') {
+        class CycleAnchor { public function make(): CycleBridge {} }
+        echo 'anchor:', (int) class_exists('CycleLeaf', false), '|';
+    } elseif ($name === 'CycleBridge') {
+        class CycleBridge extends CycleAnchor { public function make(): CycleLeaf {} }
+        echo "bridge|";
+    } else {
+        class CycleLeaf extends CycleBridge {}
+        echo "leaf|";
+    }
+});
+new CycleLeaf;
+echo 'done';
+"#,
+        ),
+        "load:CycleLeaf|load:CycleBridge|load:CycleAnchor|anchor:0|bridge|leaf|done"
+    );
+}
+
+#[test]
+fn reentrant_autoload_rejects_an_active_reverse_return_contract() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+spl_autoload_register(function (string $name): void {
+    if ($name === 'ReverseA') {
+        class ReverseA { public function make(): ReverseX {} }
+    } elseif ($name === 'ReverseB') {
+        class ReverseB extends ReverseA { public function make(): ReverseY {} }
+    } elseif ($name === 'ReverseX') {
+        class ReverseX { public function make(): ReverseQ {} }
+    } elseif ($name === 'ReverseY') {
+        class ReverseY extends ReverseX { public function make(): ReverseR {} }
+    } elseif ($name === 'ReverseQ') {
+        class ReverseQ { public function make(): ReverseB {} }
+    } else {
+        class ReverseR extends ReverseQ { public function make(): ReverseA {} }
+    }
+});
+new ReverseB;
+"#,
+        "active-reverse-contract.php",
+        "/tmp",
+    );
+
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of ReverseR::make(): ReverseA must be compatible with ReverseQ::make(): ReverseB in active-reverse-contract.php on line 14\")"
+    );
+}
+
+#[test]
+fn failed_runtime_class_link_can_retry_after_the_autoloader_exception_is_caught() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function (string $name): void {
+    static $attempts = 0;
+    echo "load:$name|";
+    if ($name === 'RetryChild') {
+        class RetryChild extends RetryParent {}
+    } else {
+        $attempts++;
+        if ($attempts === 1) {
+            throw new Exception('retry-parent');
+        }
+        class RetryParent {}
+        echo "parent:$attempts|";
+    }
+});
+try {
+    new RetryChild;
+} catch (Exception $error) {
+    echo $error->getMessage(), '|';
+}
+new RetryChild;
+echo get_parent_class('RetryChild');
+"#,
+        ),
+        "load:RetryChild|load:RetryParent|retry-parent|load:RetryChild|load:RetryParent|parent:2|RetryParent"
+    );
+}

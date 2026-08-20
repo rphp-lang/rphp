@@ -214,6 +214,29 @@ pub(crate) struct AutoloadState {
     pub(crate) base_directory: Option<std::rc::Rc<str>>,
 }
 
+/// Minimal hierarchy metadata for a runtime declaration that has been taken
+/// from its source marker but has not yet completed linking. Keeping this
+/// separate from the public class table lets reentrant autoload prove a cycle's
+/// relationships without exposing a half-composed class to ordinary lookups.
+struct ActiveRuntimeClassRelation {
+    parent: Option<String>,
+    implements: Vec<String>,
+    has_to_string: bool,
+}
+
+impl ActiveRuntimeClassRelation {
+    fn from_class(class_def: &ClassDef) -> Self {
+        Self {
+            parent: class_def.parent.clone(),
+            implements: class_def.implements.clone(),
+            has_to_string: class_def
+                .methods
+                .iter()
+                .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__toString")),
+        }
+    }
+}
+
 pub(crate) struct OutputBuffer {
     pub(crate) data: Vec<u8>,
     pub(crate) handler: Option<Value>,
@@ -318,6 +341,9 @@ pub struct ExecutorGlobals {
     /// their source declaration. Keys are compiler-unique so conditional or
     /// repeated declarations with the same PHP name remain distinguishable.
     pending_runtime_classes: HashMap<String, ClassDef>,
+    /// Hierarchy-only view of runtime declarations currently linking through
+    /// nested autoload callbacks. Never consulted by ordinary symbol probes.
+    active_runtime_class_relations: HashMap<String, ActiveRuntimeClassRelation>,
     /// Retain successfully executed declaration keys so invoking the same
     /// function-local declaration twice produces PHP's redeclaration error.
     declared_runtime_classes: HashMap<String, String>,
@@ -1016,6 +1042,7 @@ impl ExecutorGlobals {
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
+            active_runtime_class_relations: HashMap::new(),
             declared_runtime_classes: HashMap::new(),
             pending_named_classes: Vec::new(),
             generic_metadata: GenericMetadata::default(),
@@ -1124,6 +1151,7 @@ impl ExecutorGlobals {
             class_table: HashMap::new(),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
+            active_runtime_class_relations: HashMap::new(),
             declared_runtime_classes: HashMap::new(),
             pending_named_classes: Vec::new(),
             generic_metadata: GenericMetadata::default(),
@@ -1912,7 +1940,7 @@ impl ExecutorGlobals {
         implementation: MethodDeclaration<'_>,
         linking_class: Option<&ClassDef>,
     ) -> Vec<String> {
-        self.method_contract_errors_mode(required, implementation, linking_class, false)
+        self.method_contract_errors_mode(required, implementation, linking_class, true, false)
     }
 
     fn method_contract_potential_errors(
@@ -1921,7 +1949,16 @@ impl ExecutorGlobals {
         implementation: MethodDeclaration<'_>,
         linking_class: Option<&ClassDef>,
     ) -> Vec<String> {
-        self.method_contract_errors_mode(required, implementation, linking_class, true)
+        self.method_contract_errors_mode(required, implementation, linking_class, true, true)
+    }
+
+    fn method_contract_strict_errors(
+        &self,
+        required: MethodDeclaration<'_>,
+        implementation: MethodDeclaration<'_>,
+        linking_class: Option<&ClassDef>,
+    ) -> Vec<String> {
+        self.method_contract_errors_mode(required, implementation, linking_class, false, false)
     }
 
     fn method_contract_errors_mode(
@@ -1929,6 +1966,7 @@ impl ExecutorGlobals {
         required: MethodDeclaration<'_>,
         implementation: MethodDeclaration<'_>,
         linking_class: Option<&ClassDef>,
+        allow_unresolved_relation: bool,
         allow_any_unresolved_relation: bool,
     ) -> Vec<String> {
         use crate::vm::function::ParamTypeHint;
@@ -2022,13 +2060,23 @@ impl ExecutorGlobals {
                                 required.owner,
                                 linking_class,
                             )
-                        } else {
+                        } else if allow_unresolved_relation {
                             self.is_param_type_compatible(
                                 &implementation_hint,
                                 &required_hint,
                                 implementation.owner,
                                 required.owner,
                                 linking_class,
+                            )
+                        } else {
+                            self.is_param_type_compatible_mode(
+                                &implementation_hint,
+                                &required_hint,
+                                implementation.owner,
+                                required.owner,
+                                linking_class,
+                                false,
+                                false,
                             )
                         };
                         if !compatible {
@@ -2073,13 +2121,23 @@ impl ExecutorGlobals {
                         required.owner,
                         linking_class,
                     )
-                } else {
+                } else if allow_unresolved_relation {
                     self.is_return_type_compatible(
                         &implementation_return,
                         &required_return,
                         implementation.owner,
                         required.owner,
                         linking_class,
+                    )
+                } else {
+                    self.is_return_type_compatible_mode(
+                        &implementation_return,
+                        &required_return,
+                        implementation.owner,
+                        required.owner,
+                        linking_class,
+                        false,
+                        false,
                     )
                 };
                 if !compatible {
@@ -2172,33 +2230,49 @@ impl ExecutorGlobals {
         dependencies: &mut Vec<String>,
         seen: &mut std::collections::HashSet<String>,
     ) {
-        if self
-            .method_contract_errors(required, implementation, Some(linking_class))
-            .is_empty()
-            || !self
-                .method_contract_potential_errors(required, implementation, Some(linking_class))
-                .is_empty()
+        let errors = self.method_contract_errors(required, implementation, Some(linking_class));
+        let potential_errors =
+            self.method_contract_potential_errors(required, implementation, Some(linking_class));
+        if !potential_errors.is_empty()
+            || (errors.is_empty()
+                && self
+                    .method_contract_strict_errors(required, implementation, Some(linking_class))
+                    .is_empty())
         {
             return;
         }
 
+        let mut mentions_linking_class = false;
+        let mut mentions_another_active_class = false;
         for declaration in [required, implementation] {
             let signature = &declaration.function.sig;
-            let mentions_linking_class = signature
+            for hint in signature
                 .param_type_hints
                 .iter()
                 .chain(std::iter::once(&signature.return_type_hint))
-                .map(|hint| {
-                    self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class))
-                })
-                .any(|hint| variance_type_hint_mentions_class(&hint, &linking_class.name));
-            if mentions_linking_class {
-                // Autoloading a type whose relation depends on the class that
-                // is currently linking needs provisional transactional class
-                // publication. Leave that recursive case at the existing
-                // compatibility error until the linker can roll it back.
-                return;
+            {
+                let hint =
+                    self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class));
+                mentions_linking_class |=
+                    variance_type_hint_mentions_class(&hint, &linking_class.name);
+                let mut names = Vec::new();
+                collect_variance_class_names(
+                    &hint,
+                    &mut names,
+                    &mut std::collections::HashSet::new(),
+                );
+                mentions_another_active_class |= names.iter().any(|name| {
+                    !name.eq_ignore_ascii_case(&linking_class.name)
+                        && self.runtime_class_link_is_active(name)
+                });
             }
+        }
+        if mentions_linking_class && !mentions_another_active_class {
+            // Loading a new child of the class currently linking still needs
+            // provisional transactional publication. An already-active root,
+            // however, can be checked through hierarchy-only metadata without
+            // becoming visible to ordinary class lookups.
+            return;
         }
 
         for declaration in [required, implementation] {
@@ -2297,6 +2371,11 @@ impl ExecutorGlobals {
                 .any(|pseudo_type| dependency.eq_ignore_ascii_case(pseudo_type))
                 && !dependency.eq_ignore_ascii_case(&class_def.name)
                 && self.find_class(dependency).is_none()
+                && !self.runtime_class_link_is_active(dependency)
+                && !self
+                    .pending_named_classes
+                    .iter()
+                    .any(|pending| pending.name.eq_ignore_ascii_case(dependency))
         });
         dependencies
     }
@@ -3190,6 +3269,19 @@ impl ExecutorGlobals {
         declaration_key: &str,
     ) -> Result<Option<ClassDef>, String> {
         if let Some(class_def) = self.pending_runtime_classes.remove(declaration_key) {
+            let class_key = class_def.name.to_ascii_lowercase();
+            if self.active_runtime_class_relations.contains_key(&class_key) {
+                let class_name = class_def.name.clone();
+                self.pending_runtime_classes
+                    .insert(declaration_key.to_string(), class_def);
+                return Err(format!(
+                    "Cannot declare class {class_name}, because the name is already in use"
+                ));
+            }
+            self.active_runtime_class_relations.insert(
+                class_key,
+                ActiveRuntimeClassRelation::from_class(&class_def),
+            );
             return Ok(Some(class_def));
         }
         if let Some(class_name) = self.declared_runtime_classes.get(declaration_key) {
@@ -3207,8 +3299,20 @@ impl ExecutorGlobals {
         declaration_key: String,
         class_def: ClassDef,
     ) {
+        self.active_runtime_class_relations
+            .remove(&class_def.name.to_ascii_lowercase());
         self.pending_runtime_classes
             .insert(declaration_key, class_def);
+    }
+
+    pub(crate) fn abort_runtime_class_link(&mut self, class_name: &str) {
+        self.active_runtime_class_relations
+            .remove(&class_name.to_ascii_lowercase());
+    }
+
+    pub(crate) fn runtime_class_link_is_active(&self, class_name: &str) -> bool {
+        self.active_runtime_class_relations
+            .contains_key(&class_name.to_ascii_lowercase())
     }
 
     pub(crate) fn mark_runtime_class_declared(
@@ -3216,6 +3320,8 @@ impl ExecutorGlobals {
         declaration_key: String,
         class_name: String,
     ) {
+        self.active_runtime_class_relations
+            .remove(&class_name.to_ascii_lowercase());
         self.declared_runtime_classes
             .insert(declaration_key, class_name);
     }
@@ -3256,12 +3362,63 @@ impl ExecutorGlobals {
     /// source unit has executed, no later statement in it can satisfy their
     /// unresolved invariant property types, so validate them normally and
     /// surface PHP's declaration error.
-    pub(crate) fn finalize_pending_named_classes(&mut self) -> Result<(), String> {
-        self.retry_pending_named_classes()?;
+    pub(crate) fn finalize_pending_named_classes(
+        &mut self,
+    ) -> Result<(), crate::vm::execute::VmError> {
+        self.retry_pending_named_classes()
+            .map_err(crate::vm::execute::VmError::Fatal)?;
         while !self.pending_named_classes.is_empty() {
             let class_def = self.pending_named_classes.remove(0);
-            self.register_class(class_def)?;
-            self.retry_pending_named_classes()?;
+            let class_name = class_def.name.clone();
+            let relation_key = class_name.to_ascii_lowercase();
+            self.active_runtime_class_relations.insert(
+                relation_key.clone(),
+                ActiveRuntimeClassRelation::from_class(&class_def),
+            );
+
+            let dependencies = class_def
+                .parent
+                .iter()
+                .chain(class_def.implements.iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut dependency_error = None;
+            for dependency in dependencies {
+                if self.find_class(&dependency).is_some() {
+                    continue;
+                }
+                match crate::stdlib::autoload::ensure_symbol_loaded(self, &dependency) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if let Some(exception) = self.exception.take() {
+                            dependency_error = Some(crate::vm::execute::VmError::Fatal(
+                                crate::vm::execute::format_uncaught_throwable(self, &exception),
+                            ));
+                        } else {
+                            dependency_error = Some(crate::vm::execute::VmError::Fatal(format!(
+                                "Class \"{dependency}\" not found"
+                            )));
+                        }
+                        break;
+                    }
+                    Err(error) => {
+                        dependency_error = Some(error);
+                        break;
+                    }
+                }
+            }
+            if let Some(error) = dependency_error {
+                self.active_runtime_class_relations.remove(&relation_key);
+                return Err(error);
+            }
+
+            let result = self
+                .register_class(class_def)
+                .map_err(crate::vm::execute::VmError::Fatal);
+            self.active_runtime_class_relations.remove(&relation_key);
+            result?;
+            self.retry_pending_named_classes()
+                .map_err(crate::vm::execute::VmError::Fatal)?;
         }
         Ok(())
     }
@@ -4993,15 +5150,31 @@ impl ExecutorGlobals {
     /// interface and abstract class/trait compatibility checks.
     fn collect_interface_methods<'a>(&'a self, iface_name: &str) -> Vec<MethodDeclaration<'a>> {
         let mut result = Vec::new();
+        self.collect_interface_methods_inner(
+            iface_name,
+            &mut result,
+            &mut std::collections::HashSet::new(),
+        );
+        result
+    }
+
+    fn collect_interface_methods_inner<'a>(
+        &'a self,
+        iface_name: &str,
+        result: &mut Vec<MethodDeclaration<'a>>,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        if !visited.insert(iface_name.to_ascii_lowercase()) {
+            return;
+        }
         if let Some(iface_def) = self.class_table.get(iface_name) {
             for method in &iface_def.methods {
                 result.push(Self::method_declaration(iface_def, method));
             }
             for parent_iface in &iface_def.implements {
-                result.extend(self.collect_interface_methods(parent_iface));
+                self.collect_interface_methods_inner(parent_iface, result, visited);
             }
         }
-        result
     }
 
     /// Collect all interfaces for a class (direct + inherited from parents).
@@ -5443,39 +5616,102 @@ impl ExecutorGlobals {
         target: &str,
         linking_class: Option<&ClassDef>,
     ) -> bool {
-        let Some(linking_class) =
+        self.class_is_a_while_linking_inner(
+            class_name,
+            target,
+            linking_class,
+            &mut std::collections::HashSet::new(),
+        )
+    }
+
+    fn class_is_a_while_linking_inner(
+        &self,
+        class_name: &str,
+        target: &str,
+        linking_class: Option<&ClassDef>,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        let canonical_target = self
+            .find_class(target)
+            .map_or(target, |class| class.name.as_str());
+        let canonical_class = self
+            .find_class(class_name)
+            .map_or(class_name, |class| class.name.as_str());
+        if canonical_class.eq_ignore_ascii_case(canonical_target) {
+            return true;
+        }
+        if !visited.insert(canonical_class.to_ascii_lowercase()) {
+            return false;
+        }
+
+        if let Some(class_def) = self.find_class(class_name) {
+            return (canonical_target.eq_ignore_ascii_case("Stringable")
+                && self
+                    .find_effective_method(class_def, "__toString")
+                    .is_some())
+                || class_def.parent.as_deref().is_some_and(|parent| {
+                    self.class_is_a_while_linking_inner(
+                        parent,
+                        canonical_target,
+                        linking_class,
+                        visited,
+                    )
+                })
+                || class_def.implements.iter().any(|interface| {
+                    self.class_is_a_while_linking_inner(
+                        interface,
+                        canonical_target,
+                        linking_class,
+                        visited,
+                    )
+                });
+        }
+
+        if let Some(linking_class) =
             linking_class.filter(|definition| definition.name.eq_ignore_ascii_case(class_name))
-        else {
-            return self.class_is_a(class_name, target);
-        };
-        if linking_class.name.eq_ignore_ascii_case(target) {
-            return true;
-        }
-        if target.eq_ignore_ascii_case("Stringable")
-            && (linking_class
-                .methods
-                .iter()
-                .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__toString"))
-                || linking_class
-                    .parent
-                    .as_deref()
-                    .is_some_and(|parent| self.class_is_a(parent, target)))
         {
-            return true;
+            return (canonical_target.eq_ignore_ascii_case("Stringable")
+                && linking_class
+                    .methods
+                    .iter()
+                    .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__toString")))
+                || linking_class.parent.as_deref().is_some_and(|parent| {
+                    self.class_is_a_while_linking_inner(
+                        parent,
+                        target,
+                        Some(linking_class),
+                        visited,
+                    )
+                })
+                || linking_class.implements.iter().any(|interface| {
+                    self.class_is_a_while_linking_inner(
+                        interface,
+                        target,
+                        Some(linking_class),
+                        visited,
+                    )
+                });
         }
-        linking_class
-            .parent
-            .as_deref()
-            .is_some_and(|parent| self.class_is_a(parent, target))
-            || linking_class
-                .implements
-                .iter()
-                .any(|interface| self.class_is_a(interface, target))
+
+        let Some(active) = self
+            .active_runtime_class_relations
+            .get(&class_name.to_ascii_lowercase())
+        else {
+            return false;
+        };
+        (canonical_target.eq_ignore_ascii_case("Stringable") && active.has_to_string)
+            || active.parent.as_deref().is_some_and(|parent| {
+                self.class_is_a_while_linking_inner(parent, target, linking_class, visited)
+            })
+            || active.implements.iter().any(|interface| {
+                self.class_is_a_while_linking_inner(interface, target, linking_class, visited)
+            })
     }
 
     fn variance_class_is_known(&self, class_name: &str, linking_class: Option<&ClassDef>) -> bool {
         linking_class.is_some_and(|definition| definition.name.eq_ignore_ascii_case(class_name))
             || self.find_class(class_name).is_some()
+            || self.runtime_class_link_is_active(class_name)
     }
 
     /// Class aliases and autoloaded declarations may not exist yet while an
@@ -5509,6 +5745,7 @@ impl ExecutorGlobals {
             impl_owner,
             iface_owner,
             linking_class,
+            true,
             false,
         )
     }
@@ -5528,6 +5765,7 @@ impl ExecutorGlobals {
             iface_owner,
             linking_class,
             true,
+            true,
         )
     }
 
@@ -5538,6 +5776,7 @@ impl ExecutorGlobals {
         impl_owner: &str,
         iface_owner: &str,
         linking_class: Option<&ClassDef>,
+        allow_unresolved_relation: bool,
         allow_any_unresolved_relation: bool,
     ) -> bool {
         use crate::vm::function::ParamTypeHint;
@@ -5573,6 +5812,7 @@ impl ExecutorGlobals {
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
                     allow_any_unresolved_relation,
                 );
             }
@@ -5585,6 +5825,7 @@ impl ExecutorGlobals {
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
                     allow_any_unresolved_relation,
                 );
             }
@@ -5608,6 +5849,7 @@ impl ExecutorGlobals {
                 impl_owner,
                 iface_owner,
                 linking_class,
+                allow_unresolved_relation,
                 allow_any_unresolved_relation,
             ) && self.is_return_type_compatible_mode(
                 &traversable,
@@ -5615,6 +5857,7 @@ impl ExecutorGlobals {
                 impl_owner,
                 iface_owner,
                 linking_class,
+                allow_unresolved_relation,
                 allow_any_unresolved_relation,
             );
         }
@@ -5627,6 +5870,7 @@ impl ExecutorGlobals {
                 impl_owner,
                 iface_owner,
                 linking_class,
+                allow_unresolved_relation,
                 allow_any_unresolved_relation,
             ) || self.is_return_type_compatible_mode(
                 impl_hint,
@@ -5634,6 +5878,7 @@ impl ExecutorGlobals {
                 impl_owner,
                 iface_owner,
                 linking_class,
+                allow_unresolved_relation,
                 allow_any_unresolved_relation,
             );
         }
@@ -5648,6 +5893,7 @@ impl ExecutorGlobals {
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
                     allow_any_unresolved_relation,
                 )
             });
@@ -5660,6 +5906,7 @@ impl ExecutorGlobals {
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
                     allow_any_unresolved_relation,
                 )
             });
@@ -5672,6 +5919,7 @@ impl ExecutorGlobals {
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
                     allow_any_unresolved_relation,
                 )
             });
@@ -5684,6 +5932,7 @@ impl ExecutorGlobals {
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_unresolved_relation,
                     allow_any_unresolved_relation,
                 )
             });
@@ -5723,9 +5972,17 @@ impl ExecutorGlobals {
                 return true;
             }
             if impl_class.eq_ignore_ascii_case("static") {
-                return self.variance_class_is_a(impl_owner, iface_class, linking_class);
+                return if allow_unresolved_relation {
+                    self.variance_class_is_a(impl_owner, iface_class, linking_class)
+                } else {
+                    self.class_is_a_while_linking(impl_owner, iface_class, linking_class)
+                };
             }
-            return self.variance_class_is_a(impl_class, iface_class, linking_class);
+            return if allow_unresolved_relation {
+                self.variance_class_is_a(impl_class, iface_class, linking_class)
+            } else {
+                self.class_is_a_while_linking(impl_class, iface_class, linking_class)
+            };
         }
 
         // Everything else: incompatible

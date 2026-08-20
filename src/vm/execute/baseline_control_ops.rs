@@ -120,8 +120,10 @@ fn op_declare_class<'a>(
     }
 
     let class_name = class_def.name.clone();
-    eg.register_compiled_class(class_def)
-        .map_err(VmError::Fatal)?;
+    if let Err(error) = eg.register_compiled_class(class_def) {
+        eg.abort_runtime_class_link(&class_name);
+        return Err(VmError::Fatal(error));
+    }
     eg.mark_runtime_class_declared(declaration_key, class_name);
     Ok(ColdResult::Done)
 }
