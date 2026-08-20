@@ -426,6 +426,115 @@ var_dump(array_keys($array));
 }
 
 #[test]
+fn reentrant_array_key_diagnostics_preserve_zend_lifetime_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function replaceTarget($severity, $message) {
+    global $target;
+    $target = null;
+    echo $message, "\n";
+}
+set_error_handler('replaceTarget');
+$seed = 123;
+
+$target = [$seed];
+echo "unique\n";
+var_dump(isset($target[1.0E+42]), $target);
+
+$target = [$seed];
+$copy = $target;
+echo "shared\n";
+var_dump(isset($target[1.0E+42]), $target, $copy[0]);
+
+restore_error_handler();
+
+function replaceReferenceTarget($severity, $message) {
+    global $referenceTarget;
+    $referenceTarget = null;
+    echo $message, "\n";
+}
+$referenceTarget = [$seed];
+$alias =& $referenceTarget;
+set_error_handler('replaceReferenceTarget');
+echo "reference\n";
+var_dump(isset($referenceTarget[1.0E+42]), $referenceTarget, $alias);
+restore_error_handler();
+
+function replaceSharedReferenceTarget($severity, $message) {
+    global $sharedReferenceTarget;
+    $sharedReferenceTarget = null;
+    echo $message, "\n";
+}
+$sharedReferenceTarget = [$seed];
+$referenceCopy = $sharedReferenceTarget;
+$sharedAlias =& $sharedReferenceTarget;
+set_error_handler('replaceSharedReferenceTarget');
+echo "shared reference\n";
+var_dump(
+    isset($sharedReferenceTarget[1.0E+42]),
+    $sharedReferenceTarget,
+    $sharedAlias,
+    $referenceCopy[0],
+);
+restore_error_handler();
+
+function replaceEmptyTarget($severity, $message) {
+    global $emptyTarget;
+    $emptyTarget = null;
+    echo $message, "\n";
+}
+$emptyTarget = [];
+set_error_handler('replaceEmptyTarget');
+echo "pristine empty\n";
+var_dump($emptyTarget[1.0E+42], $emptyTarget);
+restore_error_handler();
+
+$throwTarget = [$seed];
+set_error_handler(function ($severity, $message) {
+    global $throwTarget;
+    $throwTarget = null;
+    throw new RuntimeException('stop');
+});
+try {
+    isset($throwTarget[1.0E+42]);
+} catch (RuntimeException $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "unique\n",
+            "The float 1.0E+42 is not representable as an int, cast occurred\n",
+            "bool(false)\n",
+            "NULL\n",
+            "shared\n",
+            "The float 1.0E+42 is not representable as an int, cast occurred\n",
+            "bool(true)\n",
+            "NULL\n",
+            "int(123)\n",
+            "reference\n",
+            "The float 1.0E+42 is not representable as an int, cast occurred\n",
+            "bool(false)\n",
+            "NULL\n",
+            "NULL\n",
+            "shared reference\n",
+            "The float 1.0E+42 is not representable as an int, cast occurred\n",
+            "bool(true)\n",
+            "NULL\n",
+            "NULL\n",
+            "int(123)\n",
+            "pristine empty\n",
+            "The float 1.0E+42 is not representable as an int, cast occurred\n",
+            "Undefined array key 0\n",
+            "NULL\n",
+            "NULL\n",
+            "stop\n",
+        )
+    );
+}
+
+#[test]
 fn illegal_array_offsets_throw_catchable_contextual_type_errors() {
     assert_eq!(
         run_php(

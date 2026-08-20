@@ -955,6 +955,189 @@ fn array_access_offset_error(value: &Value, isset_or_empty: bool) -> String {
     }
 }
 
+#[cold]
+#[inline(never)]
+fn fetch_dim_after_array_key_diagnostic<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    result_slot: *mut Value,
+    source: Value,
+    error: ArrayKeyError,
+) -> Result<ColdResult<'a>, VmError> {
+    // SAFETY: FetchDimR supplied its live operand slot. Retaining the array
+    // before invoking user code keeps the allocation valid if that code
+    // replaces the operand; the slot itself remains part of the live frame.
+    let (array_slot, original_owner_count, array_guard, original_identity, pristine_empty) = unsafe {
+        let array_slot = (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let array = (&*array_slot).dereferenced();
+        let original_owner_count = array.cycle_strong_count().unwrap();
+        let array_guard = array.clone();
+        let original_identity = array_guard.array_identity().unwrap();
+        let pristine_empty = array.as_array().unwrap().is_pristine_empty();
+        (
+            array_slot,
+            original_owner_count,
+            array_guard,
+            original_identity,
+            pristine_empty,
+        )
+    };
+
+    macro_rules! finish_diagnostic {
+        () => {
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+        };
+    }
+
+    let key = match error {
+        ArrayKeyError::Resource(resource) => {
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!(
+                    "Resource ID#{resource} used as offset, casting to integer ({resource})"
+                ),
+                opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+            )?;
+            finish_diagnostic!();
+            ArrayKey::Int(resource)
+        }
+        ArrayKeyError::DeprecatedNull => {
+            report_php_deprecation(
+                eg,
+                frame,
+                op_array,
+                opline,
+                "Using null as an array offset is deprecated, use an empty string instead",
+            )?;
+            finish_diagnostic!();
+            ArrayKey::String(String::new())
+        }
+        ArrayKeyError::DeprecatedFloat(integer) => {
+            let rendered = source.echo_to_string_with_precision(-1);
+            report_php_deprecation(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!("Implicit conversion from float {rendered} to int loses precision"),
+            )?;
+            finish_diagnostic!();
+            ArrayKey::Int(integer)
+        }
+        ArrayKeyError::NonRepresentableFloat {
+            integer,
+            also_deprecated,
+        } => {
+            let rendered = source.echo_to_string_with_precision(-1);
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!("The float {rendered} is not representable as an int, cast occurred"),
+                opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+            )?;
+            finish_diagnostic!();
+            if also_deprecated {
+                report_php_deprecation(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &format!("Implicit conversion from float {rendered} to int loses precision"),
+                )?;
+                finish_diagnostic!();
+            }
+            ArrayKey::Int(integer)
+        }
+        ArrayKeyError::Illegal => {
+            let instruction_index = unsafe {
+                (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+            };
+            return Ok(match throw_illegal_offset_type(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                &array_access_offset_error(
+                    &source,
+                    opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0,
+                ),
+            ) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
+    };
+
+    let current_identity = unsafe { (&*array_slot).dereferenced().array_identity() };
+    if current_identity == Some(original_identity)
+        || original_owner_count > 1
+        || pristine_empty
+    {
+        let array = array_guard.as_array().unwrap();
+        let fetched = match &key {
+            ArrayKey::Int(key) => array.get_int(*key),
+            ArrayKey::String(key) => {
+                let cache_ip = unsafe {
+                    (opline as *const Instruction)
+                        .offset_from(op_array.instructions.as_ptr())
+                        as usize
+                };
+                unsafe { cached_string_array_value(op_array, cache_ip, array, key) }
+            }
+        };
+        if fetched.is_none() && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0 {
+            let key = match key {
+                ArrayKey::Int(key) => key.to_string(),
+                ArrayKey::String(key) => format!("\"{key}\""),
+            };
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!("Undefined array key {key}"),
+                opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+            )?;
+            finish_diagnostic!();
+        }
+        let value = if opline._pad & FETCH_DIM_ISSET != 0 {
+            Value::bool(fetched.is_some_and(|value| {
+                !matches!(value.value_type(), ValueType::Null | ValueType::Undef)
+            }))
+        } else {
+            fetched.cloned().unwrap_or(Value::null())
+        };
+        write_fetch_dim_result(frame, result_slot, value);
+    } else {
+        write_fetch_dim_result(
+            frame,
+            result_slot,
+            if opline._pad & FETCH_DIM_ISSET != 0 {
+                Value::bool(false)
+            } else {
+                Value::null()
+            },
+        );
+    }
+    Ok(ColdResult::Done)
+}
+
 /// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -1069,6 +1252,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         integer,
                         also_deprecated,
                     }) => {
+                        let rendered = source.echo_to_string_with_precision(-1);
                         report_php_warning(
                             eg,
                             frame,
@@ -1076,7 +1260,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline,
                             &format!(
                                 "The float {} is not representable as an int, cast occurred",
-                                source.echo_to_string_with_precision(-1)
+                                rendered
                             ),
                             $suppressed,
                         )?;
@@ -1089,7 +1273,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 opline,
                                 &format!(
                                     "Implicit conversion from float {} to int loses precision",
-                                    source.echo_to_string_with_precision(-1)
+                                    rendered
                                 ),
                             )?;
                             finish_array_key_diagnostic!();
@@ -1157,6 +1341,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         also_deprecated,
                     }) => {
                         if $report_conversion {
+                            let rendered = source.echo_to_string_with_precision(-1);
                             report_php_warning(
                                 eg,
                                 frame,
@@ -1164,7 +1349,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 opline,
                                 &format!(
                                     "The float {} is not representable as an int, cast occurred",
-                                    source.echo_to_string_with_precision(-1)
+                                    rendered
                                 ),
                                 $suppressed,
                             )?;
@@ -1177,7 +1362,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     opline,
                                     &format!(
                                         "Implicit conversion from float {} to int loses precision",
-                                        source.echo_to_string_with_precision(-1)
+                                        rendered
                                     ),
                                 )?;
                                 finish_array_key_diagnostic!();
@@ -4841,77 +5026,117 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 // result = op1[op2]
+                // SAFETY: each compiler-selected operand slot belongs to this
+                // live frame. The cold diagnostic helper separately retains an
+                // array before invoking synchronous user code.
                 let arr_val = unsafe {
                     (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
                         .dereferenced()
                 };
-                let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+                let idx_val = unsafe {
+                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+                };
+                let result_ptr = unsafe {
+                    (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                };
 
                 if let Some(arr) = arr_val.as_array() {
-                    let array_key = array_key_ref_or_throw!(
-                        idx_val,
-                        &array_access_offset_error(
-                            idx_val,
-                            opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0
-                        ),
-                        opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0
-                    );
-                    let fetched = match &array_key {
-                        ArrayKeyRef::Int(key) => arr.get_int(*key),
-                        ArrayKeyRef::String(key) => {
-                            let cache_ip = unsafe {
-                                (opline as *const Instruction)
-                                    .offset_from(op_array.instructions.as_ptr())
-                                    as usize
-                            };
-                            unsafe {
-                                cached_string_array_value(
-                                    op_array,
-                                    cache_ip,
-                                    arr,
-                                    key,
-                                )
-                            }
-                        }
-                    };
-                    if fetched.is_none()
-                        && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
+                    if opline._pad & FETCH_DIM_ISSET != 0
+                        && let Some(key) = idx_val.as_long()
                     {
-                        let key = match array_key {
-                            ArrayKeyRef::Int(key) => key.to_string(),
-                            ArrayKeyRef::String(key) => format!("\"{key}\""),
-                        };
-                        report_php_warning(
-                            eg,
+                        write_fetch_dim_result(
                             frame,
-                            op_array,
-                            opline,
-                            &format!("Undefined array key {key}"),
-                            opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
-                        )?;
-                        if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
-                                ThrowResult::Handled(new_frame, new_op_array) => {
-                                    frame = new_frame;
-                                    op_array = new_op_array;
-                                    continue 'vm;
+                            result_ptr,
+                            Value::bool(arr.get_int(key).is_some_and(|value| {
+                                !matches!(value.value_type(), ValueType::Null | ValueType::Undef)
+                            })),
+                        );
+                    } else {
+                        match value_to_array_key_ref(idx_val) {
+                            Ok(array_key) => {
+                                let fetched = match &array_key {
+                                    ArrayKeyRef::Int(key) => arr.get_int(*key),
+                                    ArrayKeyRef::String(key) => {
+                                        let cache_ip = unsafe {
+                                            (opline as *const Instruction)
+                                                .offset_from(op_array.instructions.as_ptr())
+                                                as usize
+                                        };
+                                        unsafe {
+                                            cached_string_array_value(op_array, cache_ip, arr, key)
+                                        }
+                                    }
+                                };
+                                if fetched.is_none()
+                                    && opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_SILENT) == 0
+                                {
+                                    let key = match array_key {
+                                        ArrayKeyRef::Int(key) => key.to_string(),
+                                        ArrayKeyRef::String(key) => format!("\"{key}\""),
+                                    };
+                                    report_php_warning(
+                                        eg,
+                                        frame,
+                                        op_array,
+                                        opline,
+                                        &format!("Undefined array key {key}"),
+                                        opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
+                                    )?;
+                                    if let Some(exception) = eg.exception.take() {
+                                        match throw_in_frame(eg, frame, exception) {
+                                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                                frame = new_frame;
+                                                op_array = new_op_array;
+                                                continue 'vm;
+                                            }
+                                            ThrowResult::Unhandled(exception) => {
+                                                eg.exception = Some(exception);
+                                                return Ok(());
+                                            }
+                                        }
+                                    }
                                 }
-                                ThrowResult::Unhandled(exception) => {
-                                    eg.exception = Some(exception);
-                                    return Ok(());
+                                let value = if opline._pad & FETCH_DIM_ISSET != 0 {
+                                    Value::bool(fetched.is_some_and(|value| {
+                                        !matches!(
+                                            value.value_type(),
+                                            ValueType::Null | ValueType::Undef
+                                        )
+                                    }))
+                                } else {
+                                    fetched.cloned().unwrap_or(Value::null())
+                                };
+                                write_fetch_dim_result(frame, result_ptr, value);
+                            }
+                            Err(error) => {
+                                match fetch_dim_after_array_key_diagnostic(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline,
+                                    result_ptr,
+                                    idx_val.clone(),
+                                    error,
+                                )? {
+                                    ColdResult::Done => {}
+                                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                                        frame = new_frame;
+                                        op_array = new_op_array;
+                                        continue 'vm;
+                                    }
+                                    ColdResult::Unhandled(exception) => {
+                                        eg.exception = Some(exception);
+                                        return Ok(());
+                                    }
+                                    ColdResult::Continue | ColdResult::Return => {
+                                        unreachable!(
+                                            "array-key diagnostic cannot suspend execution"
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                    let val = if opline._pad & FETCH_DIM_ISSET != 0 {
-                        Value::bool(fetched.is_some_and(|value| {
-                            !matches!(value.value_type(), ValueType::Null | ValueType::Undef)
-                        }))
-                    } else {
-                        fetched.cloned().unwrap_or(Value::null())
-                    };
-                    write_fetch_dim_result(frame, result_ptr, val);
                 } else if let Some(s) = arr_val.as_str() {
                     if opline._pad & FETCH_DIM_DESTRUCTURE != 0 {
                         write_fetch_dim_result(frame, result_ptr, Value::null());

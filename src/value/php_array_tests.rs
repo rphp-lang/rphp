@@ -22,6 +22,19 @@ fn hash_entry_layout_stays_compact() {
 }
 
 #[test]
+fn pristine_empty_marker_shares_cursor_storage_and_clears_before_mutation() {
+    let mut value = Value::array(PhpArray::new());
+    assert!(value.as_array().unwrap().is_pristine_empty());
+
+    let array = value.as_array_mut().unwrap();
+    array.push(Value::long(7));
+    assert_eq!(array.cursor_reset().and_then(Value::as_long), Some(7));
+    assert_eq!(array.cursor_key(), Some(ArrayKey::Int(0)));
+    assert_eq!(array.pop().and_then(|value| value.as_long()), Some(7));
+    assert!(!array.is_pristine_empty());
+}
+
+#[test]
 fn packed_long_chunks_preserve_keys_and_reject_other_storage() {
     let mut packed = PhpArray::new();
     assert!(packed.reserve_packed_long_appends(1_000));

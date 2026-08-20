@@ -1671,6 +1671,10 @@ pub struct PhpArray {
     cursor: Cell<usize>,
 }
 
+// A live array cannot have enough entries to use the address-width high bit as
+// a cursor position, so the marker does not enlarge `PhpArray`.
+const ARRAY_CURSOR_PRISTINE: usize = 1usize << (usize::BITS - 1);
+
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
 /// `std::HashMap` otherwise uses the DOS-resistant general-purpose string
@@ -2364,55 +2368,77 @@ impl PhpArray {
         Self {
             storage: ArrayStorage::Packed(Vec::new()),
             next_int_key: 0,
-            cursor: Cell::new(0),
+            cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
         }
+    }
+
+    /// Whether this empty array has not crossed a mutable `Value` access yet.
+    /// Reentrant offset diagnostics use this conservative lifetime boundary;
+    /// the marker shares storage with the internal cursor.
+    #[inline]
+    pub(crate) fn is_pristine_empty(&self) -> bool {
+        self.cursor.get() & ARRAY_CURSOR_PRISTINE != 0 && self.is_empty()
+    }
+
+    #[inline]
+    fn mark_mutated(&self) {
+        self.cursor.set(self.cursor.get() & !ARRAY_CURSOR_PRISTINE);
     }
 
     #[inline]
     pub(crate) fn cursor_reset(&self) -> Option<&Value> {
-        self.cursor.set(0);
+        self.cursor.set(self.cursor.get() & ARRAY_CURSOR_PRISTINE);
         self.iter().next().map(|(_, value)| value)
     }
 
     #[inline]
     pub(crate) fn cursor_end(&self) -> Option<&Value> {
         let position = self.len().saturating_sub(1);
-        self.cursor.set(position);
+        self.cursor
+            .set((self.cursor.get() & ARRAY_CURSOR_PRISTINE) | position);
         self.iter().nth(position).map(|(_, value)| value)
     }
 
     #[inline]
     pub(crate) fn cursor_current(&self) -> Option<&Value> {
-        self.iter().nth(self.cursor.get()).map(|(_, value)| value)
+        self.iter()
+            .nth(self.cursor.get() & !ARRAY_CURSOR_PRISTINE)
+            .map(|(_, value)| value)
     }
 
     #[inline]
     pub(crate) fn cursor_key(&self) -> Option<ArrayKey> {
-        self.iter().nth(self.cursor.get()).map(|(key, _)| key)
+        self.iter()
+            .nth(self.cursor.get() & !ARRAY_CURSOR_PRISTINE)
+            .map(|(key, _)| key)
     }
 
     #[inline]
     pub(crate) fn cursor_next(&self) -> Option<&Value> {
-        self.cursor.set(self.cursor.get().saturating_add(1));
+        let pristine = self.cursor.get() & ARRAY_CURSOR_PRISTINE;
+        let position = (self.cursor.get() & !ARRAY_CURSOR_PRISTINE).saturating_add(1);
+        self.cursor.set(pristine | position);
         self.cursor_current()
     }
 
     #[inline]
     pub(crate) fn cursor_prev(&self) -> Option<&Value> {
-        let current = self.cursor.get();
+        let pristine = self.cursor.get() & ARRAY_CURSOR_PRISTINE;
+        let current = self.cursor.get() & !ARRAY_CURSOR_PRISTINE;
         if current == 0 {
-            self.cursor.set(self.len());
+            self.cursor.set(pristine | self.len());
             return None;
         }
-        self.cursor.set(current - 1);
+        self.cursor.set(pristine | (current - 1));
         self.cursor_current()
     }
 
     #[inline]
     fn adjust_cursor_after_remove(&self, removed_position: usize) {
-        let current = self.cursor.get();
+        let pristine = self.cursor.get() & ARRAY_CURSOR_PRISTINE;
+        let current = self.cursor.get() & !ARRAY_CURSOR_PRISTINE;
         if removed_position < current {
-            self.cursor.set(current - 1);
+            self.cursor.set(pristine | (current - 1));
         }
     }
 
@@ -2438,7 +2464,7 @@ impl PhpArray {
         Self {
             storage: ArrayStorage::Packed(Vec::with_capacity(capacity)),
             next_int_key: 0,
-            cursor: Cell::new(0),
+            cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
         }
     }
 
@@ -2449,7 +2475,7 @@ impl PhpArray {
             return Self {
                 storage: ArrayStorage::SmallHash(SmallHashStorage::new()),
                 next_int_key: 0,
-                cursor: Cell::new(0),
+                cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
             };
         }
         Self {
@@ -2460,7 +2486,7 @@ impl PhpArray {
                 verified_int_prefix: 0,
             },
             next_int_key: 0,
-            cursor: Cell::new(0),
+            cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
         }
     }
 
@@ -2472,14 +2498,14 @@ impl PhpArray {
             return Self {
                 storage: ArrayStorage::SmallHash(SmallHashStorage::new()),
                 next_int_key: 0,
-                cursor: Cell::new(0),
+                cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
             };
         }
         if capacity <= LINEAR_HASH_CAPACITY {
             return Self {
                 storage: ArrayStorage::LinearHash(LinearHashStorage::with_capacity(capacity)),
                 next_int_key: 0,
-                cursor: Cell::new(0),
+                cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
             };
         }
         Self::with_hash_capacity(capacity)
@@ -5312,17 +5338,19 @@ impl Value {
         unsafe {
             let rc_ptr = self.data.ptr as *mut PhpArray;
             let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
-            if Rc::strong_count(&rc) == 1 {
+            let array = if Rc::strong_count(&rc) == 1 {
                 // Sole owner — mutate in place. No copy.
-                Some(&mut *rc_ptr)
+                &mut *rc_ptr
             } else {
                 // Shared — COW detach: deep clone PhpArray, create new sole-owner Rc
                 let cloned = (*rc_ptr).clone();
                 Rc::decrement_strong_count(rc_ptr as *const PhpArray);
                 let new_rc = Rc::new(cloned);
                 self.data.ptr = Rc::into_raw(new_rc) as *mut u8;
-                Some(&mut *(self.data.ptr as *mut PhpArray))
-            }
+                &mut *(self.data.ptr as *mut PhpArray)
+            };
+            array.mark_mutated();
+            Some(array)
         }
     }
 
@@ -5339,7 +5367,11 @@ impl Value {
         unsafe {
             let rc_ptr = self.data.ptr as *mut PhpArray;
             let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
-            (Rc::strong_count(&rc) == 1).then(|| &mut *rc_ptr)
+            if Rc::strong_count(&rc) != 1 {
+                return None;
+            }
+            (*rc_ptr).mark_mutated();
+            Some(&mut *rc_ptr)
         }
     }
 
