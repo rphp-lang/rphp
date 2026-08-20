@@ -607,7 +607,7 @@ foreach ([
 ] as $result) var_dump($result);
 "#
         ),
-        "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n"
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\n"
     );
 }
 

@@ -44,6 +44,93 @@ echo ("a" <=> "b") . " " . ("b" <=> "b") . " " . ("c" <=> "b");
 }
 
 #[test]
+fn compound_and_cross_type_comparisons_follow_php_85_ordering() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([
+    [1, 2] == [1, 2],
+    [1] > 0,
+    0 < [1],
+    [] == false,
+    null < -1,
+    "123" == "123.0",
+    1 < "2x",
+    2 > "10x",
+    [1] <=> 0,
+    0 <=> [1],
+    NAN < 0,
+    NAN > "",
+    NAN <=> NAN,
+    [NAN] > [0],
+    [NAN] <=> [0],
+] as $result) {
+    var_dump($result);
+}
+"#,
+        ),
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nint(1)\nint(-1)\nbool(false)\nbool(false)\nint(1)\nbool(false)\nint(1)\n"
+    );
+}
+
+#[test]
+fn object_comparisons_convert_scalars_and_survive_reentrant_string_casts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PlainComparison {}
+set_error_handler(function ($level, $message) { echo $message, "\n"; });
+$plain = new PlainComparison;
+var_dump($plain == 1, 2.0 > $plain);
+restore_error_handler();
+
+class RenderedComparison {
+    public function __toString() { return "2"; }
+}
+var_dump(new RenderedComparison < "10");
+
+class InvalidRenderedComparison {
+    public function __toString() {}
+}
+try {
+    var_dump(new InvalidRenderedComparison > "");
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+
+$left = ["value" => "test"];
+$right = ["value" => new class {
+    public function __toString() {
+        global $left, $right;
+        $left = $right = null;
+        return "";
+    }
+}];
+var_dump($left > $right);
+
+$arrayLeft = [new RenderedComparison];
+$arrayRight = ["2"];
+var_dump($arrayLeft == $arrayRight, $arrayLeft <=> $arrayRight);
+
+class ComparisonContainer {
+    public function __construct(public $value) {}
+}
+$objectLeft = new ComparisonContainer(new RenderedComparison);
+$objectRight = new ComparisonContainer("2");
+var_dump($objectLeft == $objectRight, $objectLeft <=> $objectRight);
+
+$closure = function () {};
+set_error_handler(function ($level, $message) { echo $message, "\n"; });
+var_dump($closure == 1);
+restore_error_handler();
+var_dump("x" <=> $closure);
+"#,
+        ),
+        "Object of class PlainComparison could not be converted to int\nObject of class PlainComparison could not be converted to float\nbool(true)\nbool(true)\nbool(true)\nInvalidRenderedComparison::__toString(): Return value must be of type string, none returned\nbool(true)\nbool(true)\nint(0)\nbool(true)\nint(0)\nObject of class Closure could not be converted to int\nbool(true)\nint(-1)\n"
+    );
+}
+
+#[test]
 fn object_comparison_initializes_lazy_properties_but_string_cast_does_not() {
     assert_eq!(
         run_php(

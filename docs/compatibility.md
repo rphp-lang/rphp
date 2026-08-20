@@ -9,6 +9,72 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,569 pass, 1,728 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+67.378% and the whole-corpus rate is 63.744%; 4,684 of 5,297 attempted cases
+reach runtime (88.427%). Relative to exact base `1f6178d3`, the pass-set delta
+is +28/-0: all 3,541 prior passes remain passes and no status regresses. Two
+final merged manifests and summaries are byte-for-byte identical. The manifest
+SHA-256 is
+`8b7fc631ad7bb9e76c26bbf68f03209413daea4bd474723d99aaa5f64c6a6176`.
+
+PHP 8.5 loose equality, relational and spaceship operations now share a
+canonical checked comparison fallback for compound and cross-type operands.
+Boolean and null truthiness precedes numeric coercion; complete numeric strings
+compare numerically while non-numeric number/string pairs use PHP's lexical
+boundary. Arrays retain PHP's directional ordering against scalars, objects
+and closures. Runtime object/scalar comparisons perform the required numeric
+notice or checked `__toString()` conversion, including reentrant user code,
+and propagate it through nested arrays and object properties, while recursive
+comparison retains live operands and reports PHP's recursive-dependency error.
+NaN retains PHP's unordered relational result while spaceship normalizes that
+boundary to `1`. Constant evaluation uses the same pure comparison rules.
+Existing integer, double and string opcode paths remain direct scalar fast
+paths; only their non-scalar cases enter the cold fallback.
+
+Original E2E regressions exercise the complete scalar/array/object matrix,
+numeric-string boundaries, resources, enums, closures, recursive arrays,
+NaN, invalid `__toString()` returns and a reentrant string cast that mutates the
+compared object. The complete focused 22-case cluster is exact in 20 cases.
+
+The exact full-corpus additions are `Zend/tests/bug69891.phpt`,
+`Zend/tests/clone/bug24884.phpt`, comparison cases `compare_001_64bit.phpt`,
+`003`, `004`, `005` and `006`, enum cases `comparison.phpt` and `gh16954.phpt`,
+`Zend/tests/foreach/gh11222.phpt`, `gh19305-001.phpt`, `gh19305-002.phpt`,
+`gh418106144.phpt`,
+`match/gh11134.phpt`, `object-null.phpt`, object cases `objects_001.phpt` and
+`objects_015.phpt`, `optimizer/nan_warning_switch.phpt`,
+`oss_fuzz_434346548.phpt`, `switch/switch_on_numeric_strings.phpt`, temporary
+cleaning cases `004` and `005`, and the six `tests/lang/operators` cases for
+equals, greater-than, greater-than-or-equal, less-than, less-than-or-equal and
+spaceship. `gh19305-001.phpt` specifically crosses the nested object-property
+conversion boundary.
+
+Seven remaining failures advance beyond their former compile rejection, with
+no pass loss. `bug32322.phpt` reaches its separate by-reference/destructor
+output boundary; `bug42143.phpt` reaches the missing `M_PI` constant;
+`numeric_strings/trailling_whitespaces.phpt` reaches the vertical-tab/form-feed
+lexer boundary; `type_coercion/nan_comp_op.phpt` now has exact comparison
+results and differs only in `var_export(NAN)` spelling; `bug21961.phpt` reaches
+the non-static-method static-call boundary; `foreachLoopObjects.004.phpt`
+reaches missing-property warnings; and `string_decimals_001.phpt` reaches its
+independent prefix float-cast behavior. These remain visible output or runtime
+failures and are not claimed by this checkpoint.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory is 1,606 unsafe blocks and 289 unsafe functions. On an AMD Ryzen 9
+7950X pinned to one performance-governor CPU, 32 balanced A/B pairs retain the
+scalar gates under the +1% ceiling: the general CV/CV branch loop has a -6.75%
+independent-median delta and -6.68% balanced paired delta; the quick-loop-
+disabled CV/constant loop has -0.76% and -0.95%, respectively. Exact output
+checksums match for every sample. Favorable medians are control evidence, not
+a broader optimization claim.
+
+In the preceding namespace-relative catch checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,541 pass, 1,756 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 66.849% and the whole-corpus rate is 63.243%; 4,653 of 5,297 attempted cases

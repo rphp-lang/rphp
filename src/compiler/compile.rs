@@ -5051,11 +5051,8 @@ impl Compiler {
                 }))
             }
             BinOp::Equal | BinOp::NotEqual => {
-                let equal = if let Some((left, right)) = numeric_pair() {
-                    left == right
-                } else {
-                    left.structurally_equal(right)
-                };
+                let equal = crate::vm::execute::values_equal_checked(left, right)
+                    .map_err(|()| "recursive comparison in constant expression".to_string())?;
                 Ok(Value::bool(if op == BinOp::Equal { equal } else { !equal }))
             }
             BinOp::Less
@@ -5063,24 +5060,20 @@ impl Compiler {
             | BinOp::Greater
             | BinOp::GreaterEqual
             | BinOp::Spaceship => {
-                let ordering = if let Some((left, right)) = numeric_pair() {
-                    left.partial_cmp(&right)
-                } else if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
-                    Some(left.cmp(right))
-                } else {
-                    None
-                }
-                .ok_or_else(unsupported)?;
+                let comparison = crate::vm::execute::values_compare_checked(left, right)
+                    .map_err(|()| "recursive comparison in constant expression".to_string())?;
                 match op {
-                    BinOp::Less => Ok(Value::bool(ordering.is_lt())),
-                    BinOp::LessEqual => Ok(Value::bool(!ordering.is_gt())),
-                    BinOp::Greater => Ok(Value::bool(ordering.is_gt())),
-                    BinOp::GreaterEqual => Ok(Value::bool(!ordering.is_lt())),
-                    BinOp::Spaceship => Ok(Value::long(match ordering {
-                        std::cmp::Ordering::Less => -1,
-                        std::cmp::Ordering::Equal => 0,
-                        std::cmp::Ordering::Greater => 1,
-                    })),
+                    BinOp::Less => Ok(Value::bool(comparison < 0)),
+                    BinOp::LessEqual => Ok(Value::bool(comparison <= 0)),
+                    BinOp::Greater => Ok(Value::bool(
+                        comparison != crate::vm::execute::PHP_COMPARISON_UNORDERED
+                            && comparison > 0,
+                    )),
+                    BinOp::GreaterEqual => Ok(Value::bool(
+                        comparison != crate::vm::execute::PHP_COMPARISON_UNORDERED
+                            && comparison >= 0,
+                    )),
+                    BinOp::Spaceship => Ok(Value::long(comparison.signum() as i64)),
                     _ => unreachable!(),
                 }
             }

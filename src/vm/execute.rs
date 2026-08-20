@@ -3605,6 +3605,7 @@ fn value_to_global_name(val: &Value) -> Result<String, VmError> {
 }
 
 const MAX_COMPARISON_DEPTH: usize = 512;
+pub(crate) const PHP_COMPARISON_UNORDERED: i32 = 2;
 
 #[derive(Default)]
 struct ComparisonContext {
@@ -3616,6 +3617,14 @@ struct ComparisonContext {
 /// catchable Error through the checked entry point rather than overflowing the
 /// host stack. Scalar leaves retain PHP's ordinary loose behavior.
 pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
+    #[inline]
+    fn scalar_number_string_equal(number: &Value, string: &str) -> bool {
+        parse_php_numeric_string(string).map_or_else(
+            || number.echo_to_string() == string,
+            |right| number.to_double().is_some_and(|left| left == right.number),
+        )
+    }
+
     fn equal_inner(
         a: &Value,
         b: &Value,
@@ -3635,16 +3644,27 @@ pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
 
         Ok(match (a.value_type(), b.value_type()) {
             (ValueType::Long, ValueType::Long) => a.as_long() == b.as_long(),
-            (ValueType::Long | ValueType::Double, ValueType::Long | ValueType::Double) => {
-                a.to_double() == b.to_double()
-            }
+            (ValueType::Resource, ValueType::Resource) => a.as_resource_id() == b.as_resource_id(),
+            (
+                ValueType::Long | ValueType::Double | ValueType::Resource,
+                ValueType::Long | ValueType::Double | ValueType::Resource,
+            ) => a.to_double() == b.to_double(),
             (ValueType::String, ValueType::String) => {
                 let left = a.as_str().unwrap();
                 let right = b.as_str().unwrap();
-                match (left.trim().parse::<f64>(), right.trim().parse::<f64>()) {
-                    (Ok(left), Ok(right)) => left == right,
+                match (
+                    parse_php_numeric_string(left),
+                    parse_php_numeric_string(right),
+                ) {
+                    (Some(left), Some(right)) => left.number == right.number,
                     _ => left == right,
                 }
+            }
+            (ValueType::Long | ValueType::Double | ValueType::Resource, ValueType::String) => {
+                scalar_number_string_equal(a, b.as_str().unwrap())
+            }
+            (ValueType::String, ValueType::Long | ValueType::Double | ValueType::Resource) => {
+                scalar_number_string_equal(b, a.as_str().unwrap())
             }
             (ValueType::Array, ValueType::Array) => {
                 let left_identity = a.array_identity().unwrap();
@@ -3738,7 +3758,6 @@ pub(crate) fn values_equal_checked(a: &Value, b: &Value) -> Result<bool, ()> {
                 .as_closure()
                 .zip(b.as_closure())
                 .is_some_and(|(left, right)| left.same_identity(right)),
-            (ValueType::Resource, ValueType::Resource) => a.as_resource_id() == b.as_resource_id(),
             _ => false,
         })
     }
@@ -3780,20 +3799,63 @@ pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
             (ValueType::Long, ValueType::Long) => {
                 Ok(ordering(a.as_long().unwrap().cmp(&b.as_long().unwrap())))
             }
-            (ValueType::Long | ValueType::Double, ValueType::Long | ValueType::Double) => {
+            (ValueType::Resource, ValueType::Resource) => Ok(ordering(
+                a.as_resource_id()
+                    .unwrap()
+                    .cmp(&b.as_resource_id().unwrap()),
+            )),
+            (
+                ValueType::Long | ValueType::Double | ValueType::Resource,
+                ValueType::Long | ValueType::Double | ValueType::Resource,
+            ) => {
                 let left = a.to_double().unwrap();
                 let right = b.to_double().unwrap();
-                Ok(left.partial_cmp(&right).map_or(0, ordering))
+                Ok(left
+                    .partial_cmp(&right)
+                    .map_or(PHP_COMPARISON_UNORDERED, ordering))
             }
             (ValueType::String, ValueType::String) => {
                 let left = a.as_str().unwrap();
                 let right = b.as_str().unwrap();
                 Ok(
-                    match (left.trim().parse::<f64>(), right.trim().parse::<f64>()) {
-                        (Ok(left), Ok(right)) => left.partial_cmp(&right).map_or(0, ordering),
+                    match (
+                        parse_php_numeric_string(left),
+                        parse_php_numeric_string(right),
+                    ) {
+                        (Some(left), Some(right)) => left
+                            .number
+                            .partial_cmp(&right.number)
+                            .map_or(PHP_COMPARISON_UNORDERED, ordering),
                         _ => ordering(left.cmp(right)),
                     },
                 )
+            }
+            (ValueType::Long | ValueType::Double | ValueType::Resource, ValueType::String) => {
+                let right = b.as_str().unwrap();
+                Ok(parse_php_numeric_string(right).map_or_else(
+                    || {
+                        if a.to_double().is_some_and(f64::is_nan) {
+                            PHP_COMPARISON_UNORDERED
+                        } else {
+                            ordering(a.echo_to_string().as_str().cmp(right))
+                        }
+                    },
+                    |right| {
+                        a.to_double()
+                            .unwrap()
+                            .partial_cmp(&right.number)
+                            .map_or(PHP_COMPARISON_UNORDERED, ordering)
+                    },
+                ))
+            }
+            (ValueType::String, ValueType::Long | ValueType::Double | ValueType::Resource) => {
+                compare_inner(b, a, context, depth).map(|comparison| {
+                    if comparison == PHP_COMPARISON_UNORDERED {
+                        comparison
+                    } else {
+                        -comparison
+                    }
+                })
             }
             (ValueType::Array, ValueType::Array) => {
                 let left_identity = a.array_identity().unwrap();
@@ -3907,11 +3969,12 @@ pub(crate) fn values_compare_checked(a: &Value, b: &Value) -> Result<i32, ()> {
                     1
                 },
             ),
-            (ValueType::Resource, ValueType::Resource) => Ok(ordering(
-                a.as_resource_id()
-                    .unwrap()
-                    .cmp(&b.as_resource_id().unwrap()),
-            )),
+            (ValueType::Array, ValueType::Object | ValueType::Closure) => Ok(-1),
+            (ValueType::Object | ValueType::Closure, ValueType::Array) => Ok(1),
+            (ValueType::Array, _) => Ok(1),
+            (_, ValueType::Array) => Ok(-1),
+            (ValueType::Object | ValueType::Closure, _) => Ok(1),
+            (_, ValueType::Object | ValueType::Closure) => Ok(-1),
             _ => Ok(1),
         }
     }
