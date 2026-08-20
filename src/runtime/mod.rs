@@ -1978,13 +1978,9 @@ impl ExecutorGlobals {
         use crate::vm::function::ParamTypeHint;
 
         let mut errors = Vec::new();
-        let visibility_rank = |visibility| match visibility {
-            Visibility::Private => 0,
-            Visibility::Protected => 1,
-            Visibility::Public => 2,
-        };
         if required.enforces_visibility
-            && visibility_rank(implementation.visibility) < visibility_rank(required.visibility)
+            && Self::method_visibility_rank(implementation.visibility)
+                < Self::method_visibility_rank(required.visibility)
         {
             errors.push(format!("access must be at least {:?}", required.visibility));
         }
@@ -2170,6 +2166,68 @@ impl ExecutorGlobals {
             }
         }
         errors
+    }
+
+    #[inline]
+    fn method_visibility_rank(visibility: Visibility) -> u8 {
+        match visibility {
+            Visibility::Private => 0,
+            Visibility::Protected => 1,
+            Visibility::Public => 2,
+        }
+    }
+
+    #[cold]
+    fn incompatible_method_contract_diagnostic(
+        &self,
+        required: MethodDeclaration<'_>,
+        implementation: MethodDeclaration<'_>,
+        linking_class: &ClassDef,
+    ) -> Option<String> {
+        if self
+            .method_contract_errors(required, implementation, Some(linking_class))
+            .is_empty()
+        {
+            return None;
+        }
+
+        let location = linking_class
+            .source_file
+            .as_ref()
+            .map_or_else(String::new, |file| {
+                format!(" in {file} on line {}", implementation.source_line)
+            });
+        if required.enforces_visibility
+            && Self::method_visibility_rank(implementation.visibility)
+                < Self::method_visibility_rank(required.visibility)
+        {
+            let required_visibility = match required.visibility {
+                Visibility::Public => "public",
+                Visibility::Protected => "protected",
+                Visibility::Private => "private",
+            };
+            let weaker = if required.visibility == Visibility::Protected {
+                " or weaker"
+            } else {
+                ""
+            };
+            return Some(format!(
+                "Access level to {}::{}() must be {} (as in class {}){}{}",
+                self.method_diagnostic_owner(implementation, Some(linking_class)),
+                implementation.name,
+                required_visibility,
+                required.owner,
+                weaker,
+                location
+            ));
+        }
+
+        Some(format!(
+            "Declaration of {} must be compatible with {}{}",
+            self.format_method_signature(implementation, Some(linking_class)),
+            self.format_method_signature(required, Some(linking_class)),
+            location
+        ))
     }
 
     #[inline]
@@ -2489,6 +2547,22 @@ impl ExecutorGlobals {
         owner
     }
 
+    fn method_diagnostic_owner<'a>(
+        &self,
+        declaration: MethodDeclaration<'a>,
+        linking_class: Option<&'a ClassDef>,
+    ) -> &'a str {
+        if !declaration.is_abstract
+            && let Some(linking_class) = linking_class
+            && self
+                .find_class(declaration.owner)
+                .is_some_and(|definition| definition.is_trait)
+        {
+            return linking_class.name.as_str();
+        }
+        declaration.owner
+    }
+
     fn resolve_variance_type_hint(
         &self,
         hint: &crate::vm::function::ParamTypeHint,
@@ -2575,7 +2649,7 @@ impl ExecutorGlobals {
 
         let mut rendered = format!(
             "{}::{}({})",
-            declaration.owner,
+            self.method_diagnostic_owner(declaration, linking_class),
             declaration.name,
             parameters.join(", ")
         );
@@ -3113,25 +3187,11 @@ impl ExecutorGlobals {
             {
                 continue;
             }
-            if self
-                .method_contract_errors(required, implementation, Some(class_def))
-                .is_empty()
+            if let Some(error) =
+                self.incompatible_method_contract_diagnostic(required, implementation, class_def)
             {
-                continue;
+                return Err(error);
             }
-
-            let location = class_def
-                .source_file
-                .as_ref()
-                .map_or_else(String::new, |file| {
-                    format!(" in {file} on line {}", implementation.source_line)
-                });
-            return Err(format!(
-                "Declaration of {} must be compatible with {}{}",
-                self.format_method_signature(implementation, Some(class_def)),
-                self.format_method_signature(required, Some(class_def)),
-                location
-            ));
         }
         Ok(())
     }
@@ -3191,24 +3251,10 @@ impl ExecutorGlobals {
                     class_def.is_abstract && unforwarded_private_trait_requirement;
                 continue;
             }
-            if self
-                .method_contract_errors(requirement, implementation, Some(class_def))
-                .into_iter()
-                .next()
-                .is_some()
+            if let Some(error) =
+                self.incompatible_method_contract_diagnostic(requirement, implementation, class_def)
             {
-                let location = class_def
-                    .source_file
-                    .as_ref()
-                    .map_or_else(String::new, |file| {
-                        format!(" in {file} on line {}", implementation.source_line)
-                    });
-                return Err(format!(
-                    "Declaration of {} must be compatible with {}{}",
-                    self.format_method_signature(implementation, Some(class_def)),
-                    self.format_method_signature(requirement, Some(class_def)),
-                    location
-                ));
+                return Err(error);
             }
         }
         if !missing.is_empty() {

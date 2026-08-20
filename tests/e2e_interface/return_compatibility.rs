@@ -116,6 +116,81 @@ final class ClosedUnionResult implements ClosedUnionContract {
 }
 
 #[test]
+fn visibility_error_precedes_a_signature_mismatch() {
+    let error = run_php_expect_error(
+        r#"<?php
+interface VisibilityContract {
+    public function run(int $value);
+}
+class VisibilityChild implements VisibilityContract {
+    protected function run(string $value) {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Access level to VisibilityChild::run() must be public (as in class VisibilityContract)\")"
+    );
+}
+
+#[test]
+fn protected_visibility_diagnostic_names_the_weaker_boundary() {
+    let error = run_php_expect_error(
+        r#"<?php
+abstract class ProtectedContract {
+    abstract protected function run();
+}
+class PrivateChild extends ProtectedContract {
+    private function run() {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Access level to PrivateChild::run() must be protected (as in class ProtectedContract) or weaker\")"
+    );
+}
+
+#[test]
+fn trait_method_diagnostics_use_the_composing_class() {
+    let visibility_error = run_php_expect_error(
+        r#"<?php
+interface PublicTraitContract {
+    public function run();
+}
+trait ProtectedTraitImplementation {
+    protected function run() {}
+}
+class ProtectedTraitConsumer implements PublicTraitContract {
+    use ProtectedTraitImplementation;
+}
+"#,
+    );
+    assert_eq!(
+        format!("{visibility_error:?}"),
+        "Fatal(\"Access level to ProtectedTraitConsumer::run() must be public (as in class PublicTraitContract)\")"
+    );
+
+    let signature_error = run_php_expect_error(
+        r#"<?php
+interface ArityTraitContract {
+    public function run($value);
+}
+trait ArityTraitImplementation {
+    public function run() {}
+}
+class ArityTraitConsumer implements ArityTraitContract {
+    use ArityTraitImplementation;
+}
+"#,
+    );
+    assert_eq!(
+        format!("{signature_error:?}"),
+        "Fatal(\"Declaration of ArityTraitConsumer::run() must be compatible with ArityTraitContract::run($value)\")"
+    );
+}
+
+#[test]
 fn test_interface_iterable_return_accepts_array_covariance() {
     assert_eq!(
         run_php(

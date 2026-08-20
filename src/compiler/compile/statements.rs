@@ -3836,6 +3836,12 @@ impl Compiler {
                             method.line,
                         ));
                     }
+                    self.record_magic_method_visibility_warning(
+                        &resolved_class,
+                        &method.name,
+                        method.visibility,
+                        method.line,
+                    );
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_class, method.name),
@@ -4834,6 +4840,12 @@ impl Compiler {
                             method.line,
                         ));
                     }
+                    self.record_magic_method_visibility_warning(
+                        &resolved_trait,
+                        &method.name,
+                        method.visibility,
+                        method.line,
+                    );
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_trait, method.name),

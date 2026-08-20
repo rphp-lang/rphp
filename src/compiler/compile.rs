@@ -4165,6 +4165,50 @@ pub(crate) fn enum_magic_method_is_forbidden(method: &str) -> bool {
 include!("compile/statements.rs");
 
 impl Compiler {
+    fn record_magic_method_visibility_warning(
+        &self,
+        class: &str,
+        method: &str,
+        visibility: Visibility,
+        line: usize,
+    ) {
+        if visibility == Visibility::Public
+            || ["__construct", "__destruct", "__clone"]
+                .iter()
+                .any(|exception| method.eq_ignore_ascii_case(exception))
+            || ![
+                "__call",
+                "__callstatic",
+                "__get",
+                "__set",
+                "__isset",
+                "__unset",
+                "__sleep",
+                "__wakeup",
+                "__serialize",
+                "__unserialize",
+                "__tostring",
+                "__invoke",
+                "__set_state",
+                "__debuginfo",
+            ]
+            .iter()
+            .any(|magic| method.eq_ignore_ascii_case(magic))
+        {
+            return;
+        }
+        self.compile_deprecations
+            .borrow_mut()
+            .push(CompileDeprecation {
+                message: format!(
+                    "The magic method {class}::{method}() must have public visibility"
+                ),
+                file: self.source_file.clone(),
+                line,
+                warning: true,
+            });
+    }
+
     fn validate_magic_method_return_type(
         &self,
         class: &str,

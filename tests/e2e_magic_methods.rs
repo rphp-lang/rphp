@@ -5,6 +5,28 @@ use common::{
 };
 
 #[test]
+fn non_public_magic_methods_warn_at_compile_time() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class HiddenSetter {
+    protected function __set($name, $value) {}
+    private function __construct() {}
+    private function __clone() {}
+}
+trait HiddenInvoker {
+    private function __invoke() {}
+}
+echo "ok";
+"#,
+            "magic-visibility.php",
+            ".",
+        ),
+        "\nWarning: The magic method HiddenSetter::__set() must have public visibility in magic-visibility.php on line 3\n\nWarning: The magic method HiddenInvoker::__invoke() must have public visibility in magic-visibility.php on line 8\nok"
+    );
+}
+
+#[test]
 fn test_tostring_echo() {
     assert_eq!(
         run_php(
