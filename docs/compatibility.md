@@ -8,10 +8,54 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `cce12eab`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,680 pass, 1,619 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `fb054c97`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,693 pass, 1,606 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
-previously known upstream XFAIL
+headline pass rate is 69.692% and the whole-corpus rate is 65.958%; 4,708 of
+5,299 attempted cases reach runtime (88.847%). Relative to exact base
+`acad10dc`, the pass-set delta is +13/-0: all 3,680 prior passes remain passes
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`73ef76ffd950c144612f90bfa90eb34445c43a200cf9af17438e042588e553c3`
+and `4c4c1f6850bba5c97a92b73bc3002f08d555d93103353588772ba71d1c5856f6`.
+
+Method-contract validation now gives a visibility violation PHP's
+higher-priority `Access level ...` diagnostic even when the same declaration
+also has an incompatible signature. Public requirements omit a weakening
+suffix, while protected requirements say `or weaker`. A concrete method
+imported from a trait is attributed to the composing class; an abstract trait
+requirement and an inherited parent implementation retain their declaring
+owner. Non-public magic methods emit PHP's compile-time visibility warning
+before later declaration failures. The warning applies to the public magic
+method family while preserving the visibility exceptions for `__construct`,
+`__destruct` and `__clone`, including declarations compiled through traits and
+included source. Custom error-handler routing of compile warnings from `eval`
+remains separate work.
+
+Four original E2E regressions cover visibility priority, the protected
+weakening boundary, concrete-versus-abstract trait attribution and magic
+warning ordering/exceptions. The exact full-corpus additions are
+`Zend/tests/bug67436/bug67436_nohandler.phpt`,
+`Zend/tests/inheritance/bug62814.phpt`,
+`Zend/tests/magic_methods/bug61970_1.phpt`, `bug61970_2.phpt`,
+`magic_methods_002.phpt`, `magic_methods_004.phpt`, `magic_methods_008.phpt`
+and `magic_methods_009.phpt`, plus `Zend/tests/traits/bug60153.phpt`,
+`bug69467.phpt`, `bugs/abstract-methods05.phpt`,
+`bugs/abstract-methods06.phpt` and `inheritance003.phpt`.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four Symfony
+S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. No separate hot
+runtime benchmark applies: warning collection and method diagnostics run only
+during compilation or cold declaration linking, method execution and value
+layout are unchanged, and S3 exercises the affected cold path end to end.
+
+In the preceding final-static return-variance checkpoint, the measured AMD64
+PHP 8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate
+commit `cce12eab`. Across all 5,599 unmodified `Zend/tests` and `tests/lang`
+cases, 3,680 pass, 1,619 fail, 115 skip, none remain XFAIL, 185 are unsupported,
+and none time out or crash. The previously known upstream XFAIL
 `Zend/tests/inheritance/interface_constructor_prototype_002.phpt` is now an
 exact pass. The headline pass rate is 69.447% and the whole-corpus rate is
 65.726%; 4,703 of 5,299 attempted cases reach runtime (88.753%). Relative to
