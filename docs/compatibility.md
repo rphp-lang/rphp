@@ -9,6 +9,46 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,631 pass, 1,667 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+68.535% and the whole-corpus rate is 64.851%; 4,704 of 5,298 attempted cases
+reach runtime (88.788%). Relative to exact base `ad9daff5`, the pass-set delta
+is +9/-0: all 3,622 prior passes remain passes and no other status or failure
+category moves. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`b66a7047ba786dfcf0d1534006bbdbaccd63c1ee4b60d30ab434a9fcbdc8b6ea`.
+
+Repeated method and property modifiers now produce PHP 8.5 compile-time fatal
+errors instead of accepting the declaration or reporting a parser failure.
+One shared declaration reducer retains the first duplicate across ordinary
+read visibility, asymmetric set visibility, `static`, `final`, `abstract` and
+`readonly`, then reports it at the method or property declaration line. The
+rule applies consistently to classes, traits, interfaces, enums and anonymous
+classes. A duplicate abstract declaration can still be parsed far enough to
+emit the earlier modifier error, and `final abstract` uses PHP's canonical
+message without appending the method name. This also removes the former CLI
+special case that promoted one parser-error string to a fatal diagnostic.
+
+Original regressions cover same and mixed visibility, first-error precedence,
+all modifier kinds, abstract bodies, `final abstract`, asymmetric visibility
+and every class-like declaration shape. The exact full-corpus additions are
+`Zend/tests/access_modifiers/access_modifiers_001.phpt`, `_002.phpt`,
+`_004.phpt` through `_007.phpt`, `Zend/tests/errmsg/errmsg_009.phpt`,
+`errmsg_010.phpt` and `Zend/tests/readonly_props/multiple_modifiers.phpt`.
+Class-level duplicate modifiers remain separate front-end work;
+`access_modifiers_003.phpt` remains visible as a failure.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3.
+The production inventory remains 1,612 unsafe blocks and 289 unsafe functions.
+No runtime performance gate applies: invalid declarations stop at compilation,
+valid declaration AST and compiler output are unchanged, and the cold-build S3
+gate exercises the affected front-end path.
+
+In the preceding serialize-precision checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src 8.5.6 commit `fcc29c8`. Across all 5,599
+unmodified `Zend/tests` and
 `tests/lang` cases, 3,622 pass, 1,676 fail, 115 skip, one is an upstream XFAIL,
 185 are unsupported, and none time out or crash. The headline pass rate is
 68.365% and the whole-corpus rate is 64.690%; 4,702 of 5,298 attempted cases

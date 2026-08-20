@@ -214,10 +214,6 @@ fn main() {
         .with_source_name(source_file.clone())
         .parse()
         .unwrap_or_else(|e| {
-            if e.starts_with("Multiple access type modifiers are not allowed") {
-                eprintln!("Fatal error: {e}");
-                std::process::exit(255);
-            }
             if matches!(
                 e.as_str(),
                 "Cannot use positional argument after argument unpacking"

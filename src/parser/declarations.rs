@@ -1,9 +1,30 @@
 #[derive(Debug, Clone, Copy)]
+enum DuplicateMemberModifier {
+    Access,
+    Static,
+    Final,
+    Abstract,
+    Readonly,
+}
+
+impl DuplicateMemberModifier {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Access => "Multiple access type modifiers are not allowed",
+            Self::Static => "Multiple static modifiers are not allowed",
+            Self::Final => "Multiple final modifiers are not allowed",
+            Self::Abstract => "Multiple abstract modifiers are not allowed",
+            Self::Readonly => "Multiple readonly modifiers are not allowed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 struct MemberModifiers {
     visibility: Visibility,
     set_visibility: Option<Visibility>,
-    has_duplicate_set_visibility: bool,
-    duplicate_set_visibility_line: Option<usize>,
+    has_visibility: bool,
+    duplicate: Option<DuplicateMemberModifier>,
     is_static: bool,
     is_final: bool,
     is_readonly: bool,
@@ -15,8 +36,8 @@ impl Default for MemberModifiers {
         Self {
             visibility: Visibility::Public,
             set_visibility: None,
-            has_duplicate_set_visibility: false,
-            duplicate_set_visibility_line: None,
+            has_visibility: false,
+            duplicate: None,
             is_static: false,
             is_final: false,
             is_readonly: false,
@@ -26,6 +47,12 @@ impl Default for MemberModifiers {
 }
 
 impl Parser {
+    fn defer_duplicate_member_modifier(&mut self, modifiers: &MemberModifiers, line: usize) {
+        if let Some(duplicate) = modifiers.duplicate {
+            let _ = self.compile_error(duplicate.message(), line);
+        }
+    }
+
     pub(super) fn parse_promoted_property_hook_list(
         &mut self,
         property: &mut ClassProperty,
@@ -190,13 +217,6 @@ impl Parser {
         modifiers: &MemberModifiers,
         attributes: &[Attribute],
     ) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>), String> {
-        if modifiers.has_duplicate_set_visibility {
-            let line = modifiers.duplicate_set_visibility_line.unwrap_or(1);
-            return Err(self.source_error(
-                "Multiple access type modifiers are not allowed",
-                line,
-            ));
-        }
         let type_hint = self.try_parse_type_hint()?;
         let mut properties = Vec::new();
         let mut hook_methods = Vec::new();
@@ -205,6 +225,9 @@ impl Parser {
                 Token::Variable(name, line) => (name, line),
                 other => return Err(format!("Expected property variable, got {other:?}")),
             };
+            if properties.is_empty() {
+                self.defer_duplicate_member_modifier(modifiers, line);
+            }
             let default = if self.peek() == Token::Assign {
                 self.advance();
                 Some(self.parse_expr()?)
@@ -478,6 +501,7 @@ impl Parser {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
+                self.defer_duplicate_member_modifier(&modifiers, line);
                 // PHP permits functions and methods to declare a reference
                 // return with an ampersand before the name. The runtime's
                 // return-reference contract is a separate compatibility
@@ -498,7 +522,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
-                let body = self.parse_method_body(&modifiers, &method_name)?;
+                let body = self.parse_method_body(&modifiers, &method_name, line)?;
                 if modifiers.is_abstract {
                     self.compile_error(
                         format!("Anonymous class method {method_name}() must not be abstract"),
@@ -768,6 +792,7 @@ impl Parser {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
+                self.defer_duplicate_member_modifier(&modifiers, line);
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -785,7 +810,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
-                let body = self.parse_method_body(&modifiers, &method_name)?;
+                let body = self.parse_method_body(&modifiers, &method_name, line)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -823,7 +848,8 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         self.pop_generic_scope();
 
-        if !is_abstract
+        if self.deferred_compile_error.is_none()
+            && !is_abstract
             && let Some(method) = methods
                 .iter()
                 .find(|method| method.is_abstract && !method.name.starts_with('$'))
@@ -951,6 +977,7 @@ impl Parser {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
+                self.defer_duplicate_member_modifier(&modifiers, line);
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -968,7 +995,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
-                let body = self.parse_method_body(&modifiers, &method_name)?;
+                let body = self.parse_method_body(&modifiers, &method_name, line)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1063,6 +1090,7 @@ impl Parser {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
+                self.defer_duplicate_member_modifier(&modifiers, line);
                 let returns_by_ref = self.peek() == Token::Ampersand;
                 self.consume_reference_return_marker();
                 let token = self.advance();
@@ -1256,6 +1284,7 @@ impl Parser {
                         Token::Function(line) => line,
                         _ => unreachable!("method parser starts at function"),
                     };
+                    self.defer_duplicate_member_modifier(&modifiers, line);
                     let returns_by_ref = self.peek() == Token::Ampersand;
                     self.consume_reference_return_marker();
                     let token = self.advance();
@@ -1324,10 +1353,21 @@ impl Parser {
     fn parse_member_modifiers(&mut self) -> MemberModifiers {
         let mut modifiers = MemberModifiers::default();
 
+        let record_duplicate =
+            |modifiers: &mut MemberModifiers, duplicate: DuplicateMemberModifier| {
+                if modifiers.duplicate.is_none() {
+                    modifiers.duplicate = Some(duplicate);
+                }
+            };
+
         loop {
             match self.peek() {
                 Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("var") => {
                     self.advance();
+                    if modifiers.has_visibility {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
+                    }
+                    modifiers.has_visibility = true;
                     modifiers.visibility = Visibility::Public;
                 }
                 Token::Public => {
@@ -1337,17 +1377,20 @@ impl Parser {
                         && self.peek_at(2) == Token::RParen
                     {
                         self.advance();
-                        let line = match self.advance() {
-                            Token::Identifier(_, line) => line,
+                        match self.advance() {
+                            Token::Identifier(_, _) => {}
                             _ => unreachable!(),
-                        };
+                        }
                         self.advance();
-                        modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
-                        if modifiers.has_duplicate_set_visibility {
-                            modifiers.duplicate_set_visibility_line = Some(line);
+                        if modifiers.set_visibility.is_some() {
+                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                         }
                         modifiers.set_visibility = Some(Visibility::Public);
                     } else {
+                        if modifiers.has_visibility {
+                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
+                        }
+                        modifiers.has_visibility = true;
                         modifiers.visibility = Visibility::Public;
                     }
                 }
@@ -1358,17 +1401,20 @@ impl Parser {
                         && self.peek_at(2) == Token::RParen
                     {
                         self.advance();
-                        let line = match self.advance() {
-                            Token::Identifier(_, line) => line,
+                        match self.advance() {
+                            Token::Identifier(_, _) => {}
                             _ => unreachable!(),
-                        };
+                        }
                         self.advance();
-                        modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
-                        if modifiers.has_duplicate_set_visibility {
-                            modifiers.duplicate_set_visibility_line = Some(line);
+                        if modifiers.set_visibility.is_some() {
+                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                         }
                         modifiers.set_visibility = Some(Visibility::Protected);
                     } else {
+                        if modifiers.has_visibility {
+                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
+                        }
+                        modifiers.has_visibility = true;
                         modifiers.visibility = Visibility::Protected;
                     }
                 }
@@ -1379,34 +1425,49 @@ impl Parser {
                         && self.peek_at(2) == Token::RParen
                     {
                         self.advance();
-                        let line = match self.advance() {
-                            Token::Identifier(_, line) => line,
+                        match self.advance() {
+                            Token::Identifier(_, _) => {}
                             _ => unreachable!(),
-                        };
+                        }
                         self.advance();
-                        modifiers.has_duplicate_set_visibility = modifiers.set_visibility.is_some();
-                        if modifiers.has_duplicate_set_visibility {
-                            modifiers.duplicate_set_visibility_line = Some(line);
+                        if modifiers.set_visibility.is_some() {
+                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                         }
                         modifiers.set_visibility = Some(Visibility::Private);
                     } else {
+                        if modifiers.has_visibility {
+                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
+                        }
+                        modifiers.has_visibility = true;
                         modifiers.visibility = Visibility::Private;
                     }
                 }
                 Token::Static => {
                     self.advance();
+                    if modifiers.is_static {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Static);
+                    }
                     modifiers.is_static = true;
                 }
                 Token::Final => {
                     self.advance();
+                    if modifiers.is_final {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Final);
+                    }
                     modifiers.is_final = true;
                 }
                 Token::Abstract => {
                     self.advance();
+                    if modifiers.is_abstract {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Abstract);
+                    }
                     modifiers.is_abstract = true;
                 }
-                Token::Identifier(ref s, _) if s == "readonly" => {
+                Token::Identifier(ref s, _) if s.eq_ignore_ascii_case("readonly") => {
                     self.advance();
+                    if modifiers.is_readonly {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Readonly);
+                    }
                     modifiers.is_readonly = true;
                 }
                 _ => break,
@@ -1524,13 +1585,27 @@ impl Parser {
         &mut self,
         modifiers: &MemberModifiers,
         method_name: &str,
+        method_line: usize,
     ) -> Result<Vec<Stmt>, String> {
+        if modifiers.duplicate.is_some() {
+            if self.peek() == Token::Semicolon {
+                self.advance();
+                return Ok(Vec::new());
+            }
+            self.expect(&Token::LBrace)?;
+            let mut body = Vec::new();
+            while self.peek() != Token::RBrace && !self.at_eof() {
+                body.push(self.parse_stmt()?);
+            }
+            self.expect(&Token::RBrace)?;
+            return Ok(body);
+        }
         if modifiers.is_abstract {
             if modifiers.is_final {
-                return Err(format!(
-                    "Cannot use the final modifier on an abstract method {}()",
-                    method_name
-                ));
+                let _ = self.compile_error(
+                    "Cannot use the final modifier on an abstract method",
+                    method_line,
+                );
             }
             if modifiers.visibility == Visibility::Private {
                 return Err(format!(

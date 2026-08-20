@@ -55,6 +55,73 @@ fn duplicate_asymmetric_modifiers_are_a_located_compile_fatal() {
 }
 
 #[test]
+fn duplicate_member_modifiers_report_the_first_duplicate_at_the_declaration() {
+    for (declaration, message) in [
+        (
+            "static public public static final final function test() {}",
+            "Multiple access type modifiers are not allowed",
+        ),
+        (
+            "static static function test() {}",
+            "Multiple static modifiers are not allowed",
+        ),
+        (
+            "final final function test() {}",
+            "Multiple final modifiers are not allowed",
+        ),
+        (
+            "abstract abstract function test() {}",
+            "Multiple abstract modifiers are not allowed",
+        ),
+        (
+            "readonly readonly int $value;",
+            "Multiple readonly modifiers are not allowed",
+        ),
+    ] {
+        let (status, stderr) = run_stdin(&format!(
+            "<?php\nabstract class Box {{\n    {declaration}\n}}\n"
+        ));
+        assert_eq!(status, 255);
+        assert_eq!(
+            stderr,
+            format!("Fatal error: {message} in Standard input code on line 3\n")
+        );
+    }
+}
+
+#[test]
+fn final_abstract_method_is_a_compile_error_without_method_spelling() {
+    let (status, stderr) =
+        run_stdin("<?php\nabstract class Box {\n    final abstract function test();\n}\n");
+    assert_eq!(status, 255);
+    assert_eq!(
+        stderr,
+        "Fatal error: Cannot use the final modifier on an abstract method in Standard input code on line 3\n"
+    );
+}
+
+#[test]
+fn duplicate_member_modifiers_apply_to_every_class_like_declaration() {
+    for source in [
+        "trait T { public public function test() {} }",
+        "interface I { static static function test(); }",
+        "enum E { case A; final final function test() {} }",
+        "$value = new class { protected protected int $value; };",
+    ] {
+        let (status, stderr) = run_stdin(&format!("<?php\n{source}\n"));
+        assert_eq!(status, 255);
+        assert!(
+            stderr.starts_with("Fatal error: Multiple "),
+            "unexpected diagnostic: {stderr}"
+        );
+        assert!(
+            stderr.ends_with(" in Standard input code on line 2\n"),
+            "unexpected location: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn readonly_property_contract_errors_include_the_declaration_location() {
     for (declaration, message) in [
         (

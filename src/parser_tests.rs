@@ -1342,11 +1342,13 @@ fn test_reject_invalid_abstract_method_modifiers() {
             .unwrap_err()
             .contains("must therefore be declared abstract")
     );
-    assert!(
-        parse("<?php abstract class C { final abstract public function run(); }")
-            .unwrap_err()
-            .contains("final modifier on an abstract method")
-    );
+    let statements =
+        parse("<?php abstract class C { final abstract public function run(); }").unwrap();
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line: 1 }))
+            if message == "Cannot use the final modifier on an abstract method"
+    ));
     assert!(
         parse("<?php abstract class C { abstract private function run(); }")
             .unwrap_err()
@@ -1535,17 +1537,15 @@ fn asymmetric_property_visibility_is_retained_separately_for_reads_and_writes() 
 }
 
 #[test]
-fn duplicate_asymmetric_visibility_retains_the_second_modifier_location() {
+fn duplicate_asymmetric_visibility_is_a_deferred_compile_error() {
     let tokens =
         Lexer::new("<?php\nclass Box {\n    public private(set) protected(set) int $value;\n}")
             .tokenize()
             .unwrap();
-    let error = Parser::new(tokens)
-        .with_source_name("/fixture/asymmetric.php")
-        .parse()
-        .unwrap_err();
-    assert_eq!(
-        error,
-        "Multiple access type modifiers are not allowed in /fixture/asymmetric.php on line 3"
-    );
+    let statements = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line: 3 }))
+            if message == "Multiple access type modifiers are not allowed"
+    ));
 }
