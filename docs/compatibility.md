@@ -8,8 +8,55 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `698349b7`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,718 pass, 1,581 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `0e71faea`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,727 pass, 1,572 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.334% and the whole-corpus rate is 66.565%; 4,710 of
+5,299 attempted cases reach runtime (88.885%). Relative to exact base
+`9dc13ff3`, the pass-set delta is +9/-0: all 3,718 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`4af614cbdc6e9c7c689bf24b9d0be6a1d2390e63aff5f6d364124de32b9af325`
+and `de913bcafc5dd6c4aad0c0bf5b1eff7ce01dc0f53bfd555c8bd6b967f31a804`.
+
+Class-like name collisions now share one cold diagnostic formatter across
+pending declarations, published classes and repeated runtime declaration
+markers. A redeclaration reports PHP's original symbol kind and spelling, the
+first user declaration's file and line, and the colliding declaration's file
+and line. Internal classes and interfaces omit the unavailable previous-source
+clause. Enum/non-enum collisions follow PHP 8.5's exceptional ownership rule:
+the non-enum kind and spelling own the diagnostic regardless of declaration
+order. Successful registration retains the pre-existing single
+case-insensitive class-table scan and adds no metadata or object-layout state.
+
+Original E2E coverage exercises differently cased class, interface, trait and
+enum collisions, both enum/non-enum orders, internal `stdClass` and
+`Stringable`, and a class declared on a repeated function call. The exact
+full-corpus additions are `Zend/tests/errmsg/errmsg_026.phpt`,
+`Zend/tests/inter_06.phpt`,
+`Zend/tests/name_collision/declare_already_in_use.phpt`, and
+`Zend/tests/name_collision/name_collision_01.phpt` through
+`name_collision_06.phpt`; all nine pass in 32 consecutive focused runs. Import
+name resolution, function and constant redeclarations, the active/reentrant
+runtime-link collision, and the separate `class_alias()` warning contract are
+not claimed by this checkpoint.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,617 unsafe blocks and 289 unsafe
+functions. On CPU 2 with the performance governor, four warmups per binary and
+32 order-balanced measured pairs with no removed observations, 1,000
+successful simple class declarations move from 0.019709 to 0.019742 seconds
+(+0.166% independently, +0.023% paired), below the five-percent regression
+ceiling. Checksums match. The exact base and candidate binary SHA-256 values
+are `3c5a646294ba4cd45821f56686fc71762acfcfbe808c96d63c183f4f027e9e0e`
+and `a6a581491457f8f288cfa7dab7a82d92f174f93af53a09972eeeb7404d1651c4`.
+
+In the preceding direct-interface-relation checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`698349b7`. Across all 5,599 unmodified `Zend/tests` and `tests/lang` cases,
+3,718 pass, 1,581 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 70.164% and the whole-corpus rate is 66.405%; 4,710 of
 5,299 attempted cases reach runtime (88.885%). Relative to exact base
