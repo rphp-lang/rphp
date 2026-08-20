@@ -1057,13 +1057,19 @@ impl Parser {
                 let mut args = Vec::new();
                 let arg = self.parse_expr()?;
                 if !Self::is_isset_target(&arg) {
-                    return Err("Cannot use isset() on the result of an expression".into());
+                    self.compile_error(
+                        "Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead)",
+                        self.last_primary_line.unwrap_or(list_line),
+                    );
                 }
                 args.push(arg);
                 while self.comma_list_has_next(list_line)? {
                     let arg = self.parse_expr()?;
                     if !Self::is_isset_target(&arg) {
-                        return Err("Cannot use isset() on the result of an expression".into());
+                        self.compile_error(
+                            "Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead)",
+                            self.last_primary_line.unwrap_or(list_line),
+                        );
                     }
                     args.push(arg);
                 }

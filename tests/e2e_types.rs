@@ -1,6 +1,6 @@
 /// E2E tests: isset, empty, unset, type casting, type checks.
 mod common;
-use common::{run_php, run_php_with_source_context};
+use common::{run_php, run_php_expect_error_with_source_context, run_php_with_source_context};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
@@ -1740,10 +1740,24 @@ fn test_isset_multi_arg_one_null() {
 }
 
 #[test]
-fn test_isset_rejects_expression() {
-    let result =
-        std::panic::catch_unwind(|| run_php("<?php $x = 1; echo isset($x + 1) ? 'yes' : 'no';"));
-    assert!(result.is_err());
+fn isset_result_errors_are_compile_time_and_source_aware() {
+    let message = "Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead)";
+    for (source, line) in [
+        ("<?php\nisset(1 + 1);", 2),
+        ("<?php\nif (false) {\n    isset($valid, compute());\n}", 3),
+        ("<?php\nisset(\n    compute()\n);", 3),
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "/fixture/isset-result.php",
+            "/fixture",
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("{message} in /fixture/isset-result.php on line {line}"),
+            "{source}",
+        );
+    }
 }
 
 #[test]

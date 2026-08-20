@@ -587,6 +587,20 @@ fn call_like_comma_lists_distinguish_leading_trailing_and_double_commas() {
 }
 
 #[test]
+fn invalid_isset_results_are_deferred_compile_errors() {
+    let tokens = Lexer::new("<?php\nif (false) { isset($valid, compute()); }")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line: 2 }))
+            if message == "Cannot use isset() on the result of an expression (you can use \"null !== expression\" instead)"
+    ));
+}
+
+#[test]
 fn document_string_parse_tokens_receive_the_parser_source_location() {
     let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
         .tokenize()

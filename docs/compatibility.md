@@ -9,18 +9,41 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,501 pass, 1,796 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,503 pass, 1,794 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-66.094% and the whole-corpus rate is 62.529%; 4,626 of 5,297 attempted cases
-reach runtime (87.332%). Relative to exact base `60ba49c6`, the pass-set delta
-is +8/-0: all 3,493 prior passes remain passes and no other status, failure
+66.132% and the whole-corpus rate is 62.565%; 4,628 of 5,297 attempted cases
+reach runtime (87.370%). Relative to exact base `e4f50365`, the pass-set delta
+is +2/-0: all 3,501 prior passes remain passes and no other status, failure
 category or stage moves. Two final manifests and summaries are byte-for-byte
 identical. The manifest SHA-256 is
-`ffddf7c381c0f46d4889d04277a3a8e7ed389fdce53668d876c33f2010f38093`.
+`09ae8ca56b3c6dc1f0e5761205f7a0913f80cda28ee2a0213fa3064b2e548d15`.
 
-Function, constructor, method, invokable-object and closure calls now share
-PHP 8.5's argument-list delimiter state with `isset()` and `unset()`. One
-trailing comma is valid after a positional, named or unpacked argument. A
+Applying `isset()` to a function result or any other non-variable expression
+now produces PHP 8.5's compile-time fatal diagnostic, including its
+`null !== expression` alternative, source file and physical line. The parser
+records the first invalid operand as a deferred compile error so dead branches
+cannot suppress it, while still consuming the complete source unit. Valid
+single- and multi-target `isset()` execution is unchanged.
+
+An original parser regression proves that a later invalid operand remains a
+compile error inside dead code. Source-aware E2E cases cover arithmetic and
+function-call results, multiline calls and multi-target lists. Both
+`Zend/tests/isset/isset_expr_error.phpt` and `isset_func_error.phpt` are the
+only full-corpus transitions, from parser failures to exact passes. This
+checkpoint does not claim `unset()` write-context diagnostics or exact lines
+for a line-less literal token placed below the opening parenthesis.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at 1,623 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies because the change only records an already-fatal
+compile-time path and leaves valid `isset()` lowering and execution unchanged.
+
+In the preceding call-list checkpoint, function, constructor, method,
+invokable-object and closure calls share PHP 8.5's argument-list delimiter
+state with `isset()` and `unset()`. One trailing comma is valid after a
+positional, named or unpacked argument. A
 leading comma reports an unexpected token, while a second comma after a
 completed item additionally reports that the closing parenthesis was expected.
 
