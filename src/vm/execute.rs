@@ -902,6 +902,25 @@ pub(crate) fn integer_operator_operand(value: &Value) -> Result<IntegerOperatorO
     }
 }
 
+/// Convert an explicit integer-cast operand. PHP accepts the complete numeric
+/// prefix grammar for strings but does not emit the arithmetic warning or
+/// precision deprecation at an explicit `(int)`/`intval()` boundary.
+#[inline]
+pub(crate) fn explicit_long_conversion(value: &Value) -> i64 {
+    let value = value.dereferenced();
+    if value.value_type() == ValueType::String {
+        let text = value.as_str().unwrap();
+        let integer = text
+            .trim_matches(|character: char| character.is_ascii_whitespace())
+            .parse::<i64>();
+        if let Ok(integer) = integer {
+            return integer;
+        }
+        return integer_operator_operand(value).map_or(0, |operand| operand.value);
+    }
+    value.to_long_val()
+}
+
 #[inline]
 fn return_hint_contains(hint: &ParamTypeHint, expected: &ParamTypeHint) -> bool {
     hint == expected

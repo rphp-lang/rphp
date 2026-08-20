@@ -28,8 +28,8 @@ use crate::vm::execute::{
     ScalarLongSortOrder, VmError, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
-    call_function_owned_iter_with_context_and_named, check_type_hint, prepare_scalar_long_callback,
-    try_execute_scalar_long_callback, values_identical,
+    call_function_owned_iter_with_context_and_named, check_type_hint, explicit_long_conversion,
+    prepare_scalar_long_callback, try_execute_scalar_long_callback, values_identical,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -3356,7 +3356,7 @@ fn fn_intval(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::long(arg!(ed, 0).to_long_val()));
+    ret!(rv, Value::long(explicit_long_conversion(arg!(ed, 0))));
 }
 
 fn fn_strval(

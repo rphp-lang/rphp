@@ -9,6 +9,56 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,598 pass, 1,699 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+67.925% and the whole-corpus rate is 64.261%; 4,701 of 5,297 attempted cases
+reach runtime (88.748%). Relative to exact base `1d3b31af`, the pass-set delta
+is +1/-0: all 3,597 prior passes remain passes and no other status or failure
+category moves. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`3eaa6c3c929b8843ed263d9349ada401259523c0c2d10df4962e1d7c4226bddf`.
+
+Explicit PHP 8.5 string-to-integer conversion now uses the complete numeric-
+prefix grammar at both `(int)` and `intval()` boundaries. Decimal fractions,
+scientific notation, leading PHP ASCII whitespace and leading-numeric trailing
+text convert without the warnings or precision deprecations required by
+implicit arithmetic. Incomplete exponents stop before `e`; finite float syntax
+saturates at the AMD64 integer bounds, non-finite syntax converts to zero, and
+overflowing decimal integer strings clamp by sign. Non-numeric strings remain
+zero. References are transparent and non-string conversion behavior is
+unchanged.
+
+The conversion reuses the checked integer-operator parser while discarding its
+arithmetic-only diagnostic descriptor. A narrow fast path handles complete,
+representable decimal integer strings, including surrounding ASCII whitespace;
+fractional, exponent, leading-numeric and overflow cases enter the general
+parser. Original E2E coverage exercises casts and `intval()` together across
+both paths, references, incomplete exponents, finite and non-finite overflow,
+integer overflow and non-numeric input. The 12-case adjacent cluster moves from
+two to three exact passes. The sole full-corpus addition is
+`Zend/tests/int_conversion_exponents.phpt`; all other selected controls keep
+their prior outcome. Prefix `(float)` conversion, float-to-integer low-bit and
+diagnostic behavior, non-canonical cast deprecation, object/array/resource cast
+details, optional `intval()` bases and constexpr object support remain separate
+visible work.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. On an AMD Ryzen
+9 7950X pinned to one performance-governor CPU, 32 balanced release A/B pairs
+with JIT and quick loops disabled execute five million ordinary numeric-string
+casts with identical checksums. Against the exact base binary, the candidate is
+-7.599% by independent medians, -7.579% by the paired-ratio median and -7.545%
+after balancing order-specific median ratios, within the +5% gate. The initial
+general-parser-only variant was rejected at a +19.187% balanced regression;
+the complete-decimal fast path restored the common case without weakening the
+PHP conversion contract. Favorable final medians are control evidence, not a
+broader optimization claim.
+
+In the preceding integer-operator checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,597 pass, 1,700 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 67.906% and the whole-corpus rate is 64.244%; 4,701 of 5,297 attempted cases
@@ -50,7 +100,8 @@ additions cover the AMD64 long variants of AND, NOT, OR, XOR, left shift,
 right shift and modulo plus three string-variation shift cases and the modulo
 string variation.
 
-Seven remaining failures move only beyond their former operator rejection.
+At that checkpoint, seven remaining failures moved only beyond their former
+operator rejection.
 `int_conversion_exponents.phpt` reaches the separate scientific-string
 `(int)`/`intval()` boundary; `not_002.phpt` reaches fatal-backtrace formatting;
 the float-literal and float-variable warning cases reach independent string-

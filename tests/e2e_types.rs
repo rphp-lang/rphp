@@ -2122,6 +2122,37 @@ fn test_cast_int_from_string() {
 }
 
 #[test]
+fn explicit_string_int_conversions_use_the_php_numeric_prefix_grammar() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = [
+    "1.2345e9",
+    "-1.2345e9",
+    " \t+42\n",
+    " 1.2345e9 tail",
+    "12e+",
+    ".9tail",
+    "1e-1",
+    "1e100",
+    "-1e100",
+    "1e309",
+    "9223372036854775808",
+    "-9223372036854775809",
+    "not numeric",
+];
+foreach ($values as $value) {
+    echo (int) $value, ":", intval($value), "|";
+}
+$reference = &$values[0];
+echo (int) $reference, ":", intval($reference), "|";
+"#,
+        ),
+        "1234500000:1234500000|-1234500000:-1234500000|42:42|1234500000:1234500000|12:12|0:0|0:0|9223372036854775807:9223372036854775807|-9223372036854775808:-9223372036854775808|0:0|9223372036854775807:9223372036854775807|-9223372036854775808:-9223372036854775808|0:0|1234500000:1234500000|"
+    );
+}
+
+#[test]
 fn test_cast_int_from_bool_true() {
     assert_eq!(run_php("<?php echo (int)true;"), "1");
 }
