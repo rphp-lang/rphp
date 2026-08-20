@@ -2,6 +2,38 @@ mod common;
 use common::{run_php, run_php_expect_error};
 
 #[test]
+fn semi_reserved_trait_methods_and_namespace_relative_precedence_execute() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace Fixture;
+trait PreferredWords {
+    public function insteadof() { return 'preferred'; }
+    public function try() { return 'aliased'; }
+}
+trait OtherWords {
+    public function insteadof() { return 'other'; }
+}
+class WordConsumer {
+    use PreferredWords, OtherWords {
+        PreferredWords::insteadof insteadof namespace\OtherWords;
+        try as public and;
+    }
+    var $keyword = 'legacy';
+    public function or() { return 'declared'; }
+    public static function throw() { return 'static'; }
+    public function __CLASS__() { return 'magic'; }
+}
+$consumer = new WordConsumer();
+echo $consumer->insteadof(), '|', $consumer->and(), '|', $consumer->or(), '|';
+echo WordConsumer::throw(), '|', $consumer->__CLASS__(), '|', $consumer->keyword;
+"#,
+        ),
+        "preferred|aliased|declared|static|magic|legacy"
+    );
+}
+
+#[test]
 fn nested_trait_method_satisfies_an_interface_contract() {
     assert_eq!(
         run_php(

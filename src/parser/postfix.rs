@@ -203,12 +203,17 @@ impl Parser {
             });
         }
 
-        let (member, member_line) = match self.advance() {
-            Token::Identifier(name, line) => (name, Some(line)),
-            Token::Class => ("class".to_string(), None),
-            Token::From => ("from".to_string(), None),
-            other => return Err(format!("Expected member name after ::, got {:?}", other)),
+        let token = self.advance();
+        let member_line = match &token {
+            Token::Identifier(_, line)
+            | Token::Goto { line, .. }
+            | Token::Echo { line }
+            | Token::MagicConstant { line, .. } => Some(*line),
+            Token::New(line) | Token::Throw(line) => Some(*line as usize),
+            _ => None,
         };
+        let member = Self::token_as_named_arg_label(&token)
+            .ok_or_else(|| format!("Expected member name after ::, got {token:?}"))?;
         let generic_args = self.parse_optional_turbofish()?;
         if !matches!(self.peek(), Token::LParen(_)) {
             if !generic_args.is_empty() {

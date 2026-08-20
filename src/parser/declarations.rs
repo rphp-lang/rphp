@@ -439,17 +439,7 @@ impl Parser {
                 if self.peek() == Token::LBrace {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let first = self.parse_qualified_name()?;
-                        let (trait_name, method) = if self.peek() == Token::DoubleColon {
-                            self.advance();
-                            let token = self.advance();
-                            let method = Self::token_as_named_arg_label(&token).ok_or_else(|| {
-                                format!("Expected trait method name, got {token:?}")
-                            })?;
-                            (Some(first), method)
-                        } else {
-                            (None, first)
-                        };
+                        let (trait_name, method) = self.parse_trait_method_reference()?;
                         self.expect(&Token::As)?;
                         let visibility = match self.peek() {
                             Token::Public => Some(Visibility::Public),
@@ -712,17 +702,7 @@ impl Parser {
                 if self.peek() == Token::LBrace {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let first = self.parse_qualified_name()?;
-                        let (trait_name, method) = if self.peek() == Token::DoubleColon {
-                            self.advance();
-                            let token = self.advance();
-                            let method = Self::token_as_named_arg_label(&token).ok_or_else(|| {
-                                format!("Expected trait method name, got {token:?}")
-                            })?;
-                            (Some(first), method)
-                        } else {
-                            (None, first)
-                        };
+                        let (trait_name, method) = self.parse_trait_method_reference()?;
                         if self.peek() == Token::Insteadof {
                             self.advance();
                             let Some(trait_name) = trait_name else {
@@ -730,7 +710,7 @@ impl Parser {
                             };
                             let mut instead_of = Vec::new();
                             loop {
-                                instead_of.push(self.parse_qualified_name()?);
+                                instead_of.push(self.parse_trait_name()?);
                                 if self.peek() == Token::Comma {
                                     self.advance();
                                 } else {
@@ -905,17 +885,7 @@ impl Parser {
                 if self.peek() == Token::LBrace {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let first = self.parse_qualified_name()?;
-                        let (trait_name, method) = if self.peek() == Token::DoubleColon {
-                            self.advance();
-                            let token = self.advance();
-                            let method = Self::token_as_named_arg_label(&token).ok_or_else(|| {
-                                format!("Expected trait method name, got {token:?}")
-                            })?;
-                            (Some(first), method)
-                        } else {
-                            (None, first)
-                        };
+                        let (trait_name, method) = self.parse_trait_method_reference()?;
                         if self.peek() == Token::Insteadof {
                             self.advance();
                             let Some(trait_name) = trait_name else {
@@ -923,7 +893,7 @@ impl Parser {
                             };
                             let mut instead_of = Vec::new();
                             loop {
-                                instead_of.push(self.parse_qualified_name()?);
+                                instead_of.push(self.parse_trait_name()?);
                                 if self.peek() == Token::Comma {
                                     self.advance();
                                 } else {
@@ -1218,17 +1188,7 @@ impl Parser {
                 if self.peek() == Token::LBrace {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
-                        let first = self.parse_qualified_name()?;
-                        let (trait_name, method) = if self.peek() == Token::DoubleColon {
-                            self.advance();
-                            let token = self.advance();
-                            let method = Self::token_as_named_arg_label(&token).ok_or_else(|| {
-                                format!("Expected trait method name, got {token:?}")
-                            })?;
-                            (Some(first), method)
-                        } else {
-                            (None, first)
-                        };
+                        let (trait_name, method) = self.parse_trait_method_reference()?;
                         self.expect(&Token::As)?;
                         let visibility = match self.peek() {
                             Token::Public => Some(Visibility::Public),
@@ -1362,6 +1322,10 @@ impl Parser {
 
         loop {
             match self.peek() {
+                Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("var") => {
+                    self.advance();
+                    modifiers.visibility = Visibility::Public;
+                }
                 Token::Public => {
                     self.advance();
                     if matches!(self.peek(), Token::LParen(_))

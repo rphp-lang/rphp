@@ -9,16 +9,59 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,524 pass, 1,773 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,540 pass, 1,757 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-66.528% and the whole-corpus rate is 62.940%; 4,637 of 5,297 attempted cases
-reach runtime (87.540%). Relative to exact base `9ddab8cc`, the pass-set delta
-is +4/-0: all 3,520 prior passes remain passes and no other status, failure
-category or stage moves. Two final merged manifests and summaries are
-byte-for-byte identical. The manifest SHA-256 is
-`b9423bb1ccf102148c11e1e19c878da974b3a6449d508206eec22599bd0cf2cd`.
+66.830% and the whole-corpus rate is 63.226%; 4,652 of 5,297 attempted cases
+reach runtime (87.823%). Relative to exact base `b52d62c5`, the pass-set delta
+is +16/-0: all 3,524 prior passes remain passes. Two final merged manifests and
+summaries are byte-for-byte identical. The manifest SHA-256 is
+`5d3e9da11a0700338416084aa995293b37a0ed5352d7f37677f6f918064c0c38`.
 
-PHP 8.5 `strict_types` declarations now retain source-unit placement state.
+PHP 8.5 semi-reserved tokens now share the contextual-name path used by
+method declarations, instance and static member access, trait adaptations and
+named arguments. This admits logical `and`/`or`, `insteadof` and magic-constant
+spellings without changing their expression meanings. Trait adaptations use
+one reference parser across classes, anonymous classes, traits and enums: a
+bare keyword is a method, while qualified and explicit `namespace\Trait`
+forms identify the trait before `::`. Precedence exclusion lists accept the
+same namespace-relative trait form. Legacy `var` is parsed as PHP's public,
+untyped property modifier rather than as a class type.
+
+Original parser coverage exercises ordinary, static and magic-constant method
+names, instance/static calls, every trait consumer shape, bare keyword aliases,
+precedence for a method named `insteadof`, namespace-relative exclusions and a
+legacy `var` property. An E2E regression executes declaration, alias,
+precedence, static-call, magic-name and property boundaries together. The
+complete ten-case `Zend/tests/grammar/semi_reserved_00*.phpt` family is now
+exact.
+
+The exact full-corpus additions are `Zend/tests/bug18556.phpt`, `bug47165.phpt`,
+`bug55305.phpt`, `Zend/tests/gc/bug72530.phpt`,
+`Zend/tests/grammar/regression_001.phpt`, semi-reserved cases `001`, `002`,
+`003`, `006`, `008`, `009` and `010`,
+`Zend/tests/property_hooks/var_property.phpt`,
+`Zend/tests/traits/bug77966.phpt`,
+`Zend/tests/type_declarations/dnf_types/gh9500.phpt` and
+`tests/lang/execution_order.phpt`.
+
+Three non-pass outcomes move only after their previously misparsed `var`
+property becomes valid. `bug75573.phpt` reaches its independent overloaded
+`__get()`/`__set()` reference and output gap; `get_defined_vars.phpt` reaches
+the missing CLI `argc` metadata boundary; and `magic_methods/bug39775.phpt`
+reaches the missing indirect-overloaded-property modification notice. They
+remain visible failures. `traits/bug55086.phpt` is unchanged at its separate
+`catch (namespace\Type)` parsing boundary.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at 1,623 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies because the change is confined to contextual parsing
+and declaration lowering; previously valid bytecode and execution paths are
+unchanged.
+
+In the preceding `strict_types` checkpoint, PHP 8.5 declarations retain
+source-unit placement state.
 Empty statements and earlier `declare` directives preserve eligibility, while
 the first non-declare statement ends it for the complete source unit,
 including namespace and nested parser paths. A later `strict_types` directive

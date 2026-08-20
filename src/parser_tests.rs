@@ -1024,6 +1024,46 @@ fn test_parse_keyword_method_declaration() {
 }
 
 #[test]
+fn semi_reserved_members_and_trait_adaptations_parse_contextually() {
+    let source = r#"<?php
+namespace Fixture;
+trait Primary {
+    public function try() {}
+    public function insteadof() {}
+}
+trait Secondary {
+    public function insteadof() {}
+}
+trait Nested {
+    use Primary { try as and; }
+}
+class Keywords {
+    use Primary, Secondary {
+        Primary::insteadof insteadof namespace\Secondary;
+        try as public or;
+    }
+    var $keyword = 'legacy';
+    public function and() {}
+    public static function throw() {}
+    public function __CLASS__() {}
+}
+$anonymous = new class {
+    use Primary { try as or; }
+};
+enum Choice {
+    use Primary { try as insteadof; }
+}
+(new Keywords())->and();
+(new Keywords())->or();
+Keywords::throw();
+(new Keywords())->__CLASS__();
+"#;
+
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_fully_qualified_compound_type_hints() {
     let tokens = Lexer::new(
         "<?php class Fixture { protected SessionInterface|\\Closure|null $session = null; protected static ?\\Closure $factory = null; public function run(\\DateTimeInterface $date): \\Stringable {} }",

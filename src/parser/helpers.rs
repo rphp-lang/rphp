@@ -162,7 +162,11 @@ impl Parser {
             Token::Require => Some("require".to_string()),
             Token::RequireOnce => Some("require_once".to_string()),
             Token::Goto { name, .. } => Some(name.clone()),
+            Token::MagicConstant { name, .. } => Some(name.clone()),
+            Token::LogicalAnd => Some("and".to_string()),
+            Token::LogicalOr => Some("or".to_string()),
             Token::LogicalXor => Some("xor".to_string()),
+            Token::Insteadof => Some("insteadof".to_string()),
             _ => None,
         }
     }
@@ -505,6 +509,41 @@ impl Parser {
             "namespace\\{}",
             self.parse_type_name_tail(first, false)?
         ))
+    }
+
+    /// Parse a trait name where PHP also admits the explicit
+    /// `namespace\Name` form.
+    fn parse_trait_name(&mut self) -> Result<String, String> {
+        if self.peek() == Token::Namespace && self.peek_at(1) == Token::Backslash {
+            self.parse_namespace_relative_name()
+        } else {
+            self.parse_qualified_name()
+        }
+    }
+
+    /// Parse the left-hand reference of a trait adaptation. The unqualified
+    /// form is a method name and therefore admits PHP's semi-reserved words;
+    /// qualified and namespace-relative forms identify a trait before `::`.
+    fn parse_trait_method_reference(&mut self) -> Result<(Option<String>, String), String> {
+        let first = match self.peek() {
+            Token::Namespace if self.peek_at(1) == Token::Backslash => self.parse_trait_name()?,
+            Token::Backslash | Token::Identifier(_, _) => self.parse_qualified_name()?,
+            _ => {
+                let token = self.advance();
+                let method = Self::token_as_named_arg_label(&token)
+                    .ok_or_else(|| format!("Expected trait method name, got {token:?}"))?;
+                return Ok((None, method));
+            }
+        };
+
+        if self.peek() != Token::DoubleColon {
+            return Ok((None, first));
+        }
+        self.advance();
+        let token = self.advance();
+        let method = Self::token_as_named_arg_label(&token)
+            .ok_or_else(|| format!("Expected trait method name, got {token:?}"))?;
+        Ok((Some(first), method))
     }
 
     /// Parse the leading name of a use declaration, retaining the `\{`
