@@ -8,8 +8,58 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `f6f94519`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,713 pass, 1,586 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `698349b7`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,718 pass, 1,581 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.164% and the whole-corpus rate is 66.405%; 4,710 of
+5,299 attempted cases reach runtime (88.885%). Relative to exact base
+`8e78657e`, the pass-set delta is +5/-0: all 3,713 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`9404b1cd9b3ebe4eb61d67b065d83d752d867262e25fd7bd77eb4160e00eac53`
+and `b5419da7910ae319507acfe668e1681f2cc6455bc286bb780f31f1bbb1aa72c7`.
+
+Cold declaration linking now requires every resolved direct `implements` or
+interface `extends` target to be an interface and rejects two direct spellings
+that resolve to the same canonical interface identity. Diagnostics retain the
+declaring class/interface kind, canonical target spelling and declaration
+location. An explicit runtime alias rechecks this rule in stable declaration
+order, while ordinary and alias-mediated diamonds that merely converge on one
+inherited ancestor remain valid. Distinct direct type-argument bindings of one
+interface retain the opt-in RPHP generics extension's plural Reflection
+contract instead of being collapsed by their erased runtime identity.
+
+Original E2E coverage exercises class and trait wrong-kind targets, class and
+interface duplicate identities, case and alias canonicalization, declaration
+locations, valid direct redundancy and ordinary/aliased diamonds. It also
+corrects an earlier E2E oracle error that attributed an alias failure to the
+`class_alias()` line and incorrectly rejected the aliased diamond. The exact
+full-corpus additions are `Zend/tests/inter_05.phpt`,
+`Zend/tests/objects/objects_012.phpt` through `objects_014.phpt`, and
+`Zend/tests/traits/error_008.phpt`; the seven-case focused slice, including
+retained alias and compatible-interface controls, passes in 32 consecutive
+runs. Unresolved forward/self invalid relations, a lone invalid target reached
+only through alternative casing, and broader inherited-interface signature
+compatibility remain separate semantic slices.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,617 unsafe blocks and 289 unsafe
+functions. No runtime or object layout changes. On CPU 2 with the performance
+governor, four warmup pairs and 32 order-balanced measured pairs with no
+removed observations, a 1,000-pair resolved interface/class link control moves
+from 0.109220 to 0.109122 seconds (-0.090% independently, -0.013% paired), and
+the valid forward-link control moves from 0.133978 to 0.133709 seconds (-0.201%
+independently, -0.103% paired). Checksums match and both medians remain below
+the five-percent regression ceiling. The exact base and candidate binary
+SHA-256 values are `43960b5ac7b788a819ce59c7a8869739feac96c5b1585cd6d988ea59e4e5cdda`
+and `3c5a646294ba4cd45821f56686fc71762acfcfbe808c96d63c183f4f027e9e0e`.
+
+In the preceding inherited-interface-staticness checkpoint, the measured
+AMD64 PHP 8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and
+candidate commit `f6f94519`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,713 pass, 1,586 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 70.070% and the whole-corpus rate is 66.315%; 4,710 of
 5,299 attempted cases reach runtime (88.885%). Relative to exact base
