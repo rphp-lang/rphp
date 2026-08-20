@@ -269,8 +269,22 @@ fn op_new_obj<'a>(
                 )));
             }
         }
-        for dependency in
-            crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)
+        for dependency in eg.method_variance_dependencies(&class_def) {
+            stats::inc_newobj_class_hash_lookup();
+            if eg.find_class(&dependency).is_some() {
+                continue;
+            }
+            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        }
+        for dependency in crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)
         {
             stats::inc_newobj_class_hash_lookup();
             if eg.find_class(&dependency).is_some() {

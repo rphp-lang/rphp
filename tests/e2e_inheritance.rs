@@ -1276,3 +1276,24 @@ class BrokenChild extends ParentContract { use RequiresArgument; }
         "Fatal(\"Declaration of ParentContract::common(): void must be compatible with RequiresArgument::common(int $value): void\")"
     );
 }
+
+#[test]
+fn nullable_method_return_variance_compares_the_inner_class_types() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface ResultContract {}
+interface KnownResult extends ResultContract {}
+trait RequiresKnownResult {
+    abstract public function known(): ?ResultContract;
+}
+class KnownImplementation {
+    public function known(): ?KnownResult { return null; }
+}
+class KnownConsumer extends KnownImplementation { use RequiresKnownResult; }
+echo (new KnownConsumer())->known() === null ? 'known' : 'bad';
+"#,
+        ),
+        "known"
+    );
+}

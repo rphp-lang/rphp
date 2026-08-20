@@ -406,7 +406,7 @@ fn validate_property_hook_setter_variance(
     Ok(())
 }
 
-fn collect_property_hook_variance_class_names(
+fn collect_variance_class_names(
     hint: &crate::vm::function::ParamTypeHint,
     dependencies: &mut Vec<String>,
     seen: &mut std::collections::HashSet<String>,
@@ -427,14 +427,30 @@ fn collect_property_hook_variance_class_names(
             }
         }
         ParamTypeHint::Nullable(inner) => {
-            collect_property_hook_variance_class_names(inner, dependencies, seen);
+            collect_variance_class_names(inner, dependencies, seen);
         }
         ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
             for part in parts {
-                collect_property_hook_variance_class_names(part, dependencies, seen);
+                collect_variance_class_names(part, dependencies, seen);
             }
         }
         _ => {}
+    }
+}
+
+fn variance_type_hint_mentions_class(
+    hint: &crate::vm::function::ParamTypeHint,
+    class_name: &str,
+) -> bool {
+    use crate::vm::function::ParamTypeHint;
+
+    match hint {
+        ParamTypeHint::ClassName(name) => name.eq_ignore_ascii_case(class_name),
+        ParamTypeHint::Nullable(inner) => variance_type_hint_mentions_class(inner, class_name),
+        ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => parts
+            .iter()
+            .any(|part| variance_type_hint_mentions_class(part, class_name)),
+        _ => false,
     }
 }
 
@@ -478,16 +494,8 @@ pub(crate) fn property_hook_setter_variance_dependencies(
         {
             continue;
         }
-        collect_property_hook_variance_class_names(
-            &property_hint,
-            &mut dependencies,
-            &mut seen,
-        );
-        collect_property_hook_variance_class_names(
-            &setter_hint,
-            &mut dependencies,
-            &mut seen,
-        );
+        collect_variance_class_names(&property_hint, &mut dependencies, &mut seen);
+        collect_variance_class_names(&setter_hint, &mut dependencies, &mut seen);
     }
     dependencies.retain(|dependency| !dependency.eq_ignore_ascii_case(&class_def.name));
     dependencies

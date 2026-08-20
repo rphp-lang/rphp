@@ -88,9 +88,22 @@ fn op_declare_class<'a>(
             });
         }
     }
-    for dependency in
-        crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)
-    {
+    for dependency in eg.method_variance_dependencies(&class_def) {
+        if eg.find_class(&dependency).is_some() {
+            continue;
+        }
+        let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+        if let Some(exception) = eg.exception.take() {
+            eg.restore_runtime_class_declaration(declaration_key, class_def);
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+    }
+    for dependency in crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def) {
         if eg.find_class(&dependency).is_some() {
             continue;
         }
@@ -377,8 +390,23 @@ fn execute_source_unit(
                 )));
             }
         }
-        for dependency in
-            crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)
+        for dependency in eg.method_variance_dependencies(&class_def) {
+            if eg.find_class(&dependency).is_some() {
+                continue;
+            }
+            // Method-signature dependencies are also soft. Only class
+            // relationships that could make the complete contract valid are
+            // returned by the dependency collector.
+            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            if let Some(exception) = eg.exception.take() {
+                if caller.is_some() {
+                    return Ok(IncludeFileOutcome::Thrown(exception));
+                }
+                eg.exception = Some(exception);
+                return Ok(IncludeFileOutcome::Executed(Value::null()));
+            }
+        }
+        for dependency in crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)
         {
             if eg.find_class(&dependency).is_some() {
                 continue;

@@ -1304,3 +1304,55 @@ var_export(get_class_vars('autoloadvarsinventory')); echo "\n";
         )
     );
 }
+
+#[test]
+fn runtime_method_variance_autoloads_a_potentially_compatible_return_type() {
+    let dir = TempPhpDir::new();
+    let deferred = dir.write(
+        "DeferredResult.php",
+        "<?php class DeferredResult extends Exception {}",
+    );
+    let source = format!(
+        r#"<?php
+spl_autoload_register(function (string $name): void {{
+    echo "load:$name|";
+    if ($name === 'DeferredResult') {{ require '{deferred}'; }}
+}});
+trait RequiresDeferredResult {{
+    abstract public function deferred(): ?Throwable;
+}}
+class DeferredImplementation {{
+    public function deferred(): ?DeferredResult {{ return null; }}
+}}
+class DeferredConsumer extends DeferredImplementation {{ use RequiresDeferredResult; }}
+echo (new DeferredConsumer())->deferred() === null ? 'linked' : 'bad';
+"#,
+    );
+
+    assert_eq!(run_php(&source), "load:DeferredResult|linked");
+}
+
+#[test]
+fn runtime_method_variance_does_not_autoload_through_a_definite_contract_error() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+spl_autoload_register(function (string $name): void {
+    throw new Exception("must not autoload $name");
+});
+trait HardRequirement {
+    abstract public function hard(int $value): MissingHardType;
+}
+class HardImplementation {
+    public function hard(): MissingHardType { throw new Exception; }
+}
+class HardConsumer extends HardImplementation { use HardRequirement; }
+"#,
+        "method-variance-hard-error.php",
+        "/tmp",
+    );
+
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of HardImplementation::hard(): MissingHardType must be compatible with HardRequirement::hard(int $value): MissingHardType in method-variance-hard-error.php on line 9\")"
+    );
+}

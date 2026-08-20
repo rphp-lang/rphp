@@ -1912,6 +1912,25 @@ impl ExecutorGlobals {
         implementation: MethodDeclaration<'_>,
         linking_class: Option<&ClassDef>,
     ) -> Vec<String> {
+        self.method_contract_errors_mode(required, implementation, linking_class, false)
+    }
+
+    fn method_contract_potential_errors(
+        &self,
+        required: MethodDeclaration<'_>,
+        implementation: MethodDeclaration<'_>,
+        linking_class: Option<&ClassDef>,
+    ) -> Vec<String> {
+        self.method_contract_errors_mode(required, implementation, linking_class, true)
+    }
+
+    fn method_contract_errors_mode(
+        &self,
+        required: MethodDeclaration<'_>,
+        implementation: MethodDeclaration<'_>,
+        linking_class: Option<&ClassDef>,
+        allow_any_unresolved_relation: bool,
+    ) -> Vec<String> {
         use crate::vm::function::ParamTypeHint;
 
         let mut errors = Vec::new();
@@ -1995,13 +2014,24 @@ impl ExecutorGlobals {
                             required.owner,
                             linking_class,
                         );
-                        if !self.is_param_type_compatible(
-                            &implementation_hint,
-                            &required_hint,
-                            implementation.owner,
-                            required.owner,
-                            linking_class,
-                        ) {
+                        let compatible = if allow_any_unresolved_relation {
+                            self.is_param_type_potentially_compatible(
+                                &implementation_hint,
+                                &required_hint,
+                                implementation.owner,
+                                required.owner,
+                                linking_class,
+                            )
+                        } else {
+                            self.is_param_type_compatible(
+                                &implementation_hint,
+                                &required_hint,
+                                implementation.owner,
+                                required.owner,
+                                linking_class,
+                            )
+                        };
+                        if !compatible {
                             errors.push(format!(
                                 "parameter {} type must be compatible with {}, got {}",
                                 index + 1,
@@ -2035,13 +2065,24 @@ impl ExecutorGlobals {
                     required.owner,
                     linking_class,
                 );
-                if !self.is_return_type_compatible(
-                    &implementation_return,
-                    &required_return,
-                    implementation.owner,
-                    required.owner,
-                    linking_class,
-                ) {
+                let compatible = if allow_any_unresolved_relation {
+                    self.is_return_type_potentially_compatible(
+                        &implementation_return,
+                        &required_return,
+                        implementation.owner,
+                        required.owner,
+                        linking_class,
+                    )
+                } else {
+                    self.is_return_type_compatible(
+                        &implementation_return,
+                        &required_return,
+                        implementation.owner,
+                        required.owner,
+                        linking_class,
+                    )
+                };
+                if !compatible {
                     errors.push(format!(
                         "return type must be compatible with {}, got {}",
                         required_return.display_name(),
@@ -2121,6 +2162,143 @@ impl ExecutorGlobals {
     ) -> bool {
         Self::variance_parameter_index(signature, contract_index)
             .is_some_and(|index| signature.is_param_by_ref(index))
+    }
+
+    fn collect_method_contract_variance_dependencies(
+        &self,
+        required: MethodDeclaration<'_>,
+        implementation: MethodDeclaration<'_>,
+        linking_class: &ClassDef,
+        dependencies: &mut Vec<String>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        if self
+            .method_contract_errors(required, implementation, Some(linking_class))
+            .is_empty()
+            || !self
+                .method_contract_potential_errors(required, implementation, Some(linking_class))
+                .is_empty()
+        {
+            return;
+        }
+
+        for declaration in [required, implementation] {
+            let signature = &declaration.function.sig;
+            let mentions_linking_class = signature
+                .param_type_hints
+                .iter()
+                .chain(std::iter::once(&signature.return_type_hint))
+                .map(|hint| {
+                    self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class))
+                })
+                .any(|hint| variance_type_hint_mentions_class(&hint, &linking_class.name));
+            if mentions_linking_class {
+                // Autoloading a type whose relation depends on the class that
+                // is currently linking needs provisional transactional class
+                // publication. Leave that recursive case at the existing
+                // compatibility error until the linker can roll it back.
+                return;
+            }
+        }
+
+        for declaration in [required, implementation] {
+            let signature = &declaration.function.sig;
+            for hint in &signature.param_type_hints {
+                let hint =
+                    self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class));
+                collect_variance_class_names(&hint, dependencies, seen);
+            }
+            let return_hint = self.resolve_variance_type_hint(
+                &signature.return_type_hint,
+                declaration.owner,
+                Some(linking_class),
+            );
+            collect_variance_class_names(&return_hint, dependencies, seen);
+        }
+    }
+
+    /// Runtime declarations link after user code may have installed an
+    /// autoloader. Return only unknown class names whose eventual hierarchy
+    /// could turn an otherwise valid method contract into a compatible one.
+    /// Definite arity, reference, staticness and scalar-type errors do not
+    /// trigger observable autoload side effects.
+    pub(crate) fn method_variance_dependencies(&self, class_def: &ClassDef) -> Vec<String> {
+        if class_def.is_interface || class_def.is_trait {
+            return Vec::new();
+        }
+
+        let mut dependencies = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        if let Some(parent) = class_def
+            .parent
+            .as_deref()
+            .and_then(|name| self.class_table.get(name))
+        {
+            for method in &class_def.methods {
+                let implementation = Self::method_declaration(class_def, method);
+                let Some(required) = self.find_effective_method(parent, implementation.name) else {
+                    continue;
+                };
+                let required_is_implicit_property_accessor = required
+                    .name
+                    .strip_prefix('$')
+                    .and_then(|name| name.split_once("::"))
+                    .and_then(|(property_name, hook)| {
+                        parent
+                            .properties
+                            .iter()
+                            .find(|property| property.name.eq_ignore_ascii_case(property_name))
+                            .map(|property| match hook.to_ascii_lowercase().as_str() {
+                                "get" => !property.has_get_hook,
+                                "set" => !property.has_set_hook,
+                                _ => false,
+                            })
+                    })
+                    .unwrap_or(false);
+                if required.visibility == Visibility::Private
+                    || required_is_implicit_property_accessor
+                    || (required.name.eq_ignore_ascii_case("__construct") && !required.is_abstract)
+                {
+                    continue;
+                }
+                self.collect_method_contract_variance_dependencies(
+                    required,
+                    implementation,
+                    class_def,
+                    &mut dependencies,
+                    &mut seen,
+                );
+            }
+        }
+
+        let mut requirements = Vec::new();
+        self.collect_abstract_method_requirements(
+            class_def,
+            &mut requirements,
+            &mut std::collections::HashSet::new(),
+        );
+        for required in requirements {
+            let Some(implementation) = self.find_effective_method(class_def, required.name) else {
+                continue;
+            };
+            self.collect_method_contract_variance_dependencies(
+                required,
+                implementation,
+                class_def,
+                &mut dependencies,
+                &mut seen,
+            );
+        }
+
+        dependencies.retain(|dependency| {
+            !["self", "parent", "static", "object", "iterable"]
+                .iter()
+                .any(|pseudo_type| dependency.eq_ignore_ascii_case(pseudo_type))
+                && !dependency.eq_ignore_ascii_case(&class_def.name)
+                && self.find_class(dependency).is_none()
+        });
+        dependencies
     }
 
     fn variance_scope_owner<'a>(
@@ -5325,6 +5503,43 @@ impl ExecutorGlobals {
         iface_owner: &str,
         linking_class: Option<&ClassDef>,
     ) -> bool {
+        self.is_return_type_compatible_mode(
+            impl_hint,
+            iface_hint,
+            impl_owner,
+            iface_owner,
+            linking_class,
+            false,
+        )
+    }
+
+    fn is_return_type_potentially_compatible(
+        &self,
+        impl_hint: &crate::vm::function::ParamTypeHint,
+        iface_hint: &crate::vm::function::ParamTypeHint,
+        impl_owner: &str,
+        iface_owner: &str,
+        linking_class: Option<&ClassDef>,
+    ) -> bool {
+        self.is_return_type_compatible_mode(
+            impl_hint,
+            iface_hint,
+            impl_owner,
+            iface_owner,
+            linking_class,
+            true,
+        )
+    }
+
+    fn is_return_type_compatible_mode(
+        &self,
+        impl_hint: &crate::vm::function::ParamTypeHint,
+        iface_hint: &crate::vm::function::ParamTypeHint,
+        impl_owner: &str,
+        iface_owner: &str,
+        linking_class: Option<&ClassDef>,
+        allow_any_unresolved_relation: bool,
+    ) -> bool {
         use crate::vm::function::ParamTypeHint;
 
         // If implementation has no type hint but interface does, incompatible
@@ -5351,15 +5566,26 @@ impl ExecutorGlobals {
         // Nullable unwrapping: impl T is compatible with iface ?T (narrowing)
         // impl ?T is compatible with iface ?T (checked above by equality)
         match (impl_hint, iface_hint) {
+            (ParamTypeHint::Nullable(inner_impl), ParamTypeHint::Nullable(inner_iface)) => {
+                return self.is_return_type_compatible_mode(
+                    inner_impl,
+                    inner_iface,
+                    impl_owner,
+                    iface_owner,
+                    linking_class,
+                    allow_any_unresolved_relation,
+                );
+            }
             (_, ParamTypeHint::Nullable(inner_iface)) => {
                 // impl_hint (non-nullable or differently nullable) vs ?T
                 // Check if impl is compatible with the inner type
-                return self.is_return_type_compatible(
+                return self.is_return_type_compatible_mode(
                     impl_hint,
                     inner_iface,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_any_unresolved_relation,
                 );
             }
             (ParamTypeHint::Nullable(_), _) => {
@@ -5376,35 +5602,39 @@ impl ExecutorGlobals {
         if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
             let traversable = ParamTypeHint::ClassName("Traversable".to_string());
-            return self.is_return_type_compatible(
+            return self.is_return_type_compatible_mode(
                 &ParamTypeHint::Array,
                 iface_hint,
                 impl_owner,
                 iface_owner,
                 linking_class,
-            ) && self.is_return_type_compatible(
+                allow_any_unresolved_relation,
+            ) && self.is_return_type_compatible_mode(
                 &traversable,
                 iface_hint,
                 impl_owner,
                 iface_owner,
                 linking_class,
+                allow_any_unresolved_relation,
             );
         }
         if matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
             let traversable = ParamTypeHint::ClassName("Traversable".to_string());
-            return self.is_return_type_compatible(
+            return self.is_return_type_compatible_mode(
                 impl_hint,
                 &ParamTypeHint::Array,
                 impl_owner,
                 iface_owner,
                 linking_class,
-            ) || self.is_return_type_compatible(
+                allow_any_unresolved_relation,
+            ) || self.is_return_type_compatible_mode(
                 impl_hint,
                 &traversable,
                 impl_owner,
                 iface_owner,
                 linking_class,
+                allow_any_unresolved_relation,
             );
         }
 
@@ -5412,45 +5642,49 @@ impl ExecutorGlobals {
         // union/intersection nodes.
         if let ParamTypeHint::Intersection(iface_parts) = iface_hint {
             return iface_parts.iter().all(|part| {
-                self.is_return_type_compatible(
+                self.is_return_type_compatible_mode(
                     impl_hint,
                     part,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_any_unresolved_relation,
                 )
             });
         }
         if let ParamTypeHint::Union(impl_parts) = impl_hint {
             return impl_parts.iter().all(|part| {
-                self.is_return_type_compatible(
+                self.is_return_type_compatible_mode(
                     part,
                     iface_hint,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_any_unresolved_relation,
                 )
             });
         }
         if let ParamTypeHint::Union(iface_parts) = iface_hint {
             return iface_parts.iter().any(|part| {
-                self.is_return_type_compatible(
+                self.is_return_type_compatible_mode(
                     impl_hint,
                     part,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_any_unresolved_relation,
                 )
             });
         }
         if let ParamTypeHint::Intersection(impl_parts) = impl_hint {
             return impl_parts.iter().any(|part| {
-                self.is_return_type_compatible(
+                self.is_return_type_compatible_mode(
                     part,
                     iface_hint,
                     impl_owner,
                     iface_owner,
                     linking_class,
+                    allow_any_unresolved_relation,
                 )
             });
         }
@@ -5481,6 +5715,12 @@ impl ExecutorGlobals {
             // descendants and is therefore invalid.
             if iface_class.eq_ignore_ascii_case("static") {
                 return impl_class.eq_ignore_ascii_case("static");
+            }
+            if allow_any_unresolved_relation
+                && (!self.variance_class_is_known(impl_class, linking_class)
+                    || !self.variance_class_is_known(iface_class, linking_class))
+            {
+                return true;
             }
             if impl_class.eq_ignore_ascii_case("static") {
                 return self.variance_class_is_a(impl_owner, iface_class, linking_class);

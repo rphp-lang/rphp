@@ -9,6 +9,49 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,640 pass, 1,658 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+68.705% and the whole-corpus rate is 65.012%; 4,708 of 5,298 attempted cases
+reach runtime (88.864%). Relative to exact base `54ca1c6a`, the pass-set delta
+is +1/-0: all 3,639 prior passes remain passes and no remaining failure changes
+category. Two final merged manifests and summaries are byte-for-byte identical.
+The manifest SHA-256 is
+`848b1d8a5f7edcf39140802050cdd70c74d991e4f46ca59afb2681d8bf10cb47`.
+
+Runtime class declarations now soft-autoload unknown class-like dependencies
+from method contracts before final link validation, but only when resolving the
+eventual hierarchy could make an otherwise valid signature compatible. The
+same rule covers ordinary runtime declarations, included source units and
+anonymous-class registration. Definite visibility, staticness, arity,
+variadic, reference and scalar-type errors retain their existing diagnostics
+without observable autoload side effects, and contextual or pseudo-types are
+resolved or excluded rather than requested from a loader. Nullable covariant
+return types now compare their inner class types instead of requiring literal
+type-hint equality.
+
+Original E2E regressions cover a known nullable hierarchy, a missing return
+class supplied from an external file by a registered loader, and a fixed arity
+error whose loader would throw if it were invoked. The exact full-corpus
+addition is
+`Zend/tests/type_declarations/variance/trait_success.phpt`. That upstream
+fixture does not observe whether its inline loader ran; the external-file E2E
+regression independently proves the new runtime autoload boundary. Recursive
+`Zend/tests/traits/abstract_method_9.phpt` deliberately remains in the same
+compile-failure category: loading `D extends C` while `C` itself is linking
+requires provisional transactional class publication. The distinct
+no-autoloader "class not available" diagnostic also remains follow-up work.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3.
+The production inventory remains 1,612 unsafe blocks and 289 unsafe functions.
+No runtime performance benchmark applies: the added work is confined to cold
+runtime declaration/link validation, ordinary method calls are unchanged, and
+the cold-build S3 gate exercises the affected class-loading path.
+
+In the preceding private-abstract-trait checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,639 pass, 1,659 fail, 115 skip, one is an upstream XFAIL,
 185 are unsupported, and none time out or crash. The headline pass rate is
 68.686% and the whole-corpus rate is 64.994%; 4,707 of 5,298 attempted cases
