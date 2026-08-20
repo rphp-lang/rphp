@@ -798,6 +798,42 @@ fn incdec_call_results_fail_during_compilation_with_php_call_kind_and_source_lin
 }
 
 #[test]
+fn call_result_write_targets_fail_during_compilation_with_php_call_kind_and_source_line() {
+    for (expression, expected) in [
+        ("named() = isset(named());", "function"),
+        ("named() =& $target;", "function"),
+        ("named() ??= isset(named());", "function"),
+        ("named() += isset(named());", "function"),
+        ("unset(named());", "function"),
+        ("foreach ($values as named()) {}", "function"),
+        ("foreach ($values as named() => $value) {}", "function"),
+        ("foreach ($values as &named()) {}", "function"),
+        ("$callable() = 1;", "function"),
+        ("$object->method() = 1;", "method"),
+        ("Box::method() ??= 1;", "method"),
+        ("$class::$method() += 1;", "method"),
+        ("unset($object->method());", "method"),
+        ("foreach ($values as $object->method()) {}", "method"),
+        ("list($object->method()) = $source;", "method"),
+        ("list(Box::method()) = $source;", "method"),
+    ] {
+        let source = format!("<?php\nif (false) {{\n    {expression}\n}}");
+        let error = run_php_expect_error_with_source_context(
+            &source,
+            "/virtual/call-result-write.php",
+            "/virtual",
+        );
+        assert_eq!(
+            format!("{error:?}"),
+            format!(
+                "Fatal(\"Can't use {expected} return value in write context in /virtual/call-result-write.php on line 3\")"
+            ),
+            "unexpected diagnostic for {expression}"
+        );
+    }
+}
+
+#[test]
 fn incdec_property_targets_observe_the_php_reentrant_snapshot_boundaries() {
     let source = r#"<?php
 #[AllowDynamicProperties]

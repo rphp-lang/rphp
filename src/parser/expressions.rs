@@ -148,6 +148,11 @@ impl Parser {
 
     fn finish_compound_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
         let nullsafe_line = Self::nullsafe_chain_line(&target);
+        let call_write_error = if nullsafe_line.is_none() {
+            self.call_write_error(&target)
+        } else {
+            None
+        };
         if !matches!(
             &target,
             Expr::Variable { .. }
@@ -166,6 +171,7 @@ impl Parser {
                 | Expr::DynamicNamedStaticProperty { .. }
                 | Expr::DynamicStaticProperty { .. }
         ) && nullsafe_line.is_none()
+            && call_write_error.is_none()
         {
             return Err("Invalid compound assignment target".into());
         }
@@ -174,6 +180,9 @@ impl Parser {
         let expr = self.parse_assignment_or_yield()?;
         if let Some(line) = nullsafe_line {
             return Ok(self.nullsafe_write_error(line));
+        }
+        if let Some(error) = call_write_error {
+            return Ok(error);
         }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
@@ -193,6 +202,12 @@ impl Parser {
         } else {
             false
         };
+        let nullsafe_line = Self::nullsafe_chain_line(&target);
+        let call_write_error = if nullsafe_line.is_none() {
+            self.call_write_error(&target)
+        } else {
+            None
+        };
         let this_reassignment = match &target {
             Expr::Variable { name, line } if name == "this" => {
                 Some(self.compile_error("Cannot re-assign $this", *line))
@@ -211,10 +226,13 @@ impl Parser {
                 *line,
             ));
         }
-        if let Some(line) = Self::nullsafe_chain_line(&target) {
+        if let Some(line) = nullsafe_line {
             return Ok(self.nullsafe_write_error(line));
         }
         if let Some(error) = this_reassignment {
+            return Ok(error);
+        }
+        if let Some(error) = call_write_error {
             return Ok(error);
         }
         if let Expr::Globals { line } = target {
@@ -275,6 +293,11 @@ impl Parser {
 
     fn finish_coalesce_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
         let nullsafe_line = Self::nullsafe_chain_line(&target);
+        let call_write_error = if nullsafe_line.is_none() {
+            self.call_write_error(&target)
+        } else {
+            None
+        };
         if !matches!(
             &target,
             Expr::Variable { .. }
@@ -293,6 +316,7 @@ impl Parser {
                 | Expr::DynamicNamedStaticProperty { .. }
                 | Expr::DynamicStaticProperty { .. }
         ) && nullsafe_line.is_none()
+            && call_write_error.is_none()
         {
             return Err("Invalid null-coalescing assignment target".into());
         }
@@ -308,6 +332,9 @@ impl Parser {
             return Ok(self.nullsafe_write_error(line));
         }
         if let Some(error) = this_reassignment {
+            return Ok(error);
+        }
+        if let Some(error) = call_write_error {
             return Ok(error);
         }
         if let Expr::Globals { line } = target {
@@ -1007,7 +1034,7 @@ impl Parser {
                     | Expr::DynamicStaticProperty { .. }
                     | Expr::ArrayAccess { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
                     other => self
-                        .incdec_call_write_error(&other)
+                        .call_write_error(&other)
                         .map_or_else(|| Err(format!("Invalid increment target: {other:?}")), Ok),
                 }
             }
@@ -1032,7 +1059,7 @@ impl Parser {
                     | Expr::DynamicStaticProperty { .. }
                     | Expr::ArrayAccess { .. } => Ok(Expr::PreDecTarget(Box::new(target))),
                     other => self
-                        .incdec_call_write_error(&other)
+                        .call_write_error(&other)
                         .map_or_else(|| Err(format!("Invalid decrement target: {other:?}")), Ok),
                 }
             }

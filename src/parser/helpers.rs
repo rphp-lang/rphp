@@ -1121,8 +1121,12 @@ impl Parser {
         self.compile_error("Can't use nullsafe operator in write context", line)
     }
 
-    fn incdec_call_write_error(&mut self, target: &Expr) -> Option<Expr> {
+    fn call_write_error(&mut self, target: &Expr) -> Option<Expr> {
         let (kind, line) = match target {
+            // `list(...)` can still reach expression parsing in nested list
+            // assignment positions. It is a contextual language construct,
+            // not an ordinary function call result.
+            Expr::FunctionCall { name, .. } if name.eq_ignore_ascii_case("list") => return None,
             Expr::FunctionCall { line, .. } => ("function", *line),
             Expr::DynamicCall {
                 method_syntax,
@@ -1168,9 +1172,28 @@ impl Parser {
         )
     }
 
+    fn normalize_unset_target(&mut self, expr: Expr) -> Result<Expr, String> {
+        if let Expr::Globals { line } = &expr {
+            return Ok(self.globals_modification_error(*line));
+        }
+        if let Some(line) = Self::nullsafe_chain_line(&expr) {
+            return Ok(self.nullsafe_write_error(line));
+        }
+        if let Some(error) = self.call_write_error(&expr) {
+            return Ok(error);
+        }
+        if !Self::is_variable_like(&expr) {
+            return Err("Cannot use unset() on the result of an expression".into());
+        }
+        Ok(expr)
+    }
+
     fn into_foreach_target(&mut self, expr: Expr) -> Result<ForeachTarget, String> {
         if let Some(line) = Self::nullsafe_chain_line(&expr) {
             return Ok(ForeachTarget::Target(self.nullsafe_write_error(line)));
+        }
+        if let Some(error) = self.call_write_error(&expr) {
+            return Ok(ForeachTarget::Target(error));
         }
         match expr {
             Expr::Variable { ref name, line } if name == "this" => Ok(
@@ -1399,6 +1422,12 @@ impl Parser {
                         "Can't use function return value in write context",
                         line,
                     )));
+                } else if self.peek_at(1) == Token::DoubleColon {
+                    let target = self.parse_expr()?;
+                    let error = self
+                        .call_write_error(&target)
+                        .ok_or_else(|| "Invalid destructuring assignment target".to_string())?;
+                    targets.push(ListTarget::Target(error));
                 } else {
                     return Err(format!(
                         "Expected variable in list/destructuring, got identifier '{}'",
@@ -1449,6 +1478,8 @@ impl Parser {
                         "Assignments can only happen to writable values",
                         line,
                     )));
+                } else if let Some(error) = self.call_write_error(&target) {
+                    targets.push(ListTarget::Target(error));
                 } else {
                     match target {
                         Expr::Variable {

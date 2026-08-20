@@ -412,6 +412,58 @@ fn incdec_call_results_are_deferred_function_or_method_write_errors() {
 }
 
 #[test]
+fn call_results_are_deferred_write_errors_across_assignment_unset_and_foreach() {
+    for (expression, expected) in [
+        ("named() = isset(named());", "function"),
+        ("named() =& $target;", "function"),
+        ("named() ??= isset(named());", "function"),
+        ("named() += isset(named());", "function"),
+        ("unset(named());", "function"),
+        ("foreach ($values as named()) {}", "function"),
+        ("foreach ($values as named() => $value) {}", "function"),
+        ("foreach ($values as &named()) {}", "function"),
+        ("$callable() = 1;", "function"),
+        ("$object->method() = 1;", "method"),
+        ("Box::method() ??= 1;", "method"),
+        ("$class::$method() += 1;", "method"),
+        ("unset($object->method());", "method"),
+        ("foreach ($values as $object->method()) {}", "method"),
+        ("list($object->method()) = $source;", "method"),
+        ("list(Box::method()) = $source;", "method"),
+    ] {
+        let source = format!("<?php\nif (false) {{\n    {expression}\n}}");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(
+            matches!(
+                statements.last(),
+                Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                    if message == &format!(
+                        "Can't use {expected} return value in write context"
+                    ) && *line == 3
+            ),
+            "unexpected AST for {expression}: {statements:#?}"
+        );
+    }
+}
+
+#[test]
+fn dimensions_and_properties_of_call_results_remain_writable_targets() {
+    let tokens = Lexer::new(
+        "<?php\nresult()[0] = 1; result()->property = 3; \
+         unset(result()[0]); foreach ($values as result()[0]) {}",
+    )
+    .tokenize()
+    .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(!matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { .. }))
+    ));
+}
+
+#[test]
 fn braced_dynamic_nullsafe_property_retains_its_short_circuit_flag() {
     let tokens = Lexer::new("<?php $object?->{$property};")
         .tokenize()

@@ -9,16 +9,47 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,516 pass, 1,781 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,520 pass, 1,777 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-66.377% and the whole-corpus rate is 62.797%; 4,635 of 5,297 attempted cases
-reach runtime (87.502%). Relative to exact base `68ce5826`, the pass-set delta
-is +9/-0: all 3,507 prior passes remain passes and no other status, failure
+66.453% and the whole-corpus rate is 62.868%; 4,639 of 5,297 attempted cases
+reach runtime (87.578%). Relative to exact base `4a0a82aa`, the pass-set delta
+is +4/-0: all 3,516 prior passes remain passes and no other status, failure
 category or stage moves. Two final merged manifests and summaries are
 byte-for-byte identical. The manifest SHA-256 is
-`9e53ee42f0d0a60f417d27ba80f40cabb2dacc1f81a54d712001b649338d5208`.
+`c6635c6799763c140eb4b4e02bfe4b3e871b8867cbba372c162471114a84e6a0`.
 
-Literal writes to `$this` now produce PHP 8.5's compile-time fatal
+Exact call results used as write targets now produce PHP 8.5's compile-time
+`Can't use function return value in write context` fatal, substituting
+`method` where required and retaining the target's physical source line.
+Direct and reference assignment, `??=`, compound assignment,
+`unset()` and foreach targets share the classifier already used by inc/dec and
+destructuring. The parser consumes the complete construct and retains the first
+deferred error, so a later RHS error or dead-code elimination cannot replace
+the write-context diagnostic.
+
+Original parser and source-aware E2E regressions cover named, dynamic, instance
+and static calls across every admitted write context, target-before-RHS
+priority, exact source locations and both diagnostic kinds. The classifier
+does not mistake contextual `list(...)` syntax for a function call and does
+not recurse through an indexed dimension or property of a call result. The
+pre-existing empty-append `call()[]` parser gap remains outside this checkpoint.
+
+The exact full-corpus additions are
+`Zend/tests/coalesce/assign_coalesce_004.phpt`,
+`Zend/tests/errmsg/errmsg_004.phpt`,
+`Zend/tests/errmsg/errmsg_005.phpt` and
+`Zend/tests/unset/bug70240.phpt`. The adjacent inc/dec, pipe and property-hook
+cases remain exact passes, and no other status, category or stage moves.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at 1,623 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies because the change only records PHP-invalid
+compile-time write targets and leaves successful bytecode unchanged.
+
+In the preceding literal-`$this` checkpoint, literal writes produce PHP 8.5's
+compile-time fatal
 `Cannot re-assign $this` with the target's physical source line. The parser
 consumes the complete construct while retaining the first deferred error, so
 the diagnostic survives dead-code elimination and takes priority over a later

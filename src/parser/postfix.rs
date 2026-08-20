@@ -640,7 +640,7 @@ impl Parser {
                             }
                         }
                         other => {
-                            if let Some(error) = self.incdec_call_write_error(&other) {
+                            if let Some(error) = self.call_write_error(&other) {
                                 error
                             } else {
                                 return Err(format!("Invalid increment target: {other:?}"));

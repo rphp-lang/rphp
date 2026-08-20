@@ -994,26 +994,12 @@ impl Parser {
                     return Err(self.comma_list_error(list_line, false));
                 }
                 let mut targets = Vec::new();
-                let mut expr = self.parse_unset_target()?;
-                if !Self::is_variable_like(&expr) {
-                    return Err("Cannot use unset() on the result of an expression".into());
-                }
-                if let Expr::Globals { line } = expr {
-                    expr = self.globals_modification_error(line);
-                } else if let Some(line) = Self::nullsafe_chain_line(&expr) {
-                    expr = self.nullsafe_write_error(line);
-                }
+                let expr = self.parse_unset_target()?;
+                let expr = self.normalize_unset_target(expr)?;
                 targets.push(expr);
                 while self.comma_list_has_next(list_line)? {
-                    let mut expr = self.parse_unset_target()?;
-                    if !Self::is_variable_like(&expr) {
-                        return Err("Cannot use unset() on the result of an expression".into());
-                    }
-                    if let Expr::Globals { line } = expr {
-                        expr = self.globals_modification_error(line);
-                    } else if let Some(line) = Self::nullsafe_chain_line(&expr) {
-                        expr = self.nullsafe_write_error(line);
-                    }
+                    let expr = self.parse_unset_target()?;
+                    let expr = self.normalize_unset_target(expr)?;
                     targets.push(expr);
                 }
                 self.expect(&Token::RParen)?;
