@@ -1192,3 +1192,87 @@ echo $c->x;
         "42"
     );
 }
+
+#[test]
+fn private_abstract_trait_methods_bind_to_the_consuming_class() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait RequiresLocalCopy {
+    abstract private function copy(self $value): self;
+}
+class Box {
+    use RequiresLocalCopy;
+    private function copy(self $value): self { return $value; }
+    public function duplicate(): self { return $this->copy($this); }
+}
+
+trait RequiresTransform {
+    private abstract function transform(int $value): int;
+}
+abstract class TransformBase {
+    use RequiresTransform;
+    abstract protected function transform(int $value): int;
+    public function apply(int $value): int { return $this->transform($value); }
+}
+class Doubler extends TransformBase {
+    protected function transform(int $value): int { return $value * 2; }
+}
+
+echo get_class((new Box())->duplicate()), '|', (new Doubler())->apply(21);
+"#,
+        ),
+        "Box|42"
+    );
+}
+
+#[test]
+fn private_abstract_trait_methods_enforce_link_contracts() {
+    let concrete_missing = run_php_expect_error(
+        r#"<?php
+trait RequiresConcreteHidden { abstract private function hidden(): void; }
+class ConcreteIncomplete { use RequiresConcreteHidden; }
+"#,
+    );
+    assert_eq!(
+        format!("{concrete_missing:?}"),
+        "Fatal(\"Class ConcreteIncomplete contains 1 abstract method and must therefore be declared abstract or implement the remaining method (ConcreteIncomplete::hidden)\")"
+    );
+
+    let missing = run_php_expect_error(
+        r#"<?php
+trait RequiresHidden { abstract private function hidden(): void; }
+abstract class Incomplete { use RequiresHidden; }
+"#,
+    );
+    assert_eq!(
+        format!("{missing:?}"),
+        "Fatal(\"Class Incomplete must implement 1 abstract method (Incomplete::hidden)\")"
+    );
+
+    let incompatible = run_php_expect_error(
+        r#"<?php
+trait RequiresValue { abstract private function accept(int $value): void; }
+class BrokenValue {
+    use RequiresValue;
+    private function accept(array $value): void {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{incompatible:?}"),
+        "Fatal(\"Declaration of BrokenValue::accept(array $value): void must be compatible with RequiresValue::accept(int $value): void\")"
+    );
+
+    let inherited = run_php_expect_error(
+        r#"<?php
+class ParentContract { protected function common(): void {} }
+trait RequiresArgument { private abstract function common(int $value): void; }
+class BrokenChild extends ParentContract { use RequiresArgument; }
+"#,
+    );
+    assert_eq!(
+        format!("{inherited:?}"),
+        "Fatal(\"Declaration of ParentContract::common(): void must be compatible with RequiresArgument::common(int $value): void\")"
+    );
+}

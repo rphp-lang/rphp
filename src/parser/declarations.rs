@@ -522,7 +522,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
-                let body = self.parse_method_body(&modifiers, &method_name, line)?;
+                let body = self.parse_method_body(&modifiers, &method_name, line, false)?;
                 if modifiers.is_abstract {
                     self.compile_error(
                         format!("Anonymous class method {method_name}() must not be abstract"),
@@ -810,7 +810,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
-                let body = self.parse_method_body(&modifiers, &method_name, line)?;
+                let body = self.parse_method_body(&modifiers, &method_name, line, false)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -995,7 +995,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type()?;
-                let body = self.parse_method_body(&modifiers, &method_name, line)?;
+                let body = self.parse_method_body(&modifiers, &method_name, line, true)?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1586,6 +1586,7 @@ impl Parser {
         modifiers: &MemberModifiers,
         method_name: &str,
         method_line: usize,
+        allow_private_abstract: bool,
     ) -> Result<Vec<Stmt>, String> {
         if modifiers.duplicate.is_some() {
             if self.peek() == Token::Semicolon {
@@ -1607,7 +1608,7 @@ impl Parser {
                     method_line,
                 );
             }
-            if modifiers.visibility == Visibility::Private {
+            if modifiers.visibility == Visibility::Private && !allow_private_abstract {
                 return Err(format!(
                     "Abstract function {}() cannot be declared private",
                     method_name

@@ -2799,6 +2799,7 @@ impl ExecutorGlobals {
         );
         let mut missing = Vec::new();
         let mut seen_missing = std::collections::HashSet::new();
+        let mut requires_private_trait_implementation = false;
         for requirement in requirements {
             if self.concrete_property_implements_hook(class_def, requirement.name) {
                 continue;
@@ -2807,7 +2808,14 @@ impl ExecutorGlobals {
             else {
                 continue;
             };
-            if implementation.is_abstract && !class_def.is_abstract {
+            let unforwarded_private_trait_requirement = implementation.is_abstract
+                && implementation.visibility == Visibility::Private
+                && self
+                    .find_class(implementation.owner)
+                    .is_some_and(|owner| owner.is_trait);
+            if implementation.is_abstract
+                && (!class_def.is_abstract || unforwarded_private_trait_requirement)
+            {
                 if self.concrete_property_implements_hook(class_def, requirement.name) {
                     continue;
                 }
@@ -2818,25 +2826,47 @@ impl ExecutorGlobals {
                         .map_or(requirement.owner, |_| class_def.name.as_str());
                     missing.push(format!("{}::{}", owner, requirement.name));
                 }
+                requires_private_trait_implementation |=
+                    class_def.is_abstract && unforwarded_private_trait_requirement;
                 continue;
             }
-            if let Some(reason) = self
+            if self
                 .method_contract_errors(requirement, implementation, Some(class_def))
                 .into_iter()
                 .next()
+                .is_some()
             {
+                let location = class_def
+                    .source_file
+                    .as_ref()
+                    .map_or_else(String::new, |file| {
+                        format!(" in {file} on line {}", implementation.source_line)
+                    });
                 return Err(format!(
-                    "Declaration of {}::{}() must be compatible with {}::{}() ({})",
-                    implementation.owner,
-                    implementation.name,
-                    requirement.owner,
-                    requirement.name,
-                    reason
+                    "Declaration of {} must be compatible with {}{}",
+                    self.format_method_signature(implementation, Some(class_def)),
+                    self.format_method_signature(requirement, Some(class_def)),
+                    location
                 ));
             }
         }
         if !missing.is_empty() {
             let count = missing.len();
+            if requires_private_trait_implementation {
+                let location = class_def
+                    .source_file
+                    .as_ref()
+                    .map_or_else(String::new, |file| {
+                        format!(" in {file} on line {}", class_def.declaration_line)
+                    });
+                return Err(format!(
+                    "Class {} must implement {count} abstract {} ({}){}",
+                    class_def.name,
+                    if count == 1 { "method" } else { "methods" },
+                    missing.join(", "),
+                    location
+                ));
+            }
             if let Some(public_name) = class_def.anonymous_public_name() {
                 let public_name = public_name.split('\0').next().unwrap_or(&public_name);
                 return Err(format!(

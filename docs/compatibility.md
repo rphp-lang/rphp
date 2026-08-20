@@ -9,6 +9,47 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,639 pass, 1,659 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+68.686% and the whole-corpus rate is 64.994%; 4,707 of 5,298 attempted cases
+reach runtime (88.845%). Relative to exact base `9be14670`, the pass-set delta
+is +8/-0: all 3,631 prior passes remain passes. Two final merged manifests and
+summaries are byte-for-byte identical. The manifest SHA-256 is
+`279dad512be1c49ea023bdca1ba1f356a49b34601fcf4e68c10d7d794f7fda0f`.
+
+Private abstract method requirements are now valid inside traits while the
+same modifier pair remains invalid in ordinary classes. At composition time,
+`self` types bind to the consuming class, an explicit abstract method on that
+class can forward the obligation with wider visibility, and a compatible
+private implementation satisfies it. An unforwarded private requirement must
+be implemented by the immediate consumer even when that consumer is abstract;
+ordinary concrete consumers retain PHP's distinct "contains abstract method"
+diagnostic. Signature mismatches now use the shared canonical renderer with
+parameter names, resolved trait-relative types and declaration locations,
+including when an inherited concrete method is selected as the implementation.
+
+Original parser and E2E regressions cover trait-only admission, consuming-class
+`self`, private implementations, protected abstract forwarding, concrete and
+abstract missing-method wording, incompatible signatures and inherited
+implementations. The exact full-corpus additions are
+`Zend/tests/inheritance/constructor_abstract_grantparent.phpt` plus
+`Zend/tests/traits/abstract_method_1.phpt`, `_3.phpt`, `_6.phpt` through
+`_8.phpt`, `_10.phpt` and `gh14009_002.phpt`. The remaining
+`abstract_method_9.phpt` advances from the former parser rejection to its
+correct link boundary but remains a failure: RPHP still needs to defer the
+`D`-is-a-`C` return-variance decision until the autoloader publishes `D`.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3.
+The production inventory remains 1,612 unsafe blocks and 289 unsafe functions.
+No runtime performance gate applies: the change is confined to parser and cold
+class-link validation, valid method execution is unchanged, and the cold-build
+S3 gate exercises the affected linking path.
+
+In the preceding duplicate-member-modifier checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8`. Across all 5,599
+unmodified `Zend/tests` and
 `tests/lang` cases, 3,631 pass, 1,667 fail, 115 skip, one is an upstream XFAIL,
 185 are unsupported, and none time out or crash. The headline pass rate is
 68.535% and the whole-corpus rate is 64.851%; 4,704 of 5,298 attempted cases

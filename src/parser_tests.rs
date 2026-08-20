@@ -1331,7 +1331,7 @@ fn test_parse_abstract_method_contract() {
 }
 
 #[test]
-fn test_reject_invalid_abstract_method_modifiers() {
+fn test_abstract_method_modifier_boundaries() {
     let parse = |source: &str| {
         let tokens = Lexer::new(source).tokenize().unwrap();
         Parser::new(tokens).parse()
@@ -1354,6 +1354,17 @@ fn test_reject_invalid_abstract_method_modifiers() {
             .unwrap_err()
             .contains("cannot be declared private")
     );
+
+    let statements = parse("<?php trait T { abstract private function run(self $value): self; }")
+        .expect("traits may declare private abstract method requirements");
+    let Stmt::Trait { methods, .. } = &statements[0] else {
+        panic!("expected trait declaration");
+    };
+    assert_eq!(methods.len(), 1);
+    assert_eq!(methods[0].name, "run");
+    assert_eq!(methods[0].visibility, Visibility::Private);
+    assert!(methods[0].is_abstract);
+    assert!(methods[0].body.is_empty());
 }
 
 #[test]
