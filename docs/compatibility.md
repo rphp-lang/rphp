@@ -9,6 +9,49 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,655 pass, 1,643 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+68.988% and the whole-corpus rate is 65.280%; 4,713 of 5,298 attempted cases
+reach runtime (88.958%). Relative to exact base `572ed0d5`, the pass-set delta
+is +2/-0: all 3,653 prior passes remain passes and no other status or failure
+category changes. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`f439d2d1dd0ffd08d1d4d01fbe37aa4579ace411967aa25d7e3a1c10a665c9ad`.
+
+Method-variance dependency discovery now shares one ordered traversal of parent
+and abstract contracts. If autoload returns normally without defining a
+required class, runtime declarations, included/evaluated source units and
+anonymous classes report PHP 8.5's `Could not check compatibility ... because
+class ... is not available` diagnostic for the first affected contract. A
+descendant participating in a suspended class-link transaction reconstructs
+the diagnostic from its active provisional parent, so the message names the
+parent obligation rather than the incidental descendant. Exceptions thrown by
+the loader retain the existing catchable exception path.
+
+The diagnostic is reconstructed only after the missing-symbol result; the
+ordinary successful plan continues to retain just dependency names. Two
+original E2E regressions cover a directly missing return class and the nested
+active-parent obligation. The exact full-corpus additions are
+`Zend/tests/type_declarations/variance/class_order_autoload_error6.phpt` and
+`class_order_autoload_error7.phpt`. The separate `loading_exception1.phpt` and
+`loading_exception2.phpt` contract/transaction boundaries remain follow-up
+work.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,612 unsafe blocks and 289 unsafe
+functions. On one pinned AMD64 CPU, 32 order-balanced release pairs with four
+warmups per binary and no removed observations measured 2,000 successful
+variance-autoload links at 2.242807 seconds for exact base `572ed0d5` and
+2.239782 seconds for the candidate: -0.135% independently and -0.094% by paired
+ratios, with paired p10/p90 of -1.631%/+1.182% and checksum `2000`. An eager
+diagnostic-string prototype was rejected at +7.965% independently and +7.700%
+paired on the same gate before the lazy design was measured.
+
+In the preceding suspended-class-link checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,653 pass, 1,645 fail, 115 skip, one is an upstream XFAIL,
 185 are unsupported, and none time out or crash. The headline pass rate is
 68.951% and the whole-corpus rate is 65.244%; 4,713 of 5,298 attempted cases

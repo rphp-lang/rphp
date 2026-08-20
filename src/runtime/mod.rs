@@ -2224,15 +2224,12 @@ impl ExecutorGlobals {
             .is_some_and(|index| signature.is_param_by_ref(index))
     }
 
-    fn collect_method_contract_variance_dependencies(
+    fn method_contract_variance_dependency_names(
         &self,
         required: MethodDeclaration<'_>,
         implementation: MethodDeclaration<'_>,
         linking_class: &ClassDef,
-        dependencies: &mut Vec<String>,
-        seen: &mut std::collections::HashSet<String>,
-        requires_provisional_publication: &mut bool,
-    ) {
+    ) -> Option<(Vec<String>, bool)> {
         let errors = self.method_contract_errors(required, implementation, Some(linking_class));
         let potential_errors =
             self.method_contract_potential_errors(required, implementation, Some(linking_class));
@@ -2242,7 +2239,7 @@ impl ExecutorGlobals {
                     .method_contract_strict_errors(required, implementation, Some(linking_class))
                     .is_empty())
         {
-            return;
+            return None;
         }
 
         let required_signature = &required.function.sig;
@@ -2269,7 +2266,7 @@ impl ExecutorGlobals {
                 // Parameter contravariance would require the active class to
                 // inherit from a newly loaded unknown type. Its parent chain
                 // is already fixed, so autoload cannot make that relation true.
-                return;
+                return None;
             }
         }
         let required_return = self.resolve_variance_type_hint(
@@ -2290,42 +2287,36 @@ impl ExecutorGlobals {
         {
             // Return covariance has the inverse direction: an active
             // implementation type cannot become a child of a new ancestor.
-            return;
+            return None;
         }
-        *requires_provisional_publication |= mentions_linking_class;
 
+        let mut dependencies = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for declaration in [required, implementation] {
             let signature = &declaration.function.sig;
             for hint in &signature.param_type_hints {
                 let hint =
                     self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class));
-                collect_variance_class_names(&hint, dependencies, seen);
+                collect_variance_class_names(&hint, &mut dependencies, &mut seen);
             }
             let return_hint = self.resolve_variance_type_hint(
                 &signature.return_type_hint,
                 declaration.owner,
                 Some(linking_class),
             );
-            collect_variance_class_names(&return_hint, dependencies, seen);
+            collect_variance_class_names(&return_hint, &mut dependencies, &mut seen);
         }
+        Some((dependencies, mentions_linking_class))
     }
 
-    /// Runtime declarations link after user code may have installed an
-    /// autoloader. Return only unknown class names whose eventual hierarchy
-    /// could turn an otherwise valid method contract into a compatible one.
-    /// Definite arity, reference, staticness and scalar-type errors do not
-    /// trigger observable autoload side effects.
-    pub(crate) fn method_variance_dependency_plan(
+    fn visit_method_variance_contracts(
         &self,
         class_def: &ClassDef,
-    ) -> (Vec<String>, bool) {
+        mut visit: impl FnMut(MethodDeclaration<'_>, MethodDeclaration<'_>) -> bool,
+    ) {
         if class_def.is_interface || class_def.is_trait {
-            return (Vec::new(), false);
+            return;
         }
-
-        let mut dependencies = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut requires_provisional_publication = false;
 
         if let Some(parent) = class_def
             .parent
@@ -2359,14 +2350,9 @@ impl ExecutorGlobals {
                 {
                     continue;
                 }
-                self.collect_method_contract_variance_dependencies(
-                    required,
-                    implementation,
-                    class_def,
-                    &mut dependencies,
-                    &mut seen,
-                    &mut requires_provisional_publication,
-                );
+                if !visit(required, implementation) {
+                    return;
+                }
             }
         }
 
@@ -2380,15 +2366,42 @@ impl ExecutorGlobals {
             let Some(implementation) = self.find_effective_method(class_def, required.name) else {
                 continue;
             };
-            self.collect_method_contract_variance_dependencies(
-                required,
-                implementation,
-                class_def,
-                &mut dependencies,
-                &mut seen,
-                &mut requires_provisional_publication,
-            );
+            if !visit(required, implementation) {
+                return;
+            }
         }
+    }
+
+    /// Runtime declarations link after user code may have installed an
+    /// autoloader. Return only unknown class names whose eventual hierarchy
+    /// could turn an otherwise valid method contract into a compatible one.
+    /// Definite arity, reference, staticness and scalar-type errors do not
+    /// trigger observable autoload side effects.
+    pub(crate) fn method_variance_dependency_plan(
+        &self,
+        class_def: &ClassDef,
+    ) -> (Vec<String>, bool) {
+        if class_def.is_interface || class_def.is_trait {
+            return (Vec::new(), false);
+        }
+
+        let mut dependencies = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut requires_provisional_publication = false;
+
+        self.visit_method_variance_contracts(class_def, |required, implementation| {
+            if let Some((contract_dependencies, mentions_linking_class)) =
+                self.method_contract_variance_dependency_names(required, implementation, class_def)
+            {
+                requires_provisional_publication |= mentions_linking_class;
+                for dependency in contract_dependencies {
+                    if seen.insert(dependency.to_ascii_lowercase()) {
+                        dependencies.push(dependency);
+                    }
+                }
+            }
+            true
+        });
 
         dependencies.retain(|dependency| {
             !["self", "parent", "static", "object", "iterable"]
@@ -2407,6 +2420,54 @@ impl ExecutorGlobals {
 
     pub(crate) fn method_variance_dependencies(&self, class_def: &ClassDef) -> Vec<String> {
         self.method_variance_dependency_plan(class_def).0
+    }
+
+    pub(crate) fn unavailable_method_variance_dependency_error(
+        &self,
+        class_def: &ClassDef,
+        unavailable_class: &str,
+    ) -> Option<String> {
+        let mut error = None;
+        self.visit_method_variance_contracts(class_def, |required, implementation| {
+            let Some((dependencies, _)) = self.method_contract_variance_dependency_names(
+                required,
+                implementation,
+                class_def,
+            ) else {
+                return true;
+            };
+            if !dependencies
+                .iter()
+                .any(|dependency| dependency.eq_ignore_ascii_case(unavailable_class))
+            {
+                return true;
+            }
+
+            let location = class_def
+                .source_file
+                .as_ref()
+                .map_or_else(String::new, |file| {
+                    format!(" in {file} on line {}", implementation.source_line)
+                });
+            error = Some(format!(
+                "Could not check compatibility between {} and {}, because class {} is not available{}",
+                self.format_method_signature(implementation, Some(class_def)),
+                self.format_method_signature(required, Some(class_def)),
+                unavailable_class,
+                location
+            ));
+            false
+        });
+        error
+    }
+
+    pub(crate) fn active_class_unavailable_method_variance_dependency_error(
+        &self,
+        class_name: &str,
+        unavailable_class: &str,
+    ) -> Option<String> {
+        let class_def = self.find_class(class_name)?;
+        self.unavailable_method_variance_dependency_error(class_def, unavailable_class)
     }
 
     fn variance_scope_owner<'a>(

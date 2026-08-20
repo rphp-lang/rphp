@@ -274,7 +274,7 @@ fn op_new_obj<'a>(
             if eg.find_class(&dependency).is_some() {
                 continue;
             }
-            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
                 return Ok(match throw_in_frame(eg, frame, exception) {
                     ThrowResult::Handled(new_frame, new_op_array) => {
@@ -282,6 +282,12 @@ fn op_new_obj<'a>(
                     }
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
+            }
+            if !loaded
+                && let Some(error) = eg
+                    .unavailable_method_variance_dependency_error(&class_def, &dependency)
+            {
+                return Err(VmError::Fatal(error));
             }
         }
         for dependency in crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)

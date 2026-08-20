@@ -1661,3 +1661,53 @@ new BrokenQueueParent;
         "{rendered}"
     );
 }
+
+#[test]
+fn missing_method_variance_dependency_names_the_unavailable_class() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+class AvailabilityRoot { public function make(): AvailabilityRoot {} }
+spl_autoload_register(function (string $name): void {
+    if ($name === 'AvailabilityChild') {
+        class AvailabilityChild extends AvailabilityRoot {
+            public function make(): MissingAvailability {}
+        }
+    }
+});
+new AvailabilityChild;
+"#,
+        "missing-variance-dependency.php",
+        "/tmp",
+    );
+
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Could not check compatibility between AvailabilityChild::make(): MissingAvailability and AvailabilityRoot::make(): AvailabilityRoot, because class MissingAvailability is not available in missing-variance-dependency.php on line 6\")"
+    );
+}
+
+#[test]
+fn nested_link_reports_the_parents_unavailable_dependency() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+class PendingRoot { public function produce(): PendingParent {} }
+spl_autoload_register(function (string $name): void {
+    if ($name === 'PendingParent') {
+        class PendingParent extends PendingRoot {
+            public function produce(): PendingLeaf {}
+        }
+    } else {
+        class PendingProbe extends PendingParent {}
+    }
+});
+new PendingParent;
+"#,
+        "nested-missing-variance-dependency.php",
+        "/tmp",
+    );
+
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Could not check compatibility between PendingParent::produce(): PendingLeaf and PendingRoot::produce(): PendingParent, because class PendingLeaf is not available in nested-missing-variance-dependency.php on line 6\")"
+    );
+}

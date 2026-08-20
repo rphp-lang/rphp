@@ -98,10 +98,20 @@ fn op_declare_class<'a>(
             {
                 continue;
             }
-            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
                 eg.abort_runtime_class_link(&class_name);
                 return Err(VmError::Fatal(format_uncaught_throwable(eg, &exception)));
+            }
+            if !loaded
+                && let Some(error) = eg
+                    .active_class_unavailable_method_variance_dependency_error(
+                        &active_parent,
+                        &dependency,
+                    )
+            {
+                eg.abort_runtime_class_link(&class_name);
+                return Err(VmError::Fatal(error));
             }
             if let Err(error) = eg.finalize_provisional_runtime_class(&active_parent) {
                 eg.abort_runtime_class_link(&class_name);
@@ -134,10 +144,20 @@ fn op_declare_class<'a>(
             if eg.find_class(&dependency).is_some() {
                 continue;
             }
-            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
                 eg.abort_runtime_class_link(&class_name);
                 return Err(VmError::Fatal(format_uncaught_throwable(eg, &exception)));
+            }
+            if !loaded
+                && let Some(error) = eg
+                    .active_class_unavailable_method_variance_dependency_error(
+                        &class_name,
+                        &dependency,
+                    )
+            {
+                eg.abort_runtime_class_link(&class_name);
+                return Err(VmError::Fatal(error));
             }
             if let Err(error) = eg.finalize_provisional_runtime_class(&class_name) {
                 eg.abort_runtime_class_link(&class_name);
@@ -157,7 +177,7 @@ fn op_declare_class<'a>(
             if eg.find_class(&dependency).is_some() {
                 continue;
             }
-            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
                 eg.restore_runtime_class_declaration(declaration_key, class_def);
                 return Ok(match throw_in_frame(eg, frame, exception) {
@@ -166,6 +186,13 @@ fn op_declare_class<'a>(
                     }
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
+            }
+            if !loaded
+                && let Some(error) = eg
+                    .unavailable_method_variance_dependency_error(&class_def, &dependency)
+            {
+                eg.abort_runtime_class_link(&class_name);
+                return Err(VmError::Fatal(error));
             }
         }
     }
@@ -465,13 +492,19 @@ fn execute_source_unit(
             // Method-signature dependencies are also soft. Only class
             // relationships that could make the complete contract valid are
             // returned by the dependency collector.
-            let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
+            let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
                 if caller.is_some() {
                     return Ok(IncludeFileOutcome::Thrown(exception));
                 }
                 eg.exception = Some(exception);
                 return Ok(IncludeFileOutcome::Executed(Value::null()));
+            }
+            if !loaded
+                && let Some(error) = eg
+                    .unavailable_method_variance_dependency_error(&class_def, &dependency)
+            {
+                return Err(VmError::Fatal(error));
             }
         }
         for dependency in crate::runtime::property_hook_setter_variance_dependencies(eg, &class_def)
