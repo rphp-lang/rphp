@@ -62,6 +62,36 @@ impl Parser {
         })
     }
 
+    fn comma_list_error(&self, line: usize, expecting_closing_paren: bool) -> String {
+        let expectation = if expecting_closing_paren {
+            ", expecting \")\""
+        } else {
+            ""
+        };
+        self.source_error(
+            &format!("syntax error, unexpected token \",\"{expectation}"),
+            line,
+        )
+    }
+
+    /// Consume the separator after one completed call-like list item.
+    /// `false` means either no separator or one legal trailing comma; `true`
+    /// means another item follows. A second comma is a distinct parser state
+    /// that expects the closing parenthesis.
+    fn comma_list_has_next(&mut self, line: usize) -> Result<bool, String> {
+        if self.peek() != Token::Comma {
+            return Ok(false);
+        }
+        self.advance();
+        if self.peek() == Token::RParen {
+            return Ok(false);
+        }
+        if self.peek() == Token::Comma {
+            return Err(self.comma_list_error(line, true));
+        }
+        Ok(true)
+    }
+
     /// Parse comma-separated call arguments supporting both positional and
     /// named (PHP 8 `name: expr`) arguments.  The opening `(` must already
     /// be consumed; this method consumes everything up to and including the
@@ -141,6 +171,10 @@ impl Parser {
         let mut args: Vec<CallArg> = Vec::new();
         let mut seen_named = false;
         let mut seen_unpack = false;
+        let call_line = self.last_primary_line.unwrap_or(1);
+        if self.peek() == Token::Comma {
+            return Err(self.comma_list_error(call_line, false));
+        }
         if self.peek() != Token::RParen {
             loop {
                 // Check for named argument: identifier-like token followed by Colon
@@ -151,15 +185,10 @@ impl Parser {
                         let value = self.parse_expr()?;
                         args.push(CallArg::Named { name, value });
                         seen_named = true;
-                        if self.peek() == Token::Comma {
-                            self.advance();
-                            if self.peek() == Token::RParen {
-                                break;
-                            }
+                        if self.comma_list_has_next(call_line)? {
                             continue;
-                        } else {
-                            break;
                         }
+                        break;
                     }
                 }
                 // Argument unpacking has its own ordering rule. It must be
@@ -174,11 +203,7 @@ impl Parser {
                     let expr = self.parse_expr()?;
                     args.push(CallArg::Unpack(expr));
                     seen_unpack = true;
-                    if self.peek() == Token::Comma {
-                        self.advance();
-                        if self.peek() == Token::RParen {
-                            break;
-                        }
+                    if self.comma_list_has_next(call_line)? {
                         continue;
                     }
                     break;
@@ -194,14 +219,10 @@ impl Parser {
                 }
                 let expr = self.parse_positional_call_argument()?;
                 args.push(CallArg::Positional(expr));
-                if self.peek() == Token::Comma {
-                    self.advance();
-                    if self.peek() == Token::RParen {
-                        break;
-                    }
-                } else {
-                    break;
+                if self.comma_list_has_next(call_line)? {
+                    continue;
                 }
+                break;
             }
         }
         self.expect(&Token::RParen)?;

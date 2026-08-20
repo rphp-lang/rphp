@@ -54,6 +54,36 @@ fn function_argument_introspection_sees_extra_arguments() {
 }
 
 #[test]
+fn call_and_language_construct_lists_accept_one_trailing_comma() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function joinTail(...$values) { return implode(':', $values); }
+class TailCallable {
+    public $constructed;
+    public function __construct(...$values) { $this->constructed = joinTail(...$values); }
+    public function method(...$values) { return joinTail(...$values); }
+    public function __invoke(...$values) { return joinTail(...$values); }
+}
+
+$callable = new TailCallable('ctor', 1,);
+$closure = fn(...$values) => joinTail(...$values);
+echo joinTail('function', 2,), '|';
+echo $callable->constructed, '|';
+echo $callable->method('method', 3,), '|';
+echo $callable('invoke', 4,), '|';
+echo $closure('closure', 5,), '|';
+
+$first = $second = 1;
+unset($first, $second,);
+echo isset($first, $second,) ? 'set' : 'unset';
+"#,
+        ),
+        "function:2|ctor:1|method:3|invoke:4|closure:5|unset",
+    );
+}
+
+#[test]
 fn function_results_continue_through_postfix_method_and_property_chains() {
     let out = run_php(
         r#"<?php

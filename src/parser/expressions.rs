@@ -1050,15 +1050,17 @@ impl Parser {
             }
             Token::Isset => {
                 self.advance();
-                self.expect_lparen()?;
+                let list_line = self.expect_lparen()?;
+                if self.peek() == Token::Comma {
+                    return Err(self.comma_list_error(list_line, false));
+                }
                 let mut args = Vec::new();
                 let arg = self.parse_expr()?;
                 if !Self::is_isset_target(&arg) {
                     return Err("Cannot use isset() on the result of an expression".into());
                 }
                 args.push(arg);
-                while self.peek() == Token::Comma {
-                    self.advance();
+                while self.comma_list_has_next(list_line)? {
                     let arg = self.parse_expr()?;
                     if !Self::is_isset_target(&arg) {
                         return Err("Cannot use isset() on the result of an expression".into());

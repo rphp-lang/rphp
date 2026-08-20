@@ -1,6 +1,36 @@
 /// Tests for closures / anonymous functions
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
+
+#[test]
+fn closure_magic_names_include_the_lexical_source_identity() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+$plain = function () { echo __FUNCTION__, '|', __METHOD__, "\n"; };
+$plain();
+$nested = function () {
+    return function () { echo __FUNCTION__, '|', __METHOD__, "\n"; };
+};
+$nested()();
+class Scope {
+    public function make() {
+        return function () { echo __FUNCTION__, '|', __METHOD__, "\n"; };
+    }
+}
+(new Scope)->make()();
+$arrow = fn() => __FUNCTION__ . '|' . __METHOD__;
+echo $arrow();
+"#,
+            "/fixture/closure-magic.php",
+            "/fixture",
+        ),
+        "{closure:/fixture/closure-magic.php:2}|{closure:/fixture/closure-magic.php:2}\n\
+{closure:{closure:/fixture/closure-magic.php:4}:5}|{closure:{closure:/fixture/closure-magic.php:4}:5}\n\
+{closure:Scope::make():10}|{closure:Scope::make():10}\n\
+{closure:/fixture/closure-magic.php:14}|{closure:/fixture/closure-magic.php:14}",
+    );
+}
 
 #[test]
 fn anonymous_closure_instances_own_independent_function_statics() {

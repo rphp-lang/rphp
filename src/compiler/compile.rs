@@ -3135,7 +3135,7 @@ impl Compiler {
             }),
             "__FUNCTION__" => {
                 let function = if self.current_function_name.starts_with("__closure_") {
-                    "{closure}".to_string()
+                    self.declaration_diagnostic_name()
                 } else if let Some((_, hook)) = self.current_function_name.split_once("::$") {
                     format!("${hook}")
                 } else if self.lexical_static_class.is_some() {
@@ -3150,7 +3150,7 @@ impl Compiler {
             }
             "__METHOD__" => {
                 Value::string(if self.current_function_name.starts_with("__closure_") {
-                    "{closure}".to_string()
+                    self.declaration_diagnostic_name()
                 } else {
                     self.current_function_name.clone()
                 })

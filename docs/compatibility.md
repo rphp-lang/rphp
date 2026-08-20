@@ -9,16 +9,50 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,493 pass, 1,804 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,501 pass, 1,796 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-65.943% and the whole-corpus rate is 62.386%; 4,625 of 5,297 attempted cases
-reach runtime (87.314%). Relative to exact base `a8e956ed`, the pass-set delta
-is +8/-0: all 3,485 prior passes remain passes and no other status, failure
+66.094% and the whole-corpus rate is 62.529%; 4,626 of 5,297 attempted cases
+reach runtime (87.332%). Relative to exact base `60ba49c6`, the pass-set delta
+is +8/-0: all 3,493 prior passes remain passes and no other status, failure
 category or stage moves. Two final manifests and summaries are byte-for-byte
 identical. The manifest SHA-256 is
-`c0edf40d402ad817590c63ce9a364667fc0c046d5fb3056c79778c1084280731`.
+`ffddf7c381c0f46d4889d04277a3a8e7ed389fdce53668d876c33f2010f38093`.
 
-Malformed group `use` declarations now report PHP 8.5's active parser state.
+Function, constructor, method, invokable-object and closure calls now share
+PHP 8.5's argument-list delimiter state with `isset()` and `unset()`. One
+trailing comma is valid after a positional, named or unpacked argument. A
+leading comma reports an unexpected token, while a second comma after a
+completed item additionally reports that the closing parenthesis was expected.
+
+The positive call fixture also exposed that closure `__FUNCTION__` and
+`__METHOD__` values must use the callable's public lexical identity. Ordinary,
+arrow, method-scoped and nested closures now reuse the source-qualified name
+already retained for traces instead of collapsing to `{closure}`. This changes
+only the compile-time magic-constant literal; closure dispatch and storage are
+unchanged.
+
+Original parser and E2E regressions cover positional, named and unpacked call
+boundaries, constructors, methods, invokable objects, closures, `isset()`,
+`unset()`, exact leading/double-comma diagnostics and source-qualified magic
+names. The five selected `Zend/tests/function_arguments/call_with_*comma*.phpt`
+cases become exact, as do `Zend/tests/autoload/bug26697.phpt`,
+`Zend/tests/exceptions/bug31102.phpt` and
+`Zend/tests/nested_method_and_function.phpt`. These are the only full-corpus
+transitions. This checkpoint does not claim exact punctuation lines when a
+malformed comma is on a later physical line than the call opening, nor does it
+claim unrelated closure visibility gaps.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at 1,623 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies: valid call bytecode is unchanged, rejected forms are
+parser-only and closure magic names are constructed only while compiling an
+explicit magic constant.
+
+In the preceding group-use checkpoint, malformed group `use` declarations
+report PHP 8.5's active parser state.
+
 An empty group or leading comma expects an identifier or namespaced name and,
 for a mixed group, also names the admissible `function` and `const` kinds. A
 second comma after a completed item instead expects the closing brace. Typed

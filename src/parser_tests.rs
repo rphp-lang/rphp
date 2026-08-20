@@ -536,6 +536,57 @@ fn group_use_comma_diagnostics_follow_the_active_item_state() {
 }
 
 #[test]
+fn call_like_comma_lists_distinguish_leading_trailing_and_double_commas() {
+    for (expression, expected) in [
+        (
+            "dispatch(, $value);",
+            "syntax error, unexpected token \",\"",
+        ),
+        (
+            "dispatch($value,, $other);",
+            "syntax error, unexpected token \",\", expecting \")\"",
+        ),
+        (
+            "dispatch(value: $value,,);",
+            "syntax error, unexpected token \",\", expecting \")\"",
+        ),
+        (
+            "dispatch(...$values,,);",
+            "syntax error, unexpected token \",\", expecting \")\"",
+        ),
+        ("isset(, $value);", "syntax error, unexpected token \",\""),
+        (
+            "isset($value,, $other);",
+            "syntax error, unexpected token \",\", expecting \")\"",
+        ),
+        ("unset(, $value);", "syntax error, unexpected token \",\""),
+        (
+            "unset($value,, $other);",
+            "syntax error, unexpected token \",\", expecting \")\"",
+        ),
+    ] {
+        let source = format!("<?php\n{expression}");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let error = Parser::new(tokens)
+            .with_source_name("/fixture/comma-list.php")
+            .parse()
+            .unwrap_err();
+        assert_eq!(
+            error,
+            format!("{expected} in /fixture/comma-list.php on line 2")
+        );
+    }
+
+    let tokens = Lexer::new(
+        "<?php dispatch($value,); dispatch(value: $value,); dispatch(...$values,); \
+         isset($value,); unset($value,);",
+    )
+    .tokenize()
+    .unwrap();
+    assert!(Parser::new(tokens).parse().is_ok());
+}
+
+#[test]
 fn document_string_parse_tokens_receive_the_parser_source_location() {
     let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
         .tokenize()

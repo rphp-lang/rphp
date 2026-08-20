@@ -989,7 +989,10 @@ impl Parser {
             }
             Token::Unset => {
                 self.advance();
-                self.expect_lparen()?;
+                let list_line = self.expect_lparen()?;
+                if self.peek() == Token::Comma {
+                    return Err(self.comma_list_error(list_line, false));
+                }
                 let mut targets = Vec::new();
                 let mut expr = self.parse_unset_target()?;
                 if !Self::is_variable_like(&expr) {
@@ -1001,8 +1004,7 @@ impl Parser {
                     expr = self.nullsafe_write_error(line);
                 }
                 targets.push(expr);
-                while self.peek() == Token::Comma {
-                    self.advance();
+                while self.comma_list_has_next(list_line)? {
                     let mut expr = self.parse_unset_target()?;
                     if !Self::is_variable_like(&expr) {
                         return Err("Cannot use unset() on the result of an expression".into());
