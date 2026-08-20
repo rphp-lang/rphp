@@ -8,8 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `0e71faea`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,727 pass, 1,572 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `88b7abec`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,742 pass, 1,557 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.617% and the whole-corpus rate is 66.833%; 4,709 of
+5,299 attempted cases reach runtime (88.866%). Relative to exact base
+`0e71faea`, the pass-set delta is +15/-0: all 3,727 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`8f2e97d3c17474e58698db9c383035a5c7987f36d2129e835d109838bedb9a14`
+and `efc19c4baecb04d0747283011c0d998753ea41334fc700b8c4bd51b4af48e3e4`.
+
+Class-like, function and constant imports now use distinct collision tables
+with PHP's case rules: class-like and function aliases are case-insensitive,
+while constant aliases are case-sensitive. Declarations are qualified by their
+lexical namespace without being rewritten through an import, and imports and
+declarations reject a same-kind local alias in either order with the PHP 8.5
+compile-time diagnostic. Compile-time-elided conditional declarations still
+reserve their lexical name. A new namespace block resets the collision scope,
+cross-kind aliases remain independent, and importing the same fully qualified
+local class-like, function or constant symbol remains legal; a repeated import
+still fails. The normalized class-import index keeps alias lookup constant-time
+without adding metadata to ordinary declarations or changing runtime layouts.
+
+Original E2E coverage exercises declaration-before-import and import-before-
+declaration ordering, duplicate aliases, elided conditionals, multi-constant
+statement source lines, namespace resets, cross-kind aliases, constant case
+sensitivity and legal self-imports in both declaration orders. The exact
+full-corpus additions are `Zend/tests/bug42859.phpt`,
+`Zend/tests/name_collision/name_collision_07.phpt` through
+`name_collision_09.phpt`, `Zend/tests/namespaces/ns_029.phpt` and
+`ns_030.phpt`, `Zend/tests/use_const/conflicting_use.phpt`,
+`define_imported.phpt`, `define_imported_before.phpt`,
+`Zend/tests/use_function/case_insensivity.phpt`,
+`conditional_function_declaration.phpt`, `conflicting_use.phpt`,
+`define_imported.phpt`, `define_imported_before.phpt`, and
+`Zend/tests/use_late_binding_conflict.phpt`; all 15 pass in 32 consecutive
+focused runs. General function/constant redeclaration diagnostics and ordinary
+cross-kind name resolution beyond these controls are not claimed here.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,617 unsafe blocks and 289 unsafe
+functions. On CPU 2 with the performance governor, four warmups per binary and
+32 order-balanced measured pairs with no removed observations, 1,000 simple
+class declarations move from 0.015140 to 0.015011 seconds (-0.853%
+independently, -0.456% paired), while 1,000 valid class imports move from
+0.023344 to 0.023533 seconds (+0.807% independently, +0.472% paired). Both are
+below the five-percent regression ceiling and checksums match. The exact base
+and candidate binary SHA-256 values are
+`a6a581491457f8f288cfa7dab7a82d92f174f93af53a09972eeeb7404d1651c4`
+and `751a58e2e023509401708992ed63c7c1f4c3c203ff7b77a40af2433b0a7f980e`.
+
+In the preceding class-like redeclaration checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`0e71faea`. Across all 5,599 unmodified `Zend/tests` and `tests/lang` cases,
+3,727 pass, 1,572 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 70.334% and the whole-corpus rate is 66.565%; 4,710 of
 5,299 attempted cases reach runtime (88.885%). Relative to exact base
