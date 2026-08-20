@@ -466,6 +466,22 @@ fn test_var_export_array() {
     );
 }
 
+#[test]
+fn var_export_uses_canonical_special_float_spellings() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = [NAN, INF, -INF, [NAN, INF, -INF]];
+foreach ($values as $value) {
+    var_export($value);
+    echo "|", var_export($value, true), "\n";
+}
+"#,
+        ),
+        "NAN|NAN\nINF|INF\n-INF|-INF\narray (\n  0 => NAN,\n  1 => INF,\n  2 => -INF,\n)|array (\n  0 => NAN,\n  1 => INF,\n  2 => -INF,\n)\n"
+    );
+}
+
 // === json_encode / json_decode ===
 #[test]
 fn test_json_encode_array() {

@@ -7290,7 +7290,18 @@ fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
         ValueType::True => "true".to_string(),
         ValueType::False => "false".to_string(),
         ValueType::Long => val.as_long().unwrap().to_string(),
-        ValueType::Double => format!("{}", val.as_double().unwrap()),
+        ValueType::Double => {
+            let number = val.as_double().unwrap();
+            if number.is_nan() {
+                "NAN".to_string()
+            } else if number == f64::INFINITY {
+                "INF".to_string()
+            } else if number == f64::NEG_INFINITY {
+                "-INF".to_string()
+            } else {
+                number.to_string()
+            }
+        }
         ValueType::String => format!(
             "'{}'",
             val.as_str()

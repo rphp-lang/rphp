@@ -9,6 +9,35 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,621 pass, 1,676 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+68.359% and the whole-corpus rate is 64.672%; 4,701 of 5,297 attempted cases
+reach runtime (88.748%). Relative to exact base `56f5d908`, the pass-set delta
+is +1/-0: all 3,620 prior passes remain passes and no other status or failure
+category moves. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`e124d838a3ef46742c130fe2ea09c8ae8bd495d616b0228a93646d2b3f3fa7a6`.
+
+PHP 8.5 `var_export()` now renders non-finite floats with the canonical `NAN`,
+`INF` and `-INF` spellings in both direct-output and returned-string modes,
+including values nested in arrays and objects. Ordinary finite float rendering
+is unchanged; its wider `serialize_precision` contract remains separate work.
+Original E2E coverage exercises all three special values, both API modes and a
+nested array. The exact full-corpus addition is
+`Zend/tests/type_coercion/nan_comp_op.phpt`; differential probing confirms its
+comparison results were already correct and only the exported NAN label moved.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies: the change is confined to the cold, explicitly
+invoked `var_export()` renderer and does not touch executor, compiler or value
+hot paths.
+
+In the preceding NAN-coercion checkpoint, the measured AMD64 PHP 8.5 contract
+was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,620 pass, 1,677 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 68.341% and the whole-corpus rate is 64.654%; 4,701 of 5,297 attempted cases
@@ -36,8 +65,9 @@ arguments, every explicit boundary, handler interruption and the exact-float
 control. The full-corpus additions are
 `Zend/tests/type_coercion/nan_to_other.phpt`,
 `Zend/tests/type_declarations/typed_properties_038.phpt` and
-`typed_properties_075.phpt`. NAN comparison ordering remains a separate visible
-failure in `nan_comp_op.phpt`.
+`typed_properties_075.phpt`. The then-visible `nan_comp_op.phpt` failure was
+outside this diagnostic checkpoint and was subsequently isolated to its
+`var_export(NAN)` label rather than comparison ordering.
 
 All five Cargo configurations, all-feature/all-target, formatting, unsafe
 self-test and the exact unsafe ratchet pass, as do Composer S0, all four
