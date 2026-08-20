@@ -2229,6 +2229,7 @@ impl ExecutorGlobals {
         linking_class: &ClassDef,
         dependencies: &mut Vec<String>,
         seen: &mut std::collections::HashSet<String>,
+        requires_provisional_publication: &mut bool,
     ) {
         let errors = self.method_contract_errors(required, implementation, Some(linking_class));
         let potential_errors =
@@ -2242,38 +2243,54 @@ impl ExecutorGlobals {
             return;
         }
 
+        let required_signature = &required.function.sig;
+        let implementation_signature = &implementation.function.sig;
         let mut mentions_linking_class = false;
-        let mut mentions_another_active_class = false;
-        for declaration in [required, implementation] {
-            let signature = &declaration.function.sig;
-            for hint in signature
-                .param_type_hints
-                .iter()
-                .chain(std::iter::once(&signature.return_type_hint))
+        for (required_hint, implementation_hint) in required_signature
+            .param_type_hints
+            .iter()
+            .zip(&implementation_signature.param_type_hints)
+        {
+            let required_hint =
+                self.resolve_variance_type_hint(required_hint, required.owner, Some(linking_class));
+            let implementation_hint = self.resolve_variance_type_hint(
+                implementation_hint,
+                implementation.owner,
+                Some(linking_class),
+            );
+            mentions_linking_class |=
+                variance_type_hint_mentions_class(&required_hint, &linking_class.name)
+                    || variance_type_hint_mentions_class(&implementation_hint, &linking_class.name);
+            if variance_type_hint_mentions_class(&required_hint, &linking_class.name)
+                && !variance_type_hint_mentions_class(&implementation_hint, &linking_class.name)
             {
-                let hint =
-                    self.resolve_variance_type_hint(hint, declaration.owner, Some(linking_class));
-                mentions_linking_class |=
-                    variance_type_hint_mentions_class(&hint, &linking_class.name);
-                let mut names = Vec::new();
-                collect_variance_class_names(
-                    &hint,
-                    &mut names,
-                    &mut std::collections::HashSet::new(),
-                );
-                mentions_another_active_class |= names.iter().any(|name| {
-                    !name.eq_ignore_ascii_case(&linking_class.name)
-                        && self.runtime_class_link_is_active(name)
-                });
+                // Parameter contravariance would require the active class to
+                // inherit from a newly loaded unknown type. Its parent chain
+                // is already fixed, so autoload cannot make that relation true.
+                return;
             }
         }
-        if mentions_linking_class && !mentions_another_active_class {
-            // Loading a new child of the class currently linking still needs
-            // provisional transactional publication. An already-active root,
-            // however, can be checked through hierarchy-only metadata without
-            // becoming visible to ordinary class lookups.
+        let required_return = self.resolve_variance_type_hint(
+            &required_signature.return_type_hint,
+            required.owner,
+            Some(linking_class),
+        );
+        let implementation_return = self.resolve_variance_type_hint(
+            &implementation_signature.return_type_hint,
+            implementation.owner,
+            Some(linking_class),
+        );
+        mentions_linking_class |=
+            variance_type_hint_mentions_class(&required_return, &linking_class.name)
+                || variance_type_hint_mentions_class(&implementation_return, &linking_class.name);
+        if variance_type_hint_mentions_class(&implementation_return, &linking_class.name)
+            && !variance_type_hint_mentions_class(&required_return, &linking_class.name)
+        {
+            // Return covariance has the inverse direction: an active
+            // implementation type cannot become a child of a new ancestor.
             return;
         }
+        *requires_provisional_publication |= mentions_linking_class;
 
         for declaration in [required, implementation] {
             let signature = &declaration.function.sig;
@@ -2296,13 +2313,17 @@ impl ExecutorGlobals {
     /// could turn an otherwise valid method contract into a compatible one.
     /// Definite arity, reference, staticness and scalar-type errors do not
     /// trigger observable autoload side effects.
-    pub(crate) fn method_variance_dependencies(&self, class_def: &ClassDef) -> Vec<String> {
+    pub(crate) fn method_variance_dependency_plan(
+        &self,
+        class_def: &ClassDef,
+    ) -> (Vec<String>, bool) {
         if class_def.is_interface || class_def.is_trait {
-            return Vec::new();
+            return (Vec::new(), false);
         }
 
         let mut dependencies = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        let mut requires_provisional_publication = false;
 
         if let Some(parent) = class_def
             .parent
@@ -2342,6 +2363,7 @@ impl ExecutorGlobals {
                     class_def,
                     &mut dependencies,
                     &mut seen,
+                    &mut requires_provisional_publication,
                 );
             }
         }
@@ -2362,6 +2384,7 @@ impl ExecutorGlobals {
                 class_def,
                 &mut dependencies,
                 &mut seen,
+                &mut requires_provisional_publication,
             );
         }
 
@@ -2377,7 +2400,11 @@ impl ExecutorGlobals {
                     .iter()
                     .any(|pending| pending.name.eq_ignore_ascii_case(dependency))
         });
-        dependencies
+        (dependencies, requires_provisional_publication)
+    }
+
+    pub(crate) fn method_variance_dependencies(&self, class_def: &ClassDef) -> Vec<String> {
+        self.method_variance_dependency_plan(class_def).0
     }
 
     fn variance_scope_owner<'a>(
@@ -3643,7 +3670,38 @@ impl ExecutorGlobals {
     /// Register a class definition and its methods in the function table.
     /// Resolves inheritance: merges parent properties/methods into child.
     /// For non-interface, non-abstract classes: validates interface contracts.
-    pub fn register_class(&mut self, mut class_def: ClassDef) -> Result<(), String> {
+    pub fn register_class(&mut self, class_def: ClassDef) -> Result<(), String> {
+        self.register_class_mode(class_def, false)
+    }
+
+    /// Compose and internally publish a runtime class before its outstanding
+    /// method-variance dependencies have finished autoloading. The active-link
+    /// guard keeps the class hidden from userland symbol probes while a new
+    /// descendant may use the complete parent layout during its own link.
+    pub(crate) fn register_provisional_runtime_class(
+        &mut self,
+        class_def: ClassDef,
+    ) -> Result<(), String> {
+        self.register_class_mode(class_def, true)?;
+        self.retry_pending_named_classes()
+    }
+
+    pub(crate) fn finalize_provisional_runtime_class(
+        &self,
+        class_name: &str,
+    ) -> Result<(), String> {
+        let class_def = self
+            .find_class(class_name)
+            .ok_or_else(|| format!("Provisional class {class_name} disappeared while linking"))?;
+        self.validate_parent_method_contracts(class_def)?;
+        self.validate_abstract_method_contracts(class_def)
+    }
+
+    fn register_class_mode(
+        &mut self,
+        mut class_def: ClassDef,
+        defer_method_contracts: bool,
+    ) -> Result<(), String> {
         let class_name = class_def.name.clone();
         let declaration_file = class_def.source_file.clone();
         let declaration_line = class_def.declaration_line;
@@ -3773,8 +3831,10 @@ impl ExecutorGlobals {
         }
 
         self.declaration_interface_contract(&class_def)?;
-        self.validate_parent_method_contracts(&class_def)?;
-        self.validate_abstract_method_contracts(&class_def)?;
+        if !defer_method_contracts {
+            self.validate_parent_method_contracts(&class_def)?;
+            self.validate_abstract_method_contracts(&class_def)?;
+        }
 
         // Resolve inheritance — merge parent's properties and methods
         if let Some(parent_name) = &class_def.parent {
@@ -4788,7 +4848,9 @@ impl ExecutorGlobals {
             .class_table
             .iter()
             .filter(|(registered, class)| {
-                registered.as_str() == class.name && predicate(class.as_ref())
+                registered.as_str() == class.name
+                    && !self.runtime_class_link_is_active(&class.name)
+                    && predicate(class.as_ref())
             })
             .map(|(_, class)| (class.class_id, class.name.clone()))
             .collect();
@@ -4801,7 +4863,9 @@ impl ExecutorGlobals {
                 .class_table
                 .iter()
                 .filter(|(registered, class)| {
-                    registered.as_str() != class.name && predicate(class.as_ref())
+                    registered.as_str() != class.name
+                        && !self.runtime_class_link_is_active(&class.name)
+                        && predicate(class.as_ref())
                 })
                 .map(|(registered, _)| registered.to_ascii_lowercase())
                 .collect();
@@ -4844,6 +4908,19 @@ impl ExecutorGlobals {
                     })
                     .map(|(_, class)| class.as_ref())
             })
+    }
+
+    /// Userland lookup must not observe a class whose inheritance transaction
+    /// is still active. Internal linking continues to use `find_class()` so a
+    /// newly loaded descendant can compose against the provisional parent.
+    #[inline]
+    pub(crate) fn find_public_class(&self, name: &str) -> Option<&ClassDef> {
+        if self.active_runtime_class_relations.is_empty() {
+            return self.find_class(name);
+        }
+        (!self.runtime_class_link_is_active(name))
+            .then(|| self.find_class(name))
+            .flatten()
     }
 
     /// Publish another case-insensitive name for one existing class identity.

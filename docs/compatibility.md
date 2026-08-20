@@ -9,6 +9,54 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,650 pass, 1,648 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+68.894% and the whole-corpus rate is 65.190%; 4,712 of 5,298 attempted cases
+reach runtime (88.939%). Relative to exact base `3a2826f3`, the pass-set delta
+is +2/-0: all 3,648 prior passes remain passes and no other status or failure
+category changes. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`79ed36b356819da335567d027e0409446cf96439afe525bb4222636ffad1b2e4`.
+
+A runtime class with one outstanding method-variance dependency can now be
+fully composed and provisionally published inside the active linking
+transaction. A descendant loaded to satisfy that dependency therefore sees the
+parent's inherited methods, properties and constructor, while ordinary
+userland still observes the parent as absent through existence and declaration
+inventory probes, explicit static calls, object construction, Reflection and
+the class-relation introspection helpers. Relative `parent::` access from the
+completed descendant retains the internal composed view. Final parent and
+abstract-method contract validation runs only after the dependency finishes.
+
+Dependency discovery rejects variance directions that cannot become compatible
+through autoload, so invalid reverse relations retain their established
+diagnostics and side effects. The provisional path is deliberately restricted
+to one descendant dependency; multiple suspended descendants still need an
+ordered link stack and remain separate work. Three original E2E regressions
+cover public invisibility and internal relative scope, inherited layout and
+constructor use, and an abstract trait `self` obligation. The exact full-corpus
+additions are
+`Zend/tests/type_declarations/variance/class_order_autoload2.phpt` and
+`Zend/tests/traits/abstract_method_9.phpt`. `class_order_autoload6.phpt` remains
+the next multiple-descendant transaction boundary; the related loading-error
+cases retain their prior failure stage and loader side effects.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3.
+The production inventory remains 1,612 unsafe blocks and 289 unsafe functions.
+On one pinned AMD64 CPU, 32 order-balanced release pairs with four warmups per
+binary measured one million dynamic constructions at 0.334931 seconds for the
+exact baseline and 0.343610 seconds for the candidate: +2.591% independently
+and +2.396% by paired ratios, below the five-percent ceiling with checksum
+`500000`. A 2,000-class cold `eval` linking control measured 0.182476 and
+0.181352 seconds: -0.616% independently and -0.768% paired, with identical
+results. The ordinary public-class guard bypasses name normalization whenever
+no runtime link is active.
+
+In the preceding nested-interface-publication checkpoint, the measured AMD64
+PHP 8.5 contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,648 pass, 1,650 fail, 115 skip, one is an upstream XFAIL,
 185 are unsupported, and none time out or crash. The headline pass rate is
 68.856% and the whole-corpus rate is 65.154%; 4,710 of 5,298 attempted cases

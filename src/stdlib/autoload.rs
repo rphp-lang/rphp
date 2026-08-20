@@ -31,7 +31,7 @@ fn normalized_symbol_name(name: &str) -> &str {
 #[inline]
 fn symbol_exists(eg: &ExecutorGlobals, name: &str, kind: SymbolKind) -> bool {
     let name = normalized_symbol_name(name);
-    let definition = eg.find_class(name);
+    let definition = eg.find_public_class(name);
     definition.is_some_and(|definition| match kind {
         SymbolKind::Any => true,
         SymbolKind::Class => !definition.is_interface && !definition.is_trait,

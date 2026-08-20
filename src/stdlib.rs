@@ -4425,7 +4425,7 @@ fn fn_class_implements(
         ret!(rv, Value::bool(false));
     };
     let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    if eg.find_class(&class_name).is_none()
+    if eg.find_public_class(&class_name).is_none()
         && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
     {
         if eg.exception.is_none() {
@@ -4473,7 +4473,7 @@ fn fn_class_parents(
         ret!(rv, Value::bool(false));
     };
     let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    if eg.find_class(&class_name).is_none()
+    if eg.find_public_class(&class_name).is_none()
         && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
     {
         if eg.exception.is_none() {
@@ -4514,7 +4514,7 @@ fn fn_class_uses(
         ret!(rv, Value::bool(false));
     };
     let autoload_enabled = arg_opt!(ed, 1).is_none_or(Value::is_truthy);
-    if eg.find_class(&class_name).is_none()
+    if eg.find_public_class(&class_name).is_none()
         && (!autoload_enabled || !autoload::ensure_symbol_loaded(eg, &class_name)?)
     {
         if eg.exception.is_none() {

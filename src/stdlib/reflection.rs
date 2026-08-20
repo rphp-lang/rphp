@@ -2436,7 +2436,13 @@ fn class_construct(
             .map(|object| object.class_name.to_string())
             .unwrap_or_else(|| argument_string(ed, 1))
     });
-    let owner = eg.find_class(&owner).map_or(owner, |class| {
+    if eg.find_public_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        reflection_exception(eg, format!("Class \"{owner}\" does not exist"));
+        return Ok(());
+    }
+    let owner = eg.find_public_class(&owner).map_or(owner, |class| {
         class
             .anonymous_public_name()
             .unwrap_or_else(|| class.name.clone())

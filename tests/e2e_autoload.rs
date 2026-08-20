@@ -1488,3 +1488,109 @@ echo (int) trait_exists('FunctionNestedTrait', false);
         "0:0;1:1"
     );
 }
+
+#[test]
+fn provisional_parent_links_a_new_child_without_becoming_public() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class HiddenLinkBase { public function make(): HiddenLinkParent {} }
+spl_autoload_register(function (string $name): void {
+    echo "load:$name|";
+    if ($name === 'HiddenLinkParent') {
+        class HiddenLinkParent extends HiddenLinkBase {
+            public static function probe(): void { echo 'visible|'; }
+            public function make(): HiddenLinkChild {}
+        }
+    } else {
+        echo 'hidden:', (int) class_exists('HiddenLinkParent', false), ':';
+        echo (int) in_array('HiddenLinkParent', get_declared_classes(), true), '|';
+        try {
+            HiddenLinkParent::probe();
+        } catch (Error $error) {
+            echo 'static:', $error->getMessage(), '|';
+        }
+        echo 'implements:', json_encode(@class_implements('HiddenLinkParent', false)), '|';
+        echo 'parents:', json_encode(@class_parents('HiddenLinkParent', false)), '|';
+        echo 'uses:', json_encode(@class_uses('HiddenLinkParent', false)), '|';
+        try {
+            new ReflectionClass('HiddenLinkParent');
+        } catch (ReflectionException $error) {
+            echo 'reflect:', $error->getMessage(), '|';
+        }
+        try {
+            new HiddenLinkParent;
+        } catch (Error $error) {
+            echo $error->getMessage(), '|';
+        }
+        class HiddenLinkChild extends HiddenLinkParent {}
+    }
+});
+new HiddenLinkParent;
+echo 'done';
+"#,
+        ),
+        "load:HiddenLinkParent|load:HiddenLinkChild|hidden:0:0|static:Class \"HiddenLinkParent\" not found|implements:false|parents:false|uses:false|reflect:Class \"HiddenLinkParent\" does not exist|Class \"HiddenLinkParent\" not found|done"
+    );
+}
+
+#[test]
+fn provisional_parent_supplies_the_childs_inherited_layout_and_methods() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LayoutLinkBase {
+    public function __construct(protected string $value) {}
+    public function make(): LayoutLinkParent {}
+    public function value(): string { return $this->value; }
+}
+spl_autoload_register(function (string $name): void {
+    echo "load:$name|";
+    if ($name === 'LayoutLinkParent') {
+        class LayoutLinkParent extends LayoutLinkBase {
+            public static function marker(): void { echo 'relative|'; }
+            public function make(): LayoutLinkChild {}
+        }
+    } else {
+        class LayoutLinkChild extends LayoutLinkParent {
+            public static function verify(): void { parent::marker(); }
+        }
+        LayoutLinkChild::verify();
+        echo (new LayoutLinkChild('child'))->value(), '|';
+    }
+});
+$parent = new LayoutLinkParent('parent');
+echo $parent->value();
+"#,
+        ),
+        "load:LayoutLinkParent|load:LayoutLinkChild|relative|child|parent"
+    );
+}
+
+#[test]
+fn provisional_trait_obligation_links_an_active_consumers_child() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+spl_autoload_register(function (string $name): void {
+    echo "load:$name|";
+    if ($name === 'DeferredSelfTrait') {
+        trait DeferredSelfTrait {
+            abstract private function make(): self;
+        }
+    } elseif ($name === 'DeferredSelfConsumer') {
+        class DeferredSelfConsumer {
+            use DeferredSelfTrait;
+            private function make(): DeferredSelfChild { return new DeferredSelfChild; }
+        }
+    } else {
+        class DeferredSelfChild extends DeferredSelfConsumer {}
+    }
+});
+new DeferredSelfConsumer;
+echo 'done';
+"#,
+        ),
+        "load:DeferredSelfConsumer|load:DeferredSelfTrait|load:DeferredSelfChild|done"
+    );
+}

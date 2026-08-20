@@ -241,7 +241,7 @@ fn op_new_obj<'a>(
         stats::inc_newobj_class_hash_lookup();
     }
     if (dynamic_static_scope || dynamic_class_name || ic.class_id == 0)
-        && eg.find_class(&name).is_none()
+        && eg.find_public_class(&name).is_none()
         && let Some(class_def) = eg.take_pending_anonymous_class(&name)
     {
         let dependencies = class_def
@@ -312,7 +312,7 @@ fn op_new_obj<'a>(
     if !literal_cache_hit
         && {
             stats::inc_newobj_class_hash_lookup();
-            eg.find_class(&name).is_none()
+            eg.find_public_class(&name).is_none()
         }
     {
         let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &name)?;
@@ -341,7 +341,7 @@ fn op_new_obj<'a>(
         eg.class_by_id(ic.class_id)
     } else {
         stats::inc_newobj_class_hash_lookup();
-        eg.find_class(&name)
+        eg.find_public_class(&name)
     };
     op_new_obj_resolved(
         eg,
@@ -3741,7 +3741,15 @@ fn op_init_static_call<'a>(
             )
         }
     } else {
-        if eg.find_class(&class).is_none() {
+        let relative_scope = raw_class.eq_ignore_ascii_case("self")
+            || raw_class.eq_ignore_ascii_case("parent")
+            || raw_class.eq_ignore_ascii_case("static");
+        let class_is_available = if relative_scope {
+            eg.find_class(&class).is_some()
+        } else {
+            eg.find_public_class(&class).is_some()
+        };
+        if !class_is_available {
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &class)?;
             if let Some(exception) = eg.exception.take() {
                 return Ok(match throw_in_frame(eg, frame, exception) {
