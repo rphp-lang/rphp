@@ -2129,6 +2129,21 @@ fn normalize_typed_declaration_default(value: Value, hint: &ParamTypeHint) -> Re
     }
 }
 
+pub(crate) fn normalize_rebound_property_default(
+    value: Value,
+    definition: &PropertyDefinition,
+    class: &str,
+) -> Result<Value, String> {
+    normalize_typed_declaration_default(value, &definition.type_hint).map_err(|value| {
+        invalid_typed_declaration_default_message(
+            &value,
+            &definition.type_hint,
+            class,
+            &definition.name,
+        )
+    })
+}
+
 fn invalid_typed_declaration_default_message(
     value: &Value,
     hint: &ParamTypeHint,
@@ -2262,6 +2277,63 @@ fn deferred_constant_expression_is_supported(expression: &Expr) -> bool {
     }
 }
 
+/// Trait property defaults using the consuming class must be re-evaluated at
+/// each trait-composition boundary. `self::class` has the same rebinding
+/// contract as `__CLASS__`; other declaration magic constants retain their
+/// source scope and remain ordinary eager constants.
+fn trait_property_default_rebinds_class(expression: &Expr) -> bool {
+    match expression {
+        Expr::MagicConstant { name, .. } => name.eq_ignore_ascii_case("__CLASS__"),
+        Expr::ClassConstant {
+            class_name,
+            constant,
+            ..
+        } => class_name.eq_ignore_ascii_case("self") && constant.eq_ignore_ascii_case("class"),
+        Expr::DynamicNamedClassConstant { constant, .. } => {
+            trait_property_default_rebinds_class(constant)
+        }
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => {
+            trait_property_default_rebinds_class(class)
+                || trait_property_default_rebinds_class(constant)
+        }
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => {
+            trait_property_default_rebinds_class(left)
+                || trait_property_default_rebinds_class(right)
+        }
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot(inner)
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => trait_property_default_rebinds_class(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            trait_property_default_rebinds_class(condition)
+                || trait_property_default_rebinds_class(then_expr)
+                || trait_property_default_rebinds_class(else_expr)
+        }
+        Expr::ArrayLiteral(elements) => elements.iter().any(|element| {
+            element
+                .key
+                .as_ref()
+                .is_some_and(trait_property_default_rebinds_class)
+                || trait_property_default_rebinds_class(&element.value)
+        }),
+        Expr::ArrayAccess { array, index, .. } => {
+            trait_property_default_rebinds_class(array)
+                || trait_property_default_rebinds_class(index)
+        }
+        _ => false,
+    }
+}
+
 /// Only a missing global/class symbol may postpone a property default to
 /// first object construction. Other constant-expression failures remain
 /// compile-time diagnostics even when the expression happens to mention a
@@ -2291,9 +2363,19 @@ pub struct DeferredPropertyDefault {
     pub source_line: usize,
 }
 
+/// Source expression retained only for a trait property whose default binds
+/// to the current consumer. The enclosing sidecar keeps ordinary ClassDef and
+/// PropertyDefinition layouts unchanged.
+#[derive(Debug, Clone)]
+pub struct ReboundTraitPropertyDefault {
+    pub definition: DeferredPropertyDefault,
+    pub is_static: bool,
+}
+
 #[derive(Debug)]
 pub struct DeferredInstancePropertyDefaults {
     entries: Rc<Vec<DeferredPropertyDefault>>,
+    rebound_trait_entries: Rc<Vec<ReboundTraitPropertyDefault>>,
     resolved: RefCell<Option<Rc<[Value]>>>,
 }
 
@@ -2301,6 +2383,18 @@ impl DeferredInstancePropertyDefaults {
     pub(crate) fn new(entries: Vec<DeferredPropertyDefault>) -> Self {
         Self {
             entries: Rc::new(entries),
+            rebound_trait_entries: Rc::new(Vec::new()),
+            resolved: RefCell::new(None),
+        }
+    }
+
+    pub(crate) fn with_rebound_trait_entries(
+        entries: Vec<DeferredPropertyDefault>,
+        rebound_trait_entries: Vec<ReboundTraitPropertyDefault>,
+    ) -> Self {
+        Self {
+            entries: Rc::new(entries),
+            rebound_trait_entries: Rc::new(rebound_trait_entries),
             resolved: RefCell::new(None),
         }
     }
@@ -2308,6 +2402,16 @@ impl DeferredInstancePropertyDefaults {
     #[inline]
     pub(crate) fn entries(&self) -> Rc<Vec<DeferredPropertyDefault>> {
         Rc::clone(&self.entries)
+    }
+
+    #[inline]
+    pub(crate) fn rebound_trait_entries(&self) -> Rc<Vec<ReboundTraitPropertyDefault>> {
+        Rc::clone(&self.rebound_trait_entries)
+    }
+
+    #[inline]
+    pub(crate) fn has_runtime_entries(&self) -> bool {
+        !self.entries.is_empty()
     }
 
     #[inline]
@@ -4620,6 +4724,11 @@ impl Compiler {
                         .get("__PROPERTY__")
                         .cloned()
                         .unwrap_or_else(|| Value::string("")))
+                } else if name.eq_ignore_ascii_case("__CLASS__") {
+                    known.get("__CLASS__").cloned().ok_or_else(|| {
+                        "magic constant __CLASS__ requires the active compilation context"
+                            .to_string()
+                    })
                 } else {
                     Err(format!(
                         "magic constant {} requires the active compilation context",

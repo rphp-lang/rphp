@@ -9,14 +9,64 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,441 pass, 1,856 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,443 pass, 1,854 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-64.961% and the whole-corpus rate is 61.457%; 4,624 of 5,297 attempted cases
-reach runtime (87.295%). Relative to exact base `462a7bd0`, the pass-set delta
-is +3/-0: all 3,438 prior passes remain passes.
+64.999% and the whole-corpus rate is 61.493%; 4,625 of 5,297 attempted cases
+reach runtime (87.314%). Relative to exact base `e9ac0b43`, the pass-set delta
+is +2/-0: all 3,441 prior passes remain passes.
 
-Inside a trait method or nested closure, `__CLASS__` now names the nearest
-final class that composed that trait body. Inheriting a composed method keeps
+Ordinary class property defaults now evaluate `__CLASS__` in their declaring
+class. Trait instance and static property defaults containing `__CLASS__` or
+`self::class` instead bind at every composition boundary, including nested
+traits and expressions such as concatenation. A class that merely inherits a
+composed instance property keeps the parent's value, while explicit trait
+reuse creates the child's value. Compatible trait-property collisions compare
+the values for the current composer and preserve the first declaration's
+rebinding recipe, matching PHP's order-dependent nested-trait contract.
+
+Inherited trait-composed static storage remains shared with its parent, so its
+actual value does not change. PHP 8.5 nevertheless exposes a child-relative
+static default through `ReflectionClass::getDefaultProperties()`; RPHP now
+rebinds only the copied declaration metadata for that view. Explicit trait
+reuse still creates independent static storage with the new consumer's value.
+
+The compiler eagerly validates each default in its source trait and retains
+only consumer-relative expressions in the existing cold deferred-default
+sidecar. Class registration evaluates those recipes before property collision
+checks and carries forward only the first accepted recipe. Final classes keep
+static recipes solely for descendant Reflection metadata; instance object
+templates are already final. This does not enlarge `ClassDef` or
+`PropertyDefinition`, and classes with metadata-only recipes bypass runtime
+default materialization during object construction.
+
+Original E2E regressions cover direct class defaults, `__CLASS__`,
+`self::class`, concatenation, instance and static properties, nested traits,
+inheritance, explicit reuse, unrelated consumers, child Reflection metadata
+and composition-order collisions. `bug55214.phpt` and `bug76539.phpt` are the
+only full-corpus transitions, from compile/output failures to exact passes;
+there is no lost pass or other category/stage movement. Two final manifests
+and summaries are byte-for-byte identical. The manifest SHA-256 is
+`5e5284349a91b036f40dba081c0442ebd20ccaae1ba4c285df783b02c7d26c5c`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions. On one pinned AMD64 CPU, 32 order-balanced release pairs, each
+measuring five requests of 1,000 ordinary trait-property compositions, retain
+output `1000` and measure 0.403266 seconds for the exact baseline versus
+0.399591 seconds for the candidate: -0.911% independently, -0.508% by paired
+means and +0.324% by the paired median, below the +5% regression gate. This is
+evidence of no link-path regression, not an optimization claim.
+
+This checkpoint does not claim `parent::class` in trait property defaults,
+other declaration magic constants, deprecated parent callables, missing
+standard-library functions, optional extension suites outside the selected
+corpus or broader PHP syntax and runtime compatibility.
+
+In the preceding trait-method checkpoint, `__CLASS__` inside a trait method or
+nested closure names the nearest final class that composed that trait body.
+Inheriting a composed method keeps
 the parent's composition, reusing the trait in a child creates the child's
 composition, and a nested trait follows its final consumer. Static calls,
 aliases, private dispatch and a reentrant `parent::method()` select the exact
@@ -58,7 +108,7 @@ independent means and +4.646% by paired ratios, below the +5% gate. A 1,000-
 composition cold-link control measures -0.645% by independent means and
 -0.298% paired; this is evidence of no regression, not an optimization claim.
 
-This checkpoint does not claim trait property-default magic constants,
+That preceding checkpoint did not claim trait property-default magic constants,
 deprecated `is_callable(['parent', ...])` behavior, missing standard-library
 functions, optional extension suites outside the selected corpus or broader
 PHP syntax and runtime compatibility.

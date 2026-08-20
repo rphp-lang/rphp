@@ -1178,6 +1178,26 @@ measures -0.645% independently and -0.298% paired. Trait property-default magic
 constants, deprecated parent callables and missing standard-library functions
 remain separate work.
 
+The `trait-property-magic-class` checkpoint reaches 3,443 passes with 1,854
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Ordinary class property `__CLASS__` defaults use their declaring
+class, while trait property defaults containing `__CLASS__` or `self::class`
+rebind at every composition boundary. Nested traits, inheritance, explicit
+reuse, first-compatible collision order and unrelated consumers follow PHP
+8.5. Inherited static storage keeps its parent value while copied Reflection
+default metadata is child-relative. The compiler retains rebinding expressions
+in an existing cold sidecar without enlarging common class/property metadata.
+The exact full-corpus delta from `e9ac0b43` is +2/-0:
+`bug55214.phpt` and `bug76539.phpt` become exact with every prior pass and all
+other categories unchanged. Two final manifests and summaries are
+byte-for-byte identical. All five feature configurations, all-target,
+formatting, unsafe policy, Composer S0, four Symfony S1 gates and PHP 8.5 S2/S3
+pass. A CPU-pinned 32-pair release control, with five 1,000-composition
+requests per observation, measures -0.911% independently, -0.508% by paired
+means and +0.324% by paired median, below the +5% gate. Relative
+`parent::class` defaults and other declaration magic constants remain separate
+work.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

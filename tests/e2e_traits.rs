@@ -197,6 +197,86 @@ echo $u->name;
 }
 
 #[test]
+fn trait_property_class_defaults_bind_at_each_composition_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DirectPropertyDefaults {
+    public $instance = __CLASS__;
+    public static $static = __CLASS__;
+}
+trait InnerPropertyDefaults {
+    public $instance = __CLASS__;
+    public $pseudo = self::class;
+    public $decorated = self::class . 'Suffix';
+    public static $static = __CLASS__;
+    public static $staticPseudo = self::class;
+}
+trait OuterPropertyDefaults { use InnerPropertyDefaults; }
+class PropertyDefaultBase { use OuterPropertyDefaults; }
+class PropertyDefaultChild extends PropertyDefaultBase {}
+class PropertyDefaultReuse extends PropertyDefaultBase { use OuterPropertyDefaults; }
+class PropertyDefaultOther { use InnerPropertyDefaults; }
+
+$direct = new DirectPropertyDefaults();
+echo $direct->instance, ':', DirectPropertyDefaults::$static, "\n";
+$base = new PropertyDefaultBase();
+echo $base->instance, ':', $base->pseudo, ':', $base->decorated, ':', PropertyDefaultBase::$static, ':', PropertyDefaultBase::$staticPseudo, "\n";
+$child = new PropertyDefaultChild();
+echo $child->instance, ':', $child->pseudo, ':', $child->decorated, ':', PropertyDefaultChild::$static, ':', PropertyDefaultChild::$staticPseudo, "\n";
+$childDefaults = (new ReflectionClass(PropertyDefaultChild::class))->getDefaultProperties();
+echo $childDefaults['instance'], ':', $childDefaults['pseudo'], ':', $childDefaults['decorated'], ':', $childDefaults['static'], ':', $childDefaults['staticPseudo'], "\n";
+$reuse = new PropertyDefaultReuse();
+echo $reuse->instance, ':', $reuse->pseudo, ':', $reuse->decorated, ':', PropertyDefaultReuse::$static, ':', PropertyDefaultReuse::$staticPseudo, "\n";
+$other = new PropertyDefaultOther();
+echo $other->instance, ':', $other->pseudo, ':', $other->decorated, ':', PropertyDefaultOther::$static, ':', PropertyDefaultOther::$staticPseudo;
+"#,
+        ),
+        concat!(
+            "DirectPropertyDefaults:DirectPropertyDefaults\n",
+            "PropertyDefaultBase:PropertyDefaultBase:PropertyDefaultBaseSuffix:PropertyDefaultBase:PropertyDefaultBase\n",
+            "PropertyDefaultBase:PropertyDefaultBase:PropertyDefaultBaseSuffix:PropertyDefaultBase:PropertyDefaultBase\n",
+            "PropertyDefaultBase:PropertyDefaultBase:PropertyDefaultBaseSuffix:PropertyDefaultChild:PropertyDefaultChild\n",
+            "PropertyDefaultReuse:PropertyDefaultReuse:PropertyDefaultReuseSuffix:PropertyDefaultReuse:PropertyDefaultReuse\n",
+            "PropertyDefaultOther:PropertyDefaultOther:PropertyDefaultOtherSuffix:PropertyDefaultOther:PropertyDefaultOther",
+        )
+    );
+}
+
+#[test]
+fn trait_property_class_default_collisions_use_the_current_composer() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait DynamicFirst { public string $value = __CLASS__; }
+trait LiteralSecond { public string $value = 'DynamicOuter'; }
+trait DynamicOuter { use DynamicFirst, LiteralSecond; }
+class DynamicConsumer { use DynamicOuter; }
+
+trait LiteralFirst { public string $value = 'LiteralOuter'; }
+trait DynamicSecond { public string $value = self::class; }
+trait LiteralOuter { use LiteralFirst, DynamicSecond; }
+class LiteralConsumer { use LiteralOuter; }
+
+trait MagicSpelling { public string $value = __CLASS__; }
+trait PseudoSpelling { public string $value = self::class; }
+class SameConsumer { use MagicSpelling, PseudoSpelling; }
+
+trait ExplicitTrait { public string $value = __CLASS__; }
+class ExplicitConsumer {
+    use ExplicitTrait;
+    public string $value = 'ExplicitConsumer';
+}
+
+echo (new DynamicConsumer())->value, ':', (new LiteralConsumer())->value, ':';
+echo (new SameConsumer())->value, ':', (new ExplicitConsumer())->value;
+"#,
+        ),
+        "DynamicConsumer:LiteralOuter:SameConsumer:ExplicitConsumer"
+    );
+}
+
+#[test]
 fn private_trait_properties_use_the_consuming_class_scope() {
     let out = run_php(
         r#"<?php

@@ -567,7 +567,7 @@ fn op_new_obj_resolved<'a>(
     // typed-property guard succeeds.
     let deferred_defaults = class_def
         .and_then(|class| class.deferred_instance_defaults.as_ref())
-        .is_some();
+        .is_some_and(|defaults| defaults.has_runtime_entries());
     let deferred_defaults = if deferred_defaults {
         let class_id = class_def.expect("checked class definition").class_id;
         match materialize_deferred_instance_defaults(eg, frame, op_array, ip, class_id)? {

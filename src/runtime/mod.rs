@@ -4,7 +4,8 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compiler::compile::{
-    ClassConstantDefinition, ClassDef, PropertyDefinition, enum_magic_method_is_forbidden,
+    ClassConstantDefinition, ClassDef, PropertyDefinition, ReboundTraitPropertyDefault,
+    enum_magic_method_is_forbidden,
 };
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 use crate::generics::GenericType;
@@ -3245,6 +3246,30 @@ impl ExecutorGlobals {
         Ok(())
     }
 
+    fn evaluate_rebound_trait_property_default(
+        &mut self,
+        rebound: &ReboundTraitPropertyDefault,
+        property: &PropertyDefinition,
+        class_name: &str,
+        parent_name: Option<&str>,
+    ) -> Result<Value, String> {
+        let mut definition = rebound.definition.clone();
+        let mut scope = (*definition.evaluation_scope).clone();
+        scope.lexical_class = Some(class_name.to_string());
+        scope.lexical_parent = parent_name.map(str::to_string);
+        definition.evaluation_scope = std::rc::Rc::new(scope);
+        let Some(value) =
+            crate::stdlib::reflection::evaluate_deferred_property_default_value(&definition, self)
+                .map_err(|error| error.to_string())?
+        else {
+            return Err(format!(
+                "Cannot evaluate trait property default {}::${} while composing {}",
+                rebound.definition.declaring_class, rebound.definition.property_name, class_name
+            ));
+        };
+        crate::compiler::compile::normalize_rebound_property_default(value, property, class_name)
+    }
+
     /// Register a class definition and its methods in the function table.
     /// Resolves inheritance: merges parent properties/methods into child.
     /// For non-interface, non-abstract classes: validates interface contracts.
@@ -3252,16 +3277,23 @@ impl ExecutorGlobals {
         let class_name = class_def.name.clone();
         let declaration_file = class_def.source_file.clone();
         let declaration_line = class_def.declaration_line;
-        let own_deferred_instance_defaults = class_def
+        let (own_deferred_instance_defaults, own_rebound_trait_defaults) = class_def
             .deferred_instance_defaults
             .take()
-            .map(|defaults| defaults.entries().as_ref().clone())
+            .map(|defaults| {
+                (
+                    defaults.entries().as_ref().clone(),
+                    defaults.rebound_trait_entries().as_ref().clone(),
+                )
+            })
             .unwrap_or_default();
         // PHP materializes a child's inherited defaults before its own
         // declarations. Keep that semantic order independently from RPHP's
         // storage-slot order, which deliberately places child declarations
         // first for property lookup.
         let mut deferred_instance_defaults = Vec::new();
+        let mut rebound_trait_defaults = own_rebound_trait_defaults;
+        let mut inherited_rebound_trait_defaults = Vec::new();
         // PHP does not permit class redeclaration. Besides matching that rule,
         // this guarantees class_by_id pointers remain stable for inline caches.
         if self
@@ -3379,6 +3411,13 @@ impl ExecutorGlobals {
             if let Some(parent) = self.class_table.get(parent_name.as_str()) {
                 if let Some(defaults) = &parent.deferred_instance_defaults {
                     deferred_instance_defaults.extend(defaults.entries().iter().cloned());
+                    inherited_rebound_trait_defaults.extend(
+                        defaults
+                            .rebound_trait_entries()
+                            .iter()
+                            .filter(|entry| entry.is_static)
+                            .cloned(),
+                    );
                 }
                 validate_property_inheritance(
                     self,
@@ -3466,6 +3505,28 @@ impl ExecutorGlobals {
         }
         deferred_instance_defaults.extend(own_deferred_instance_defaults);
 
+        // An inherited trait-composed static property keeps its parent's
+        // storage slot and therefore its actual value. PHP nevertheless
+        // exposes a child-relative default through ReflectionClass, so only
+        // rebind the copied declaration metadata here and carry the recipe to
+        // further descendants.
+        for rebound in inherited_rebound_trait_defaults {
+            let Some(property_index) = class_def.static_properties.iter().position(|property| {
+                property.name == rebound.definition.property_name
+                    && property.declaring_class == rebound.definition.declaring_class
+            }) else {
+                continue;
+            };
+            let value = self.evaluate_rebound_trait_property_default(
+                &rebound,
+                &class_def.static_properties[property_index],
+                &class_name,
+                class_def.parent.as_deref(),
+            )?;
+            class_def.static_properties[property_index].default = Some(value);
+            rebound_trait_defaults.push(rebound);
+        }
+
         // Merge traits: copy trait methods and properties into this class.
         // Must happen after parent inheritance so trait methods override inherited ones
         // (matching PHP semantics: trait > parent, class > trait).
@@ -3490,7 +3551,50 @@ impl ExecutorGlobals {
                     .as_ref()
                     .map(|defaults| defaults.entries())
                     .unwrap_or_else(|| std::rc::Rc::new(Vec::new()));
+                let trait_rebound_defaults = trait_def
+                    .deferred_instance_defaults
+                    .as_ref()
+                    .map(|defaults| defaults.rebound_trait_entries());
+                let trait_rebound_defaults = trait_rebound_defaults
+                    .as_deref()
+                    .map_or(&[][..], |entries| entries.as_slice());
                 let mut trait_properties = trait_def.properties.clone();
+                let mut trait_static_properties = trait_def.static_properties.clone();
+                for rebound in trait_rebound_defaults {
+                    let properties = if rebound.is_static {
+                        &mut trait_static_properties
+                    } else {
+                        &mut trait_properties
+                    };
+                    let Some(property_index) = properties.iter().position(|property| {
+                        property.name == rebound.definition.property_name
+                            && property.declaring_class == rebound.definition.declaring_class
+                    }) else {
+                        continue;
+                    };
+                    let value = self.evaluate_rebound_trait_property_default(
+                        rebound,
+                        &properties[property_index],
+                        &class_name,
+                        class_def.parent.as_deref(),
+                    )?;
+                    properties[property_index].default = Some(value);
+                }
+                let accepted_rebound_defaults = trait_rebound_defaults
+                    .iter()
+                    .filter(|rebound| {
+                        if rebound.is_static {
+                            !own_static_names.contains(&rebound.definition.property_name)
+                                && !composed_static_trait_names
+                                    .contains(&rebound.definition.property_name)
+                        } else {
+                            !own_property_names.contains(&rebound.definition.property_name)
+                                && !composed_trait_property_names
+                                    .contains_key(&rebound.definition.property_name)
+                        }
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
                 // Trait collision checks compare resolved default values. A
                 // direct global constant may have been published by an
                 // earlier include/define() after this trait's source unit was
@@ -3586,12 +3690,23 @@ impl ExecutorGlobals {
                 merge_trait_static_property_definitions(
                     &mut class_def.static_properties,
                     &mut static_property_slots,
-                    &trait_def.static_properties,
+                    &trait_static_properties,
                     &class_name,
                     trait_name,
                     &own_static_names,
                     &mut composed_static_trait_names,
                 )?;
+                for mut rebound in accepted_rebound_defaults {
+                    if !class_def.is_trait && !rebound.is_static {
+                        continue;
+                    }
+                    rebound.definition.declaring_class = class_name.clone();
+                    let mut scope = (*rebound.definition.evaluation_scope).clone();
+                    scope.lexical_class = Some(class_name.clone());
+                    scope.lexical_parent = class_def.parent.clone();
+                    rebound.definition.evaluation_scope = std::rc::Rc::new(scope);
+                    rebound_trait_defaults.push(rebound);
+                }
 
                 // Merge trait methods: copy function_table pointers
                 let child_method_names: std::collections::HashSet<String> = class_def
@@ -3871,14 +3986,27 @@ impl ExecutorGlobals {
             deferred.property_index = property_index;
             true
         });
-        class_def.deferred_instance_defaults =
-            (!deferred_instance_defaults.is_empty()).then(|| {
-                Box::new(
-                    crate::compiler::compile::DeferredInstancePropertyDefaults::new(
-                        deferred_instance_defaults,
-                    ),
-                )
-            });
+        rebound_trait_defaults.retain(|rebound| {
+            let properties = if rebound.is_static {
+                &class_def.static_properties
+            } else {
+                &class_def.properties
+            };
+            properties.iter().any(|property| {
+                property.name == rebound.definition.property_name
+                    && property.declaring_class == rebound.definition.declaring_class
+            })
+        });
+        class_def.deferred_instance_defaults = (!deferred_instance_defaults.is_empty()
+            || !rebound_trait_defaults.is_empty())
+        .then(|| {
+            Box::new(
+                crate::compiler::compile::DeferredInstancePropertyDefaults::with_rebound_trait_entries(
+                    deferred_instance_defaults,
+                    rebound_trait_defaults,
+                ),
+            )
+        });
 
         // Shared ownership keeps the allocation stable and lets class_alias()
         // publish another lookup key without duplicating metadata or identity.

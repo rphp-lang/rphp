@@ -4034,6 +4034,10 @@ impl Compiler {
                     "self::class".to_string(),
                     Value::string(resolved_class.clone()),
                 );
+                property_constants.insert(
+                    "__CLASS__".to_string(),
+                    Value::string(resolved_class.clone()),
+                );
                 for constant in &compiled_constants {
                     if constant.evaluation_error.is_none() {
                         property_constants.insert(
@@ -4951,6 +4955,16 @@ impl Compiler {
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut deferred_instance_defaults = Vec::new();
+                let mut rebound_trait_defaults = Vec::new();
+                let mut trait_property_constants = self.known_constants.clone();
+                trait_property_constants.insert(
+                    "self::class".to_string(),
+                    Value::string(resolved_trait.clone()),
+                );
+                trait_property_constants.insert(
+                    "__CLASS__".to_string(),
+                    Value::string(resolved_trait.clone()),
+                );
                 for prop in properties {
                     self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
@@ -5020,7 +5034,7 @@ impl Compiler {
                     let default = match &prop.default {
                         Some(expr) => match self.eval_const_expr_in_source_with_property(
                             expr,
-                            &self.known_constants,
+                            &trait_property_constants,
                             Some(&prop.name),
                         ) {
                             Ok(value) => Some(value),
@@ -5130,6 +5144,34 @@ impl Compiler {
                         }
                         definition.set_has_default(false);
                     }
+                    if let Some(expression) = prop.default.as_ref().filter(|expression| {
+                        !default_is_deferred
+                            && trait_property_default_rebinds_class(expression)
+                    })
+                    {
+                        rebound_trait_defaults.push(ReboundTraitPropertyDefault {
+                            definition: DeferredPropertyDefault {
+                                property_name: prop.name.clone(),
+                                declaring_class: resolved_trait.clone(),
+                                property_index: 0,
+                                expression: Box::new(expression.clone()),
+                                evaluation_scope: std::rc::Rc::new(
+                                    AttributeEvaluationScope {
+                                        namespace: self.current_namespace.clone(),
+                                        class_imports: self.use_map.clone(),
+                                        constant_imports: self.constant_use_map.clone(),
+                                        lexical_class: Some(resolved_trait.clone()),
+                                        lexical_parent: None,
+                                        lexical_property: Some(prop.name.clone()),
+                                        source_directory: self.source_directory.clone(),
+                                    },
+                                ),
+                                source_file: self.source_file.clone(),
+                                source_line: prop.line,
+                            },
+                            is_static: prop.is_static,
+                        });
+                    }
                     if prop.is_static {
                         compiled_static_props.push(definition);
                     } else {
@@ -5198,13 +5240,16 @@ impl Compiler {
                         .map(|method| method.name.clone())
                         .collect(),
                     enum_backing_error: None,
-                    deferred_instance_defaults: (!deferred_instance_defaults.is_empty()).then(
-                        || {
-                            Box::new(DeferredInstancePropertyDefaults::new(
+                    deferred_instance_defaults: (!deferred_instance_defaults.is_empty()
+                        || !rebound_trait_defaults.is_empty())
+                    .then(|| {
+                        Box::new(
+                            DeferredInstancePropertyDefaults::with_rebound_trait_entries(
                                 deferred_instance_defaults,
-                            ))
-                        },
-                    ),
+                                rebound_trait_defaults,
+                            ),
+                        )
+                    }),
                     class_id: 0,
                 });
                 self.class_declaration_keys.push(None);
