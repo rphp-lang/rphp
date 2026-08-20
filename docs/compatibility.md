@@ -8,7 +8,68 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `0ecb4823`. Across all 5,599
+8.5.6 commit `fcc29c8` and candidate commit `ef9b1f45`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,774 pass, 1,525 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 71.221% and the whole-corpus rate is 67.405%; 4,716 of
+5,299 attempted cases reach runtime (88.998%). Relative to exact base
+`0ecb4823`, the pass-set delta is +16/-0: every prior pass remains a pass and
+there are no other status or failure-category transitions. Two sequential
+final full runs have byte-identical merged manifests and summaries. Their
+SHA-256 values are
+`4c28e3ed8473f41ba99d726988922e6c36f5718958784766546bfcb761efd89e`
+and `6d0bac7bb9c2a17e0718bf14ce67568f162d2488d58936a04a9820486568dada`.
+
+Relative `self`, `parent` and `static` operations now follow PHP 8.5's active
+class-scope rules instead of being rejected uniformly by the parser. At top
+level, member operations and `new static` raise catchable `Error` objects with
+the operation-specific diagnostic and source origin; the same syntax inside an
+unscoped named function remains a compile fatal. A closure declared globally
+may acquire its relative scope through `Closure::bindTo()` or `call()`, while a
+class-declared closure keeps lexical `self`/`parent` and forwards its late
+`static` called class. Relative closure return types are admitted, invalid
+global named-function return types retain the compile stage, and a failed late-
+static return check names the resolved called class. Constant-expression forms
+retain their distinct forbidden-`static` diagnostics.
+
+One parser regression and eight original E2E regressions cover top-level and
+named-function failures, bound global closures, lexical versus late-static
+class closures, resolved return diagnostics, source location and three
+constant-expression diagnostic families. The 16 exact full-corpus additions
+are `Zend/tests/bug70918.phpt`, `Zend/tests/class_name/bug66811.phpt`,
+`class_name_as_scalar_error_001.phpt`, `class_name_as_scalar_error_005.phpt`,
+`class_name_as_scalar_error_006.phpt`, `class_name_as_scalar_error_007.phpt`,
+`Zend/tests/closures/bug70987.phpt`,
+`Zend/tests/constants/dynamic_class_const_fetch_cache_slot.phpt`,
+`Zend/tests/constexpr/constant_expressions_static_class_name_error.phpt`,
+`Zend/tests/first_class_callable/constexpr/error_dynamic_004.phpt`,
+`Zend/tests/self_class_const_outside_class.phpt`,
+`Zend/tests/type_declarations/relative_types/invalid_types/static_global_function.phpt`,
+`relative_types/relative_type_in_closures.phpt`,
+`static_type_outside_class.phpt`, `static_type_return.phpt` and
+`static_type_trait.phpt`. Named functions do not become dynamically bindable,
+lexical magic constants are unchanged, and unrelated callable, trait and
+Reflection gaps remain visible rather than being claimed by this checkpoint.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory is 1,614 unsafe blocks and 289 unsafe functions.
+On CPU 2 with the performance governor, four warmups per binary and 32 balanced
+ABBA/BAAB groups with no removed observations, compilation of 10,000 ordinary
+expressions in a dead branch retains output `ok`. The 64 observations per
+binary measure baseline p10/median/p90
+0.160889/0.161643/0.164149 seconds and candidate
+0.160688/0.161697/0.164493 seconds: +0.034% independently and +0.091% by the
+paired-ratio median, whose p10/p90 is -1.172%/+1.112%. Both medians remain
+below the five-percent regression ceiling; no speedup is claimed. The exact
+base and candidate binary SHA-256 values are
+`f565434ee3a6528a50158819988015e0a361b95faca13e91720aa8f1e01a4847`
+and `752aabc6caa6d10c2d23a31e96b2dc978fb21675307ae1b2b58100c7e0c323f8`.
+
+In the preceding yield-from-Traversable checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`0ecb4823`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,758 pass, 1,541 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 70.919% and the whole-corpus rate is 67.119%; 4,709 of
