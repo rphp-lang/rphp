@@ -165,3 +165,35 @@ echo 'again:', gc_collect_cycles(), "\n";
         "rooted:0\ndrop:second\ndrop:first\ncount:2,weak:null\nagain:0\n"
     );
 }
+
+#[test]
+fn suspended_generator_values_are_cycle_edges_until_the_last_root_is_removed() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DirectSuspendedPayload {
+    public function __destruct() { echo 'direct|'; }
+}
+class BoundSuspendedPayload {
+    public function callback() { return function () { return $this; }; }
+    public function __destruct() { echo 'bound|'; }
+}
+function consumeSuspended(...$values) {}
+
+$generator = null;
+$generator = (function ($direct, $callback) use (&$generator) {
+    consumeSuspended($generator, $callback, yield 'ready');
+})(new DirectSuspendedPayload, (new BoundSuspendedPayload)->callback());
+echo $generator->current(), '|';
+$rooted = gc_collect_cycles();
+echo "rooted:$rooted|";
+$generator = null;
+echo 'replaced|';
+gc_collect_cycles();
+echo 'released|';
+echo 'again:', gc_collect_cycles(), '|';
+"#,
+        ),
+        "ready|rooted:0|replaced|bound|direct|released|again:0|"
+    );
+}

@@ -77,6 +77,12 @@ pub const SEND_FLAG_ERROR_SUPPRESS: u16 = 1 << 2;
 /// the selected parameter is actually by-reference.
 pub const SEND_FLAG_NONREFERENCEABLE: u16 = 1 << 3;
 
+/// SendVarEx/SendNamed flag: op1 is the by-value snapshot taken before a
+/// yielding later argument, while `result` names the original source CV.
+/// Runtime signature resolution selects the CV alias for a by-reference
+/// parameter and the snapshot for an ordinary by-value parameter.
+pub const SEND_FLAG_YIELD_SNAPSHOT: u16 = 1 << 4;
+
 /// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
 /// handlers still run and observe the suppressed mask.
 pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;

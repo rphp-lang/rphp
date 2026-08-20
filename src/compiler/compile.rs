@@ -45,11 +45,15 @@ use crate::vm::instruction::{
     NEW_FLAG_UNPACKED_ARGUMENTS, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND, OpType,
     PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT, REFERENCE_RESULT_INTERNAL,
     REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS, SEND_FLAG_NONREFERENCEABLE,
-    STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY,
-    STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT,
-    THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
+    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
+
+/// Stable operand, optional named-argument literal, and optional original CV
+/// retained for runtime by-reference selection across a generator suspension.
+type CompiledCallArg = (u16, OpType, Option<u16>, Option<u16>);
 
 fn incdec_target_source_line(target: &Expr) -> usize {
     match target {
@@ -1598,14 +1602,24 @@ fn propagate_declared_scalar_types(
                 call.arguments_proven = false;
             }
         }
-        if send_var_may_alias && instruction.op1_type == OpType::Cv {
-            if let Some(slot) = slots.get_mut(instruction.op1 as usize) {
+        let aliased_send_cv = if instruction._pad & SEND_FLAG_YIELD_SNAPSHOT != 0
+            && matches!(instruction.opcode, OpCode::SendVarEx | OpCode::SendNamed)
+            && (send_var_may_alias || instruction.opcode == OpCode::SendNamed)
+        {
+            Some(instruction.result)
+        } else if send_var_may_alias && instruction.op1_type == OpType::Cv {
+            Some(instruction.op1)
+        } else {
+            None
+        };
+        if let Some(aliased_send_cv) = aliased_send_cv {
+            if let Some(slot) = slots.get_mut(aliased_send_cv as usize) {
                 *slot = KnownScalarType::Unknown;
             }
-            if let Some(slot) = receiver_classes.get_mut(instruction.op1 as usize) {
+            if let Some(slot) = receiver_classes.get_mut(aliased_send_cv as usize) {
                 *slot = None;
             }
-            if let Some(reference) = reference_wrapped_cvs.get_mut(instruction.op1 as usize) {
+            if let Some(reference) = reference_wrapped_cvs.get_mut(aliased_send_cv as usize) {
                 *reference = true;
             }
         }
@@ -7597,6 +7611,7 @@ impl Compiler {
                             )
                         )
                 });
+                let contains_yield = args.iter().any(CallArg::contains_yield);
                 let mut reference_writebacks = Vec::new();
                 let compiled_args = if has_reference_lvalue {
                     Some(
@@ -7608,10 +7623,12 @@ impl Compiler {
                                 }) if index < 64 && ref_args & (1u64 << index) != 0 => {
                                     match self.compile_array_append_argument_reference(target, &[])
                                     {
-                                        Ok((result, result_type)) => (result, result_type, None),
+                                        Ok((result, result_type)) => {
+                                            (result, result_type, None, None)
+                                        }
                                         Err(error) => {
                                             self.deferred_error = Some(error);
-                                            (0, OpType::Unused, None)
+                                            (0, OpType::Unused, None, None)
                                         }
                                     }
                                 }
@@ -7622,30 +7639,50 @@ impl Compiler {
                                     {
                                         Ok((op, op_type, writeback)) => {
                                             reference_writebacks.push((writeback, op, op_type));
-                                            (op, op_type, None)
+                                            (op, op_type, None, None)
                                         }
                                         Err(error) => {
                                             self.deferred_error = Some(error);
-                                            (0, OpType::Unused, None)
+                                            (0, OpType::Unused, None, None)
                                         }
                                     }
                                 }
                                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                                     let (op, op_type) = self.compile_expr(expr);
-                                    (op, op_type, None)
+                                    let (op, op_type) = if contains_yield {
+                                        let (name, line) = match expr {
+                                            Expr::Variable { name, line } => (name.as_str(), *line),
+                                            _ => ("argument", 0),
+                                        };
+                                        self.snapshot_yield_rvalue_operand(op, op_type, name, line)
+                                    } else {
+                                        (op, op_type)
+                                    };
+                                    (op, op_type, None, None)
                                 }
                                 CallArg::Named { name, value } => {
                                     let (op, op_type) = self.compile_expr(value);
+                                    let source_cv =
+                                        (contains_yield && op_type == OpType::Cv).then_some(op);
+                                    let (op, op_type) = if contains_yield {
+                                        let (variable, line) = match value {
+                                            Expr::Variable { name, line } => (name.as_str(), *line),
+                                            _ => ("argument", 0),
+                                        };
+                                        self.snapshot_yield_rvalue_operand(
+                                            op, op_type, variable, line,
+                                        )
+                                    } else {
+                                        (op, op_type)
+                                    };
                                     let name = self.add_literal(Value::string(name.clone()));
-                                    (op, op_type, Some(name))
+                                    (op, op_type, Some(name), source_cv)
                                 }
                             })
                             .collect(),
                     )
                 } else {
-                    args.iter()
-                        .any(CallArg::contains_yield)
-                        .then(|| self.compile_call_args(args))
+                    contains_yield.then(|| self.compile_call_args(args, ref_args, false))
                 };
 
                 let runtime_generic_check = self.emit_generic_check(
@@ -8561,20 +8598,24 @@ impl Compiler {
                 // Pre-compile arg expressions BEFORE NewObj so side effects
                 // always execute, even when the class has no __construct.
                 // Compile args, tracking which are named for SendNamed emission
-                let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
-                    .iter()
-                    .map(|arg| match arg {
-                        CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                            let (op, op_type) = self.compile_expr(expr);
-                            (op, op_type, None)
-                        }
-                        CallArg::Named { name, value } => {
-                            let (op, op_type) = self.compile_expr(value);
-                            let name_idx = self.add_literal(Value::string(name.clone()));
-                            (op, op_type, Some(name_idx))
-                        }
-                    })
-                    .collect();
+                let compiled_args: Vec<CompiledCallArg> =
+                    if args.iter().any(CallArg::contains_yield) {
+                        self.compile_call_args(args, 0, true)
+                    } else {
+                        args.iter()
+                            .map(|arg| match arg {
+                                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
+                                    let (op, op_type) = self.compile_expr(expr);
+                                    (op, op_type, None, None)
+                                }
+                                CallArg::Named { name, value } => {
+                                    let (op, op_type) = self.compile_expr(value);
+                                    let name_idx = self.add_literal(Value::string(name.clone()));
+                                    (op, op_type, Some(name_idx), None)
+                                }
+                            })
+                            .collect()
+                    };
 
                 let (resolved_class, dynamic_static_scope) =
                     self.resolve_static_member_owner(class_name);
@@ -8644,20 +8685,24 @@ impl Compiler {
                     self.push_instruction_at_line(new_obj, *line);
                     return (tmp, OpType::Tmp);
                 }
-                let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
-                    .iter()
-                    .map(|arg| match arg {
-                        CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                            let (op, op_type) = self.compile_expr(expr);
-                            (op, op_type, None)
-                        }
-                        CallArg::Named { name, value } => {
-                            let (op, op_type) = self.compile_expr(value);
-                            let name_idx = self.add_literal(Value::string(name.clone()));
-                            (op, op_type, Some(name_idx))
-                        }
-                    })
-                    .collect();
+                let compiled_args: Vec<CompiledCallArg> =
+                    if args.iter().any(CallArg::contains_yield) {
+                        self.compile_call_args(args, 0, true)
+                    } else {
+                        args.iter()
+                            .map(|arg| match arg {
+                                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
+                                    let (op, op_type) = self.compile_expr(expr);
+                                    (op, op_type, None, None)
+                                }
+                                CallArg::Named { name, value } => {
+                                    let (op, op_type) = self.compile_expr(value);
+                                    let name_idx = self.add_literal(Value::string(name.clone()));
+                                    (op, op_type, Some(name_idx), None)
+                                }
+                            })
+                            .collect()
+                    };
                 let (class, class_type) = self.compile_expr(class);
                 let tmp = self.alloc_tmp();
                 let mut new_obj = Instruction::new(OpCode::NewObj);
@@ -8697,21 +8742,25 @@ impl Compiler {
                     .iter()
                     .any(|argument| matches!(argument, CallArg::Unpack(_)))
                     .then(|| self.compile_mixed_unpacked_call_arguments(args, 0));
-                let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
-                    .iter()
-                    .filter(|_| unpacked_arguments.is_none())
-                    .map(|arg| match arg {
-                        CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                            let (op, op_type) = self.compile_expr(expr);
-                            (op, op_type, None)
-                        }
-                        CallArg::Named { name, value } => {
-                            let (op, op_type) = self.compile_expr(value);
-                            let name_idx = self.add_literal(Value::string(name.clone()));
-                            (op, op_type, Some(name_idx))
-                        }
-                    })
-                    .collect();
+                let compiled_args: Vec<CompiledCallArg> =
+                    if unpacked_arguments.is_none() && args.iter().any(CallArg::contains_yield) {
+                        self.compile_call_args(args, 0, true)
+                    } else {
+                        args.iter()
+                            .filter(|_| unpacked_arguments.is_none())
+                            .map(|arg| match arg {
+                                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
+                                    let (op, op_type) = self.compile_expr(expr);
+                                    (op, op_type, None, None)
+                                }
+                                CallArg::Named { name, value } => {
+                                    let (op, op_type) = self.compile_expr(value);
+                                    let name_idx = self.add_literal(Value::string(name.clone()));
+                                    (op, op_type, Some(name_idx), None)
+                                }
+                            })
+                            .collect()
+                    };
                 let sequence = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
                 let class_name = format!("class@anonymous#{sequence}");
                 let declaration = Stmt::Class {
@@ -8922,6 +8971,16 @@ impl Compiler {
                     // Evaluate the receiver and arguments first, then start
                     // the call protocol from their stable TMP/CV operands.
                     let (obj_op, obj_type) = self.compile_expr(object);
+                    let (receiver_name, receiver_line) = match object.as_ref() {
+                        Expr::Variable { name, line } => (name.as_str(), *line),
+                        _ => ("receiver", 0),
+                    };
+                    let (obj_op, obj_type) = self.snapshot_yield_rvalue_operand(
+                        obj_op,
+                        obj_type,
+                        receiver_name,
+                        receiver_line,
+                    );
                     let mut receiver_patches =
                         self.take_nullsafe_receiver_patches(obj_op, obj_type);
                     let tmp = self.alloc_tmp();
@@ -8940,7 +8999,7 @@ impl Compiler {
                     } else {
                         None
                     };
-                    let compiled_args = self.compile_call_args(args);
+                    let compiled_args = self.compile_call_args(args, 0, true);
                     let result = self.compile_method_call_from_operands(
                         obj_op,
                         obj_type,
@@ -9094,7 +9153,7 @@ impl Compiler {
                 let compiled_args = args
                     .iter()
                     .any(CallArg::contains_yield)
-                    .then(|| self.compile_call_args(args));
+                    .then(|| self.compile_call_args(args, 0, true));
                 let dynamic_static_scope = (self.dynamic_static_scope
                     && matches!(pseudo_class.as_str(), "self" | "parent"))
                     || pseudo_class == "static";
@@ -10347,18 +10406,84 @@ impl Compiler {
         }
     }
 
-    fn compile_call_args(&mut self, args: &[CallArg]) -> Vec<(u16, OpType, Option<u16>)> {
+    /// Evaluate arguments that precede a later `yield` into stable operands.
+    /// A plain CV operand would otherwise be reread only after the generator
+    /// resumes. For known by-value parameters we retain its current value in a
+    /// TMP. Late-bound positional and named sends additionally retain the
+    /// original CV index as instruction metadata, allowing the VM to select
+    /// that l-value only when runtime signature resolution proves that the
+    /// parameter is by-reference.
+    fn snapshot_yield_rvalue_operand(
+        &mut self,
+        op: u16,
+        op_type: OpType,
+        name: &str,
+        line: usize,
+    ) -> (u16, OpType) {
+        if op_type != OpType::Cv {
+            return (op, op_type);
+        }
+        let result = self.alloc_tmp();
+        let mut snapshot = Instruction::new(OpCode::FetchCvR);
+        snapshot.op1 = op;
+        snapshot.op1_type = OpType::Cv;
+        snapshot.op2 = self.add_literal(Value::string(name));
+        snapshot.op2_type = OpType::Const;
+        snapshot.result = result;
+        snapshot.result_type = OpType::Tmp;
+        self.push_instruction_at_line(snapshot, line);
+        (result, OpType::Tmp)
+    }
+
+    fn compile_call_args(
+        &mut self,
+        args: &[CallArg],
+        ref_args: u64,
+        runtime_reference_check: bool,
+    ) -> Vec<CompiledCallArg> {
         args.iter()
-            .map(|arg| match arg {
-                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                    let (op, op_type) = self.compile_expr(expr);
-                    (op, op_type, None)
+            .enumerate()
+            .map(|(index, arg)| {
+                let (mut op, mut op_type, name_literal) = match arg {
+                    CallArg::Positional(expr) | CallArg::Unpack(expr) => {
+                        let (op, op_type) = self.compile_expr(expr);
+                        (op, op_type, None)
+                    }
+                    CallArg::Named { name, value } => {
+                        let (op, op_type) = self.compile_expr(value);
+                        let name_idx = self.add_literal(Value::string(name.clone()));
+                        (op, op_type, Some(name_idx))
+                    }
+                };
+                let mut source_cv = None;
+
+                let positional = matches!(arg, CallArg::Positional(_) | CallArg::Unpack(_));
+                let known_reference = positional
+                    && !runtime_reference_check
+                    && index < 64
+                    && ref_args & (1u64 << index) != 0;
+                if op_type == OpType::Cv && !known_reference {
+                    let original_cv = op;
+                    let (name, line) = match arg.expr() {
+                        Expr::Variable { name, line } => (name.clone(), *line),
+                        _ => ("argument".to_string(), 0),
+                    };
+                    let result = self.alloc_tmp();
+                    let mut snapshot = Instruction::new(OpCode::FetchCvR);
+                    snapshot.op1 = original_cv;
+                    snapshot.op1_type = OpType::Cv;
+                    snapshot.op2 = self.add_literal(Value::string(name));
+                    snapshot.op2_type = OpType::Const;
+                    snapshot.result = result;
+                    snapshot.result_type = OpType::Tmp;
+                    self.push_instruction_at_line(snapshot, line);
+                    op = result;
+                    op_type = OpType::Tmp;
+                    if runtime_reference_check || !positional {
+                        source_cv = Some(original_cv);
+                    }
                 }
-                CallArg::Named { name, value } => {
-                    let (op, op_type) = self.compile_expr(value);
-                    let name_idx = self.add_literal(Value::string(name.clone()));
-                    (op, op_type, Some(name_idx))
-                }
+                (op, op_type, name_literal, source_cv)
             })
             .collect()
     }
@@ -10443,7 +10568,7 @@ impl Compiler {
         nullsafe_patch: Option<usize>,
         method: &str,
         args: &[CallArg],
-        compiled_args: &[(u16, OpType, Option<u16>)],
+        compiled_args: &[CompiledCallArg],
         generic_args: &[TypeHint],
         line: usize,
     ) -> (u16, OpType) {
@@ -10508,6 +10633,11 @@ impl Compiler {
         generic_args: &[TypeHint],
         line: usize,
     ) -> (u16, OpType) {
+        let (callable, callable_type) = if args.iter().any(CallArg::contains_yield) {
+            self.snapshot_yield_rvalue_operand(callable, callable_type, "callable", line)
+        } else {
+            (callable, callable_type)
+        };
         if generic_args.is_empty()
             && args
                 .iter()
@@ -10530,7 +10660,7 @@ impl Compiler {
         let compiled_args = args
             .iter()
             .any(CallArg::contains_yield)
-            .then(|| self.compile_call_args(args));
+            .then(|| self.compile_call_args(args, 0, true));
         let runtime_generic_check = self.emit_generic_check(
             OpCode::CheckGenericArgs,
             GenericDeclarationKind::Function,
@@ -10581,13 +10711,10 @@ impl Compiler {
 
     /// Emit Send instructions from pre-compiled argument tuples.
     /// Used by `Expr::New` where side effects must execute before NewObj.
-    /// Each tuple: (operand, op_type, Option<name_literal_idx>).
-    fn emit_precompiled_call_args(
-        &mut self,
-        compiled_args: &[(u16, OpType, Option<u16>)],
-        cv_offset: u32,
-    ) {
-        for (i, (op, op_type, named_idx)) in compiled_args.iter().enumerate() {
+    /// Each tuple carries the operand, optional name literal, and optional
+    /// original CV for runtime by-reference selection.
+    fn emit_precompiled_call_args(&mut self, compiled_args: &[CompiledCallArg], cv_offset: u32) {
+        for (i, (op, op_type, named_idx, source_cv)) in compiled_args.iter().enumerate() {
             if let Some(name_const) = named_idx {
                 let mut send = Instruction::new(OpCode::SendNamed);
                 send.op1 = *op;
@@ -10595,6 +10722,21 @@ impl Compiler {
                 send.op2 = *name_const;
                 send.op2_type = OpType::Const;
                 send.extended_value = i as u32;
+                if let Some(source_cv) = source_cv {
+                    send.result = *source_cv;
+                    send.result_type = OpType::Unused;
+                    send._pad |= SEND_FLAG_YIELD_SNAPSHOT;
+                }
+                self.instructions.push(send);
+            } else if let Some(source_cv) = source_cv {
+                let mut send = Instruction::new(OpCode::SendVarEx);
+                send.op1 = *op;
+                send.op1_type = *op_type;
+                send.op2 = (i as u32 + cv_offset) as u16;
+                send.extended_value = i as u32;
+                send.result = *source_cv;
+                send.result_type = OpType::Unused;
+                send._pad |= SEND_FLAG_YIELD_SNAPSHOT;
                 self.instructions.push(send);
             } else {
                 let mut send = Instruction::new(OpCode::SendVal);
@@ -10609,19 +10751,24 @@ impl Compiler {
     fn emit_precompiled_runtime_call_args(
         &mut self,
         args: &[CallArg],
-        compiled_args: &[(u16, OpType, Option<u16>)],
+        compiled_args: &[CompiledCallArg],
         cv_offset: u32,
         ref_args: u64,
         use_var_ex: bool,
         set_extended_value: bool,
     ) {
         debug_assert_eq!(args.len(), compiled_args.len());
-        for (index, (arg, (op, op_type, name_idx))) in args.iter().zip(compiled_args).enumerate() {
+        for (index, (arg, (op, op_type, name_idx, source_cv))) in
+            args.iter().zip(compiled_args).enumerate()
+        {
             match arg {
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let nonreferenceable = Self::nullsafe_chain_line(expr).is_some();
+                    let yield_snapshot = use_var_ex && source_cv.is_some();
                     let opcode = if nonreferenceable {
                         OpCode::SendVal
+                    } else if yield_snapshot {
+                        OpCode::SendVarEx
                     } else {
                         Self::positional_opcode(ref_args, index, *op_type, use_var_ex)
                     };
@@ -10636,6 +10783,14 @@ impl Compiler {
                     if set_extended_value {
                         send.extended_value = index as u32;
                     }
+                    if yield_snapshot && let Some(source_cv) = source_cv {
+                        send.result = *source_cv;
+                        // Metadata only: keeping result_type unused prevents
+                        // scalar/dataflow passes from treating the source CV
+                        // as a value written by SendVarEx.
+                        send.result_type = OpType::Unused;
+                        send._pad |= SEND_FLAG_YIELD_SNAPSHOT;
+                    }
                     if nonreferenceable {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = index as u32;
@@ -10649,6 +10804,11 @@ impl Compiler {
                     send.op2 = name_idx.expect("compiled named argument must retain its name");
                     send.op2_type = OpType::Const;
                     send.extended_value = index as u32;
+                    if let Some(source_cv) = source_cv {
+                        send.result = *source_cv;
+                        send.result_type = OpType::Unused;
+                        send._pad |= SEND_FLAG_YIELD_SNAPSHOT;
+                    }
                     if Self::nullsafe_chain_line(arg.expr()).is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                     }

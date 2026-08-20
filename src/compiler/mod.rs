@@ -28,6 +28,7 @@ use crate::vm::function::{
 };
 use crate::vm::instruction::{
     InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OpType,
+    SEND_FLAG_YIELD_SNAPSHOT,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
@@ -167,6 +168,11 @@ impl OpArray {
             match instruction.opcode {
                 OpCode::BindGlobal | OpCode::CheckStatic | OpCode::BindStatic => {
                     mark(instruction.op1)
+                }
+                OpCode::SendVarEx | OpCode::SendNamed
+                    if instruction._pad & SEND_FLAG_YIELD_SNAPSHOT != 0 =>
+                {
+                    mark(instruction.result)
                 }
                 OpCode::SendRef | OpCode::SendVarEx | OpCode::SendNamed
                     if instruction.op1_type == OpType::Cv =>

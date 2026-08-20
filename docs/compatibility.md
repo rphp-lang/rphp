@@ -9,17 +9,61 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,473 pass, 1,824 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,485 pass, 1,812 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-65.565% and the whole-corpus rate is 62.029%; 4,625 of 5,297 attempted cases
-reach runtime (87.314%). Relative to exact base `4094eb60`, the pass-set delta
-is +30/-0: all 3,443 prior passes remain passes and no other status, failure
+65.792% and the whole-corpus rate is 62.243%; 4,625 of 5,297 attempted cases
+reach runtime (87.314%). Relative to exact base `df30397b`, the pass-set delta
+is +12/-0: all 3,473 prior passes remain passes and no other status, failure
 category or stage moves. Two final manifests and summaries are byte-for-byte
 identical. The manifest SHA-256 is
-`faddbf4c2ff69ab73efbf04827c6a36253ba40aca3e290f16eedbd00beab53f4`.
+`397a45a6423fad2f95113bf39825bcdf9f3f3542dee24aeb3811abda7e83a9ca`.
 
-PHP 8.5's deprecated relative callable spellings now share one lexical,
-late-called and receiver-aware resolver. String and two-element array forms
+When a generator is interrupted while evaluating arguments for a function,
+method, constructor or dynamic callable, operands evaluated before the
+`yield` now keep PHP 8.5's value at that evaluation boundary. Late-bound calls
+retain both a by-value snapshot and the original CV lvalue until signature
+resolution selects the correct one; this applies to positional and named
+arguments. Method receivers and dynamic callable operands are likewise
+snapshotted before the suspension, while declared by-reference parameters and
+lexical reference captures retain their original PHP cells through every
+detach/materialize cycle.
+
+Detached generator activations expose their saved CV, TMP, yielded key/value,
+return, closure-static and array-delegate values to the request-local cycle
+graph. Removing the last userland root therefore collects a generator that
+references itself from an interrupted call and runs objects retained directly
+or through a bound closure in PHP destructor order. Internal Generator chains
+are flattened iteratively during destructor discovery, preserving the existing
+10,000-level `yield from` release guarantee. `Closure::call()` also keeps its
+temporary bound `$this` when the invoked closure returns a generator.
+
+Four original E2E regressions cover rooted and unrooted collection, bound and
+direct destructor ordering, positional and named runtime by-value/by-reference
+selection after external mutation, constructor/reference behavior, callable
+replacement, `Closure::call()` receiver lifetime and deep delegated release.
+All eleven `Zend/tests/generators/gh9750-001.phpt` through `011.phpt` cases and
+the adjacent `Zend/tests/closures/bug70397.phpt` are the exact full-corpus
+additions.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions. On one pinned AMD64 CPU, the established 200-pair generator-resume
+gate retains checksum `19999900000` and measures -1.532% by its balanced
+order-specific median ratio, below the +1% regression ceiling. This is evidence
+of no generator-resume regression, not an optimization claim.
+
+This checkpoint does not claim that RPHP's public `gc_collect_cycles()` count
+includes PHP's internal suspended-frame bookkeeping node; collection timing,
+destructor effects and selected PHPT output are exact, but a diagnostic probe
+can report one fewer collected element. Broader weak-reference temporary
+retention, generator/fiber crossings, optional extension suites and general
+PHP compatibility remain outside this checkpoint.
+
+In the preceding relative-callable checkpoint, PHP 8.5's deprecated relative
+callable spellings share one lexical, late-called and receiver-aware resolver.
+String and two-element array forms
 using `self`, `parent` or `static`, plus qualified arrays such as
 `["Child", "parent::method"]`, retain forwarding scope, method visibility and
 the live compatible receiver. Static targets keep late-static identity,
@@ -64,7 +108,7 @@ the gate's balanced order-specific median ratio, both below the +5% regression
 ceiling. This is evidence of no callback-dispatch regression, not an
 optimization claim.
 
-This checkpoint does not claim deprecated relative-scope behavior for every
+That checkpoint does not claim deprecated relative-scope behavior for every
 unselected standard-library callback consumer, the remaining semi-reserved
 grammar gap, optional extension suites outside the selected corpus or broader
 PHP syntax and runtime compatibility.

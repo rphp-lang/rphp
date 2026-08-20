@@ -994,9 +994,10 @@ where
         {
             use crate::vm::generator::{Generator, new_generator_ref};
 
-            let mut arguments = Vec::with_capacity(num_args);
-            for index in 0..num_args {
-                arguments.push((*frame).cv(index as u32).clone());
+            let mut arguments = Vec::with_capacity(user.op_array.num_cvs as usize);
+            for index in 0..user.op_array.num_cvs {
+                let value = (*frame).cv(index);
+                arguments.push(value.clone_closure_capture());
             }
             let mut generator = Generator::new(
                 func_ptr,
@@ -1757,11 +1758,11 @@ fn materialize_generator_frame(
         (*frame).return_value = std::ptr::null_mut();
         for (i, value) in gen_data.cv_values.iter().enumerate() {
             let slot = (*frame).cv_mut(i as u32);
-            frame_restore_slot(frame, slot as *mut Value, value.clone());
+            frame_restore_slot(frame, slot as *mut Value, value.clone_closure_capture());
         }
         for (i, value) in gen_data.tmp_values.iter().enumerate() {
             let slot = (*frame).tmp_mut(i as u32);
-            frame_restore_slot(frame, slot as *mut Value, value.clone());
+            frame_restore_slot(frame, slot as *mut Value, value.clone_closure_capture());
         }
         (*frame).opline = user
             .op_array

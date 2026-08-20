@@ -93,12 +93,44 @@ fn destructor_identity(eg: &ExecutorGlobals, value: &Value) -> Option<usize> {
     })
 }
 
+/// Clone the saved operands of an internal Generator object that has no
+/// release sidecar of its own. Flattening these activations keeps destructor
+/// discovery iterative across arbitrarily deep `yield from` chains.
+fn plain_generator_children(
+    eg: &ExecutorGlobals,
+    value: &Value,
+) -> Option<(usize, Vec<Value>)> {
+    let value = value.dereferenced();
+    let identity = value.object_identity()?;
+    let object = value.as_object()?;
+    let generator = object.generator.clone()?;
+    if eg.has_weak_object_release_work(identity)
+        || eg.lazy_object_state(value).is_some()
+        || eg.has_fiber_context(identity)
+        || eg
+            .find_method_info(&object.class_name, "__destruct")
+            .is_some()
+    {
+        return None;
+    }
+    drop(object);
+
+    let mut children = Vec::new();
+    generator
+        .as_ref()
+        .borrow()
+        .for_each_cycle_child(|child| children.push(child.clone_closure_capture()));
+    Some((identity, children))
+}
+
 fn collect_destructor_children(
     eg: &ExecutorGlobals,
     value: &Value,
     children: &mut Vec<(usize, usize, Value)>,
     seen_arrays: &mut std::collections::HashSet<usize>,
     seen_references: &mut std::collections::HashSet<usize>,
+    seen_closures: &mut std::collections::HashSet<usize>,
+    seen_generators: &mut std::collections::HashSet<usize>,
 ) {
     if let Some(identity) = value.reference_identity()
         && !seen_references.insert(identity)
@@ -106,6 +138,32 @@ fn collect_destructor_children(
         return;
     }
     let value = value.dereferenced();
+    if let Some((identity, mut pending)) = plain_generator_children(eg, value) {
+        if !seen_generators.insert(identity) {
+            return;
+        }
+        pending.reverse();
+        while let Some(child) = pending.pop() {
+            if let Some((identity, mut nested)) = plain_generator_children(eg, &child) {
+                if seen_generators.insert(identity) {
+                    let start = pending.len();
+                    pending.append(&mut nested);
+                    pending[start..].reverse();
+                }
+                continue;
+            }
+            collect_destructor_children(
+                eg,
+                &child,
+                children,
+                seen_arrays,
+                seen_references,
+                seen_closures,
+                seen_generators,
+            );
+        }
+        return;
+    }
     if let Some(identity) = destructor_identity(eg, value) {
         if let Some((_, references, _)) = children
             .iter_mut()
@@ -114,6 +172,52 @@ fn collect_destructor_children(
             *references += 1;
         } else {
             children.push((identity, 1, value.clone()));
+        }
+        return;
+    }
+    if value.value_type() == ValueType::Closure {
+        let Some(identity) = value.weak_object_identity() else {
+            return;
+        };
+        if !seen_closures.insert(identity) {
+            return;
+        }
+        if let Some(closure) = value.as_closure() {
+            if let Some(bound_this) = &closure.bound_this {
+                collect_destructor_children(
+                    eg,
+                    bound_this,
+                    children,
+                    seen_arrays,
+                    seen_references,
+                    seen_closures,
+                    seen_generators,
+                );
+            }
+            for capture in &closure.captures {
+                collect_destructor_children(
+                    eg,
+                    capture,
+                    children,
+                    seen_arrays,
+                    seen_references,
+                    seen_closures,
+                    seen_generators,
+                );
+            }
+            if let Some(static_vars) = &closure.static_vars {
+                for value in static_vars.as_ref().borrow().values() {
+                    collect_destructor_children(
+                        eg,
+                        value,
+                        children,
+                        seen_arrays,
+                        seen_references,
+                        seen_closures,
+                        seen_generators,
+                    );
+                }
+            }
         }
         return;
     }
@@ -131,6 +235,8 @@ fn collect_destructor_children(
                 children,
                 seen_arrays,
                 seen_references,
+                seen_closures,
+                seen_generators,
             );
         }
     }
@@ -267,6 +373,8 @@ fn run_final_object_destructor_tree(
     let mut children = Vec::<(usize, usize, Value)>::new();
     let mut seen_arrays = std::collections::HashSet::new();
     let mut seen_references = std::collections::HashSet::new();
+    let mut seen_closures = std::collections::HashSet::new();
+    let mut seen_generators = std::collections::HashSet::new();
     if let Some(object) = owner.as_object() {
         object.for_each_property(|_, property| {
             collect_destructor_children(
@@ -275,8 +383,29 @@ fn run_final_object_destructor_tree(
                 &mut children,
                 &mut seen_arrays,
                 &mut seen_references,
+                &mut seen_closures,
+                &mut seen_generators,
             );
         });
+        if let Some(generator) = &object.generator {
+            if let Some(identity) = owner.object_identity() {
+                seen_generators.insert(identity);
+            }
+            generator
+                .as_ref()
+                .borrow()
+                .for_each_cycle_child(|value| {
+                    collect_destructor_children(
+                        eg,
+                        value,
+                        &mut children,
+                        &mut seen_arrays,
+                        &mut seen_references,
+                        &mut seen_closures,
+                        &mut seen_generators,
+                    );
+                });
+        }
     }
 
     for (_, property_references, child) in children {
@@ -491,8 +620,10 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
             .object_identity()
             .is_some_and(|identity| eg.has_fiber_context(identity))
         || value.as_object().is_some_and(|object| {
-            eg.find_method_info(&object.class_name, "__destruct")
-                .is_some()
+            object.generator.is_some()
+                || eg
+                    .find_method_info(&object.class_name, "__destruct")
+                    .is_some()
         })
         || {
             let mut nested_object = false;

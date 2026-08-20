@@ -218,6 +218,50 @@ impl CycleGraph {
         }
         cyclic
     }
+
+    /// Order destructor dispatch for values retained by a suspended generator
+    /// from the generator's saved operand graph. Those operands may have been
+    /// entered in the possible-root buffer earlier by Rust-side temporary
+    /// clones, but Zend owns them through the activation and releases pending
+    /// call operands before local CVs.
+    fn destructor_order(&self, garbage: &HashSet<usize>) -> Vec<usize> {
+        let mut adjacency = vec![Vec::new(); self.nodes.len()];
+        for &(source, target) in &self.ordinary_edges {
+            if let (Some(&source), Some(&target)) =
+                (self.indices.get(&source), self.indices.get(&target))
+                && garbage.contains(&self.nodes[source].identity)
+                && garbage.contains(&self.nodes[target].identity)
+            {
+                adjacency[source].push(target);
+            }
+        }
+
+        let mut ordered = Vec::with_capacity(self.nodes.len());
+        let mut visited = vec![false; self.nodes.len()];
+        for (index, node) in self.nodes.iter().enumerate() {
+            let is_generator = node.kind == CycleNodeKind::Object
+                && node
+                    .value
+                    .as_object()
+                    .is_some_and(|object| object.generator.is_some());
+            if !is_generator || !garbage.contains(&node.identity) {
+                continue;
+            }
+            let mut stack = vec![index];
+            while let Some(current) = stack.pop() {
+                if visited[current] || !garbage.contains(&self.nodes[current].identity) {
+                    continue;
+                }
+                visited[current] = true;
+                ordered.push(current);
+                stack.extend(adjacency[current].iter().rev().copied());
+            }
+        }
+        ordered.extend(self.nodes.iter().enumerate().filter_map(|(index, node)| {
+            (garbage.contains(&node.identity) && !visited[index]).then_some(index)
+        }));
+        ordered
+    }
 }
 
 fn propagate(adjacency: &[Vec<usize>], live: &mut [bool], queue: &mut VecDeque<usize>) {
@@ -294,8 +338,9 @@ impl ExecutorGlobals {
             garbage.iter().map(|(identity, _)| *identity).collect();
         let cyclic = initial.cyclic_identities(&garbage_identities);
 
-        for node in &initial.nodes {
-            if node.kind == CycleNodeKind::Object && garbage_identities.contains(&node.identity) {
+        for index in initial.destructor_order(&garbage_identities) {
+            let node = &initial.nodes[index];
+            if node.kind == CycleNodeKind::Object {
                 run_cycle_object_destructor(self, &node.value)?;
                 if self.exception.is_some() {
                     return Ok(0);

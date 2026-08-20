@@ -3295,11 +3295,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let func_common = unsafe { &*(*call).func };
                 let is_ref = func_common.sig.is_param_by_ref(param_idx);
 
-                if is_ref && opline.op1_type == OpType::Cv {
+                let yield_snapshot =
+                    opline._pad & crate::vm::instruction::SEND_FLAG_YIELD_SNAPSHOT != 0;
+                if is_ref && (opline.op1_type == OpType::Cv || yield_snapshot) {
                     // Same logic as SendRef
                     let argument = unsafe {
                         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                        let raw_ptr = base.add(opline.op1 as usize);
+                        let source_cv = if yield_snapshot {
+                            debug_assert_eq!(opline.result_type, OpType::Unused);
+                            opline.result
+                        } else {
+                            opline.op1
+                        };
+                        let raw_ptr = base.add(source_cv as usize);
                         materialize_reference_alias(frame, raw_ptr)
                     };
                     let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };

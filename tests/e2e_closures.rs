@@ -43,6 +43,26 @@ echo $original(), $bound(), $original(), $bound();
 }
 
 #[test]
+fn closure_call_retains_its_bound_receiver_in_a_detached_generator_frame() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$generatorClosure = function () {
+    $this->value = "bound";
+    yield $this->value;
+};
+$receiver = new class {
+    public $value;
+};
+$generator = $generatorClosure->call($receiver);
+echo $generator->current(), ':', $receiver->value;
+"#,
+        ),
+        "bound:bound",
+    );
+}
+
+#[test]
 fn test_closure_basic() {
     assert_eq!(
         run_php(

@@ -898,6 +898,134 @@ $generator->send("new-method");
     );
 }
 
+#[test]
+fn test_generator_snapshots_prior_late_bound_values_but_retains_reference_lvalues() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RefOrValueReceiver {
+    public function byValue($value, $resume) { echo "value:$value|"; }
+    public function byReference(&$value, $resume) {
+        $value = "method";
+        echo "reference:$value|";
+    }
+}
+function lateBoundValue(&$value, $receiver) {
+    $receiver->byValue($value, yield "value-ready");
+}
+function lateBoundReference(&$value, $receiver) {
+    $receiver->byReference($value, yield "reference-ready");
+}
+function mixedReferenceLvalue($value, &$slot, $resume) {
+    echo "mixed-value:$value|";
+    $slot = "callee";
+}
+function mixedReferenceFlow(&$value, &$array) {
+    mixedReferenceLvalue($value, $array[0], yield "mixed-ready");
+}
+
+$receiver = new RefOrValueReceiver;
+$value = "before";
+$generator = lateBoundValue($value, $receiver);
+echo $generator->current(), "|";
+$value = "outside";
+$generator->send(null);
+echo "after-value:$value|";
+
+$value = "before";
+$generator = lateBoundReference($value, $receiver);
+echo $generator->current(), "|";
+$value = "outside";
+$generator->send(null);
+echo "after-reference:$value|";
+
+$value = "before";
+$array = ["slot"];
+$generator = mixedReferenceFlow($value, $array);
+echo $generator->current(), "|";
+$value = "outside";
+$array[0] = "outside-slot";
+$generator->send(null);
+echo "after-mixed:$value:$array[0]|";
+"#,
+        ),
+        concat!(
+            "value-ready|value:before|after-value:outside|",
+            "reference-ready|reference:method|after-reference:method|",
+            "mixed-ready|mixed-value:before|after-mixed:outside:callee|",
+        ),
+    );
+}
+
+#[test]
+fn test_generator_snapshot_protocol_covers_named_constructor_and_callable_operands() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class NamedYieldReceiver {
+    public function byValue($value, $resume) { echo "named-value:$value|"; }
+    public function byReference(&$value, $resume) {
+        $value = "named";
+        echo "named-reference:$value|";
+    }
+}
+function namedValue(&$value, $receiver) {
+    $receiver->byValue(value: $value, resume: yield "named-value-ready");
+}
+function namedReference(&$value, $receiver) {
+    $receiver->byReference(value: $value, resume: yield "named-reference-ready");
+}
+class YieldConstructorReceiver {
+    public function __construct(&$value, $resume) {
+        $value = "constructor";
+        echo "constructor:$value|";
+    }
+}
+function yieldingConstructor(&$value) {
+    new YieldConstructorReceiver($value, yield "constructor-ready");
+}
+function yieldingCallable(&$callable) {
+    $callable(yield "callable-ready");
+}
+
+$receiver = new NamedYieldReceiver;
+$value = "before";
+$generator = namedValue($value, $receiver);
+echo $generator->current(), "|";
+$value = "outside";
+$generator->send(null);
+echo "after-named-value:$value|";
+
+$value = "before";
+$generator = namedReference($value, $receiver);
+echo $generator->current(), "|";
+$value = "outside";
+$generator->send(null);
+echo "after-named-reference:$value|";
+
+$value = "before";
+$generator = yieldingConstructor($value);
+echo $generator->current(), "|";
+$value = "outside";
+$generator->send(null);
+echo "after-constructor:$value|";
+
+$callable = fn($value) => print "old:$value|";
+$generator = yieldingCallable($callable);
+echo $generator->current(), "|";
+$callable = fn($value) => print "new:$value|";
+$generator->send("sent");
+"#,
+        ),
+        concat!(
+            "named-value-ready|named-value:before|after-named-value:outside|",
+            "named-reference-ready|named-reference:named|after-named-reference:named|",
+            "constructor-ready|constructor:constructor|after-constructor:constructor|",
+            "callable-ready|old:sent|",
+        ),
+    );
+}
+
 // ── yield from ──
 
 #[test]

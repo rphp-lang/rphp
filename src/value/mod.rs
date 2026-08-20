@@ -4951,6 +4951,9 @@ impl Value {
             Some(CycleNodeKind::Object) => {
                 if let Some(object) = self.as_object() {
                     object.for_each_property(|_, value| push(value));
+                    if let Some(generator) = &object.generator {
+                        generator.as_ref().borrow().for_each_cycle_child(&mut push);
+                    }
                 }
             }
             Some(CycleNodeKind::Reference) => {

@@ -96,14 +96,14 @@ impl Generator {
         num_cvs: u32,
         num_temps: u32,
     ) -> Self {
+        let trace_num_args = args.len();
+        let mut args = args.into_iter();
         let mut cv_values = Vec::with_capacity(num_cvs as usize);
-        // Copy arguments into CV slots
-        for i in 0..num_cvs as usize {
-            if i < args.len() {
-                cv_values.push(args[i].clone());
-            } else {
-                cv_values.push(Value::undef());
-            }
+        // Move the already-prepared parameter and capture values into their
+        // detached slots. Re-cloning an owned reference here would
+        // dereference a `use (&$value)` capture and lose its lexical cell.
+        for _ in 0..num_cvs {
+            cv_values.push(args.next().unwrap_or_else(Value::undef));
         }
         let mut tmp_values = Vec::with_capacity(num_temps as usize);
         for _ in 0..num_temps {
@@ -117,7 +117,7 @@ impl Generator {
             state: GeneratorState::Created,
             value: Value::null(),
             key: Value::long(-1), // will become 0 on first yield
-            trace_num_args: Value::long(i64::try_from(args.len()).unwrap_or(i64::MAX)),
+            trace_num_args: Value::long(i64::try_from(trace_num_args).unwrap_or(i64::MAX)),
             return_value: Value::null(),
             has_returned: false,
             rewindable: true,
@@ -136,6 +136,40 @@ impl Generator {
     /// Get the UserFunction from the stored func pointer
     pub unsafe fn user_function(&self) -> &UserFunction {
         &*(self.func as *const UserFunction)
+    }
+
+    /// Visit every PHP value owned by a detached generator activation.
+    ///
+    /// The request-local cycle collector cannot infer these edges from the
+    /// public Generator object's ordinary properties. In particular, a
+    /// suspended frame may retain a reference back to its own Generator
+    /// object plus otherwise acyclic argument values. Exposing the complete
+    /// saved-value set lets the collector subtract those internal owners and
+    /// release the activation when its last userland root disappears.
+    pub(crate) fn for_each_cycle_child(&self, mut visitor: impl FnMut(&Value)) {
+        // Zend retires operands already transferred to an interrupted call
+        // before the generator's local CVs. Preserve that observable order
+        // when those values own user destructors.
+        for value in &self.tmp_values {
+            visitor(value);
+        }
+        for value in &self.cv_values {
+            visitor(value);
+        }
+        visitor(&self.value);
+        visitor(&self.key);
+        visitor(&self.trace_num_args);
+        visitor(&self.return_value);
+        if let Some(static_vars) = &self.closure_static_vars {
+            for value in static_vars.as_ref().borrow().values() {
+                visitor(value);
+            }
+        }
+        if let Some(YieldFromDelegate::Array(entries, _)) = &self.delegate {
+            for (_, value) in entries {
+                visitor(value);
+            }
+        }
     }
 }
 

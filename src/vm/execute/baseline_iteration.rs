@@ -1641,12 +1641,18 @@ fn op_yield<'a>(
         let num_cvs = unsafe { (*frame).num_cvs } as usize;
         let num_temps = unsafe { (*frame).num_temps } as usize;
         gen_data.cv_values.clear();
+        // SAFETY: `frame` is the active generator activation and both loops
+        // use the CV/TMP bounds read from that same live frame.
         for i in 0..num_cvs {
-            gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+            gen_data
+                .cv_values
+                .push(unsafe { (*frame).cv(i as u32) }.clone_closure_capture());
         }
         gen_data.tmp_values.clear();
         for i in 0..num_temps {
-            gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+            gen_data
+                .tmp_values
+                .push(unsafe { (*frame).tmp(i as u32) }.clone_closure_capture());
         }
 
         // Save instruction pointer (advance past yield for resume)
@@ -1759,12 +1765,18 @@ fn op_yield_from<'a>(
                         let num_cvs = unsafe { (*frame).num_cvs } as usize;
                         let num_temps = unsafe { (*frame).num_temps } as usize;
                         gen_data.cv_values.clear();
+                        // SAFETY: `frame` remains the active generator frame;
+                        // these indices are bounded by its live CV/TMP counts.
                         for i in 0..num_cvs {
-                            gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+                            gen_data
+                                .cv_values
+                                .push(unsafe { (*frame).cv(i as u32) }.clone_closure_capture());
                         }
                         gen_data.tmp_values.clear();
                         for i in 0..num_temps {
-                            gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+                            gen_data
+                                .tmp_values
+                                .push(unsafe { (*frame).tmp(i as u32) }.clone_closure_capture());
                         }
                         let base = op_array.instructions.as_ptr();
                         gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
@@ -1826,12 +1838,18 @@ fn op_yield_from<'a>(
                 let num_cvs = unsafe { (*frame).num_cvs } as usize;
                 let num_temps = unsafe { (*frame).num_temps } as usize;
                 gen_data.cv_values.clear();
+                // SAFETY: `frame` remains live through snapshot publication;
+                // both loops use its validated CV/TMP slot counts.
                 for i in 0..num_cvs {
-                    gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+                    gen_data
+                        .cv_values
+                        .push(unsafe { (*frame).cv(i as u32) }.clone_closure_capture());
                 }
                 gen_data.tmp_values.clear();
                 for i in 0..num_temps {
-                    gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+                    gen_data
+                        .tmp_values
+                        .push(unsafe { (*frame).tmp(i as u32) }.clone_closure_capture());
                 }
                 let base = op_array.instructions.as_ptr();
                 gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };

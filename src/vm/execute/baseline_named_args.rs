@@ -13,6 +13,7 @@ fn op_send_named<'a>(
     let call = unsafe { (*frame).call };
     debug_assert!(!call.is_null());
     let func_common = unsafe { &*(*call).func };
+    let yield_snapshot = opline._pad & SEND_FLAG_YIELD_SNAPSHOT != 0;
 
     if !unsafe { (*call).named_args_used } {
         let positional = opline.extended_value.min(func_common.sig.public_arity());
@@ -91,7 +92,11 @@ fn op_send_named<'a>(
                         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                     });
                 }
-                if opline.op1_type != OpType::Cv {
+                if yield_snapshot {
+                    debug_assert_eq!(opline.result_type, OpType::Unused);
+                    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                    materialize_reference_alias(frame, base.add(opline.result as usize))
+                } else if opline.op1_type != OpType::Cv {
                     snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?
                 } else {
                     let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
@@ -141,6 +146,7 @@ fn op_send_named<'a>(
 
                 if is_ref
                     && (opline.op1_type == OpType::Cv
+                        || yield_snapshot
                         || (opline._pad & SEND_FLAG_NONREFERENCEABLE != 0
                             && !func_common.sig.is_param_prefer_ref(idx)))
                 {
@@ -172,7 +178,13 @@ fn op_send_named<'a>(
                             });
                         }
                         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                        let raw_ptr = base.add(opline.op1 as usize);
+                        let source_cv = if yield_snapshot {
+                            debug_assert_eq!(opline.result_type, OpType::Unused);
+                            opline.result
+                        } else {
+                            opline.op1
+                        };
+                        let raw_ptr = base.add(source_cv as usize);
                         materialize_reference_alias(frame, raw_ptr)
                     };
                     let arg_slot = unsafe { (*call).cv_mut(cv_idx) };

@@ -43,9 +43,9 @@ use super::instruction::{
     NEW_FLAG_VIRTUAL_DECLARED_READS, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
     OBJ_PROP_REFERENCE_BIND, OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT,
     REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE, SEND_FLAG_GLOBALS,
-    SEND_FLAG_NONREFERENCEABLE, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use super::opcode::OpCode;
 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
@@ -3339,8 +3339,15 @@ fn execute_full_call<'a>(
                 use crate::vm::generator::{Generator, new_generator_ref};
 
                 let mut args = Vec::with_capacity(user.op_array.num_cvs as usize);
+                // SAFETY: `call` is the still-live compiler-sized callee frame;
+                // every index is bounded by its own immutable op-array CV count.
                 for i in 0..user.op_array.num_cvs {
-                    args.push(unsafe { (*call).cv(i).clone() });
+                    let value = unsafe { (*call).cv(i) };
+                    // The call boundary has already applied by-value
+                    // parameter semantics. Detaching the resulting frame must
+                    // retain any reference cells that remain, including
+                    // declared by-reference parameters and lexical captures.
+                    args.push(value.clone_closure_capture());
                 }
                 let mut generator = Generator::new(
                     unsafe { (*call).func },
