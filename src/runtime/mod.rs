@@ -3455,15 +3455,12 @@ impl ExecutorGlobals {
             }
             Ok(())
         } else {
-            if self
+            if let Some(previous) = self
                 .pending_named_classes
                 .iter()
-                .any(|pending| pending.name.eq_ignore_ascii_case(&class_def.name))
+                .find(|pending| pending.name.eq_ignore_ascii_case(&class_def.name))
             {
-                return Err(format!(
-                    "Cannot declare class {}, because the name is already in use",
-                    class_def.name
-                ));
+                return Err(Self::class_like_redeclaration_error(previous, &class_def));
             }
             if self.class_definition_requires_delayed_linking(&class_def) {
                 self.pending_named_classes.push(class_def);
@@ -3515,8 +3512,9 @@ impl ExecutorGlobals {
             return Ok(Some(class_def));
         }
         if let Some(class_name) = self.declared_runtime_classes.get(declaration_key) {
-            return Err(format!(
-                "Cannot declare class {class_name}, because the name is already in use"
+            return Err(self.find_class(class_name).map_or_else(
+                || format!("Cannot declare class {class_name}, because the name is already in use"),
+                |previous| Self::class_like_redeclaration_error(previous, previous),
             ));
         }
         Ok(None)
@@ -3966,15 +3964,13 @@ impl ExecutorGlobals {
         let mut inherited_rebound_trait_defaults = Vec::new();
         // PHP does not permit class redeclaration. Besides matching that rule,
         // this guarantees class_by_id pointers remain stable for inline caches.
-        if self
+        if let Some(previous) = self
             .class_table
-            .keys()
-            .any(|registered| registered.eq_ignore_ascii_case(&class_name))
+            .iter()
+            .find(|(registered, _)| registered.eq_ignore_ascii_case(&class_name))
+            .map(|(_, class)| class.as_ref())
         {
-            return Err(format!(
-                "Cannot declare class {}, because the name is already in use",
-                class_name
-            ));
+            return Err(Self::class_like_redeclaration_error(previous, &class_def));
         }
         let class_table = &self.class_table;
         self.generic_metadata
@@ -4747,6 +4743,46 @@ impl ExecutorGlobals {
         }
 
         Ok(())
+    }
+
+    /// Class-like names share one case-insensitive registry. PHP attributes a
+    /// collision to the first declaration's kind and spelling, except that an
+    /// enum colliding with another kind uses that non-enum kind.
+    #[cold]
+    fn class_like_redeclaration_error(previous: &ClassDef, current: &ClassDef) -> String {
+        let diagnostic_owner = if previous.is_enum && !current.is_enum {
+            current
+        } else {
+            previous
+        };
+        let kind = if diagnostic_owner.is_interface {
+            "interface"
+        } else if diagnostic_owner.is_trait {
+            "trait"
+        } else if diagnostic_owner.is_enum {
+            "enum"
+        } else {
+            "class"
+        };
+        let previous_location = previous
+            .source_file
+            .as_ref()
+            .map_or_else(String::new, |file| {
+                format!(
+                    " (previously declared in {file}:{})",
+                    previous.declaration_line
+                )
+            });
+        let current_location = current
+            .source_file
+            .as_ref()
+            .map_or_else(String::new, |file| {
+                format!(" in {file} on line {}", current.declaration_line)
+            });
+        format!(
+            "Cannot redeclare {kind} {}{previous_location}{current_location}",
+            diagnostic_owner.name
+        )
     }
 
     #[cold]

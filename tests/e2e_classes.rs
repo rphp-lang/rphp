@@ -6,6 +6,70 @@ use common::{
 };
 
 #[test]
+fn class_like_redeclarations_keep_the_original_kind_spelling_and_origin() {
+    for (source, expected) in [
+        (
+            "<?php\nclass OriginalClass {}\ninterface ORIGINALCLASS {}",
+            "Cannot redeclare class OriginalClass (previously declared in /virtual/redeclaration.php:2) in /virtual/redeclaration.php on line 3",
+        ),
+        (
+            "<?php\ninterface OriginalInterface {}\ntrait ORIGINALINTERFACE {}",
+            "Cannot redeclare interface OriginalInterface (previously declared in /virtual/redeclaration.php:2) in /virtual/redeclaration.php on line 3",
+        ),
+        (
+            "<?php\ntrait OriginalTrait {}\nclass ORIGINALTRAIT {}",
+            "Cannot redeclare trait OriginalTrait (previously declared in /virtual/redeclaration.php:2) in /virtual/redeclaration.php on line 3",
+        ),
+        (
+            "<?php\nenum OriginalEnum {}\nenum ORIGINALENUM {}",
+            "Cannot redeclare enum OriginalEnum (previously declared in /virtual/redeclaration.php:2) in /virtual/redeclaration.php on line 3",
+        ),
+        (
+            "<?php\nenum OriginalEnumThenClass {}\nclass ORIGINALENUMTHENCLASS {}",
+            "Cannot redeclare class ORIGINALENUMTHENCLASS (previously declared in /virtual/redeclaration.php:2) in /virtual/redeclaration.php on line 3",
+        ),
+        (
+            "<?php\nclass OriginalClassThenEnum {}\nenum ORIGINALCLASSTHENENUM {}",
+            "Cannot redeclare class OriginalClassThenEnum (previously declared in /virtual/redeclaration.php:2) in /virtual/redeclaration.php on line 3",
+        ),
+        (
+            "<?php\ninterface stdClass {}",
+            "Cannot redeclare class stdClass in /virtual/redeclaration.php on line 2",
+        ),
+        (
+            "<?php\nclass Stringable {}",
+            "Cannot redeclare interface Stringable in /virtual/redeclaration.php on line 2",
+        ),
+    ] {
+        assert_eq!(
+            run_php_expect_error_with_source_context(
+                source,
+                "/virtual/redeclaration.php",
+                "/virtual",
+            )
+            .to_string(),
+            expected
+        );
+    }
+
+    assert_eq!(
+        run_php_expect_error_with_source_context(
+            r#"<?php
+function declare_once_per_call() {
+    class LocalDeclaration {}
+}
+declare_once_per_call();
+declare_once_per_call();
+"#,
+            "/virtual/runtime-redeclaration.php",
+            "/virtual",
+        )
+        .to_string(),
+        "Cannot redeclare class LocalDeclaration (previously declared in /virtual/runtime-redeclaration.php:3) in /virtual/runtime-redeclaration.php on line 3"
+    );
+}
+
+#[test]
 fn class_like_declarations_reject_reserved_names_and_preserve_raw_spelling() {
     for (source, file, expected) in [
         (
