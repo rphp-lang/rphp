@@ -2153,6 +2153,40 @@ echo (int) $reference, ":", intval($reference), "|";
 }
 
 #[test]
+fn explicit_string_float_conversions_use_the_php_numeric_prefix_grammar() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$values = [
+    "2px",
+    "2.5px",
+    ".9.",
+    "9..",
+    "1e2tail",
+    "12e+",
+    "1e309",
+    "-1e309",
+    "-0",
+    "nan",
+    "INF",
+    " \t+.5e-1x",
+    "not numeric",
+];
+foreach ($values as $value) {
+    var_dump((float) $value, floatval($value));
+    $copy = $value;
+    settype($copy, "float");
+    var_dump($copy);
+}
+$reference = &$values[0];
+var_dump((float) $reference, floatval($reference));
+"#,
+        ),
+        "float(2)\nfloat(2)\nfloat(2)\nfloat(2.5)\nfloat(2.5)\nfloat(2.5)\nfloat(0.9)\nfloat(0.9)\nfloat(0.9)\nfloat(9)\nfloat(9)\nfloat(9)\nfloat(100)\nfloat(100)\nfloat(100)\nfloat(12)\nfloat(12)\nfloat(12)\nfloat(INF)\nfloat(INF)\nfloat(INF)\nfloat(-INF)\nfloat(-INF)\nfloat(-INF)\nfloat(-0)\nfloat(-0)\nfloat(-0)\nfloat(0)\nfloat(0)\nfloat(0)\nfloat(0)\nfloat(0)\nfloat(0)\nfloat(0.05)\nfloat(0.05)\nfloat(0.05)\nfloat(0)\nfloat(0)\nfloat(0)\nfloat(2)\nfloat(2)\n"
+    );
+}
+
+#[test]
 fn test_cast_int_from_bool_true() {
     assert_eq!(run_php("<?php echo (int)true;"), "1");
 }

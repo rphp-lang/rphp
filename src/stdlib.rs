@@ -28,8 +28,9 @@ use crate::vm::execute::{
     ScalarLongSortOrder, VmError, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
-    call_function_owned_iter_with_context_and_named, check_type_hint, explicit_long_conversion,
-    prepare_scalar_long_callback, try_execute_scalar_long_callback, values_identical,
+    call_function_owned_iter_with_context_and_named, check_type_hint, explicit_float_conversion,
+    explicit_long_conversion, prepare_scalar_long_callback, try_execute_scalar_long_callback,
+    values_identical,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -3376,7 +3377,7 @@ fn fn_floatval(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg!(ed, 0).to_float_val()));
+    ret!(rv, Value::double(explicit_float_conversion(arg!(ed, 0))));
 }
 
 fn fn_boolval(
@@ -3476,7 +3477,7 @@ fn fn_settype(
             let value = match original.value_type() {
                 ValueType::Object | ValueType::Closure => 1.0,
                 ValueType::Array => f64::from(!original.as_array().unwrap().is_empty()),
-                _ => original.to_float_val(),
+                _ => explicit_float_conversion(&original),
             };
             Value::double(value)
         }

@@ -9,6 +9,52 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,601 pass, 1,696 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+67.982% and the whole-corpus rate is 64.315%; 4,701 of 5,297 attempted cases
+reach runtime (88.748%). Relative to exact base `fd0298d7`, the pass-set delta
+is +3/-0: all 3,598 prior passes remain passes and no other status or failure
+category moves. Two final merged manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`70b49f99f2e53a7ad13c49e47ff7226d80c19d930db5a0f02f620cc560cbb361`.
+
+Explicit PHP 8.5 string-to-float conversion now shares the complete numeric-
+prefix grammar across `(float)`, `floatval()` and `settype(..., "float")`.
+Decimal fractions, scientific notation, leading PHP ASCII whitespace and
+leading-numeric trailing text convert without diagnostics; incomplete
+exponents stop before `e`. Numeric exponent overflow produces signed infinity,
+negative zero retains its sign, while Rust-only textual `NaN` and `inf`
+spellings remain non-numeric and convert to zero. References are transparent
+and non-string conversion behavior is unchanged.
+
+Complete float strings containing an ASCII digit retain a direct parse fast
+path. Prefix, trailing-text and invalid cases enter the checked parser already
+shared by numeric coercion, so the optimization cannot admit textual special
+values. Original E2E coverage exercises 13 boundary values through all three
+explicit APIs plus a reference. The complete 19-case `(float)`/`floatval()`
+audit moves from five to eight exact passes with two unchanged skips. The exact
+full-corpus additions are
+`Zend/tests/numeric_strings/explicit_cast_leading_numeric_must_work.phpt`,
+`tests/lang/bug73329.phpt` and `tests/lang/string_decimals_001.phpt`.
+Object/array/resource conversion diagnostics, unary signed-zero propagation,
+non-canonical cast aliases, integer-literal parsing and constexpr object
+support remain separate visible work.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. On an AMD Ryzen
+9 7950X pinned to one performance-governor CPU, 32 alternating release A/B
+pairs with two warmups per binary, JIT and quick loops disabled execute five
+million complete decimal-string casts with identical checksums. Against the
+exact base binary, the candidate is +0.701% by independent medians and +0.888%
+by the paired-ratio median, within the +5% gate. The initial parser-only variant
+was rejected at +7.879% and +8.279%, respectively; the complete-string fast
+path restored the common case without weakening the PHP contract.
+
+In the preceding scientific-string integer-cast checkpoint, the measured
+AMD64 PHP 8.5 contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,598 pass, 1,699 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 67.925% and the whole-corpus rate is 64.261%; 4,701 of 5,297 attempted cases
@@ -37,10 +83,10 @@ both paths, references, incomplete exponents, finite and non-finite overflow,
 integer overflow and non-numeric input. The 12-case adjacent cluster moves from
 two to three exact passes. The sole full-corpus addition is
 `Zend/tests/int_conversion_exponents.phpt`; all other selected controls keep
-their prior outcome. Prefix `(float)` conversion, float-to-integer low-bit and
-diagnostic behavior, non-canonical cast deprecation, object/array/resource cast
-details, optional `intval()` bases and constexpr object support remain separate
-visible work.
+their prior outcome. At that checkpoint, prefix `(float)` conversion, float-to-
+integer low-bit and diagnostic behavior, non-canonical cast deprecation,
+object/array/resource cast details, optional `intval()` bases and constexpr
+object support remained separate visible work.
 
 All five Cargo configurations, all-feature/all-target, formatting, unsafe
 self-test and the exact unsafe ratchet pass, as do Composer S0, all four

@@ -2745,7 +2745,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 let casted = match opline.extended_value {
                     0 => Value::long(explicit_long_conversion(val)), // (int)
-                    1 => Value::double(val.to_float_val()), // (float)
+                    1 => Value::double(explicit_float_conversion(val)), // (float)
                     2 => {                                   // (string)
                         report_array_to_string_conversion!(val);
                         if matches!(val.value_type(), ValueType::Object | ValueType::Closure) {

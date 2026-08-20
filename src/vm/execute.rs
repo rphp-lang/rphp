@@ -921,6 +921,24 @@ pub(crate) fn explicit_long_conversion(value: &Value) -> i64 {
     value.to_long_val()
 }
 
+/// Convert an explicit float-cast operand. String casts accept PHP's numeric
+/// prefix grammar without admitting Rust's textual `NaN`/`inf` spellings.
+#[inline]
+pub(crate) fn explicit_float_conversion(value: &Value) -> f64 {
+    let value = value.dereferenced();
+    if value.value_type() == ValueType::String {
+        let text = value.as_str().unwrap();
+        let trimmed = text.trim_matches(|character: char| character.is_ascii_whitespace());
+        if trimmed.as_bytes().iter().any(u8::is_ascii_digit)
+            && let Ok(number) = trimmed.parse::<f64>()
+        {
+            return number;
+        }
+        return parse_php_numeric_prefix(text).map_or(0.0, |(parsed, _)| parsed.number);
+    }
+    value.to_float_val()
+}
+
 #[inline]
 fn return_hint_contains(hint: &ParamTypeHint, expected: &ParamTypeHint) -> bool {
     hint == expected
