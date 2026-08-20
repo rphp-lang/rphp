@@ -135,6 +135,46 @@ fn php_float_to_string(number: f64, precision: i32) -> String {
     output
 }
 
+/// Format a finite or non-finite float for PHP serialization consumers.
+/// `serialize_precision=0` retains Zend's distinct one-digit scientific form,
+/// while other values use the shared significant-digit formatter.
+#[cold]
+pub(crate) fn php_serialized_float_to_string(number: f64, precision: i32) -> String {
+    if number.is_nan() {
+        return "NAN".to_string();
+    }
+    if number == f64::INFINITY {
+        return "INF".to_string();
+    }
+    if number == f64::NEG_INFINITY {
+        return "-INF".to_string();
+    }
+    if precision != 0 {
+        return php_float_to_string(number, precision);
+    }
+
+    let scientific = format!("{number:.0e}");
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("Rust scientific float formatting has an exponent");
+    let exponent = exponent.parse::<i32>().unwrap_or(0);
+    format!("{mantissa}.0E{:+}", exponent)
+}
+
+/// `var_export()` must retain that a finite scalar is a float even when its
+/// significant-digit rendering is an integer.
+#[cold]
+pub(crate) fn php_var_export_float_to_string(number: f64, precision: i32) -> String {
+    if !number.is_finite() {
+        return php_serialized_float_to_string(number, precision);
+    }
+    let mut output = php_float_to_string(number, precision);
+    if !output.bytes().any(|byte| matches!(byte, b'.' | b'E')) {
+        output.push_str(".0");
+    }
+    output
+}
+
 #[inline]
 fn fixed_shortest_fits_precision(value: &str, precision: usize) -> bool {
     let unsigned = value.strip_prefix('-').unwrap_or(value);

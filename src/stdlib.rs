@@ -11,7 +11,9 @@
 ///   - `ret!(rv, expr)` → writes to return_value with null check
 use std::borrow::Cow;
 use std::fmt::Write as _;
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
+
+use serde::Serialize as _;
 
 use crate::compiler::compile::{ClassConstantDefinition, PropertyDefinition};
 use crate::compiler::{
@@ -5099,6 +5101,8 @@ fn fn_constant(
 // JSON functions
 // ============================================================================
 
+const JSON_PRESERVE_ZERO_FRACTION_FLAG: i64 = 1024;
+
 fn fn_json_encode(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -5108,7 +5112,8 @@ fn fn_json_encode(
     if eg.exception.is_some() {
         ret!(rv, Value::bool(false));
     }
-    let encoded = json_encode_value(&value, eg)?;
+    let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
+    let encoded = json_encode_value(&value, flags, eg)?;
     if eg.exception.is_some() {
         ret!(rv, Value::bool(false));
     }
@@ -6740,7 +6745,7 @@ fn var_dump_value_inner(
             } else if number == f64::NEG_INFINITY {
                 "-INF".to_string()
             } else {
-                val.echo_to_string_with_precision(-1)
+                val.echo_to_string_with_precision(eg.serialize_precision)
             };
             format!("{prefix}float({display})\n")
         }
@@ -7290,18 +7295,10 @@ fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
         ValueType::True => "true".to_string(),
         ValueType::False => "false".to_string(),
         ValueType::Long => val.as_long().unwrap().to_string(),
-        ValueType::Double => {
-            let number = val.as_double().unwrap();
-            if number.is_nan() {
-                "NAN".to_string()
-            } else if number == f64::INFINITY {
-                "INF".to_string()
-            } else if number == f64::NEG_INFINITY {
-                "-INF".to_string()
-            } else {
-                number.to_string()
-            }
-        }
+        ValueType::Double => crate::value::php_var_export_float_to_string(
+            val.as_double().unwrap(),
+            eg.serialize_precision,
+        ),
         ValueType::String => format!(
             "'{}'",
             val.as_str()
@@ -7356,7 +7353,11 @@ fn var_export_value(val: &Value, eg: &ExecutorGlobals) -> String {
 
 /// Simple JSON encoder
 /// Convert a PHP Value to serde_json::Value for encoding.
-fn value_to_json(val: &Value, eg: &mut ExecutorGlobals) -> Result<serde_json::Value, VmError> {
+fn value_to_json(
+    val: &Value,
+    eg: &mut ExecutorGlobals,
+    compact_formatter_compatible: &mut bool,
+) -> Result<serde_json::Value, VmError> {
     Ok(match val.value_type() {
         ValueType::Null | ValueType::Undef => serde_json::Value::Null,
         ValueType::True => serde_json::Value::Bool(true),
@@ -7367,6 +7368,11 @@ fn value_to_json(val: &Value, eg: &mut ExecutorGlobals) -> Result<serde_json::Va
         ValueType::Double => {
             let d = val.as_double().unwrap();
             if d.is_finite() {
+                if *compact_formatter_compatible {
+                    let magnitude = d.abs();
+                    *compact_formatter_compatible =
+                        d.fract() != 0.0 && (1e-4..1e17).contains(&magnitude);
+                }
                 serde_json::Number::from_f64(d)
                     .map(serde_json::Value::Number)
                     .unwrap_or(serde_json::Value::Null)
@@ -7384,7 +7390,7 @@ fn value_to_json(val: &Value, eg: &mut ExecutorGlobals) -> Result<serde_json::Va
             if is_list {
                 let mut values = Vec::with_capacity(arr.len());
                 for value in arr.values() {
-                    values.push(value_to_json(value, eg)?);
+                    values.push(value_to_json(value, eg, compact_formatter_compatible)?);
                 }
                 serde_json::Value::Array(values)
             } else {
@@ -7394,7 +7400,7 @@ fn value_to_json(val: &Value, eg: &mut ExecutorGlobals) -> Result<serde_json::Va
                         ArrayKey::Int(n) => n.to_string(),
                         ArrayKey::String(s) => s,
                     };
-                    map.insert(key, value_to_json(v, eg)?);
+                    map.insert(key, value_to_json(v, eg, compact_formatter_compatible)?);
                 }
                 serde_json::Value::Object(map)
             }
@@ -7448,7 +7454,10 @@ fn value_to_json(val: &Value, eg: &mut ExecutorGlobals) -> Result<serde_json::Va
             }
             let mut map = serde_json::Map::new();
             for (key, value) in properties {
-                map.insert(key, value_to_json(&value, eg)?);
+                map.insert(
+                    key,
+                    value_to_json(&value, eg, compact_formatter_compatible)?,
+                );
             }
             serde_json::Value::Object(map)
         }
@@ -7456,8 +7465,65 @@ fn value_to_json(val: &Value, eg: &mut ExecutorGlobals) -> Result<serde_json::Va
     })
 }
 
-fn json_encode_value(val: &Value, eg: &mut ExecutorGlobals) -> Result<String, VmError> {
-    Ok(serde_json::to_string(&value_to_json(val, eg)?).unwrap_or_else(|_| "null".to_string()))
+struct PhpJsonFormatter {
+    serialize_precision: i32,
+    preserve_zero_fraction: bool,
+}
+
+impl serde_json::ser::Formatter for PhpJsonFormatter {
+    fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> std::io::Result<()>
+    where
+        W: ?Sized + std::io::Write,
+    {
+        if self.serialize_precision == -1 {
+            let magnitude = value.abs();
+            let php_uses_fixed = magnitude == 0.0 || (1e-4..1e17).contains(&magnitude);
+            if php_uses_fixed {
+                let mut formatter = serde_json::ser::CompactFormatter;
+                if self.preserve_zero_fraction || value.fract() != 0.0 {
+                    return serde_json::ser::Formatter::write_f64(&mut formatter, writer, value);
+                }
+                if value == 0.0 {
+                    return writer.write_all(if value.is_sign_negative() {
+                        b"-0"
+                    } else {
+                        b"0"
+                    });
+                }
+                return serde_json::ser::Formatter::write_i64(&mut formatter, writer, value as i64);
+            }
+        }
+
+        let mut output =
+            crate::value::php_serialized_float_to_string(value, self.serialize_precision);
+        if self.preserve_zero_fraction && !output.bytes().any(|byte| matches!(byte, b'.' | b'E')) {
+            output.push_str(".0");
+        }
+        output.make_ascii_lowercase();
+        writer.write_all(output.as_bytes())
+    }
+}
+
+fn json_encode_value(val: &Value, flags: i64, eg: &mut ExecutorGlobals) -> Result<String, VmError> {
+    let preserve_zero_fraction = flags & JSON_PRESERVE_ZERO_FRACTION_FLAG != 0;
+    let mut compact_formatter_compatible = eg.serialize_precision == -1 && !preserve_zero_fraction;
+    let value = value_to_json(val, eg, &mut compact_formatter_compatible)?;
+    if compact_formatter_compatible {
+        return Ok(serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string()));
+    }
+    let mut output = Vec::new();
+    let result = {
+        let formatter = PhpJsonFormatter {
+            serialize_precision: eg.serialize_precision,
+            preserve_zero_fraction,
+        };
+        let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
+        value.serialize(&mut serializer)
+    };
+    if result.is_err() {
+        return Ok("null".to_string());
+    }
+    Ok(String::from_utf8(output).unwrap_or_else(|_| "null".to_string()))
 }
 
 pub(crate) fn json_decode_string(s: &str, assoc: bool) -> Value {
@@ -12125,6 +12191,19 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                         .insert(normalized, "14".to_string());
                 }
             }
+            "serialize_precision" => {
+                if let Some(precision) = parse_precision_ini(value) {
+                    eg.serialize_precision = precision;
+                    eg.ini_overrides
+                        .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                        .insert(normalized, value.clone());
+                } else {
+                    eg.serialize_precision = -1;
+                    eg.ini_overrides
+                        .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                        .insert(normalized, "-1".to_string());
+                }
+            }
             "zend.exception_ignore_args" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
@@ -12216,6 +12295,9 @@ fn fn_ini_get(
     if option.eq_ignore_ascii_case("precision") {
         ret!(rv, Value::string(eg.precision.to_string()));
     }
+    if option.eq_ignore_ascii_case("serialize_precision") {
+        ret!(rv, Value::string(eg.serialize_precision.to_string()));
+    }
     ret!(rv, Value::bool(false));
 }
 
@@ -12238,6 +12320,7 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         .to_string(),
         "zend.exception_ignore_args" => "0".to_string(),
         "precision" => eg.precision.to_string(),
+        "serialize_precision" => eg.serialize_precision.to_string(),
         "zend.enable_gc" => if eg.gc_enabled { "1" } else { "0" }.to_string(),
         "memory_limit" => "-1".to_string(),
         "zend.exception_string_param_max_len" => "15".to_string(),
@@ -12302,6 +12385,17 @@ fn fn_ini_set(
             ret!(rv, Value::bool(false));
         };
         eg.precision = precision;
+        eg.ini_overrides
+            .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+            .insert(option, value);
+        ret!(rv, Value::string(previous));
+    }
+
+    if option == "serialize_precision" {
+        let Some(precision) = parse_precision_ini(&value) else {
+            ret!(rv, Value::bool(false));
+        };
+        eg.serialize_precision = precision;
         eg.ini_overrides
             .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
             .insert(option, value);

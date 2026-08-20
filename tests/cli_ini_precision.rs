@@ -117,3 +117,76 @@ echo ini_get('precision'), '|', 1 / 3;
     );
     assert_eq!(stderr, "");
 }
+
+#[test]
+fn serialize_precision_controls_every_float_export_consumer() {
+    let source = r#"
+echo ini_get('serialize_precision'), "\n";
+foreach ([0.0, -0.0, 1.25, 1.2345678901234567, 1e20, 1e-5] as $value) {
+    echo var_export($value, true), '|', serialize($value), '|', json_encode($value), '|';
+    var_dump($value);
+}
+echo json_encode([42.0, -0.0], JSON_PRESERVE_ZERO_FRACTION), "\n";
+var_dump(ini_set('serialize_precision', '17junk'));
+echo ini_get('serialize_precision'), '|', var_export(1.2345678901234567, true), '|';
+echo serialize(1e-5), '|', json_encode(1e-5), '|';
+var_dump(1e-5);
+var_dump(ini_set('serialize_precision', '-2'));
+echo ini_get('serialize_precision'), "\n";
+"#;
+    let (status, stdout, stderr) = run(&["-dserialize_precision=3", "-r", source]);
+    assert_eq!(status, 0);
+    assert_eq!(
+        stdout,
+        concat!(
+            "3\n",
+            "0.0|d:0;|0|float(0)\n",
+            "-0.0|d:-0;|-0|float(-0)\n",
+            "1.25|d:1.25;|1.25|float(1.25)\n",
+            "1.23|d:1.23;|1.23|float(1.23)\n",
+            "1.0E+20|d:1.0E+20;|1.0e+20|float(1.0E+20)\n",
+            "1.0E-5|d:1.0E-5;|1.0e-5|float(1.0E-5)\n",
+            "[42.0,-0.0]\n",
+            "string(1) \"3\"\n",
+            "17junk|1.2345678901234567|d:1.0000000000000001E-5;|",
+            "1.0000000000000001e-5|float(1.0000000000000001E-5)\n",
+            "bool(false)\n17junk\n",
+        )
+    );
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn zero_and_invalid_startup_serialize_precision_keep_php_boundaries() {
+    let source = r#"
+foreach ([0.0, -0.0, 1.0, 1.25, 12.5, 1e20, 1e-5] as $value) {
+    echo var_export($value, true), '|', serialize($value), '|', json_encode($value), '|';
+    var_dump($value);
+}
+"#;
+    let (status, stdout, stderr) = run(&["-dserialize_precision=0", "-r", source]);
+    assert_eq!(status, 0);
+    assert_eq!(
+        stdout,
+        concat!(
+            "0.0|d:0.0E+0;|0.0e+0|float(0)\n",
+            "-0.0|d:-0.0E+0;|-0.0e+0|float(-0)\n",
+            "1.0|d:1.0E+0;|1.0e+0|float(1)\n",
+            "1.0|d:1.0E+0;|1.0e+0|float(1)\n",
+            "1.0E+1|d:1.0E+1;|1.0e+1|float(1.0E+1)\n",
+            "1.0E+20|d:1.0E+20;|1.0e+20|float(1.0E+20)\n",
+            "1.0E-5|d:1.0E-5;|1.0e-5|float(1.0E-5)\n",
+        )
+    );
+    assert_eq!(stderr, "");
+
+    let (status, stdout, stderr) = run(&[
+        "-dserialize_precision=17junk",
+        "-dserialize_precision=-2",
+        "-r",
+        "echo ini_get('serialize_precision'), '|', var_export(1.2345678901234567, true), '|', json_encode(1e20);",
+    ]);
+    assert_eq!(status, 0);
+    assert_eq!(stdout, "-1|1.2345678901234567|1.0e+20");
+    assert_eq!(stderr, "");
+}

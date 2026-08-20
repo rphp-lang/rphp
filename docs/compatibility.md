@@ -9,6 +9,49 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,622 pass, 1,676 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+68.365% and the whole-corpus rate is 64.690%; 4,702 of 5,298 attempted cases
+reach runtime (88.750%). Relative to exact base `b753762b`, the pass-set delta
+is +1/-0: all 3,621 prior passes remain passes. Admitting the new INI directive
+also moves one AMD64-inapplicable case from unsupported to its upstream skip;
+no other status or failure category moves. Two final merged manifests and
+summaries are byte-for-byte identical. The manifest SHA-256 is
+`18b99bc6bf823a0e5d672584ac761e4471396b07fb1be3b7a39c7bf821eab39b`.
+
+PHP 8.5 `serialize_precision` is now request-local with its `-1` default and is
+accepted through repeated CLI `-d` definitions plus `ini_get()`/`ini_set()`.
+Valid leading integer text is preserved by the INI APIs while controlling the
+parsed significant-digit value; values below `-1` retain or restore the
+default. `var_export()`, `var_dump()`, `serialize()` and `json_encode()` share
+the setting while ordinary echo/string conversion continues to use the
+separate `precision` directive. The formatters preserve signed zero, float
+identity where the API requires it, PHP's fixed/scientific boundaries and the
+distinct zero-precision form. JSON additionally honors
+`JSON_PRESERVE_ZERO_FRACTION`; compatible default values retain the original
+compact-serde path instead of paying for the precision-aware formatter.
+
+Original CLI coverage exercises startup and runtime mutation, invalid and
+prefix-valued settings, precision zero, ±0, ordinary fractions, large and small
+exponents, nested JSON and all four consumers. The exact full-corpus addition
+is `tests/lang/bug24640.phpt`; `Zend/tests/hex_overflow_32bit.phpt` is now
+correctly evaluated as an architecture skip instead of an unsupported INI
+case. One existing callback-pipeline expectation was corrected from `6.0` to
+the independently verified PHP 8.5 default JSON spelling `6`.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3.
+The production inventory remains 1,612 unsafe blocks and 289 unsafe functions.
+On an AMD Ryzen 9 7950X pinned to one performance-governor CPU, 32 balanced
+alternating release A/B pairs with two warmups per binary, JIT and quick loops
+disabled execute five million ordinary `json_encode(1.25)` calls with the same
+20,000,000 checksum. The candidate is +1.777% by independent medians and
++1.872% by the paired-delta median, within the +5% gate.
+
+In the preceding canonical-special-float-export checkpoint, the measured AMD64
+PHP 8.5 contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,621 pass, 1,676 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 68.359% and the whole-corpus rate is 64.672%; 4,701 of 5,297 attempted cases
@@ -21,7 +64,8 @@ identical. The manifest SHA-256 is
 PHP 8.5 `var_export()` now renders non-finite floats with the canonical `NAN`,
 `INF` and `-INF` spellings in both direct-output and returned-string modes,
 including values nested in arrays and objects. Ordinary finite float rendering
-is unchanged; its wider `serialize_precision` contract remains separate work.
+was unchanged in that checkpoint; its wider `serialize_precision` contract was
+addressed by the following checkpoint.
 Original E2E coverage exercises all three special values, both API modes and a
 nested array. The exact full-corpus addition is
 `Zend/tests/type_coercion/nan_comp_op.phpt`; differential probing confirms its

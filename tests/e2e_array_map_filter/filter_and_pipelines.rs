@@ -370,7 +370,7 @@ $result = json_encode(array_reduce(
 echo ":" . $result;
 "#,
     );
-    assert_eq!(out, "5:6.0|m1m2m3f2f3f4r3:3");
+    assert_eq!(out, "5:6|m1m2m3f2f3f4r3:3");
 }
 
 #[test]

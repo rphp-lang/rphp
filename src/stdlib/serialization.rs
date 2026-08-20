@@ -142,15 +142,10 @@ fn serialize_value(
         ValueType::Double => {
             let number = value.as_double().unwrap();
             output.push_str("d:");
-            if number.is_nan() {
-                output.push_str("NAN");
-            } else if number == f64::INFINITY {
-                output.push_str("INF");
-            } else if number == f64::NEG_INFINITY {
-                output.push_str("-INF");
-            } else {
-                output.push_str(&number.to_string());
-            }
+            output.push_str(&crate::value::php_serialized_float_to_string(
+                number,
+                eg.serialize_precision,
+            ));
             output.push(';');
         }
         ValueType::String => {
