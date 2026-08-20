@@ -8,12 +8,65 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,662 pass, 1,636 fail, 115 skip, one is an upstream XFAIL,
-185 are unsupported, and none time out or crash. The headline pass rate is
-69.120% and the whole-corpus rate is 65.405%; 4,712 of 5,298 attempted cases
-reach runtime (88.939%). Relative to exact base `5e35c679`, the pass-set delta
-is +7/-0: all 3,655 prior passes remain passes. The only non-pass changes are
+8.5.6 commit `fcc29c8` and candidate commit `cce12eab`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,680 pass, 1,619 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+previously known upstream XFAIL
+`Zend/tests/inheritance/interface_constructor_prototype_002.phpt` is now an
+exact pass. The headline pass rate is 69.447% and the whole-corpus rate is
+65.726%; 4,703 of 5,299 attempted cases reach runtime (88.753%). Relative to
+exact base `f2e3b6cc`, the pass-set delta is +18/-0: all 3,662 prior passes
+remain passes. Five additional non-pass cases move from runtime to compile,
+the correct declaration-validation stage, while retaining later diagnostic
+gaps: `Zend/tests/inheritance/bug72119.phpt`,
+`Zend/tests/traits/bug60153.phpt`, `bug69467.phpt`,
+`Zend/tests/typehints/bug62441.phpt` and
+`Zend/tests/variadic/adding_additional_optional_parameter_error.phpt`. Two
+final merged manifests and summaries are byte-for-byte identical. Their
+SHA-256 values are
+`cf7ddc2f4621cf81b9d392af5a565be3cf9bd468273d3d5df6b3add0f3b3533e`
+and `51d306343989615bb60c8046b29a64d74dddfc3f2172179d394a04d69248a1e8`.
+
+A final implementation class may now close a required late-static return with
+`self` or its exact class name because no descendant can widen that result.
+The same rule applies through union branches, and source-equivalent `?T` and
+`T|null` forms are normalized for covariance. Non-final implementations,
+including final methods on an extensible class, still require `static`, and an
+unrelated union branch remains incompatible. Interface requirements, including
+those inherited through a parent, now join abstract class and trait
+requirements in pre-publication validation so incompatible declarations fail
+at PHP's declaration boundary.
+
+Three original E2E regressions cover final implementations of interface,
+abstract-parent and abstract-trait contracts plus union and nullable forms; the
+non-final rejection; and rejection of an unrelated union branch. The nine-case
+`Zend/tests/type_declarations/variance/override_static_with_self` cluster is
+now exact: `static_to_self.phpt`, `static_to_self_in_non_final_class.phpt`,
+`static_to_self_to_unions.phpt` and `union_to_union_1.phpt` through
+`union_to_union_6.phpt`. The nine adjacent exact additions are
+`Zend/tests/inheritance/interface_constructor_prototype_001.phpt`,
+`interface_constructor_prototype_002.phpt`,
+`Zend/tests/nullable_types/covariant_nullable_param_fails.phpt`,
+`Zend/tests/return_types/009.phpt`, `inheritance003.phpt`, `rfc004.phpt`, and
+`Zend/tests/variadic/non_variadic_implements_variadic_error.phpt`,
+`variadic_changed_byref_error.phpt` and `variadic_changed_typehint_error.phpt`.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four Symfony
+S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. No separate hot
+runtime benchmark applies: the work is confined to cold declaration and
+class-link validation, successful method execution and value layout are
+unchanged, and S3 exercises the affected cold path end to end.
+
+In the preceding conditional-declaration and variance-loading-exception
+checkpoint, the measured AMD64 PHP 8.5 contract was pinned to php-src 8.5.6
+commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and `tests/lang`
+cases, 3,662 pass, 1,636 fail, 115 skip, one is an upstream XFAIL, 185 are
+unsupported, and none time out or crash. The headline pass rate is 69.120% and
+the whole-corpus rate is 65.405%; 4,712 of 5,298 attempted cases reach runtime
+(88.939%). Relative to exact base `5e35c679`, the pass-set delta is +7/-0: all
+3,655 prior passes remain passes. The only non-pass changes are
 `Zend/tests/bug78406.phpt` and
 `Zend/tests/inheritance/deprecation_to_exception_during_inheritance_can_be_caught.phpt`,
 which advance from an early output mismatch to their later runtime gaps after
