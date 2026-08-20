@@ -1137,14 +1137,77 @@ echo constant("123");
 }
 
 #[test]
-fn test_define_returns_false_for_empty_name() {
+fn empty_dynamic_constant_names_are_valid_and_redefine_normally() {
     let out = run_php(
         r#"<?php
-$result = define("", "val");
-echo $result ? "true" : "false";
+set_error_handler(function($severity, $message, $file, $line) {
+    echo $severity, ':', $message, ':', $line, "\n";
+    return true;
+});
+var_dump(define("", "first"));
+var_dump(defined(""));
+var_dump(constant(""));
+var_dump(define("", "second"));
+var_dump(constant(""));
 "#,
     );
-    assert_eq!(out, "false");
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "string(5) \"first\"\n",
+            "2:Constant  already defined, this will be an error in PHP 9:9\n",
+            "bool(false)\n",
+            "string(5) \"first\"\n",
+        )
+    );
+}
+
+#[test]
+fn null_dynamic_constant_names_are_deprecated_and_coerced_to_empty() {
+    let out = run_php(
+        r#"<?php
+set_error_handler(function($severity, $message, $file, $line) {
+    echo $severity, ':', $message, ':', $line, "\n";
+    return true;
+});
+var_dump(define(null, "first"));
+var_dump(defined(""));
+var_dump(constant(""));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "8192:define(): Passing null to parameter #1 ($constant_name) of type string is deprecated:6\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "string(5) \"first\"\n",
+        )
+    );
+}
+
+#[test]
+fn strict_define_rejects_null_instead_of_defining_the_empty_name() {
+    let out = run_php(
+        r#"<?php
+declare(strict_types=1);
+try {
+    define(null, "value");
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump(defined(""));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "define(): Argument #1 ($constant_name) must be of type string, null given\n",
+            "bool(false)\n",
+        )
+    );
 }
 
 // ============================================================================

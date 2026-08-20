@@ -4922,6 +4922,9 @@ fn fn_define(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if reject_strict_internal_string(eg, ed, arg!(ed, 0), "define", "constant_name") {
+        return Ok(());
+    }
     let name_value = arg!(ed, 0).dereferenced();
     if matches!(
         name_value.value_type(),
@@ -4936,10 +4939,14 @@ fn fn_define(
         ));
         ret!(rv, Value::null());
     }
-    let name = arg_str!(ed, 0);
-    if name.is_empty() {
-        ret!(rv, Value::bool(false));
+    if name_value.value_type() == ValueType::Null {
+        report_internal_deprecation(
+            eg,
+            ed,
+            "define(): Passing null to parameter #1 ($constant_name) of type string is deprecated",
+        )?;
     }
+    let name = arg_str!(ed, 0);
     let val = arg!(ed, 1).clone();
     if eg.find_constant(&name).is_some() {
         report_internal_diagnostic(
