@@ -484,10 +484,12 @@ fn execute_source_unit(
         eg.record_included_file(canonical.clone());
     }
     eg.emit_compile_deprecations(&compile_result.deprecations);
-    eg.constant_attributes
-        .extend(std::mem::take(&mut compile_result.constant_attributes));
-    eg.constant_expressions
-        .extend(std::mem::take(&mut compile_result.constant_expressions));
+    for (name, attributes) in std::mem::take(&mut compile_result.constant_attributes) {
+        eg.constant_attributes.entry(name).or_insert(attributes);
+    }
+    for (name, expression) in std::mem::take(&mut compile_result.constant_expressions) {
+        eg.constant_expressions.entry(name).or_insert(expression);
+    }
     eg.refresh_constant_deprecation_metadata_presence();
     eg.bump_constant_deprecation_generation();
 

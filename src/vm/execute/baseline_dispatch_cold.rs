@@ -3658,8 +3658,19 @@ fn op_fetch_const(
             )
         };
         let name = name_val.as_str().unwrap_or("").to_string();
-        eg.define_constant(&name, value_val.clone())
-            .map_err(VmError::Fatal)?;
+        if eg.find_constant(&name).is_some() {
+            report_php_warning(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &crate::runtime::constant_redefinition_message(&name),
+                false,
+            )?;
+        } else {
+            eg.define_constant(&name, value_val.clone())
+                .map_err(VmError::Fatal)?;
+        }
     } else {
         let name_val =
             unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };

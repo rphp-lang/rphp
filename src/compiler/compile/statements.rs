@@ -3446,12 +3446,18 @@ impl Compiler {
                     &declaration_name,
                     *line,
                 )?;
+                let first_source_declaration = !self
+                    .constant_attributes
+                    .borrow()
+                    .contains_key(&declaration_name);
                 self.constant_declaration_names
                     .push(declaration_name.clone());
-                self.constant_attributes
-                    .borrow_mut()
-                    .insert(declaration_name.clone(), reflected_attributes.clone());
-                if constant_expression_references_symbol(value) {
+                if first_source_declaration {
+                    self.constant_attributes
+                        .borrow_mut()
+                        .insert(declaration_name.clone(), reflected_attributes.clone());
+                }
+                if first_source_declaration && constant_expression_references_symbol(value) {
                     self.constant_expressions.borrow_mut().insert(
                         declaration_name.clone(),
                         ConstantExpressionMetadata {
@@ -3473,8 +3479,11 @@ impl Compiler {
                     .eval_const_expr_in_source(value, &self.known_constants)
                     .ok();
                 let (val_op, val_type) = if let Some(ct_val) = compile_time {
-                    self.known_constants
-                        .insert(declaration_name.clone(), ct_val.clone());
+                    if first_source_declaration {
+                        self.known_constants
+                            .entry(declaration_name.clone())
+                            .or_insert_with(|| ct_val.clone());
+                    }
                     (self.add_literal(ct_val), OpType::Const)
                 } else {
                     self.compile_constant_expression(value)
@@ -3487,7 +3496,7 @@ impl Compiler {
                 instr.op2_type = val_type;
                 // extended_value = 1 means "define mode" (store constant)
                 instr.extended_value = 1;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 }
             }
             Stmt::ListAssign {

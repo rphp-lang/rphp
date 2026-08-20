@@ -5994,7 +5994,7 @@ impl ExecutorGlobals {
     pub fn define_constant(&self, name: &str, value: crate::value::Value) -> Result<(), String> {
         let mut table = self.constant_table.borrow_mut();
         if table.contains_key(name) {
-            return Err(format!("Constant {} already defined", name));
+            return Err(constant_redefinition_message(name));
         }
         table.insert(name.to_string(), value);
         Ok(())
@@ -6736,6 +6736,10 @@ impl ExecutorGlobals {
             .last()
             .map(|buffer| buffer.data.clone())
     }
+}
+
+pub(crate) fn constant_redefinition_message(name: &str) -> String {
+    format!("Constant {name} already defined, this will be an error in PHP 9")
 }
 
 fn class_is_a_in_table(

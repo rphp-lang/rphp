@@ -18,12 +18,57 @@ try { constant('missing runtime name'); } catch (Error $error) { echo $error->ge
         ),
         concat!(
             "define(): Argument #1 ($constant_name) must be of type string, array given\n",
-            "2:Constant TRUE already defined:4\n",
+            "2:Constant TRUE already defined, this will be an error in PHP 9:4\n",
             "bool(false)\n",
             "bool(true)\n",
-            "2:Constant runtime name already defined:6\n",
+            "2:Constant runtime name already defined, this will be an error in PHP 9:6\n",
             "bool(false)\n",
             "Undefined constant \"missing runtime name\"",
+        )
+    );
+}
+
+#[test]
+fn source_constant_redefinition_warns_and_preserves_the_first_value_and_attributes() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+#[FirstMarker]
+const StableValue = 1;
+#[SecondMarker]
+const StableValue = 2;
+const stablevalue = 3;
+echo StableValue, ':', stablevalue, ':';
+$attributes = (new ReflectionConstant('StableValue'))->getAttributes();
+echo count($attributes), ':', $attributes[0]->getName();
+"#,
+            "/virtual/constant-redefinition.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nWarning: Constant StableValue already defined, this will be an error in PHP 9 in /virtual/constant-redefinition.php on line 5\n",
+            "1:3:1:FirstMarker",
+        )
+    );
+}
+
+#[test]
+fn source_constant_redefinition_does_not_seed_later_constants_from_the_duplicate() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+define('RuntimeSeed', 7);
+const DeferredStable = RuntimeSeed;
+const DeferredStable = 9;
+const DerivedStable = DeferredStable;
+echo DeferredStable, ':', DerivedStable;
+"#,
+            "/virtual/deferred-constant-redefinition.php",
+            "/virtual",
+        ),
+        concat!(
+            "\nWarning: Constant DeferredStable already defined, this will be an error in PHP 9 in /virtual/deferred-constant-redefinition.php on line 4\n",
+            "7:7",
         )
     );
 }

@@ -4947,7 +4947,7 @@ fn fn_define(
             ed,
             2,
             "Warning",
-            &format!("Constant {name} already defined"),
+            &crate::runtime::constant_redefinition_message(&name),
         )?;
         ret!(rv, Value::bool(false));
     }

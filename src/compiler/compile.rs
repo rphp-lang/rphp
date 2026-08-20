@@ -3645,9 +3645,21 @@ impl Compiler {
         let file_context = Some((self.source_file.as_str(), self.source_directory.as_str()));
         // Two passes over the full statement tree (including namespace bodies).
         // Pass 1: collect directly evaluable constants
-        Self::prescan_constants_pass(stmts, None, &mut self.known_constants, file_context);
+        Self::prescan_constants_pass(
+            stmts,
+            None,
+            &mut HashSet::new(),
+            &mut self.known_constants,
+            file_context,
+        );
         // Pass 2: retry with the now-larger table (handles forward refs like const B = A)
-        Self::prescan_constants_pass(stmts, None, &mut self.known_constants, file_context);
+        Self::prescan_constants_pass(
+            stmts,
+            None,
+            &mut HashSet::new(),
+            &mut self.known_constants,
+            file_context,
+        );
     }
 
     /// Single pass over statements, recursing into namespace bodies.
@@ -3655,6 +3667,7 @@ impl Compiler {
     fn prescan_constants_pass(
         stmts: &[Stmt],
         ns: Option<&str>,
+        declared: &mut HashSet<String>,
         known: &mut HashMap<String, Value>,
         file_context: Option<(&str, &str)>,
     ) {
@@ -3666,7 +3679,8 @@ impl Compiler {
                             Some(prefix) => format!("{}\\{}", prefix, name),
                             None => name.clone(),
                         };
-                        if !known.contains_key(&fqn)
+                        if declared.insert(fqn.clone())
+                            && !known.contains_key(&fqn)
                             && let Ok(val) =
                                 Self::eval_const_expr_with_context(value, known, file_context)
                         {
@@ -3678,12 +3692,13 @@ impl Compiler {
                     Self::prescan_constants_pass(
                         body,
                         (!name.is_empty()).then_some(name.as_str()),
+                        declared,
                         known,
                         file_context,
                     );
                 }
                 Stmt::Block(body) => {
-                    Self::prescan_constants_pass(body, ns, known, file_context);
+                    Self::prescan_constants_pass(body, ns, declared, known, file_context);
                 }
                 _ => {}
             }
