@@ -7474,7 +7474,7 @@ impl Compiler {
                                 init.op1 = callback_op;
                                 init.op1_type = callback_type;
                                 init.extended_value = forwarded.len() as u32;
-                                self.instructions.push(init);
+                                self.push_instruction_at_line(init, *line);
 
                                 self.emit_user_call_args(forwarded);
 
@@ -7503,7 +7503,7 @@ impl Compiler {
                                     init.op1_type = callback_type;
                                     init.extended_value = elements.len() as u32;
                                     init._pad = 1;
-                                    self.instructions.push(init);
+                                    self.push_instruction_at_line(init, *line);
 
                                     for (index, element) in elements.iter().enumerate() {
                                         let (op, op_type) = self.compile_expr(&element.value);

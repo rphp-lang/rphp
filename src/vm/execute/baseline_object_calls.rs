@@ -3829,9 +3829,30 @@ fn op_init_static_call<'a>(
         }
 
         let full_name = format!("{}::{}", class, method);
-        let (resolved, magic_method) = match eg.find_function(&full_name) {
-            Some(ptr) => (ptr, None),
+        let (resolved, magic_method, instance_magic) = match eg.find_function(&full_name) {
+            Some(ptr) => (ptr, None, false),
             None => {
+                // A scoped `self::missing()`/`Class::missing()` call keeps the
+                // live instance receiver. PHP therefore prefers `__call` over
+                // `__callStatic` when the receiver is compatible with the
+                // requested class.
+                let live_receiver = closure_bound_this(frame, op_array, false).filter(|receiver| {
+                    receiver
+                        .as_object()
+                        .is_some_and(|object| eg.class_is_a(&object.class_name, &class))
+                });
+                let instance_magic = live_receiver.as_ref().and_then(|_| {
+                    eg.find_method_info(&class, "__call")
+                        .filter(|(visibility, is_static, _)| {
+                            *visibility == Visibility::Public && !*is_static
+                        })
+                        .and_then(|(_, _, defining)| {
+                            eg.find_function(&format!("{defining}::__call"))
+                        })
+                });
+                if let Some(magic) = instance_magic {
+                    (magic, Some(Value::string(&method)), true)
+                } else {
                 if class_callback_requires_instance(eg, &class, &method) {
                     return Ok(throw_non_static_callback_error(
                         eg, frame, op_array, ip, &class, &method,
@@ -3846,7 +3867,7 @@ fn op_init_static_call<'a>(
                         eg.find_function(&format!("{defining}::__callStatic"))
                     });
                 if let Some(magic) = magic {
-                    (magic, Some(Value::string(&method)))
+                    (magic, Some(Value::string(&method)), false)
                 } else {
                     let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", raw_class, method));
                     match throw_in_frame(eg, frame, err) {
@@ -3858,10 +3879,11 @@ fn op_init_static_call<'a>(
                         }
                     }
                 }
+                }
             }
         };
         let method_info = eg.find_method_info(&class, &method);
-        let method_is_non_static = method_info
+        let method_is_non_static = instance_magic || method_info
             .as_ref()
             .is_some_and(|(_, is_static, _)| !is_static);
         // SAFETY: `find_function` returns a request-owned immutable function
@@ -4177,15 +4199,49 @@ fn op_init_late_static_call<'a>(
 }
 
 #[inline(never)]
+fn missing_static_callback_method_reason(
+    eg: &ExecutorGlobals,
+    callback: &Value,
+) -> Option<String> {
+    let (class, method) = callback.as_str()?.rsplit_once("::")?;
+    let definition = eg.find_class(class.trim_start_matches('\\'))?;
+    if eg.find_method_info(&definition.name, method).is_some()
+        || eg
+            .find_method_info(&definition.name, "__callStatic")
+            .is_some()
+    {
+        return None;
+    }
+    Some(format!(
+        "class {} does not have a method \"{method}\"",
+        definition.name
+    ))
+}
+
+#[inline(never)]
 fn op_init_user_call<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let resolved = match resolve_user_call_at_opline(eg, frame, op_array, opline) {
+    let ordinary = resolve_user_call_at_opline(eg, frame, op_array, opline);
+    let checked = if ordinary.is_some() {
+        ordinary
+    } else {
+        resolve_user_call_at_opline_checked(eg, frame, op_array, opline, ordinary)?
+    };
+    let resolved = match checked {
         Some(resolved) => resolved,
         None => {
+            if let Some(exception) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exception) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
             let callback_raw = unsafe {
                 &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
             };
@@ -4195,14 +4251,23 @@ fn op_init_user_call<'a>(
                 callback_raw
             };
             let description = callback.echo_to_string();
+            let missing_method = missing_static_callback_method_reason(eg, callback);
             let message = if opline._pad == 1 {
-                if callback.as_str().is_some() {
+                if let Some(reason) = missing_method.as_deref() {
+                    format!(
+                        "call_user_func_array(): Argument #1 ($callback) must be a valid callback, {reason}"
+                    )
+                } else if callback.as_str().is_some() {
                     format!(
                         "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{description}\" not found or not callable"
                     )
                 } else {
                     "call_user_func_array(): Argument #1 ($callback) must be a valid callback, no array or string given".to_string()
                 }
+            } else if let Some(reason) = missing_method.as_deref() {
+                format!(
+                    "call_user_func(): Argument #1 ($callback) must be a valid callback, {reason}"
+                )
             } else {
                 format!(
                     "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{description}\" not found or not callable"
@@ -4232,6 +4297,30 @@ fn op_init_user_call<'a>(
     Ok(ColdResult::Done)
 }
 
+#[cold]
+fn legacy_callback_deprecation_type_error(
+    eg: &ExecutorGlobals,
+    function: &str,
+    previous: Value,
+) -> Value {
+    let error = make_error_value(
+        "TypeError",
+        &format!(
+            "{function}(): Argument #1 ($callback) must be a valid callback, (null)"
+        ),
+    );
+    if let Some(mut object) = error.as_object_mut() {
+        let key = eg
+            .find_property_visibility("TypeError", "previous")
+            .map_or_else(
+                || "previous".to_string(),
+                |(_, declaring)| crate::runtime::mangle_private_prop(&declaring, "previous"),
+            );
+        object.set_property(&key, previous);
+    }
+    error
+}
+
 fn scope_introspection_function_name(name: &str) -> Option<&'static str> {
     let normalized = name.strip_prefix('\\').unwrap_or(name);
     if normalized.contains('\\') {
@@ -4258,11 +4347,7 @@ fn resolve_user_call_at_opline(
     let callback_raw = unsafe {
         &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
     };
-    let callback = if callback_raw.is_reference() {
-        unsafe { &*callback_raw.as_ref_ptr() }
-    } else {
-        callback_raw
-    };
+    let callback = callback_raw.dereferenced();
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
@@ -4270,12 +4355,130 @@ fn resolve_user_call_at_opline(
         op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache
     };
     let caller_class = get_caller_class(frame, eg);
-    crate::stdlib::resolve_callback_with_cache(
+    let ordinary = crate::stdlib::resolve_callback_with_cache(
         callback,
         eg,
         caller_class.as_deref(),
         Some(cache_slot),
+    );
+    if ordinary
+        .as_ref()
+        .is_some_and(|resolved| !resolved.is_magic_call)
+    {
+        return ordinary;
+    }
+    resolve_user_call_magic_fallback(
+        eg,
+        frame,
+        op_array,
+        callback,
+        caller_class.as_deref(),
+        ordinary,
     )
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_user_call_magic_fallback(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    callback: &Value,
+    caller_class: Option<&str>,
+    ordinary: Option<crate::stdlib::ResolvedCallback>,
+) -> Option<crate::stdlib::ResolvedCallback> {
+    let receiver = closure_bound_this(frame, op_array, false);
+    crate::stdlib::resolve_live_scoped_instance_callback(
+        callback,
+        eg,
+        caller_class,
+        receiver.as_ref(),
+    )
+    .or(ordinary)
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_user_call_at_opline_checked(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    ordinary: Option<crate::stdlib::ResolvedCallback>,
+) -> Result<Option<crate::stdlib::ResolvedCallback>, VmError> {
+    let callback_raw = unsafe {
+        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    };
+    let callback = if callback_raw.is_reference() {
+        unsafe { &*callback_raw.as_ref_ptr() }
+    } else {
+        callback_raw
+    };
+    if !crate::stdlib::callback_uses_legacy_scope(callback) {
+        return Ok(ordinary);
+    }
+    let lexical_class = get_caller_class(frame, eg);
+    let receiver = closure_bound_this(frame, op_array, false);
+    let called_class = receiver
+        .as_ref()
+        .and_then(Value::as_object)
+        .map(|object| object.class_name.to_string())
+        .or_else(|| {
+            eg.class_by_id(late_static_call_class_id(eg, frame))
+                .map(|class| class.name.clone())
+        });
+    match crate::stdlib::resolve_legacy_callback(
+        callback,
+        eg,
+        lexical_class.as_deref(),
+        called_class.as_deref(),
+        receiver.as_ref(),
+    ) {
+        crate::stdlib::LegacyCallbackResolution::NotLegacy => Ok(ordinary),
+        crate::stdlib::LegacyCallbackResolution::Legacy {
+            resolved,
+            deprecation,
+        } => {
+            let invalid_reason = resolved.is_none().then(|| {
+                crate::stdlib::legacy_callback_invalid_reason(
+                    callback,
+                    eg,
+                    lexical_class.as_deref(),
+                    called_class.as_deref(),
+                    receiver.as_ref(),
+                )
+            });
+            if let Some(deprecation) = deprecation {
+                report_php_deprecation(eg, frame, op_array, opline, &deprecation)?;
+            }
+            if let Some(previous) = eg.exception.take() {
+                let function = if opline._pad == 1 {
+                    "call_user_func_array"
+                } else {
+                    "call_user_func"
+                };
+                eg.exception = Some(legacy_callback_deprecation_type_error(
+                    eg, function, previous,
+                ));
+                Ok(None)
+            } else if let Some(reason) = invalid_reason {
+                let function = if opline._pad == 1 {
+                    "call_user_func_array"
+                } else {
+                    "call_user_func"
+                };
+                eg.exception = Some(make_error_value(
+                    "TypeError",
+                    &format!(
+                        "{function}(): Argument #1 ($callback) must be a valid callback, {reason}"
+                    ),
+                ));
+                Ok(None)
+            } else {
+                Ok(resolved)
+            }
+        }
+    }
 }
 
 #[inline]

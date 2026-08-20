@@ -9,14 +9,70 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,443 pass, 1,854 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,473 pass, 1,824 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-64.999% and the whole-corpus rate is 61.493%; 4,625 of 5,297 attempted cases
-reach runtime (87.314%). Relative to exact base `e9ac0b43`, the pass-set delta
-is +2/-0: all 3,441 prior passes remain passes.
+65.565% and the whole-corpus rate is 62.029%; 4,625 of 5,297 attempted cases
+reach runtime (87.314%). Relative to exact base `4094eb60`, the pass-set delta
+is +30/-0: all 3,443 prior passes remain passes and no other status, failure
+category or stage moves. Two final manifests and summaries are byte-for-byte
+identical. The manifest SHA-256 is
+`faddbf4c2ff69ab73efbf04827c6a36253ba40aca3e290f16eedbd00beab53f4`.
 
-Ordinary class property defaults now evaluate `__CLASS__` in their declaring
-class. Trait instance and static property defaults containing `__CLASS__` or
+PHP 8.5's deprecated relative callable spellings now share one lexical,
+late-called and receiver-aware resolver. String and two-element array forms
+using `self`, `parent` or `static`, plus qualified arrays such as
+`["Child", "parent::method"]`, retain forwarding scope, method visibility and
+the live compatible receiver. Static targets keep late-static identity,
+non-static targets bind `$this`, and missing methods select `__call` before
+`__callStatic` when scoped static syntax still has an instance. Trait bytecode
+uses the exact composition selected by dispatch, including one-step parent
+forwarding rather than recursing through the dynamic receiver.
+
+`call_user_func()`, `call_user_func_array()`, `array_map()`, `is_callable()`,
+callable parameter validation, `Closure::fromCallable()` and
+`register_shutdown_function()` deliver the PHP 8.5 deprecation at their
+physical source boundary. A throwing diagnostic handler interrupts
+consumption with PHP's outer callback `TypeError` and chained previous
+exception where required, without leaving a pending callback frame. Detached
+user callbacks retain surplus trace arguments, so error handlers and
+Throwable snapshots report the same argument list and source line as PHP.
+Ordinary function and static-method callbacks continue through their existing
+monomorphic cache before any legacy-shape work.
+
+Eight original E2E regressions cover lexical versus called scope, instance and
+static targets, every admitted consumer, qualified visibility and error text,
+trait parent composition, throwing handlers and cleanup, global invalid scope,
+instance magic dispatch and shutdown lifetime. A syntax-selected 33-case
+focused PHP 8.5 gate has 31 passes, one platform skip and only the pre-existing
+`semi_reserved_003.phpt` parser failure. The 30 exact full-corpus additions are
+`autoload/bug37138.phpt`, `bug41026.phpt`, both `bug48899` cases,
+`call_user_functions/bug32290.phpt`, `bug66719.phpt`,
+`callable_self_parent_static_deprecation.phpt`, `closures/closure_030.phpt`,
+the five affected `dynamic_call` cases, `exceptions/bug51394.phpt`, all four
+affected `gh16799`/`gh_21699` cases, `is_callable_trampoline_uaf-deprecated.phpt`,
+five affected `lsb` cases, three affected magic-method cases, `match/029` and
+`030`, and `traits/bug76773-deprecated.phpt`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at its ceiling of 1,623 unsafe blocks and 289 unsafe
+functions. On one pinned AMD64 CPU, 32 order-balanced release pairs retain
+checksum `12500002500000` and put five million ordinary `call_user_func()`
+calls at +2.311% and five million scoped static callback calls at -0.415% by
+the gate's balanced order-specific median ratio, both below the +5% regression
+ceiling. This is evidence of no callback-dispatch regression, not an
+optimization claim.
+
+This checkpoint does not claim deprecated relative-scope behavior for every
+unselected standard-library callback consumer, the remaining semi-reserved
+grammar gap, optional extension suites outside the selected corpus or broader
+PHP syntax and runtime compatibility.
+
+In the preceding trait-property checkpoint, ordinary class property defaults
+evaluate `__CLASS__` in their declaring class.
+
+Trait instance and static property defaults containing `__CLASS__` or
 `self::class` instead bind at every composition boundary, including nested
 traits and expressions such as concatenation. A class that merely inherits a
 composed instance property keeps the parent's value, while explicit trait

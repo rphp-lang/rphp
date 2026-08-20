@@ -351,104 +351,6 @@ fn existing_closure_callable(callable: &Value) -> Option<Value> {
     })
 }
 
-fn get_calling_this(ed: *mut ExecuteData) -> Option<Value> {
-    if ed.is_null() {
-        return None;
-    }
-    // SAFETY: the synchronous internal method frame retains its live caller;
-    // a method signature with this_offset=1 owns an initialized CV 0 receiver.
-    unsafe {
-        let caller = (*ed).prev_execute_data;
-        if caller.is_null() || (*caller).func.is_null() || (*(*caller).func).sig.this_offset != 1 {
-            return None;
-        }
-        ((*caller).cv(0).value_type() == ValueType::Object).then(|| (*caller).cv(0).clone())
-    }
-}
-
-fn resolve_relative_from_callable(
-    callable: &Value,
-    ed: *mut ExecuteData,
-    eg: &mut ExecutorGlobals,
-) -> Result<Option<ResolvedCallback>, VmError> {
-    let Some(name) = callable.as_str() else {
-        return Ok(None);
-    };
-    let Some((relative, method)) = name.rsplit_once("::") else {
-        return Ok(None);
-    };
-    if !relative.eq_ignore_ascii_case("self") && !relative.eq_ignore_ascii_case("parent") {
-        return Ok(None);
-    }
-    report_internal_deprecation(
-        eg,
-        ed,
-        &format!(
-            "Use of \"{}\" in callables is deprecated",
-            relative.to_ascii_lowercase()
-        ),
-    )?;
-
-    let Some(caller_class) = get_calling_scope_class(ed, eg) else {
-        return Ok(None);
-    };
-    let owner = if relative.eq_ignore_ascii_case("self") {
-        caller_class.to_string()
-    } else {
-        let Some(parent) = eg
-            .find_class(caller_class)
-            .and_then(|class| class.parent.clone())
-        else {
-            return Ok(None);
-        };
-        parent
-    };
-    let Some((visibility, is_static, func_ptr, declaring)) =
-        find_method_in_class_hierarchy(eg, &owner, method)
-    else {
-        return Ok(if relative.eq_ignore_ascii_case("self") {
-            resolve_magic_callback(eg, &owner, method, "__callStatic", None)
-        } else {
-            None
-        });
-    };
-    if !eg.check_visibility(Some(caller_class), declaring, visibility) {
-        return Ok(None);
-    }
-    let class_id = eg.class_id_of(&owner);
-    if is_static {
-        return Ok(Some(ResolvedCallback {
-            func_ptr,
-            prepend_args: vec![Value::null()],
-            use_vars: vec![],
-            called_scope_class_id: class_id,
-            bound_this: None,
-            closure_static_vars: None,
-            is_magic_call: false,
-        }));
-    }
-    let Some(receiver) = get_calling_this(ed) else {
-        return Ok(None);
-    };
-    let compatible = receiver
-        .as_object()
-        .is_some_and(|object| eg.class_is_a(object.class_name.as_ref(), &owner));
-    if !compatible {
-        return Ok(None);
-    }
-    Ok(Some(ResolvedCallback {
-        func_ptr,
-        prepend_args: vec![receiver.clone()],
-        use_vars: vec![],
-        called_scope_class_id: receiver
-            .as_object()
-            .map_or(class_id, |object| object.class_id),
-        bound_this: Some(receiver),
-        closure_static_vars: None,
-        is_magic_call: false,
-    }))
-}
-
 #[cold]
 #[inline(never)]
 fn fn_closure_from_callable(
@@ -461,9 +363,11 @@ fn fn_closure_from_callable(
         ret!(rv, closure);
     }
 
-    let resolved = resolve_relative_from_callable(callable, ed, eg)?
-        .or_else(|| resolve_callback_at_callsite(callable, eg, ed));
+    let resolved = resolve_callback_at_callsite_checked(callable, eg, ed)?;
     let Some(resolved) = resolved else {
+        if eg.exception.is_some() {
+            return Ok(());
+        }
         let caller_class = get_calling_scope_class(ed, eg);
         let mut reason = first_class_callable_error(callable, eg, caller_class.as_deref());
         if reason.starts_with("Non-static method ") {

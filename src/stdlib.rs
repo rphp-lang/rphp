@@ -1540,9 +1540,12 @@ fn fn_array_map(
     let resolved = if callback.value_type() == ValueType::Null {
         None
     } else {
-        match resolve_callback_at_callsite(callback, eg, ed) {
+        match resolve_callback_at_callsite_checked(callback, eg, ed)? {
             Some(resolved) => Some(resolved),
             None => {
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
                 if callback
                     .as_array()
                     .and_then(|parts| parts.get_value_at(0))
@@ -5524,7 +5527,10 @@ fn fn_register_shutdown_function(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
-    let Some(resolved) = resolve_callback_at_callsite(callback, eg, ed) else {
+    let Some(resolved) = resolve_callback_at_callsite_checked(callback, eg, ed)? else {
+        if eg.exception.is_some() {
+            return Ok(());
+        }
         let detail = if callback.as_str().is_some() || callback.as_array().is_some() {
             invalid_handler_callback_detail(callback, eg)
         } else {
@@ -6321,7 +6327,7 @@ pub(crate) unsafe fn collect_debug_backtrace(
                 });
                 let argument = if scoped_argument.is_some() {
                     scoped_argument
-                } else if index >= common.sig.public_arity()
+                } else if index as usize >= common.sig.param_names.len()
                     && let Some(saved) = eg.function_arguments.get(&(frame as usize))
                 {
                     saved.get(index as usize).cloned()
@@ -8435,23 +8441,6 @@ fn get_calling_scope_class<'a>(
     }
 }
 
-fn get_calling_scope_receiver(ed: *mut crate::vm::frame::ExecuteData) -> Option<Value> {
-    if ed.is_null() {
-        return None;
-    }
-    // SAFETY: this is the same synchronous internal-call boundary as
-    // get_calling_scope_class(). A signature with this_offset=1 guarantees
-    // the live caller frame owns an initialized receiver in CV(0); cloning it
-    // retains the object beyond the registering call.
-    unsafe {
-        let caller = (*ed).prev_execute_data;
-        if caller.is_null() || (*caller).func.is_null() || (*(*caller).func).sig.this_offset != 1 {
-            return None;
-        }
-        Some((*caller).cv(0).clone())
-    }
-}
-
 fn resolve_magic_callback(
     eg: &ExecutorGlobals,
     class_name: &str,
@@ -8473,6 +8462,393 @@ fn resolve_magic_callback(
         closure_static_vars: None,
         is_magic_call: true,
     })
+}
+
+/// Legacy PHP callback spellings that carry a class-scope keyword are still
+/// accepted in PHP 8.5, but every attempt to consume one is deprecated. Keep
+/// recognition and semantic resolution separate from diagnostic delivery so
+/// compiler-lowered calls and internal callback consumers can report at their
+/// own source boundary without duplicating method lookup.
+pub(crate) enum LegacyCallbackResolution {
+    NotLegacy,
+    Legacy {
+        resolved: Option<ResolvedCallback>,
+        deprecation: Option<String>,
+    },
+}
+
+#[inline]
+fn legacy_relative_owner(
+    eg: &ExecutorGlobals,
+    relative: &str,
+    lexical_class: Option<&str>,
+    called_class: Option<&str>,
+) -> Option<String> {
+    if relative.eq_ignore_ascii_case("self") {
+        lexical_class.map(str::to_owned)
+    } else if relative.eq_ignore_ascii_case("parent") {
+        lexical_class
+            .and_then(|class| eg.find_class(class))
+            .and_then(|class| class.parent.clone())
+    } else if relative.eq_ignore_ascii_case("static") {
+        called_class.map(str::to_owned)
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn legacy_called_scope_id(eg: &ExecutorGlobals, owner: &str, called_class: Option<&str>) -> u32 {
+    called_class
+        .filter(|called| eg.class_is_a(called, owner))
+        .map_or_else(|| eg.class_id_of(owner), |called| eg.class_id_of(called))
+}
+
+fn resolve_legacy_scoped_method(
+    eg: &ExecutorGlobals,
+    owner: &str,
+    method: &str,
+    lexical_class: Option<&str>,
+    called_class: Option<&str>,
+    receiver: Option<&Value>,
+    object_form: bool,
+) -> Option<ResolvedCallback> {
+    let Some((visibility, is_static, func_ptr, declaring)) =
+        find_method_in_class_hierarchy(eg, owner, method)
+    else {
+        let compatible_receiver = receiver.filter(|receiver| {
+            receiver
+                .as_object()
+                .is_some_and(|object| eg.class_is_a(&object.class_name, owner))
+        });
+        let mut resolved = compatible_receiver
+            .and_then(|receiver| {
+                resolve_magic_callback(eg, owner, method, "__call", Some(receiver))
+            })
+            .or_else(|| {
+                (!object_form)
+                    .then(|| resolve_magic_callback(eg, owner, method, "__callStatic", None))
+                    .flatten()
+            })?;
+        if let Some(object) = receiver.and_then(Value::as_object) {
+            resolved.called_scope_class_id = object.class_id;
+        } else {
+            resolved.called_scope_class_id = legacy_called_scope_id(eg, owner, called_class);
+        }
+        return Some(resolved);
+    };
+    if !eg.check_visibility(lexical_class, declaring, visibility) {
+        return None;
+    }
+    if is_static {
+        return Some(ResolvedCallback {
+            func_ptr,
+            prepend_args: vec![Value::null()],
+            use_vars: vec![],
+            called_scope_class_id: legacy_called_scope_id(eg, owner, called_class),
+            bound_this: None,
+            closure_static_vars: None,
+            is_magic_call: false,
+        });
+    }
+
+    let receiver = receiver?.clone();
+    let object = receiver.as_object()?;
+    if !eg.class_is_a(&object.class_name, owner) {
+        return None;
+    }
+    let called_scope_class_id = object.class_id;
+    drop(object);
+    Some(ResolvedCallback {
+        func_ptr,
+        prepend_args: vec![receiver.clone()],
+        use_vars: vec![],
+        called_scope_class_id,
+        bound_this: Some(receiver),
+        closure_static_vars: None,
+        is_magic_call: false,
+    })
+}
+
+/// Resolve the PHP 8.5 legacy `self`/`parent`/`static` callback forms.
+///
+/// `lexical_class` is the declaring scope of the consuming call site, while
+/// `called_class` is its forwarding late-static scope. `receiver` is the live
+/// `$this`, if any. A matched-but-invalid form remains distinguishable from an
+/// ordinary callback because PHP reports its deprecation before rejecting it.
+pub(crate) fn resolve_legacy_callback(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    lexical_class: Option<&str>,
+    called_class: Option<&str>,
+    receiver: Option<&Value>,
+) -> LegacyCallbackResolution {
+    if let Some(name) = val.as_str()
+        && let Some((relative, method)) = name.rsplit_once("::")
+        && matches!(
+            relative.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        )
+    {
+        let relative = relative.to_ascii_lowercase();
+        let owner = legacy_relative_owner(eg, &relative, lexical_class, called_class);
+        let deprecation = owner
+            .as_ref()
+            .map(|_| format!("Use of \"{relative}\" in callables is deprecated"));
+        let resolved = owner.and_then(|owner| {
+            resolve_legacy_scoped_method(
+                eg,
+                &owner,
+                method,
+                lexical_class,
+                called_class,
+                receiver,
+                false,
+            )
+        });
+        return LegacyCallbackResolution::Legacy {
+            resolved,
+            deprecation,
+        };
+    }
+
+    let Some(array) = val.as_array() else {
+        return LegacyCallbackResolution::NotLegacy;
+    };
+    if array.len() != 2 {
+        return LegacyCallbackResolution::NotLegacy;
+    }
+    let Some(first) = array.get_value_at(0) else {
+        return LegacyCallbackResolution::NotLegacy;
+    };
+    let Some(method) = array.get_value_at(1).and_then(Value::as_str) else {
+        return LegacyCallbackResolution::NotLegacy;
+    };
+
+    if let Some(relative) = first.as_str()
+        && matches!(
+            relative.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        )
+        && !method.contains("::")
+    {
+        let relative = relative.to_ascii_lowercase();
+        let owner = legacy_relative_owner(eg, &relative, lexical_class, called_class);
+        let deprecation = owner
+            .as_ref()
+            .map(|_| format!("Use of \"{relative}\" in callables is deprecated"));
+        let resolved = owner.and_then(|owner| {
+            resolve_legacy_scoped_method(
+                eg,
+                &owner,
+                method,
+                lexical_class,
+                called_class,
+                receiver,
+                false,
+            )
+        });
+        return LegacyCallbackResolution::Legacy {
+            resolved,
+            deprecation,
+        };
+    }
+
+    let Some((qualifier, bare_method)) = method.rsplit_once("::") else {
+        return LegacyCallbackResolution::NotLegacy;
+    };
+    let (receiver_class, callback_receiver, object_form) = if let Some(object) = first.as_object() {
+        (object.class_name.to_string(), Some(first), true)
+    } else if let Some(class) = first.as_str() {
+        let class = class.trim_start_matches('\\').to_string();
+        let live_receiver = receiver.filter(|candidate| {
+            candidate
+                .as_object()
+                .is_some_and(|object| eg.class_is_a(&object.class_name, &class))
+        });
+        (class, live_receiver, false)
+    } else {
+        return LegacyCallbackResolution::NotLegacy;
+    };
+    let display = receiver_class.clone();
+    let owner = if qualifier.eq_ignore_ascii_case("self") {
+        Some(receiver_class.clone())
+    } else if qualifier.eq_ignore_ascii_case("parent") {
+        eg.find_class(&receiver_class)
+            .and_then(|class| class.parent.clone())
+    } else if qualifier.eq_ignore_ascii_case("static") {
+        called_class.map(str::to_owned)
+    } else {
+        Some(qualifier.trim_start_matches('\\').to_string())
+    };
+    let owner = owner.filter(|owner| eg.class_is_a(&receiver_class, owner));
+    let deprecation = owner
+        .as_ref()
+        .map(|_| format!("Callables of the form [\"{display}\", \"{method}\"] are deprecated"));
+    let resolved = owner.and_then(|owner| {
+        let forwarding_class = called_class
+            .filter(|called| eg.class_is_a(called, &owner))
+            .or(Some(owner.as_str()));
+        resolve_legacy_scoped_method(
+            eg,
+            &owner,
+            bare_method,
+            lexical_class,
+            forwarding_class,
+            callback_receiver,
+            object_form,
+        )
+    });
+    LegacyCallbackResolution::Legacy {
+        resolved,
+        deprecation,
+    }
+}
+
+#[inline]
+fn is_relative_scope_keyword(name: &str) -> bool {
+    name.eq_ignore_ascii_case("self")
+        || name.eq_ignore_ascii_case("parent")
+        || name.eq_ignore_ascii_case("static")
+}
+
+#[inline]
+pub(crate) fn callback_uses_legacy_scope(val: &Value) -> bool {
+    if let Some(name) = val.as_str()
+        && let Some((relative, _)) = name.rsplit_once("::")
+    {
+        return is_relative_scope_keyword(relative);
+    }
+    let Some(array) = val.as_array() else {
+        return false;
+    };
+    if array.len() != 2 {
+        return false;
+    }
+    array
+        .get_value_at(0)
+        .and_then(Value::as_str)
+        .is_some_and(is_relative_scope_keyword)
+        || array
+            .get_value_at(1)
+            .and_then(Value::as_str)
+            .is_some_and(|method| method.contains("::"))
+}
+
+/// Explain a matched legacy callback that could not be resolved. Callback
+/// wrappers prepend their own function/argument wording; this helper owns the
+/// class-scope-specific tail so compiler-lowered and internal paths agree.
+pub(crate) fn legacy_callback_invalid_reason(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    lexical_class: Option<&str>,
+    called_class: Option<&str>,
+    receiver: Option<&Value>,
+) -> String {
+    let inaccessible_or_missing = |owner: &str, method: &str| {
+        if let Some((visibility, is_static, _, defining)) =
+            find_method_in_class_hierarchy(eg, owner, method)
+        {
+            if !eg.check_visibility(lexical_class, defining, visibility) {
+                let visibility = match visibility {
+                    Visibility::Private => "private",
+                    Visibility::Protected => "protected",
+                    Visibility::Public => "public",
+                };
+                return format!("cannot access {visibility} method {owner}::{method}()");
+            }
+            if !is_static
+                && !receiver.is_some_and(|receiver| {
+                    receiver
+                        .as_object()
+                        .is_some_and(|object| eg.class_is_a(&object.class_name, owner))
+                })
+            {
+                return format!(
+                    "non-static method {owner}::{method}() cannot be called statically"
+                );
+            }
+        }
+        format!("class {owner} does not have a method \"{method}\"")
+    };
+
+    if let Some(name) = val.as_str()
+        && let Some((relative, method)) = name.rsplit_once("::")
+        && matches!(
+            relative.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        )
+    {
+        return legacy_relative_owner(eg, relative, lexical_class, called_class).map_or_else(
+            || {
+                format!(
+                    "cannot access \"{}\" when no class scope is active",
+                    relative.to_ascii_lowercase()
+                )
+            },
+            |owner| inaccessible_or_missing(&owner, method),
+        );
+    }
+
+    let Some(array) = val.as_array() else {
+        return "no array or string given".to_string();
+    };
+    let Some(first) = array.get_value_at(0) else {
+        return "no array or string given".to_string();
+    };
+    let Some(method) = array.get_value_at(1).and_then(Value::as_str) else {
+        return "no array or string given".to_string();
+    };
+    if let Some(relative) = first.as_str()
+        && matches!(
+            relative.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        )
+        && !method.contains("::")
+    {
+        return legacy_relative_owner(eg, relative, lexical_class, called_class).map_or_else(
+            || {
+                format!(
+                    "cannot access \"{}\" when no class scope is active",
+                    relative.to_ascii_lowercase()
+                )
+            },
+            |owner| inaccessible_or_missing(&owner, method),
+        );
+    }
+    let receiver_class = first
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .or_else(|| {
+            first
+                .as_str()
+                .map(|class| class.trim_start_matches('\\').to_string())
+        });
+    let Some(receiver_class) = receiver_class else {
+        return "first array member is not a valid class name or object".to_string();
+    };
+    let Some((qualifier, bare_method)) = method.rsplit_once("::") else {
+        return "no array or string given".to_string();
+    };
+    let owner = if qualifier.eq_ignore_ascii_case("self") {
+        Some(receiver_class)
+    } else if qualifier.eq_ignore_ascii_case("parent") {
+        eg.find_class(&receiver_class)
+            .and_then(|class| class.parent.clone())
+    } else if qualifier.eq_ignore_ascii_case("static") {
+        called_class.map(str::to_owned)
+    } else {
+        Some(qualifier.trim_start_matches('\\').to_string())
+    };
+    owner.map_or_else(
+        || {
+            format!(
+                "cannot access \"{}\" when no class scope is active",
+                qualifier.to_ascii_lowercase()
+            )
+        },
+        |owner| inaccessible_or_missing(&owner, bare_method),
+    )
 }
 
 #[cold]
@@ -8610,6 +8986,14 @@ fn resolve_callback(
             let obj_val = arr.get_value_at(0)?;
             let method_val = arr.get_value_at(1)?;
             let method_name = method_val.as_str()?;
+            // A qualified array method (`self::m`, `parent::m`, `A::m`)
+            // belongs to PHP 8.5's deprecated legacy-callable grammar. Leave
+            // it unresolved here so the consuming boundary can diagnose and
+            // resolve it with lexical/called scope instead of treating it as
+            // an ordinary magic method name.
+            if method_name.contains("::") && !is_property_hook_method_name(method_name) {
+                return None;
+            }
             if obj_val.value_type() == ValueType::Closure
                 && method_name.eq_ignore_ascii_case("__invoke")
             {
@@ -9060,51 +9444,134 @@ pub(crate) fn resolve_callback_with_cache(
 
 /// Resolve a callback from the legacy stdlib wrapper. Only array callbacks
 /// need the caller's lexical class for visibility checks.
+pub(crate) fn resolve_live_scoped_instance_callback(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    lexical_class: Option<&str>,
+    receiver: Option<&Value>,
+) -> Option<ResolvedCallback> {
+    let receiver = receiver?;
+    let (class_name, method_name) = if let Some(name) = val.as_str() {
+        let (class, method) = name.rsplit_once("::")?;
+        (class.trim_start_matches('\\'), method)
+    } else {
+        let array = val.as_array()?;
+        if array.len() != 2 {
+            return None;
+        }
+        (
+            array.get_value_at(0)?.as_str()?.trim_start_matches('\\'),
+            array.get_value_at(1)?.as_str()?,
+        )
+    };
+    if method_name.contains("::") && !is_property_hook_method_name(method_name) {
+        return None;
+    }
+    if is_relative_scope_keyword(class_name) {
+        return None;
+    }
+    let object = receiver.as_object()?;
+    if !eg.class_is_a(&object.class_name, class_name) {
+        return None;
+    }
+    let called_scope_class_id = object.class_id;
+    drop(object);
+    let Some((visibility, is_static, func_ptr, declaring)) =
+        find_method_in_class_hierarchy(eg, class_name, method_name)
+    else {
+        let mut resolved =
+            resolve_magic_callback(eg, class_name, method_name, "__call", Some(receiver))?;
+        resolved.called_scope_class_id = called_scope_class_id;
+        resolved.bound_this = Some(receiver.clone());
+        return Some(resolved);
+    };
+    if is_static || !eg.check_visibility(lexical_class, declaring, visibility) {
+        return None;
+    }
+    Some(ResolvedCallback {
+        func_ptr,
+        prepend_args: vec![receiver.clone()],
+        use_vars: vec![],
+        called_scope_class_id,
+        bound_this: Some(receiver.clone()),
+        closure_static_vars: None,
+        is_magic_call: false,
+    })
+}
+
 #[inline]
 pub(super) fn resolve_callback_at_callsite(
     val: &Value,
     eg: &ExecutorGlobals,
     ed: *mut ExecuteData,
 ) -> Option<ResolvedCallback> {
-    let caller_class = if val.value_type() == ValueType::Array {
-        get_calling_scope_class(ed, eg)
-    } else {
-        None
-    };
-    resolve_callback_with_cache(val, eg, caller_class, callback_cache_slot(ed)).or_else(|| {
-        let name = val.as_str()?;
-        let (class_name, method_name) = name.rsplit_once("::")?;
-        // PHP retains the legacy scoped callable `SelfClass::method` when a
-        // non-static method registers or immediately invokes it on its live
-        // `$this`. The resolved descriptor must own that receiver because a
-        // shutdown callback executes after the registering frame has left.
-        let declaring = get_calling_scope_class(ed, eg)?;
-        let class_name = class_name.trim_start_matches('\\');
-        if !declaring.eq_ignore_ascii_case(class_name) {
-            return None;
+    let needs_scope = val.value_type() == ValueType::Array
+        || val.as_str().is_some_and(|name| name.contains("::"));
+    if !needs_scope {
+        return resolve_callback_with_cache(val, eg, None, callback_cache_slot(ed));
+    }
+    let lexical_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
+    let visibility_scope = (val.value_type() == ValueType::Array)
+        .then_some(lexical_class.as_deref())
+        .flatten();
+    let ordinary = resolve_callback_with_cache(val, eg, visibility_scope, callback_cache_slot(ed));
+    if ordinary
+        .as_ref()
+        .is_some_and(|resolved| !resolved.is_magic_call)
+    {
+        return ordinary;
+    }
+    let receiver = crate::vm::execute::receiver_for_internal_call(ed);
+    resolve_live_scoped_instance_callback(val, eg, lexical_class.as_deref(), receiver.as_ref())
+        .or(ordinary)
+}
+
+/// Resolve a callback at an internal-function boundary and deliver the PHP
+/// 8.5 deprecation attached to legacy relative spellings. Ordinary callbacks
+/// retain the existing cache-backed resolver and do not allocate scope data.
+pub(super) fn resolve_callback_at_callsite_checked(
+    val: &Value,
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+) -> Result<Option<ResolvedCallback>, VmError> {
+    let ordinary = resolve_callback_at_callsite(val, eg, ed);
+    if ordinary.is_some() {
+        return Ok(ordinary);
+    }
+    if !callback_uses_legacy_scope(val) {
+        return Ok(ordinary);
+    }
+    let lexical_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
+    let receiver = crate::vm::execute::receiver_for_internal_call(ed);
+    let called_class = receiver
+        .as_ref()
+        .and_then(Value::as_object)
+        .map(|object| object.class_name.to_string())
+        .or_else(|| {
+            crate::vm::execute::called_class_name_for_internal_call(eg, ed).map(str::to_owned)
+        });
+    match resolve_legacy_callback(
+        val,
+        eg,
+        lexical_class.as_deref(),
+        called_class.as_deref(),
+        receiver.as_ref(),
+    ) {
+        LegacyCallbackResolution::NotLegacy => Ok(ordinary),
+        LegacyCallbackResolution::Legacy {
+            resolved,
+            deprecation,
+        } => {
+            if let Some(deprecation) = deprecation {
+                report_internal_deprecation(eg, ed, &deprecation)?;
+            }
+            if eg.exception.is_some() {
+                Ok(None)
+            } else {
+                Ok(resolved)
+            }
         }
-        let receiver = get_calling_scope_receiver(ed)?;
-        let object = receiver.as_object()?;
-        if !eg.class_is_a(&object.class_name, class_name) {
-            return None;
-        }
-        let called_scope_class_id = object.class_id;
-        drop(object);
-        let (visibility, is_static, func_ptr, defining) =
-            find_method_in_class_hierarchy(eg, class_name, method_name)?;
-        if is_static || !eg.check_visibility(Some(declaring), defining, visibility) {
-            return None;
-        }
-        Some(ResolvedCallback {
-            func_ptr,
-            prepend_args: vec![receiver],
-            use_vars: vec![],
-            called_scope_class_id,
-            bound_this: None,
-            closure_static_vars: None,
-            is_magic_call: false,
-        })
-    })
+    }
 }
 
 #[cold]
@@ -9918,6 +10385,27 @@ pub(crate) fn invoke_call_user_func_array(
     call_resolved_with_php_array(eg, resolved, args)
 }
 
+/// Invoke a callback already resolved at the consuming source boundary. This
+/// keeps legacy-scope deprecation delivery outside the ordinary cache-backed
+/// resolver while sharing call_user_func_array argument semantics.
+pub(crate) fn invoke_resolved_call_user_func_array(
+    resolved: ResolvedCallback,
+    args_value: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, VmError> {
+    let Some(args) = args_value.as_array() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "call_user_func_array(): Argument #2 ($args) must be of type array, {} given",
+                args_value.dereferenced().type_name()
+            ),
+        ));
+        return Ok(Value::null());
+    };
+    call_resolved_with_php_array(eg, resolved, args)
+}
+
 /// call_user_func($callback, ...$args)
 /// CV 0 = callback, CV 1 = variadic array of extra args
 fn fn_call_user_func(
@@ -9929,9 +10417,12 @@ fn fn_call_user_func(
     // Variadic args packed at CV(1)
     let variadic_val = arg!(ed, 1);
 
-    let resolved = match resolve_callback_at_callsite(callback, eg, ed) {
+    let resolved = match resolve_callback_at_callsite_checked(callback, eg, ed)? {
         Some(r) => r,
         None => {
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             let desc = callback.echo_to_string();
             eg.exception = Some(crate::value::make_error_value(
                 "TypeError",
@@ -9994,7 +10485,10 @@ fn fn_is_callable(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let val = arg!(ed, 0);
-    let callable = resolve_callback_at_callsite(val, eg, ed).is_some();
+    let callable = resolve_callback_at_callsite_checked(val, eg, ed)?.is_some();
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     ret!(rv, Value::bool(callable));
 }
 
@@ -12067,16 +12561,26 @@ fn fn_call_user_func_array(
 ) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
     let args_val = arg!(ed, 1);
-    let caller_class = get_calling_scope_class(ed, eg).map(str::to_owned);
+    let resolved = match resolve_callback_at_callsite_checked(callback, eg, ed)? {
+        Some(resolved) => resolved,
+        None => {
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            let desc = callback.echo_to_string();
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
+                    desc
+                ),
+            ));
+            return Ok(());
+        }
+    };
     let discarded = rv.is_null() || eg.detached_return_discarded();
     let previous_discarded = eg.replace_detached_return_discarded(discarded);
-    let result = invoke_call_user_func_array(
-        callback,
-        args_val,
-        eg,
-        caller_class.as_deref(),
-        callback_cache_slot(ed),
-    );
+    let result = invoke_resolved_call_user_func_array(resolved, args_val, eg);
     eg.replace_detached_return_discarded(previous_discarded);
     let result = result?;
     if eg.exception.is_some() {

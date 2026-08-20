@@ -864,6 +864,11 @@ where
         eg.publish_detached_trace_origin(frame as usize, file.clone(), *line);
     }
     let mut return_value = Value::null();
+    let mut trace_arguments = (user_callee.is_some()
+        && this_offset == 0
+        && capture_count == 0
+        && public_num_args > signature.param_names.len())
+        .then(|| Vec::with_capacity(num_args));
 
     // SAFETY: `frame` is a fresh compiler-sized activation. All argument and
     // variadic destinations are uninitialized slots described by `func_ptr`.
@@ -876,12 +881,19 @@ where
             let arg = args
                 .next()
                 .expect("callback argument iterator shorter than declared length");
+            if let Some(trace_arguments) = trace_arguments.as_mut() {
+                trace_arguments.push(arg.clone());
+            }
             callback_arg_init(frame, i, arg);
         }
         debug_assert!(
             args.next().is_none(),
             "callback argument iterator longer than declared length"
         );
+        if let Some(trace_arguments) = trace_arguments.take() {
+            eg.function_arguments
+                .insert(frame as usize, trace_arguments);
+        }
 
         if called_scope_class_id != 0 {
             publish_late_static_call_class_id(eg, frame, called_scope_class_id);

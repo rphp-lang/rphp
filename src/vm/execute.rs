@@ -227,6 +227,21 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
                 return Some(class.to_string());
             }
 
+            // Calls that selected an ancestor's trait composition publish the
+            // exact dispatch class in the compiler-reserved activation TMP.
+            // Prefer it over the dynamic receiver, which may remain a child
+            // object and would otherwise make `parent` recurse into the same
+            // composition.
+            if (*func).fn_type == FunctionType::User {
+                let function = &*(func as *const UserFunction);
+                if let Some(scope_tmp) = function.op_array.trait_class_scope_tmp {
+                    let scope = &*(*frame).slot_ptr(scope_tmp as u32);
+                    if let Some(scope) = scope.as_str() {
+                        return Some(scope.to_string());
+                    }
+                }
+            }
+
             // Trait op arrays are shared by every consuming class. Their lexical
             // visibility scope is the nearest class that composed the trait, not
             // whichever consumer happened to register last.
@@ -326,6 +341,23 @@ pub(crate) fn lexical_class_name_for_internal_call(
     internal_frame: *mut ExecuteData,
 ) -> Option<String> {
     get_caller_class(caller_frame_for_internal_call(internal_frame)?, eg)
+}
+
+/// Recover the live `$this` of the user frame that invoked an internal
+/// callback consumer. Named methods reserve CV 0; class-scoped closures keep
+/// the same receiver in their compiler-recorded `this` CV.
+pub(crate) fn receiver_for_internal_call(internal_frame: *mut ExecuteData) -> Option<Value> {
+    let caller = caller_frame_for_internal_call(internal_frame)?;
+    // SAFETY: the internal handler executes synchronously beneath this live
+    // user frame, whose function metadata and CV storage remain valid.
+    unsafe {
+        let function = (*caller).func;
+        if function.is_null() || (*function).fn_type != FunctionType::User {
+            return None;
+        }
+        let user = &*(function as *const UserFunction);
+        closure_bound_this(caller, &user.op_array, false)
+    }
 }
 
 fn caller_frame_for_internal_call(internal_frame: *mut ExecuteData) -> Option<*mut ExecuteData> {
@@ -3027,6 +3059,47 @@ fn execute_full_call<'a>(
                 let value = (&*(*call).cv(cv_idx)).dereferenced().clone();
                 if value.is_undef() {
                     continue;
+                }
+                if matches!(hint, ParamTypeHint::Callable)
+                    && crate::stdlib::callback_uses_legacy_scope(&value)
+                {
+                    let lexical_class = get_caller_class(frame, eg);
+                    let receiver = closure_bound_this(frame, op_array, false);
+                    let called_class = receiver
+                        .as_ref()
+                        .and_then(Value::as_object)
+                        .map(|object| object.class_name.to_string())
+                        .or_else(|| {
+                            eg.class_by_id(late_static_call_class_id(eg, frame))
+                                .map(|class| class.name.clone())
+                        });
+                    let legacy = crate::stdlib::resolve_legacy_callback(
+                        &value,
+                        eg,
+                        lexical_class.as_deref(),
+                        called_class.as_deref(),
+                        receiver.as_ref(),
+                    );
+                    if let crate::stdlib::LegacyCallbackResolution::Legacy {
+                        resolved,
+                        deprecation,
+                    } = legacy
+                    {
+                        if let Some(deprecation) = deprecation {
+                            report_php_deprecation(eg, frame, op_array, opline, &deprecation)?;
+                        }
+                        if let Some(exception) = eg.exception.take() {
+                            cleanup_frame_slots(call);
+                            pop_vm_call_frame(eg, call);
+                            return Ok(match throw_in_frame(eg, frame, exception) {
+                                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                            });
+                        }
+                        if resolved.is_some() {
+                            continue;
+                        }
+                    }
                 }
                 match prepare_call_argument(
                     &value,

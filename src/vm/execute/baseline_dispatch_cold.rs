@@ -1895,7 +1895,92 @@ fn op_call_user_func_array<'a>(
         op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache
     };
     let caller_class = get_caller_class(frame, eg);
-    let result = if opline._pad & CALL_USER_FUNC_ARRAY_SOURCE_UNPACK != 0 {
+    let uses_legacy_scope = crate::stdlib::callback_uses_legacy_scope(callback);
+    let receiver = if uses_legacy_scope {
+        closure_bound_this(frame, op_array, false)
+    } else {
+        None
+    };
+    let called_class = if uses_legacy_scope {
+        receiver
+            .as_ref()
+            .and_then(Value::as_object)
+            .map(|object| object.class_name.to_string())
+            .or_else(|| {
+                eg.class_by_id(late_static_call_class_id(eg, frame))
+                    .map(|class| class.name.clone())
+            })
+    } else {
+        None
+    };
+    let legacy = if uses_legacy_scope {
+        crate::stdlib::resolve_legacy_callback(
+            callback,
+            eg,
+            caller_class.as_deref(),
+            called_class.as_deref(),
+            receiver.as_ref(),
+        )
+    } else {
+        crate::stdlib::LegacyCallbackResolution::NotLegacy
+    };
+    let result = if let crate::stdlib::LegacyCallbackResolution::Legacy {
+        resolved,
+        deprecation,
+    } = legacy
+    {
+        let args = args.clone();
+        let invalid_reason = resolved.is_none().then(|| {
+            crate::stdlib::legacy_callback_invalid_reason(
+                callback,
+                eg,
+                caller_class.as_deref(),
+                called_class.as_deref(),
+                receiver.as_ref(),
+            )
+        });
+        if let Some(deprecation) = deprecation {
+            report_php_deprecation(eg, frame, op_array, opline, &deprecation)?;
+        }
+        if opline._pad & CALL_USER_FUNC_ARRAY_SOURCE_UNPACK == 0
+            && let Some(previous) = eg.exception.take()
+        {
+            eg.exception = Some(legacy_callback_deprecation_type_error(
+                eg,
+                "call_user_func_array",
+                previous,
+            ));
+        }
+        if eg.exception.is_some() {
+            Value::null()
+        } else if let Some(resolved) = resolved {
+            if opline._pad & CALL_USER_FUNC_ARRAY_SOURCE_UNPACK != 0 {
+                let source_file = if op_array.source_file.is_empty() {
+                    op_array.name.as_str()
+                } else {
+                    op_array.source_file.as_str()
+                };
+                crate::stdlib::invoke_resolved_source_unpacked_call(
+                    resolved,
+                    &args,
+                    eg,
+                    source_file,
+                    op_array.strict_types,
+                )?
+            } else {
+                crate::stdlib::invoke_resolved_call_user_func_array(resolved, &args, eg)?
+            }
+        } else {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "call_user_func_array(): Argument #1 ($callback) must be a valid callback, {}",
+                    invalid_reason.unwrap_or_else(|| "no array or string given".to_string())
+                ),
+            ));
+            Value::null()
+        }
+    } else if opline._pad & CALL_USER_FUNC_ARRAY_SOURCE_UNPACK != 0 {
         let source_file = if op_array.source_file.is_empty() {
             op_array.name.as_str()
         } else {

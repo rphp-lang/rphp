@@ -32,6 +32,8 @@ include!("e2e_callable/argument_unpack_semantics.rs");
 
 include!("e2e_callable/method_visibility_and_inheritance.rs");
 
+include!("e2e_callable/relative_scope_callbacks.rs");
+
 #[test]
 fn void_cast_marks_only_the_explicitly_discarded_call() {
     let compiled = compile_source(
