@@ -3751,6 +3751,9 @@ impl ExecutorGlobals {
 
     #[cold]
     fn declaration_interface_contract(&mut self, class_def: &ClassDef) -> Result<(), String> {
+        if let Some(error) = self.direct_interface_relation_error(class_def) {
+            return Err(error);
+        }
         if class_def.is_interface {
             return self.validate_interface_method_staticness(class_def);
         }
@@ -5215,11 +5218,8 @@ impl ExecutorGlobals {
         self.class_table.insert(alias.to_string(), class);
         self.retry_pending_named_classes()
             .map_err(ClassAliasRegistrationError::DelayedLink)?;
-        let duplicate_error = aliases_interface
-            .then(|| self.duplicate_interface_identity_error())
-            .flatten();
-        if duplicate_error.is_some() {
-            return Ok(duplicate_error);
+        if let Some(error) = self.interface_relation_error() {
+            return Err(ClassAliasRegistrationError::DelayedLink(error));
         }
         if let Some(error) = aliases_interface
             .then(|| self.interface_method_staticness_error())
@@ -5241,46 +5241,53 @@ impl ExecutorGlobals {
         })
     }
 
-    /// Runtime aliases can make two differently spelled interface edges refer
-    /// to one canonical identity after top-level declarations were eagerly
-    /// registered. Recheck unique class IDs, including inherited interfaces,
-    /// only on this cold alias-publication boundary.
-    fn duplicate_interface_identity_error(&self) -> Option<String> {
-        fn visit_interface(
-            eg: &ExecutorGlobals,
-            name: &str,
-            seen: &mut std::collections::HashSet<u32>,
-            depth: usize,
-        ) -> Option<String> {
-            if depth > eg.class_table.len() {
-                return None;
-            }
-            let interface = eg.find_class(name)?;
-            if !interface.is_interface {
-                return None;
-            }
-            if !seen.insert(interface.class_id) {
-                return Some(interface.name.clone());
-            }
-            interface
-                .implements
-                .iter()
-                .find_map(|parent| visit_interface(eg, parent, seen, depth.saturating_add(1)))
-        }
-
-        for class_id in 1..self.next_class_id {
-            let Some(class) = self.class_by_id(class_id) else {
+    /// Validate only direct interface edges. PHP permits ordinary and aliased
+    /// diamonds that converge on one inherited ancestor, but rejects two
+    /// direct spellings that resolve to the same canonical interface identity.
+    #[cold]
+    fn direct_interface_relation_error(&self, class: &ClassDef) -> Option<String> {
+        let location = || {
+            class.source_file.as_ref().map_or_else(String::new, |file| {
+                format!(" in {file} on line {}", class.declaration_line)
+            })
+        };
+        let mut direct_interfaces =
+            (class.implements.len() > 1).then(std::collections::HashSet::new);
+        for name in &class.implements {
+            let interface = self
+                .class_table
+                .get(name)
+                .map(std::rc::Rc::as_ref)
+                .or_else(|| {
+                    // A single unresolved forward edge is not part of this
+                    // checkpoint. Avoid turning its cold lookup into a second
+                    // request-wide case-insensitive scan; multi-edge identity
+                    // checks still need canonical alias/casing resolution.
+                    (class.implements.len() > 1)
+                        .then(|| self.find_class(name))
+                        .flatten()
+                });
+            let Some(interface) = interface else {
                 continue;
             };
-            if class.implements.len() < 2 {
-                continue;
+            if !interface.is_interface {
+                return Some(format!(
+                    "{} cannot implement {} - it is not an interface{}",
+                    class.name,
+                    interface.name,
+                    location()
+                ));
             }
-            let mut seen = std::collections::HashSet::new();
-            let duplicate = class
-                .implements
-                .iter()
-                .find_map(|interface| visit_interface(self, interface, &mut seen, 0));
-            if let Some(interface) = duplicate {
+            if direct_interfaces
+                .as_mut()
+                .is_some_and(|interfaces| !interfaces.insert(interface.class_id))
+            {
+                if self
+                    .generic_metadata
+                    .has_distinct_direct_interface_bindings(&class.name, &interface.name)
+                {
+                    continue;
+                }
                 let kind = if class.is_interface {
                     "Interface"
                 } else if class.is_enum {
@@ -5289,12 +5296,24 @@ impl ExecutorGlobals {
                     "Class"
                 };
                 return Some(format!(
-                    "{kind} {} cannot implement previously implemented interface {interface}",
-                    class.name
+                    "{kind} {} cannot implement previously implemented interface {}{}",
+                    class.name,
+                    interface.name,
+                    location()
                 ));
             }
         }
         None
+    }
+
+    /// A runtime alias may resolve a direct edge after top-level declarations
+    /// were eagerly registered. Recheck declarations in stable registration
+    /// order only on this explicit cold alias-publication boundary.
+    fn interface_relation_error(&self) -> Option<String> {
+        (1..self.next_class_id).find_map(|class_id| {
+            self.class_by_id(class_id)
+                .and_then(|class| self.direct_interface_relation_error(class))
+        })
     }
 
     /// Match a class name used by interned property metadata in one concrete

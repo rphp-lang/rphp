@@ -946,23 +946,38 @@ interface DuplicateAliasInterface extends CanonicalAliasInterface, ProjectedAlia
     );
     assert_eq!(
         error.to_string(),
-        "Interface DuplicateAliasInterface cannot implement previously implemented interface CanonicalAliasInterface in /fixture/alias-interface.php on line 3"
+        "Interface DuplicateAliasInterface cannot implement previously implemented interface CanonicalAliasInterface in /fixture/alias-interface.php on line 4"
     );
 
-    let transitive = run_php_expect_error_with_source_context(
-        r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 interface AliasRootInterface {}
 class_alias(AliasRootInterface::class, 'ProjectedRootInterface');
 interface AliasLeftInterface extends AliasRootInterface {}
 interface AliasRightInterface extends ProjectedRootInterface {}
 interface AliasDiamondInterface extends AliasLeftInterface, AliasRightInterface {}
+echo "diamond\n";
 "#,
-        "/fixture/alias-interface-transitive.php",
+        ),
+        "diamond\n"
+    );
+}
+
+#[test]
+fn class_alias_preserves_the_canonical_kind_and_declaration_location() {
+    let error = run_php_expect_error_with_source_context(
+        r#"<?php
+class CanonicalParentClass {}
+class_alias(CanonicalParentClass::class, 'ProjectedParentClass');
+interface InvalidAliasInterface extends ProjectedParentClass {}
+"#,
+        "/fixture/alias-interface-kind.php",
         "/fixture",
     );
     assert_eq!(
-        transitive.to_string(),
-        "Interface AliasDiamondInterface cannot implement previously implemented interface AliasRootInterface in /fixture/alias-interface-transitive.php on line 3"
+        error.to_string(),
+        "InvalidAliasInterface cannot implement CanonicalParentClass - it is not an interface in /fixture/alias-interface-kind.php on line 4"
     );
 }
 

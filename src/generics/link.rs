@@ -4,6 +4,38 @@ use super::{
 };
 
 impl GenericMetadata {
+    /// The opt-in generics extension treats distinct direct bindings of one
+    /// generic interface as separate Reflection entries even though their
+    /// erased runtime class identity is shared. Ordinary PHP inheritances
+    /// have identical empty argument lists and never satisfy this exception.
+    pub(crate) fn has_distinct_direct_interface_bindings(
+        &self,
+        owner: &str,
+        ancestor: &str,
+    ) -> bool {
+        let mut first = None;
+        for inheritance in self.inheritances.iter().filter(|inheritance| {
+            matches!(
+                inheritance.kind,
+                GenericInheritanceKind::Extends | GenericInheritanceKind::Implements
+            ) && self
+                .symbol(inheritance.owner)
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
+                && self
+                    .symbol(inheritance.ancestor)
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(ancestor))
+        }) {
+            let Some(previous) = first else {
+                first = Some(inheritance.arguments.as_ref());
+                continue;
+            };
+            if previous != inheritance.arguments.as_ref() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Validate the direct generic bindings declared by one class-like. This
     /// runs when the class is linked, after metadata from its compilation unit
     /// has joined the executor-wide table.

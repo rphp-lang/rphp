@@ -39,6 +39,67 @@ $c->foo();
     );
 }
 
+#[test]
+fn direct_interface_relations_require_interfaces_and_unique_identities() {
+    let wrong_kind = run_php_expect_error(
+        r#"<?php
+class ParentClass {}
+interface InvalidInterface extends ParentClass {}
+"#,
+    );
+    assert_eq!(
+        format!("{wrong_kind:?}"),
+        "Fatal(\"InvalidInterface cannot implement ParentClass - it is not an interface\")"
+    );
+
+    let wrong_trait = run_php_expect_error(
+        r#"<?php
+trait ParentTrait {}
+class InvalidTraitConsumer implements ParentTrait {}
+"#,
+    );
+    assert_eq!(
+        format!("{wrong_trait:?}"),
+        "Fatal(\"InvalidTraitConsumer cannot implement ParentTrait - it is not an interface\")"
+    );
+
+    let duplicate_class = run_php_expect_error(
+        r#"<?php
+interface RepeatedContract {}
+class InvalidClass implements repeatedcontract, REPEATEDCONTRACT {}
+"#,
+    );
+    assert_eq!(
+        format!("{duplicate_class:?}"),
+        "Fatal(\"Class InvalidClass cannot implement previously implemented interface RepeatedContract\")"
+    );
+
+    let duplicate_interface = run_php_expect_error(
+        r#"<?php
+interface RepeatedParent {}
+interface InvalidChild extends repeatedparent, REPEATEDPARENT {}
+"#,
+    );
+    assert_eq!(
+        format!("{duplicate_interface:?}"),
+        "Fatal(\"Interface InvalidChild cannot implement previously implemented interface RepeatedParent\")"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface RootContract {}
+interface LeftContract extends RootContract {}
+interface RightContract extends RootContract {}
+interface DiamondContract extends LeftContract, RightContract {}
+interface RedundantContract extends RootContract, LeftContract {}
+echo "compatible\n";
+"#,
+        ),
+        "compatible\n"
+    );
+}
+
 // ── P1: Visibility uses lexical class scope ──
 
 #[test]
