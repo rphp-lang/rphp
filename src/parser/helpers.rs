@@ -511,9 +511,9 @@ impl Parser {
         ))
     }
 
-    /// Parse a trait name where PHP also admits the explicit
+    /// Parse a qualified name where PHP also admits the explicit
     /// `namespace\Name` form.
-    fn parse_trait_name(&mut self) -> Result<String, String> {
+    fn parse_qualified_or_namespace_relative_name(&mut self) -> Result<String, String> {
         if self.peek() == Token::Namespace && self.peek_at(1) == Token::Backslash {
             self.parse_namespace_relative_name()
         } else {
@@ -526,7 +526,9 @@ impl Parser {
     /// qualified and namespace-relative forms identify a trait before `::`.
     fn parse_trait_method_reference(&mut self) -> Result<(Option<String>, String), String> {
         let first = match self.peek() {
-            Token::Namespace if self.peek_at(1) == Token::Backslash => self.parse_trait_name()?,
+            Token::Namespace if self.peek_at(1) == Token::Backslash => {
+                self.parse_qualified_or_namespace_relative_name()?
+            }
             Token::Backslash | Token::Identifier(_, _) => self.parse_qualified_name()?,
             _ => {
                 let token = self.advance();

@@ -584,3 +584,27 @@ echo namespace\accepts(new namespace\Box()), "\n";
     );
     assert_eq!(out, "constant\nfunction\nclass\nclass\n");
 }
+
+#[test]
+fn namespace_relative_catch_types_resolve_with_unions_and_without_variables() {
+    let out = run_php(
+        r#"<?php
+namespace CatchScope;
+class FirstProblem extends \Exception {}
+class LastProblem extends \Exception {}
+
+try {
+    throw new FirstProblem('first');
+} catch (namespace\LastProblem|\RuntimeException|namespace\FirstProblem $error) {
+    echo $error->getMessage(), "\n";
+}
+
+try {
+    throw new LastProblem('last');
+} catch (namespace\LastProblem) {
+    echo "caught-without-variable\n";
+}
+"#,
+    );
+    assert_eq!(out, "first\ncaught-without-variable\n");
+}

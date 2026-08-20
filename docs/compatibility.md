@@ -9,15 +9,42 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,540 pass, 1,757 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,541 pass, 1,756 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-66.830% and the whole-corpus rate is 63.226%; 4,652 of 5,297 attempted cases
-reach runtime (87.823%). Relative to exact base `b52d62c5`, the pass-set delta
-is +16/-0: all 3,524 prior passes remain passes. Two final merged manifests and
+66.849% and the whole-corpus rate is 63.243%; 4,653 of 5,297 attempted cases
+reach runtime (87.842%). Relative to exact base `3b0ad5ab`, the pass-set delta
+is +1/-0: all 3,540 prior passes remain passes and no other status, failure
+category or stage moves. Two final merged manifests and
 summaries are byte-for-byte identical. The manifest SHA-256 is
-`5d3e9da11a0700338416084aa995293b37a0ed5352d7f37677f6f918064c0c38`.
+`ac77eb9d1e0d657b4980e66327a770c3dd62ab9e993fb0c01971ef9c071342ca`.
 
-PHP 8.5 semi-reserved tokens now share the contextual-name path used by
+PHP 8.5 catch type lists now admit explicit namespace-relative names such as
+`namespace\Problem`. The same qualified-or-namespace-relative name parser is
+shared with trait references, and is applied independently to every union
+catch member. Ordinary relative and leading-backslash absolute types remain
+unchanged, as do catch clauses with an exception variable and PHP 8's
+variable-free form.
+
+An original parser regression retains the exact name representations for a
+mixed three-type catch union and a variable-free namespace-relative catch. A
+namespace E2E regression throws into both forms and proves runtime class
+resolution, union ordering and the optional-variable boundary. The complete
+parser unit set, namespace E2E file and adjacent `traits` plus `exceptions`
+PHPT directories pass with no unrelated transition.
+
+The sole full-corpus addition is `Zend/tests/traits/bug55086.phpt`, which now
+passes through its previously unreachable `catch (namespace\Foo $e)` tail
+after preserving the already-supported trait import and adaptation behavior.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at 1,623 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies because the change only selects an existing parser
+and name-resolution representation; successful bytecode paths are unchanged.
+
+In the preceding semi-reserved member checkpoint, PHP 8.5 tokens share the
+contextual-name path used by
 method declarations, instance and static member access, trait adaptations and
 named arguments. This admits logical `and`/`or`, `insteadof` and magic-constant
 spellings without changing their expression meanings. Trait adaptations use

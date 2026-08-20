@@ -844,6 +844,34 @@ fn test_parse_named_first_class_function_callable() {
 }
 
 #[test]
+fn catch_types_accept_namespace_relative_names_in_every_union_position() {
+    let tokens = Lexer::new(
+        "<?php namespace Fixture; try {} catch (namespace\\First|\\RuntimeException|namespace\\Last $error) {} try {} catch (namespace\\Silent) {}",
+    )
+    .tokenize()
+    .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let Stmt::Namespace { body, .. } = &statements[0] else {
+        panic!("expected namespace statement");
+    };
+
+    let Stmt::TryCatch { catches, .. } = &body[0] else {
+        panic!("expected first try/catch");
+    };
+    assert_eq!(
+        catches[0].types,
+        ["namespace\\First", "\\RuntimeException", "namespace\\Last"]
+    );
+    assert_eq!(catches[0].var.as_deref(), Some("error"));
+
+    let Stmt::TryCatch { catches, .. } = &body[1] else {
+        panic!("expected second try/catch");
+    };
+    assert_eq!(catches[0].types, ["namespace\\Silent"]);
+    assert_eq!(catches[0].var, None);
+}
+
+#[test]
 fn test_parse_array_element_reference_assignment_without_bitwise_ambiguity() {
     let tokens = Lexer::new("<?php $loops[$key][] = &$pathInLoop;")
         .tokenize()

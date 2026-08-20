@@ -561,11 +561,11 @@ impl Parser {
             self.expect_lparen()?;
             // Parse exception type(s): ExA | ExB
             let mut types = Vec::new();
-            let type_name = self.parse_qualified_name()?;
+            let type_name = self.parse_qualified_or_namespace_relative_name()?;
             types.push(type_name);
             while self.peek() == Token::Pipe {
                 self.advance();
-                let t = self.parse_qualified_name()?;
+                let t = self.parse_qualified_or_namespace_relative_name()?;
                 types.push(t);
             }
             let var = match self.peek() {
@@ -710,7 +710,9 @@ impl Parser {
                             };
                             let mut instead_of = Vec::new();
                             loop {
-                                instead_of.push(self.parse_trait_name()?);
+                                instead_of.push(
+                                    self.parse_qualified_or_namespace_relative_name()?,
+                                );
                                 if self.peek() == Token::Comma {
                                     self.advance();
                                 } else {
@@ -893,7 +895,9 @@ impl Parser {
                             };
                             let mut instead_of = Vec::new();
                             loop {
-                                instead_of.push(self.parse_trait_name()?);
+                                instead_of.push(
+                                    self.parse_qualified_or_namespace_relative_name()?,
+                                );
                                 if self.peek() == Token::Comma {
                                     self.advance();
                                 } else {
