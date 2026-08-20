@@ -8,8 +8,61 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `3c5af617`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,744 pass, 1,555 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `e9e20beb`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,751 pass, 1,548 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.787% and the whole-corpus rate is 66.994%; 4,709 of
+5,299 attempted cases reach runtime (88.866%). Relative to exact base
+`3c5af617`, the pass-set delta is +7/-0: all 3,744 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`357f2a087bb6003607236c021eb8c462142950c2804155add60f1778036e7687`
+and `cbcf38eae735c99e25e415254023383837327b8c2e6272a4ae598b7cb1f4829b`.
+
+Duplicate global constants declared by source `const` or `define()` now emit
+PHP 8.5's `Constant NAME already defined, this will be an error in PHP 9`
+warning at the colliding source line, continue execution and preserve the
+first case-sensitive value. Within one compilation unit, repeated source
+declarations retain the first declaration's attributes and deferred-expression
+metadata. The two-pass constant pre-scan also reserves the first source
+declaration even when its value must be resolved at runtime, so a statically
+evaluable duplicate cannot seed later constant folding. Cold include/eval
+metadata merges no longer overwrite metadata already resident in the executor.
+Runtime `define()` preceding a later attributed source constant, especially
+across source-unit execution order, still needs lazy metadata publication and
+is explicitly outside this checkpoint's attribute-ownership claim.
+
+Original E2E coverage exercises exact `define()` warning text, first source
+value and attributes, constant-name case sensitivity, diagnostic source lines,
+and the runtime-resolved-first/static-duplicate pre-scan boundary. The exact
+full-corpus additions are
+`Zend/tests/attributes/constants/constant_redefined_addition.phpt`,
+`constant_redefined_change.phpt`, `constant_redefined_removal.phpt`,
+`Zend/tests/constants/008.phpt`, `constants_004.phpt`, `constants_008.phpt`
+and
+`Zend/tests/type_declarations/typed_class_constants_inheritance_success4.phpt`;
+all seven pass in 32 consecutive focused runs. `Zend/tests/bug29890.phpt`
+remains blocked on `set_time_limit()`, `Zend/tests/constants/constants_001.phpt`
+on the empty constant name, and `Zend/tests/constants/gh18850.phpt` on
+`__COMPILER_HALT_OFFSET__`; all three retain their exact expected failures.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory is 1,618 unsafe blocks and 289 unsafe functions.
+On CPU 2 with the performance governor, four warmups per binary and 32 order-
+balanced measured pairs with no removed observations, 1,000 successful simple
+constant declarations move from 0.179274 to 0.177592 seconds (-0.938%
+independently, -0.457% paired), with paired p10/p90 of -2.986%/+2.528%.
+Checksums match and both medians remain below the five-percent regression
+ceiling. The exact base and candidate binary SHA-256 values are
+`5c4d998f09a6a0a6f9eeef3ce48fdab25da745564a1f710a4cf93857935ab0ff`
+and `021f46fd72fe1df8f738381457c5b17769a80dddaa00fb6819229f6cef366ef4`.
+
+In the preceding function-redeclaration checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`3c5af617`. Across all 5,599 unmodified `Zend/tests` and `tests/lang` cases,
+3,744 pass, 1,555 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 70.655% and the whole-corpus rate is 66.869%; 4,709 of
 5,299 attempted cases reach runtime (88.866%). Relative to exact base
