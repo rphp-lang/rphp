@@ -761,14 +761,44 @@ impl Parser {
 
     /// Try to parse a type hint at the start of a parameter.
     /// Returns None if no type hint is present (next token is $var, &, or ...).
-    fn try_parse_type_hint(&mut self) -> Result<Option<TypeHint>, String> {
+    fn finish_non_return_type_hint(
+        &mut self,
+        hint: TypeHint,
+        parameter: bool,
+        line: usize,
+    ) -> Result<Option<TypeHint>, String> {
+        if !Self::type_hint_uses_static(&hint) {
+            return Ok(Some(hint));
+        }
+        if Self::type_hint_uses_static_generic_application(&hint) {
+            return Err("static is only allowed as a return type".to_string());
+        }
+        if parameter {
+            self.compile_error("Cannot use the static modifier on a parameter", line);
+            Ok(Some(hint))
+        } else {
+            Err(self.source_error("syntax error, unexpected token \"static\"", line))
+        }
+    }
+
+    fn try_parse_type_hint(&mut self, parameter: bool) -> Result<Option<TypeHint>, String> {
+        let declaration_line = self.tokens[self.pos..]
+            .iter()
+            .find_map(|token| match token {
+                Token::Variable(_, line) | Token::This(line) => Some(*line),
+                _ => None,
+            })
+            .unwrap_or_else(|| self.closest_token_source_line());
         // Nullable: ?type
         if self.peek() == Token::Question {
             // Peek ahead: ?$var or ?... means ternary/other, not type hint
             // In param context, ?Identifier or ?ArrayKw means nullable type
             let next = self.tokens.get(self.pos + 1);
             if matches!(next, Some(Token::Static)) {
-                return Err("static is only allowed as a return type".to_string());
+                return Err(self.source_error(
+                    "syntax error, unexpected token \"static\"",
+                    declaration_line,
+                ));
             }
             let is_type = matches!(
                 next,
@@ -805,22 +835,23 @@ impl Parser {
                 if is_type_context {
                     let hint = self.parse_base_type_hint()?;
                     let hint = self.maybe_parse_compound_type(hint)?;
-                    if Self::type_hint_uses_static(&hint) {
-                        return Err("static is only allowed as a return type".to_string());
-                    }
-                    return Ok(Some(hint));
+                    return self.finish_non_return_type_hint(
+                        hint,
+                        parameter,
+                        declaration_line,
+                    );
                 }
                 Ok(None)
             }
             Token::Namespace => {
                 let hint = self.parse_base_type_hint()?;
                 let hint = self.maybe_parse_compound_type(hint)?;
-                Ok(Some(hint))
+                self.finish_non_return_type_hint(hint, parameter, declaration_line)
             }
             Token::Backslash => {
                 let hint = self.parse_base_type_hint()?;
                 let hint = self.maybe_parse_compound_type(hint)?;
-                Ok(Some(hint))
+                self.finish_non_return_type_hint(hint, parameter, declaration_line)
             }
             Token::ArrayKw | Token::Null | Token::True | Token::False => {
                 let next = self.tokens.get(self.pos + 1);
@@ -834,21 +865,23 @@ impl Parser {
                 if is_type_context {
                     let hint = self.parse_base_type_hint()?;
                     let hint = self.maybe_parse_compound_type(hint)?;
-                    if Self::type_hint_uses_static(&hint) {
-                        return Err("static is only allowed as a return type".to_string());
-                    }
-                    return Ok(Some(hint));
+                    return self.finish_non_return_type_hint(
+                        hint,
+                        parameter,
+                        declaration_line,
+                    );
                 }
                 Ok(None)
             }
-            Token::Static => Err("static is only allowed as a return type".to_string()),
+            Token::Static => {
+                let hint = self.parse_base_type_hint()?;
+                let hint = self.maybe_parse_compound_type(hint)?;
+                self.finish_non_return_type_hint(hint, parameter, declaration_line)
+            }
             Token::LParen(_) => {
                 let hint = self.parse_base_type_hint()?;
                 let hint = self.maybe_parse_compound_type(hint)?;
-                if Self::type_hint_uses_static(&hint) {
-                    return Err("static is only allowed as a return type".to_string());
-                }
-                Ok(Some(hint))
+                self.finish_non_return_type_hint(hint, parameter, declaration_line)
             }
             _ => Ok(None),
         }
@@ -1011,6 +1044,24 @@ impl Parser {
         }
     }
 
+    fn type_hint_uses_static_generic_application(hint: &TypeHint) -> bool {
+        match hint {
+            TypeHint::GenericApplication { base, arguments } => {
+                base.eq_ignore_ascii_case("static")
+                    || arguments
+                        .iter()
+                        .any(Self::type_hint_uses_static_generic_application)
+            }
+            TypeHint::Nullable(inner) | TypeHint::GenericParameter { erased: inner, .. } => {
+                Self::type_hint_uses_static_generic_application(inner)
+            }
+            TypeHint::Union(parts) | TypeHint::Intersection(parts) => parts
+                .iter()
+                .any(Self::type_hint_uses_static_generic_application),
+            _ => false,
+        }
+    }
+
     fn parse_one_param(&mut self) -> Result<Param, String> {
         let attributes = self.parse_attribute_groups()?;
         // Check for constructor property promotion: visibility keyword before type hint
@@ -1070,7 +1121,7 @@ impl Parser {
             ));
         }
         // Optional type hint before &, ..., $var
-        let type_hint = self.try_parse_type_hint()?;
+        let type_hint = self.try_parse_type_hint(true)?;
         // Optional & prefix for pass-by-reference
         let is_ref = if self.peek() == Token::Ampersand {
             self.advance(); // consume '&'

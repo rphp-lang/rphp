@@ -5835,6 +5835,7 @@ impl Compiler {
             line,
             self.lexical_static_class.as_deref(),
             self.lexical_static_parent.as_deref(),
+            self.dynamic_static_scope || self.bindable_closure_scope,
         )
     }
 
@@ -5844,6 +5845,7 @@ impl Compiler {
         line: usize,
         current_class: Option<&str>,
         parent_class: Option<&str>,
+        late_bound_scope: bool,
     ) -> Result<(), String> {
         use crate::parser::TypeHint;
 
@@ -5867,6 +5869,50 @@ impl Compiler {
                     } else {
                         None
                     }
+                }
+                _ => None,
+            }
+        }
+
+        fn first_qualified_reserved_type(hint: &TypeHint) -> Option<&str> {
+            match hint {
+                TypeHint::ClassName(name)
+                    if name.contains('\\')
+                        && crate::class_names::is_semantically_reserved(name) =>
+                {
+                    Some(name)
+                }
+                TypeHint::Nullable(inner) | TypeHint::GenericParameter { erased: inner, .. } => {
+                    first_qualified_reserved_type(inner)
+                }
+                TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
+                    parts.iter().find_map(first_qualified_reserved_type)
+                }
+                TypeHint::GenericApplication { base, arguments } => (base.contains('\\')
+                    && crate::class_names::is_semantically_reserved(base))
+                .then_some(base.as_str())
+                .or_else(|| arguments.iter().find_map(first_qualified_reserved_type)),
+                _ => None,
+            }
+        }
+
+        fn first_relative_type(hint: &TypeHint) -> Option<&str> {
+            match hint {
+                TypeHint::ClassName(name)
+                    if matches!(name.to_ascii_lowercase().as_str(), "self" | "parent") =>
+                {
+                    Some(name)
+                }
+                TypeHint::Nullable(inner) | TypeHint::GenericParameter { erased: inner, .. } => {
+                    first_relative_type(inner)
+                }
+                TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
+                    parts.iter().find_map(first_relative_type)
+                }
+                TypeHint::GenericApplication { base, arguments } => {
+                    matches!(base.to_ascii_lowercase().as_str(), "self" | "parent")
+                        .then_some(base.as_str())
+                        .or_else(|| arguments.iter().find_map(first_relative_type))
                 }
                 _ => None,
             }
@@ -5904,8 +5950,17 @@ impl Compiler {
             }
         }
 
-        fn intersection_member_name(hint: &TypeHint) -> Option<String> {
+        fn intersection_member_name(
+            hint: &TypeHint,
+            unresolved_relative_scope: bool,
+        ) -> Option<String> {
             match hint {
+                TypeHint::ClassName(name)
+                    if unresolved_relative_scope
+                        && matches!(name.to_ascii_lowercase().as_str(), "self" | "parent") =>
+                {
+                    Some(name.clone())
+                }
                 TypeHint::ClassName(name) => match name.to_ascii_lowercase().as_str() {
                     "int" => Some("int".to_string()),
                     "float" => Some("float".to_string()),
@@ -5938,14 +5993,22 @@ impl Compiler {
             }
         }
 
-        fn first_invalid_intersection_member(hint: &TypeHint) -> Option<String> {
+        fn first_invalid_intersection_member(
+            hint: &TypeHint,
+            unresolved_relative_scope: bool,
+        ) -> Option<String> {
             match hint {
                 TypeHint::Intersection(parts) => parts.iter().find_map(|part| {
-                    intersection_member_name(part)
-                        .or_else(|| first_invalid_intersection_member(part))
+                    intersection_member_name(part, unresolved_relative_scope).or_else(|| {
+                        first_invalid_intersection_member(part, unresolved_relative_scope)
+                    })
                 }),
-                TypeHint::Union(parts) => parts.iter().find_map(first_invalid_intersection_member),
-                TypeHint::Nullable(inner) => first_invalid_intersection_member(inner),
+                TypeHint::Union(parts) => parts.iter().find_map(|part| {
+                    first_invalid_intersection_member(part, unresolved_relative_scope)
+                }),
+                TypeHint::Nullable(inner) => {
+                    first_invalid_intersection_member(inner, unresolved_relative_scope)
+                }
                 _ => None,
             }
         }
@@ -6174,10 +6237,57 @@ impl Compiler {
             None
         }
 
+        if let Some(reserved) = hint.as_ref().and_then(first_qualified_reserved_type) {
+            let terminal = reserved.rsplit('\\').next().unwrap_or(reserved);
+            let is_namespace_relative = reserved
+                .get(.."namespace\\".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("namespace\\"));
+            let is_fully_qualified_builtin =
+                reserved.starts_with('\\') && !reserved.trim_start_matches('\\').contains('\\');
+            let is_fully_qualified_relative = is_fully_qualified_builtin
+                && matches!(terminal.to_ascii_lowercase().as_str(), "self" | "parent");
+            let message = if is_fully_qualified_relative {
+                format!("'{reserved}' is an invalid class name")
+            } else if is_namespace_relative || is_fully_qualified_builtin {
+                format!(
+                    "Type declaration '{}' must be unqualified",
+                    terminal.to_ascii_lowercase()
+                )
+            } else {
+                format!(
+                    "Cannot use \"{}\" as a type name as it is reserved",
+                    self.resolve_name(reserved).trim_start_matches('\\')
+                )
+            };
+            return Err(self.goto_error(&message, line));
+        }
+        if let Some(relative) = hint.as_ref().and_then(first_relative_type) {
+            let relative = relative.to_ascii_lowercase();
+            if current_class.is_none() && !late_bound_scope {
+                return Err(self.goto_error(
+                    &format!("Cannot use \"{relative}\" when no class scope is active"),
+                    line,
+                ));
+            }
+            if relative == "parent"
+                && current_class.is_some()
+                && parent_class.is_none()
+                && !late_bound_scope
+            {
+                return Err(self.goto_error(
+                    "Cannot use \"parent\" when current class scope has no parent",
+                    line,
+                ));
+            }
+        }
         if let Some(message) = hint.as_ref().and_then(standalone_type_error) {
             return Err(self.goto_error(message, line));
         }
-        if let Some(invalid) = hint.as_ref().and_then(first_invalid_intersection_member) {
+        let unresolved_relative_scope = late_bound_scope;
+        if let Some(invalid) = hint
+            .as_ref()
+            .and_then(|hint| first_invalid_intersection_member(hint, unresolved_relative_scope))
+        {
             return Err(self.goto_error(
                 &format!("Type {invalid} cannot be part of an intersection type"),
                 line,
@@ -6220,9 +6330,16 @@ impl Compiler {
         declaring_class: &str,
         property_name: &str,
         parent_class: Option<&str>,
+        late_bound_scope: bool,
     ) -> Result<(), String> {
         self.validate_property_function_only_type(hint, line, declaring_class, property_name)?;
-        self.validate_declared_type_hint_in_scope(hint, line, Some(declaring_class), parent_class)
+        self.validate_declared_type_hint_in_scope(
+            hint,
+            line,
+            Some(declaring_class),
+            parent_class,
+            late_bound_scope,
+        )
     }
 
     fn validate_property_function_only_type(

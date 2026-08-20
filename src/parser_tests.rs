@@ -1416,6 +1416,36 @@ fn test_relative_static_scope_is_deferred_to_the_right_phase() {
 }
 
 #[test]
+fn test_static_parameter_and_property_diagnostics_keep_their_php_stage() {
+    let parse = |source: &str| {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        Parser::new(tokens).parse()
+    };
+
+    for source in [
+        "<?php class C { function invalid(static $value) {} }",
+        "<?php class C { function invalid(C|static $value) {} }",
+    ] {
+        let statements = parse(source).expect("parameter diagnostics are compile errors");
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, .. }))
+                if message == "Cannot use the static modifier on a parameter"
+        ));
+    }
+
+    for source in [
+        "<?php class C { function invalid(?static $value) {} }",
+        "<?php class C { public ?static $value; }",
+    ] {
+        assert_eq!(
+            parse(source).unwrap_err(),
+            "syntax error, unexpected token \"static\" on line 1"
+        );
+    }
+}
+
+#[test]
 fn test_static_anonymous_function_forms_are_expressions() {
     let tokens = Lexer::new(
         "<?php $closure = static function($value) { return $value; }; $arrow = static fn($value) => $value; static function() {}; static fn() => null;",

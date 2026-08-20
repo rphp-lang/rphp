@@ -408,6 +408,125 @@ fn intersection_types_reject_non_class_members_at_declaration_time() {
 }
 
 #[test]
+fn relative_declared_types_require_a_resolvable_scope() {
+    for (source, expected) in [
+        (
+            "<?php\nfunction invalid(): SELF {}",
+            "Cannot use \"self\" when no class scope is active",
+        ),
+        (
+            "<?php\nfunction invalid(): PARENT {}",
+            "Cannot use \"parent\" when no class scope is active",
+        ),
+        (
+            "<?php\ninterface Contract { function invalid(): PARENT; }",
+            "Cannot use \"parent\" when current class scope has no parent",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(source, "relative-type.php", ".");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{expected} in relative-type.php on line 2")),
+            "unexpected error: {error}"
+        );
+    }
+
+    compile_types(
+        "<?php interface Contract { function valid(): self&Iterator; } class Base {} class Child extends Base { function valid(): parent&Iterator {} }",
+    );
+}
+
+#[test]
+fn late_bound_relative_types_cannot_enter_intersections() {
+    for (source, relative) in [
+        (
+            "<?php\ntrait DeferredScope { function invalid(): self&Iterator {} }",
+            "self",
+        ),
+        (
+            "<?php\ntrait DeferredScope { function invalid(): PARENT&Iterator {} }",
+            "PARENT",
+        ),
+        (
+            "<?php\n$closure = function(): self&Iterator {};",
+            "self",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(source, "relative-type.php", ".");
+        assert!(
+            error.to_string().contains(&format!(
+                "Type {relative} cannot be part of an intersection type in relative-type.php on line 2"
+            )),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn qualified_reserved_type_names_fail_during_compilation() {
+    for (source, expected) in [
+        (
+            "<?php\nfunction invalid(Vendor\\INT $value): void {}",
+            "Cannot use \"Vendor\\INT\" as a type name as it is reserved",
+        ),
+        (
+            "<?php\nfunction invalid(\\Vendor\\BOOL $value): void {}",
+            "Cannot use \"Vendor\\BOOL\" as a type name as it is reserved",
+        ),
+        (
+            "<?php\nnamespace Domain; function invalid(namespace\\INT $value): void {}",
+            "Type declaration 'int' must be unqualified",
+        ),
+        (
+            "<?php\nfunction invalid(\\INT $value): void {}",
+            "Type declaration 'int' must be unqualified",
+        ),
+        (
+            "<?php\nfunction invalid(): \\iterable {}",
+            "Type declaration 'iterable' must be unqualified",
+        ),
+        (
+            "<?php\nclass Scope { function invalid(\\SELF $value): void {} }",
+            "'\\SELF' is an invalid class name",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(source, "reserved-type.php", ".");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{expected} in reserved-type.php on line 2")),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn static_parameter_and_property_tokens_keep_php_diagnostics() {
+    let parameter = run_php_expect_error_with_source_context(
+        "<?php\nclass InvalidParameter { function invalid(static $value) {} }",
+        "static-type.php",
+        ".",
+    );
+    assert!(parameter.to_string().contains(
+        "Cannot use the static modifier on a parameter in static-type.php on line 2"
+    ));
+
+    for source in [
+        "<?php\nclass InvalidParameter { function invalid(?static $value) {} }",
+        "<?php\nclass InvalidProperty { public ?static $value; }",
+    ] {
+        let error = run_php_expect_error_with_source_context(source, "static-type.php", ".");
+        assert!(
+            error
+                .to_string()
+                .contains("syntax error, unexpected token \"static\""),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
 fn redundant_declared_types_use_php_normalization_and_diagnostics() {
     for (source, expected) in [
         (

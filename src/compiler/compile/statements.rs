@@ -4254,6 +4254,7 @@ impl Compiler {
                         &resolved_class,
                         &prop.name,
                         resolved_parent.as_deref(),
+                        false,
                     )?;
                     let type_hint = self.resolve_declared_property_type_hint(
                         self.convert_type_hint(&prop.type_hint),
@@ -4799,6 +4800,7 @@ impl Compiler {
                         &resolved_iface,
                         &property.name,
                         None,
+                        false,
                     )?;
                     let type_hint = self.resolve_declared_property_type_hint(
                         self.convert_type_hint(&property.type_hint),
@@ -5154,6 +5156,7 @@ impl Compiler {
                         &resolved_trait,
                         &prop.name,
                         None,
+                        true,
                     )?;
                     let type_hint = self.convert_type_hint(&prop.type_hint);
                     let mut default_is_deferred = false;

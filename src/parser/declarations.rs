@@ -217,7 +217,7 @@ impl Parser {
         modifiers: &MemberModifiers,
         attributes: &[Attribute],
     ) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>), String> {
-        let type_hint = self.try_parse_type_hint()?;
+        let type_hint = self.try_parse_type_hint(false)?;
         let mut properties = Vec::new();
         let mut hook_methods = Vec::new();
         loop {
