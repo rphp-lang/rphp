@@ -1676,6 +1676,269 @@ fn op_yield<'a>(
 }
 
 #[inline(never)]
+fn resolve_yield_from_source(
+    eg: &mut ExecutorGlobals,
+    source: &Value,
+) -> Result<Option<YieldFromSource>, VmError> {
+    let Some(object) = source.as_object() else {
+        return Ok(source.as_array().map(|array| {
+            YieldFromSource::Array(
+                array
+                    .iter()
+                    .map(|(key, value)| (key, value.clone()))
+                    .collect(),
+            )
+        }));
+    };
+    let mut class_name = object.class_name.to_string();
+    if class_name == "Generator" {
+        let generator = object.generator.clone();
+        drop(object);
+        return Ok(generator.map(|generator| {
+            YieldFromSource::Generator(
+                generator,
+                crate::vm::generator::YieldFromGeneratorMode::Direct,
+            )
+        }));
+    }
+    drop(object);
+
+    if let Some(entries) = snapshot_builtin_yield_from_iterator(eg, source) {
+        return Ok(Some(YieldFromSource::Array(entries)));
+    }
+    if !eg.class_is_a(&class_name, "Traversable") {
+        return Ok(None);
+    }
+
+    let mut iterable = source.clone();
+    let mut aggregate_identities = Vec::new();
+    while eg.class_is_a(&class_name, "IteratorAggregate") {
+        let identity = iterable.object_identity().unwrap_or(0);
+        if aggregate_identities.contains(&identity) {
+            eg.exception = Some(make_error_value(
+                "Exception",
+                &format!(
+                    "Objects returned by {class_name}::getIterator() must be traversable or implement interface Iterator"
+                ),
+            ));
+            return Ok(None);
+        }
+        aggregate_identities.push(identity);
+        let aggregate_class = class_name.clone();
+        let Some(next) = crate::stdlib::call_object_protocol_method(
+            eg,
+            &iterable,
+            "IteratorAggregate",
+            "getIterator",
+            &[],
+        )? else {
+            return Err(VmError::Fatal(format!(
+                "Call to undefined method {class_name}::getIterator()"
+            )));
+        };
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+        iterable = next;
+        let Some(object) = iterable.as_object() else {
+            eg.exception = Some(make_error_value(
+                "Exception",
+                &format!(
+                    "Objects returned by {aggregate_class}::getIterator() must be traversable or implement interface Iterator"
+                ),
+            ));
+            return Ok(None);
+        };
+        class_name = object.class_name.to_string();
+        drop(object);
+        if !eg.class_is_a(&class_name, "Traversable") {
+            eg.exception = Some(make_error_value(
+                "Exception",
+                &format!(
+                    "Objects returned by {aggregate_class}::getIterator() must be traversable or implement interface Iterator"
+                ),
+            ));
+            return Ok(None);
+        }
+        if let Some(entries) = snapshot_builtin_yield_from_iterator(eg, &iterable) {
+            return Ok(Some(YieldFromSource::Array(entries)));
+        }
+    }
+
+    if class_name == "Generator" {
+        let generator = iterable
+            .as_object_rc()
+            .and_then(|object| object.borrow().generator.clone());
+        return Ok(generator.map(|generator| {
+            YieldFromSource::Generator(
+                generator,
+                crate::vm::generator::YieldFromGeneratorMode::Traversable,
+            )
+        }));
+    }
+    if eg.class_is_a(&class_name, "Iterator") {
+        return Ok(Some(YieldFromSource::Iterator(iterable)));
+    }
+    Ok(None)
+}
+
+enum YieldFromSource {
+    Generator(
+        crate::vm::generator::GeneratorRef,
+        crate::vm::generator::YieldFromGeneratorMode,
+    ),
+    Array(Vec<(crate::value::ArrayKey, Value)>),
+    Iterator(Value),
+}
+
+fn snapshot_builtin_yield_from_iterator(
+    eg: &ExecutorGlobals,
+    source: &Value,
+) -> Option<Vec<(crate::value::ArrayKey, Value)>> {
+    let object = source.as_object()?;
+    let class_name = object.class_name.to_string();
+    let values = object.get_property("__rphp_iterator_values").cloned();
+    drop(object);
+    if ![
+        "ArrayIterator",
+        "ArrayObject",
+        "SplObjectStorage",
+        "SplPriorityQueue",
+    ]
+    .iter()
+    .any(|builtin| eg.class_is_a(&class_name, builtin))
+    {
+        return None;
+    }
+    let values = values?;
+    values.as_array().map(|array| {
+        array
+            .iter()
+            .map(|(key, value)| (key, value.clone()))
+            .collect()
+    })
+}
+
+fn yield_from_iterator_step(
+    eg: &mut ExecutorGlobals,
+    iterator: &Value,
+    first: bool,
+) -> Result<Option<(Value, Value)>, VmError> {
+    let method = if first { "rewind" } else { "next" };
+    let _ = crate::stdlib::call_object_protocol_method(
+        eg,
+        iterator,
+        "Iterator",
+        method,
+        &[],
+    )?;
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    let valid = crate::stdlib::call_object_protocol_method(
+        eg,
+        iterator,
+        "Iterator",
+        "valid",
+        &[],
+    )?
+    .unwrap_or_else(|| Value::bool(false));
+    if eg.exception.is_some() || !valid.is_truthy() {
+        return Ok(None);
+    }
+    // Zend observes current() before key() when advancing an Iterator-backed
+    // yield-from delegate. Keep this separate from foreach's fetch order.
+    let value = crate::stdlib::call_object_protocol_method(
+        eg,
+        iterator,
+        "Iterator",
+        "current",
+        &[],
+    )?
+    .unwrap_or_else(Value::null);
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    let key = crate::stdlib::call_object_protocol_method(
+        eg,
+        iterator,
+        "Iterator",
+        "key",
+        &[],
+    )?
+    .unwrap_or_else(Value::null);
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    Ok(Some((key, value)))
+}
+
+fn throw_yield_from_exception<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    exception: Value,
+) -> ColdResult<'a> {
+    match throw_in_frame(eg, frame, exception) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+    }
+}
+
+fn suspend_yield_from<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    generator: crate::vm::generator::GeneratorRef,
+    delegate: crate::vm::generator::YieldFromDelegate,
+    key: Value,
+    value: Value,
+) -> ColdResult<'a> {
+    use crate::vm::generator::GeneratorState;
+
+    {
+        let mut data = generator.borrow_mut();
+        data.delegate = Some(delegate);
+        data.yield_from_result_slot = opline.result as u32;
+        data.value = value;
+        data.key = key;
+        // SAFETY: `frame` is the active activation for `op_array`; the
+        // compiler-sized CV/TMP envelopes and current opline all remain live
+        // until this helper snapshots them and pops that same frame below.
+        let num_cvs = unsafe { (*frame).num_cvs } as usize;
+        let num_temps = unsafe { (*frame).num_temps } as usize;
+        data.cv_values.clear();
+        for index in 0..num_cvs {
+            data.cv_values
+                .push(unsafe { (*frame).cv(index as u32) }.clone_closure_capture());
+        }
+        data.tmp_values.clear();
+        for index in 0..num_temps {
+            data.tmp_values
+                .push(unsafe { (*frame).tmp(index as u32) }.clone_closure_capture());
+        }
+        let base = op_array.instructions.as_ptr();
+        data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
+        data.state = GeneratorState::Suspended;
+    }
+
+    eg.active_generator = Some(generator);
+    // SAFETY: `frame` is still the active generator activation. Its predecessor
+    // remains live while this frame is cleaned and popped, and therefore owns
+    // a valid immutable op-array for the returned dispatch control.
+    let previous = unsafe { (*frame).prev_execute_data };
+    if previous.is_null() {
+        return ColdResult::Return;
+    }
+    eg.current_execute_data.set(previous);
+    unsafe { cleanup_frame_slots(frame) };
+    pop_vm_call_frame(eg, frame);
+    ColdResult::NewFrame(previous, unsafe { (*previous).op_array() })
+}
+
+#[inline(never)]
 fn op_yield_from<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -1688,198 +1951,181 @@ fn op_yield_from<'a>(
 
     if let Some(gen_ref) = eg.active_generator.take() {
         let result_slot = opline.result as u32;
-
-        // Determine delegate type
-        if let Some(obj_data) = source_val.as_object() {
-            if obj_data.class_name.as_ref() == "Generator" {
-                if let Some(inner_gen_ref) = obj_data.generator.clone() {
-                    drop(obj_data);
-                    if std::rc::Rc::ptr_eq(&gen_ref, &inner_gen_ref) {
-                        eg.active_generator = Some(gen_ref);
-                        let error = crate::value::make_error_value(
-                            "Error",
-                            "Impossible to yield from the Generator being currently run",
-                        );
-                        return Ok(match throw_in_frame(eg, frame, error) {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                ColdResult::NewFrame(new_frame, new_op_array)
-                            }
-                            ThrowResult::Unhandled(exception) => {
-                                ColdResult::Unhandled(exception)
-                            }
-                        });
-                    }
-                    let inner_state: GeneratorState = inner_gen_ref.borrow().state;
-                    if inner_state == GeneratorState::Completed {
-                        if !inner_gen_ref.borrow().has_returned {
-                            eg.active_generator = Some(gen_ref);
-                            let error = crate::value::make_error_value(
-                                "Error",
-                                "Generator passed to yield from was aborted without proper return and is unable to continue",
-                            );
-                            let instruction_index = unsafe {
-                                (opline as *const Instruction)
-                                    .offset_from(op_array.instructions.as_ptr())
-                                    as usize
-                            };
-                            attach_throwable_origin(
-                                &error,
-                                eg,
-                                frame,
-                                op_array,
-                                instruction_index,
-                            );
-                            return Ok(match throw_in_frame(eg, frame, error) {
-                                ThrowResult::Handled(new_frame, new_op_array) => {
-                                    ColdResult::NewFrame(new_frame, new_op_array)
-                                }
-                                ThrowResult::Unhandled(exception) => {
-                                    ColdResult::Unhandled(exception)
-                                }
-                            });
-                        }
-                        // Sub-generator already done, write return value to result
-                        let ret_val = inner_gen_ref.borrow().return_value.clone();
-                        eg.active_generator = Some(gen_ref);
-                        // Write result to TMP and continue (don't suspend)
-                        if opline.result_type != OpType::Unused {
-                            let slot = unsafe { (*frame).slot_mut(result_slot) };
-                            unsafe { frame_tmp_set(frame, slot as *mut Value, ret_val) };
-                        }
-                        unsafe { (*frame).opline = (*frame).opline.add(1); }
-                        return Ok(ColdResult::Continue);
-                    }
-
-                    // Set up delegation
-                    {
-                        let mut gen_data = gen_ref.borrow_mut();
-                        gen_data.delegate = Some(YieldFromDelegate::Generator(inner_gen_ref.clone()));
-                        gen_data.yield_from_result_slot = result_slot;
-
-                        // Copy inner generator's current value/key to outer
-                        let inner = inner_gen_ref.borrow();
-                        gen_data.value = inner.value.clone();
-                        gen_data.key = inner.key.clone();
-
-                        // Save frame state
-                        let num_cvs = unsafe { (*frame).num_cvs } as usize;
-                        let num_temps = unsafe { (*frame).num_temps } as usize;
-                        gen_data.cv_values.clear();
-                        // SAFETY: `frame` remains the active generator frame;
-                        // these indices are bounded by its live CV/TMP counts.
-                        for i in 0..num_cvs {
-                            gen_data
-                                .cv_values
-                                .push(unsafe { (*frame).cv(i as u32) }.clone_closure_capture());
-                        }
-                        gen_data.tmp_values.clear();
-                        for i in 0..num_temps {
-                            gen_data
-                                .tmp_values
-                                .push(unsafe { (*frame).tmp(i as u32) }.clone_closure_capture());
-                        }
-                        let base = op_array.instructions.as_ptr();
-                        gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
-                        gen_data.state = GeneratorState::Suspended;
-                    }
-
-                    eg.active_generator = Some(gen_ref);
-
-                    // Pop frame like Yield
-                    let prev = unsafe { (*frame).prev_execute_data };
-                    if prev.is_null() {
-                        return Ok(ColdResult::Return);
-                    }
-                    eg.current_execute_data.set(prev);
-                    unsafe { cleanup_frame_slots(frame) };
-                    pop_vm_call_frame(eg, frame);
-                    return Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }));
-                }
-            }
-            drop(obj_data);
-            eg.active_generator = Some(gen_ref);
-            let err = make_error_value("Error", "Can use \"yield from\" only with arrays and Traversables");
-            match throw_in_frame(eg, frame, err) {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    return Ok(ColdResult::NewFrame(new_frame, new_op_array));
-                }
-                ThrowResult::Unhandled(exc) => {
-                    return Ok(ColdResult::Unhandled(exc));
-                }
-            }
-        } else if let Some(arr) = source_val.as_array() {
-            let entries: Vec<(crate::value::ArrayKey, Value)> = arr.iter().map(|(k, v)| (k, v.clone())).collect();
-
-            if entries.is_empty() {
-                // Empty array — result is null, continue
+        let source = match resolve_yield_from_source(eg, &source_val) {
+            Ok(source) => source,
+            Err(error) => {
                 eg.active_generator = Some(gen_ref);
-                if opline.result_type != OpType::Unused {
-                    let slot = unsafe { (*frame).slot_mut(result_slot) };
-                    unsafe { frame_tmp_set(frame, slot as *mut Value, Value::null()) };
-                }
-                unsafe { (*frame).opline = (*frame).opline.add(1); }
-                return Ok(ColdResult::Continue);
+                return Err(error);
             }
+        };
+        if let Some(exception) = eg.exception.take() {
+            eg.active_generator = Some(gen_ref);
+            return Ok(throw_yield_from_exception(eg, frame, exception));
+        }
+        let Some(source) = source else {
+            eg.active_generator = Some(gen_ref);
+            let error = make_error_value(
+                "Error",
+                "Can use \"yield from\" only with arrays and Traversables",
+            );
+            return Ok(throw_yield_from_exception(eg, frame, error));
+        };
 
-            // Set up array delegation
-            {
-                let mut gen_data = gen_ref.borrow_mut();
-                // Yield first element
-                let (ref key, ref val) = entries[0];
-                gen_data.value = val.clone();
-                gen_data.key = match key {
-                    crate::value::ArrayKey::Int(i) => Value::long(*i),
-                    crate::value::ArrayKey::String(s) => Value::string(s.clone()),
+        match source {
+            YieldFromSource::Generator(inner, return_mode) => {
+                if std::rc::Rc::ptr_eq(&gen_ref, &inner) {
+                    eg.active_generator = Some(gen_ref);
+                    let error = make_error_value(
+                        "Error",
+                        "Impossible to yield from the Generator being currently run",
+                    );
+                    return Ok(throw_yield_from_exception(eg, frame, error));
+                }
+                let inner_state = inner.borrow().state;
+                if return_mode == crate::vm::generator::YieldFromGeneratorMode::Traversable {
+                    let protocol_error = match inner_state {
+                        GeneratorState::Completed => {
+                            Some("Cannot traverse an already closed generator")
+                        }
+                        GeneratorState::Suspended if !inner.borrow().rewindable => {
+                            Some("Cannot rewind a generator that was already run")
+                        }
+                        GeneratorState::Created
+                        | GeneratorState::Suspended
+                        | GeneratorState::Running => None,
+                    };
+                    if let Some(message) = protocol_error {
+                        eg.active_generator = Some(gen_ref);
+                        let exception = make_error_value("Exception", message);
+                        return Ok(throw_yield_from_exception(eg, frame, exception));
+                    }
+                }
+                if inner_state == GeneratorState::Completed {
+                    if !inner.borrow().has_returned {
+                        eg.active_generator = Some(gen_ref);
+                        let error = make_error_value(
+                            "Error",
+                            "Generator passed to yield from was aborted without proper return and is unable to continue",
+                        );
+                        let instruction_index = unsafe {
+                            (opline as *const Instruction)
+                                .offset_from(op_array.instructions.as_ptr())
+                                as usize
+                        };
+                        attach_throwable_origin(
+                            &error,
+                            eg,
+                            frame,
+                            op_array,
+                            instruction_index,
+                        );
+                        return Ok(throw_yield_from_exception(eg, frame, error));
+                    }
+                    let result = if return_mode
+                        == crate::vm::generator::YieldFromGeneratorMode::Direct
+                    {
+                        inner.borrow().return_value.clone()
+                    } else {
+                        Value::null()
+                    };
+                    eg.active_generator = Some(gen_ref);
+                    if opline.result_type != OpType::Unused {
+                        // SAFETY: `result_slot` is compiler-allocated by this
+                        // live YieldFrom instruction in the active frame.
+                        let slot = unsafe { (*frame).slot_mut(result_slot) };
+                        unsafe { frame_tmp_set(frame, slot as *mut Value, result) };
+                    }
+                    // SAFETY: `opline` is the current instruction inside this
+                    // immutable op-array, so its successor is the continuation.
+                    unsafe { (*frame).opline = (*frame).opline.add(1) };
+                    return Ok(ColdResult::Continue);
+                }
+                let (key, value) = {
+                    let inner_data = inner.borrow();
+                    (inner_data.key.clone(), inner_data.value.clone())
                 };
-                gen_data.delegate = Some(YieldFromDelegate::Array(entries, 1)); // position after first
-                gen_data.yield_from_result_slot = result_slot;
-
-                // Save frame state
-                let num_cvs = unsafe { (*frame).num_cvs } as usize;
-                let num_temps = unsafe { (*frame).num_temps } as usize;
-                gen_data.cv_values.clear();
-                // SAFETY: `frame` remains live through snapshot publication;
-                // both loops use its validated CV/TMP slot counts.
-                for i in 0..num_cvs {
-                    gen_data
-                        .cv_values
-                        .push(unsafe { (*frame).cv(i as u32) }.clone_closure_capture());
-                }
-                gen_data.tmp_values.clear();
-                for i in 0..num_temps {
-                    gen_data
-                        .tmp_values
-                        .push(unsafe { (*frame).tmp(i as u32) }.clone_closure_capture());
-                }
-                let base = op_array.instructions.as_ptr();
-                gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
-                gen_data.state = GeneratorState::Suspended;
+                Ok(suspend_yield_from(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    gen_ref,
+                    YieldFromDelegate::Generator(inner, return_mode),
+                    key,
+                    value,
+                ))
             }
-
-            eg.active_generator = Some(gen_ref);
-
-            // Pop frame like Yield
-            let prev = unsafe { (*frame).prev_execute_data };
-            if prev.is_null() {
-                return Ok(ColdResult::Return);
+            YieldFromSource::Array(entries) => {
+                if entries.is_empty() {
+                    eg.active_generator = Some(gen_ref);
+                    if opline.result_type != OpType::Unused {
+                        // SAFETY: `result_slot` is compiler-allocated by this
+                        // live YieldFrom instruction in the active frame.
+                        let slot = unsafe { (*frame).slot_mut(result_slot) };
+                        unsafe { frame_tmp_set(frame, slot as *mut Value, Value::null()) };
+                    }
+                    // SAFETY: `opline` is the current instruction inside this
+                    // immutable op-array, so its successor is the continuation.
+                    unsafe { (*frame).opline = (*frame).opline.add(1) };
+                    return Ok(ColdResult::Continue);
+                }
+                let (key, value) = {
+                    let (key, value) = &entries[0];
+                    let key = match key {
+                        crate::value::ArrayKey::Int(key) => Value::long(*key),
+                        crate::value::ArrayKey::String(key) => Value::string(key),
+                    };
+                    (key, value.clone())
+                };
+                Ok(suspend_yield_from(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    gen_ref,
+                    YieldFromDelegate::Array(entries, 1),
+                    key,
+                    value,
+                ))
             }
-            eg.current_execute_data.set(prev);
-            unsafe { cleanup_frame_slots(frame) };
-            pop_vm_call_frame(eg, frame);
-            return Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }));
-        } else {
-            eg.active_generator = Some(gen_ref);
-            let err = make_error_value("Error", "Can use \"yield from\" only with arrays and Traversables");
-            match throw_in_frame(eg, frame, err) {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    return Ok(ColdResult::NewFrame(new_frame, new_op_array));
+            YieldFromSource::Iterator(iterator) => {
+                let step = match yield_from_iterator_step(eg, &iterator, true) {
+                    Ok(step) => step,
+                    Err(error) => {
+                        eg.active_generator = Some(gen_ref);
+                        return Err(error);
+                    }
+                };
+                if let Some(exception) = eg.exception.take() {
+                    eg.active_generator = Some(gen_ref);
+                    return Ok(throw_yield_from_exception(eg, frame, exception));
                 }
-                ThrowResult::Unhandled(exc) => {
-                    return Ok(ColdResult::Unhandled(exc));
-                }
+                let Some((key, value)) = step else {
+                    eg.active_generator = Some(gen_ref);
+                    if opline.result_type != OpType::Unused {
+                        // SAFETY: `result_slot` is compiler-allocated by this
+                        // live YieldFrom instruction in the active frame.
+                        let slot = unsafe { (*frame).slot_mut(result_slot) };
+                        unsafe { frame_tmp_set(frame, slot as *mut Value, Value::null()) };
+                    }
+                    // SAFETY: `opline` is the current instruction inside this
+                    // immutable op-array, so its successor is the continuation.
+                    unsafe { (*frame).opline = (*frame).opline.add(1) };
+                    return Ok(ColdResult::Continue);
+                };
+                Ok(suspend_yield_from(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    gen_ref,
+                    YieldFromDelegate::Iterator(iterator),
+                    key,
+                    value,
+                ))
             }
         }
     } else {
-        return Err(VmError::Fatal("yield from outside generator".into()));
+        Err(VmError::Fatal("yield from outside generator".into()))
     }
 }

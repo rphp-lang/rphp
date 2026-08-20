@@ -7,12 +7,22 @@ use std::rc::Rc;
 use crate::value::{ArrayKey, Value};
 use crate::vm::function::{FunctionCommon, UserFunction};
 
-/// Delegate for `yield from` — either a sub-generator or an array being iterated.
+/// Delegate for `yield from` — a sub-generator, array or user Iterator.
 pub enum YieldFromDelegate {
-    /// Delegating to another Generator
-    Generator(GeneratorRef),
+    /// Delegating to another Generator. IteratorAggregate-produced generators
+    /// share the iterative engine while retaining Traversable send/throw and
+    /// return-value semantics.
+    Generator(GeneratorRef, YieldFromGeneratorMode),
     /// Delegating to an array (entries + current position)
     Array(Vec<(ArrayKey, Value)>, usize),
+    /// Delegating lazily to a userland Iterator object.
+    Iterator(Value),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum YieldFromGeneratorMode {
+    Direct,
+    Traversable,
 }
 
 /// Generator execution state
@@ -170,14 +180,19 @@ impl Generator {
                 visitor(value);
             }
         }
+        if let Some(YieldFromDelegate::Iterator(iterator)) = &self.delegate {
+            visitor(iterator);
+        }
     }
 }
 
 impl Drop for Generator {
     fn drop(&mut self) {
         let mut next = match self.delegate.take() {
-            Some(YieldFromDelegate::Generator(delegate)) => Some(delegate),
-            Some(YieldFromDelegate::Array(_, _)) | None => None,
+            Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate),
+            Some(YieldFromDelegate::Array(_, _)) | Some(YieldFromDelegate::Iterator(_)) | None => {
+                None
+            }
         };
 
         // A suspended `yield from` frame retains its delegate both explicitly
@@ -195,8 +210,10 @@ impl Drop for Generator {
 
             let mut generator_data = generator.borrow_mut();
             next = match generator_data.delegate.take() {
-                Some(YieldFromDelegate::Generator(delegate)) => Some(delegate),
-                Some(YieldFromDelegate::Array(_, _)) | None => None,
+                Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate),
+                Some(YieldFromDelegate::Array(_, _))
+                | Some(YieldFromDelegate::Iterator(_))
+                | None => None,
             };
             generator_data.cv_values.clear();
             generator_data.tmp_values.clear();

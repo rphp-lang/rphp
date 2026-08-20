@@ -7684,8 +7684,10 @@ fn synchronize_aborted_generator_delegate(
         let delegate = {
             let generator = current.borrow();
             match generator.delegate.as_ref() {
-                Some(YieldFromDelegate::Generator(delegate)) => Some(delegate.clone()),
-                Some(YieldFromDelegate::Array(_, _)) | None => None,
+                Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate.clone()),
+                Some(YieldFromDelegate::Array(_, _))
+                | Some(YieldFromDelegate::Iterator(_))
+                | None => None,
             }
         };
         let Some(delegate) = delegate else {
@@ -7712,13 +7714,14 @@ fn visible_generator_delegate(
         let delegate = {
             let generator = current.borrow();
             match generator.delegate.as_ref() {
-                Some(YieldFromDelegate::Generator(delegate))
+                Some(YieldFromDelegate::Generator(delegate, _))
                     if delegate.borrow().state != GeneratorState::Completed =>
                 {
                     Some(delegate.clone())
                 }
-                Some(YieldFromDelegate::Generator(_))
+                Some(YieldFromDelegate::Generator(_, _))
                 | Some(YieldFromDelegate::Array(_, _))
+                | Some(YieldFromDelegate::Iterator(_))
                 | None => None,
             }
         };
@@ -7737,8 +7740,10 @@ fn has_completed_generator_delegate(gen_ref: &crate::vm::generator::GeneratorRef
         let delegate = {
             let generator = current.borrow();
             match generator.delegate.as_ref() {
-                Some(YieldFromDelegate::Generator(delegate)) => Some(delegate.clone()),
-                Some(YieldFromDelegate::Array(_, _)) | None => None,
+                Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate.clone()),
+                Some(YieldFromDelegate::Array(_, _))
+                | Some(YieldFromDelegate::Iterator(_))
+                | None => None,
             }
         };
         let Some(delegate) = delegate else {

@@ -1418,6 +1418,13 @@ fn resume_generator_delegation(
                         (current.has_returned, current.return_value.clone())
                     };
                     active_delegates.record_ascent(&current);
+                    let forwards_return = matches!(
+                        parent.borrow().delegate.as_ref(),
+                        Some(YieldFromDelegate::Generator(
+                            _,
+                            crate::vm::generator::YieldFromGeneratorMode::Direct
+                        ))
+                    );
                     {
                         let mut parent_data = parent.borrow_mut();
                         parent_data.delegate = None;
@@ -1427,7 +1434,11 @@ fn resume_generator_delegation(
                     }
                     current = parent;
                     input = if has_returned {
-                        GeneratorFrameInput::YieldFromReturn(return_value)
+                        GeneratorFrameInput::YieldFromReturn(if forwards_return {
+                            return_value
+                        } else {
+                            Value::null()
+                        })
                     } else if fresh_execution {
                         GeneratorFrameInput::SyntheticThrow(make_error_value(
                             "Error",
@@ -1471,10 +1482,12 @@ fn resume_generator_delegation(
                     let delegate = {
                         let current_data = current.borrow();
                         match current_data.delegate.as_ref() {
-                            Some(YieldFromDelegate::Generator(delegate)) => {
+                            Some(YieldFromDelegate::Generator(delegate, _)) => {
                                 Some(delegate.clone())
                             }
-                            Some(YieldFromDelegate::Array(_, _)) | None => None,
+                            Some(YieldFromDelegate::Array(_, _))
+                            | Some(YieldFromDelegate::Iterator(_))
+                            | None => None,
                         }
                     };
                     let Some(delegate) = delegate else {
@@ -1565,11 +1578,15 @@ fn resume_generator_delegation(
         let generator_delegate = {
             let current_data = current.borrow();
             match current_data.delegate.as_ref() {
-                Some(YieldFromDelegate::Generator(delegate)) => Some(delegate.clone()),
-                Some(YieldFromDelegate::Array(_, _)) | None => None,
+                Some(YieldFromDelegate::Generator(delegate, mode)) => {
+                    Some((delegate.clone(), *mode))
+                }
+                Some(YieldFromDelegate::Array(_, _))
+                | Some(YieldFromDelegate::Iterator(_))
+                | None => None,
             }
         };
-        if let Some(delegate) = generator_delegate {
+        if let Some((delegate, mode)) = generator_delegate {
             if active_delegates.contains(&current, &parents, &delegate) {
                 current.borrow_mut().delegate = None;
                 input = GeneratorFrameInput::SyntheticThrow(make_error_value(
@@ -1577,6 +1594,35 @@ fn resume_generator_delegation(
                     "Impossible to yield from the Generator being currently run",
                 ));
                 continue;
+            }
+            if mode == crate::vm::generator::YieldFromGeneratorMode::Traversable {
+                if matches!(
+                    &input,
+                    GeneratorFrameInput::Throw(_)
+                        | GeneratorFrameInput::SyntheticThrow(_)
+                        | GeneratorFrameInput::Propagate(_)
+                ) {
+                    current.borrow_mut().delegate = None;
+                    drop(delegate);
+                    let frame_input = std::mem::replace(
+                        &mut input,
+                        GeneratorFrameInput::Send(Value::null()),
+                    );
+                    match execute_generator_frame_input(eg, &current, frame_input)? {
+                        GeneratorFrameOutcome::Advanced => fresh_execution = true,
+                        GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                            propagation = Some(GeneratorPropagation::Threw(
+                                exception,
+                                extend_trace,
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                // Iterator::next() advances a Generator-backed Traversable
+                // with null; Generator::send() payloads are not forwarded
+                // through an IteratorAggregate boundary.
+                input = GeneratorFrameInput::Send(Value::null());
             }
             if delegate.borrow().rewindable {
                 delegate.borrow_mut().rewindable = false;
@@ -1655,6 +1701,82 @@ fn resume_generator_delegation(
                             current_data.state = GeneratorState::Suspended;
                         }
                         propagation = Some(GeneratorPropagation::Yielded);
+                    }
+                }
+            }
+            continue;
+        }
+
+        let iterator_delegate = matches!(
+            current.borrow().delegate,
+            Some(YieldFromDelegate::Iterator(_))
+        );
+        if iterator_delegate {
+            let delegate = current
+                .borrow_mut()
+                .delegate
+                .take()
+                .expect("iterator delegation disappeared");
+            let YieldFromDelegate::Iterator(iterator) = delegate else {
+                unreachable!();
+            };
+            match std::mem::replace(
+                &mut input,
+                GeneratorFrameInput::Send(Value::null()),
+            ) {
+                frame_input @ (GeneratorFrameInput::Throw(_)
+                | GeneratorFrameInput::SyntheticThrow(_)
+                | GeneratorFrameInput::Propagate(_)) => {
+                    match execute_generator_frame_input(eg, &current, frame_input)? {
+                        GeneratorFrameOutcome::Advanced => fresh_execution = true,
+                        GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                            propagation = Some(GeneratorPropagation::Threw(
+                                exception,
+                                extend_trace,
+                            ));
+                        }
+                    }
+                }
+                GeneratorFrameInput::Send(_) | GeneratorFrameInput::YieldFromReturn(_) => {
+                    let step = yield_from_iterator_step(eg, &iterator, false)?;
+                    if let Some(exception) = eg.exception.take() {
+                        match execute_generator_frame_input(
+                            eg,
+                            &current,
+                            GeneratorFrameInput::Propagate(exception),
+                        )? {
+                            GeneratorFrameOutcome::Advanced => fresh_execution = true,
+                            GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                                propagation = Some(GeneratorPropagation::Threw(
+                                    exception,
+                                    extend_trace,
+                                ));
+                            }
+                        }
+                    } else if let Some((key, value)) = step {
+                        {
+                            let mut current_data = current.borrow_mut();
+                            current_data.value = value;
+                            current_data.key = key;
+                            current_data.delegate = Some(YieldFromDelegate::Iterator(iterator));
+                            current_data.state = GeneratorState::Suspended;
+                        }
+                        propagation = Some(GeneratorPropagation::Yielded);
+                    } else {
+                        current.borrow_mut().ip_offset += 1;
+                        match execute_generator_frame_input(
+                            eg,
+                            &current,
+                            GeneratorFrameInput::YieldFromReturn(Value::null()),
+                        )? {
+                            GeneratorFrameOutcome::Advanced => fresh_execution = true,
+                            GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                                propagation = Some(GeneratorPropagation::Threw(
+                                    exception,
+                                    extend_trace,
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -2086,7 +2208,7 @@ fn execute_resumed_generator_frame(
     }
     let delegated = matches!(
         generator.delegate.as_ref(),
-        Some(crate::vm::generator::YieldFromDelegate::Generator(_))
+        Some(crate::vm::generator::YieldFromDelegate::Generator(_, _))
     );
     drop(generator);
     eg.exception = saved_exception;

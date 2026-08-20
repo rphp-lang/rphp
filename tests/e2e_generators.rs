@@ -1068,6 +1068,254 @@ foreach (gen() as $v) {
 }
 
 #[test]
+fn yield_from_iterator_is_lazy_and_preserves_protocol_order_and_keys() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LoggedIterator implements Iterator {
+    private int $position = 0;
+
+    public function rewind(): void { echo "rewind|"; $this->position = 0; }
+    public function valid(): bool { echo "valid:$this->position|"; return $this->position < 2; }
+    public function current(): mixed { echo "current:$this->position|"; return 10 + $this->position; }
+    public function key(): mixed { echo "key:$this->position|"; return "k$this->position"; }
+    public function next(): void { echo "next|"; $this->position++; }
+}
+
+function relayIterator() {
+    $result = yield from new LoggedIterator();
+    var_dump($result);
+}
+
+$generator = relayIterator();
+echo $generator->key(), "=", $generator->current(), "|";
+$generator->send("ignored");
+echo $generator->key(), "=", $generator->current(), "|";
+$generator->next();
+"#,
+        ),
+        concat!(
+            "rewind|valid:0|current:0|key:0|k0=10|",
+            "next|valid:1|current:1|key:1|k1=11|",
+            "next|valid:2|NULL\n",
+        ),
+    );
+}
+
+#[test]
+fn yield_from_iterator_aggregate_is_lazy_and_discards_inner_generator_return() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LoggedAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        echo "getIterator|";
+        $received = yield "named" => 42;
+        echo "received:";
+        var_dump($received);
+        return 99;
+    }
+}
+
+function relayAggregate() {
+    $result = yield from new LoggedAggregate();
+    var_dump($result);
+}
+
+$generator = relayAggregate();
+echo $generator->key(), "=", $generator->current(), "|";
+$generator->send("ignored");
+"#,
+        ),
+        "getIterator|named=42|received:NULL\nNULL\n",
+    );
+}
+
+#[test]
+fn yield_from_iterator_protocol_exception_is_catchable_by_parent_generator() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FailingIterator implements Iterator {
+    public function rewind(): void { echo "rewind|"; }
+    public function valid(): bool { throw new RuntimeException("valid failed"); }
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+}
+
+function guardedRelay() {
+    try {
+        yield from new FailingIterator();
+    } catch (Throwable $error) {
+        echo $error::class, ":", $error->getMessage();
+    }
+}
+
+guardedRelay()->current();
+"#,
+        ),
+        "rewind|RuntimeException:valid failed",
+    );
+}
+
+#[test]
+fn generator_throw_reenters_the_parent_at_an_iterator_yield_from_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class SingleIterator implements Iterator {
+    private bool $done = false;
+    public function rewind(): void {}
+    public function valid(): bool { return !$this->done; }
+    public function current(): mixed { return "item"; }
+    public function key(): mixed { return 7; }
+    public function next(): void { $this->done = true; }
+}
+
+function guardedIterator() {
+    try {
+        yield from new SingleIterator();
+    } catch (Exception $error) {
+        echo "caught:", $error->getMessage(), "|";
+        yield "after";
+    }
+}
+
+$generator = guardedIterator();
+echo $generator->key(), "=", $generator->current(), "|";
+echo $generator->throw(new Exception("boom")), "|";
+$generator->next();
+"#,
+        ),
+        "7=item|caught:boom|after|",
+    );
+}
+
+#[test]
+fn generator_throw_is_not_forwarded_through_an_iterator_aggregate_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ThrowingAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        try {
+            yield "inner";
+        } catch (Exception $error) {
+            echo "inner-caught|";
+        }
+    }
+}
+
+function guardedAggregate() {
+    try {
+        yield from new ThrowingAggregate();
+    } catch (Exception $error) {
+        echo "outer-caught|";
+        yield "after";
+    }
+}
+
+$generator = guardedAggregate();
+echo $generator->current(), "|";
+echo $generator->throw(new Exception("boom")), "|";
+$generator->next();
+"#,
+        ),
+        "inner|outer-caught|after|",
+    );
+}
+
+#[test]
+fn iterator_aggregate_rewinds_generator_results_and_rejects_invalid_lifecycle_states() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function lifecycleSource() {
+    yield 1;
+    yield 2;
+}
+
+class GeneratorAggregate implements IteratorAggregate {
+    public function __construct(private Generator $source) {}
+    public function getIterator(): Traversable { return $this->source; }
+}
+
+function guardedLifecycle($source) {
+    try {
+        yield from new GeneratorAggregate($source);
+    } catch (Throwable $error) {
+        echo $error::class, ":", $error->getMessage(), "|";
+    }
+}
+
+$advanced = lifecycleSource();
+$advanced->rewind();
+$advanced->next();
+guardedLifecycle($advanced)->current();
+
+$closed = lifecycleSource();
+foreach ($closed as $_) {}
+guardedLifecycle($closed)->current();
+"#,
+        ),
+        concat!(
+            "Exception:Cannot rewind a generator that was already run|",
+            "Exception:Cannot traverse an already closed generator|",
+        ),
+    );
+}
+
+#[test]
+fn yield_from_rejects_invalid_iterator_aggregate_result_at_the_protocol_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class InvalidAggregate implements IteratorAggregate {
+    public function getIterator() { return []; }
+}
+
+function guardedInvalidAggregate() {
+    try {
+        yield from new InvalidAggregate();
+    } catch (Throwable $error) {
+        echo $error::class, ":", $error->getMessage();
+    }
+}
+
+guardedInvalidAggregate()->current();
+"#,
+        ),
+        concat!(
+            "Exception:Objects returned by InvalidAggregate::getIterator() ",
+            "must be traversable or implement interface Iterator",
+        ),
+    );
+}
+
+#[test]
+fn yield_from_array_iterator_uses_its_iterable_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DerivedArrayIterator extends ArrayIterator {}
+
+function relayArrayIterator() {
+    yield 1;
+    yield from new DerivedArrayIterator(["named" => 2, 3]);
+    yield 4;
+}
+
+foreach (relayArrayIterator() as $key => $value) {
+    echo $key, "=", $value, "|";
+}
+"#,
+        ),
+        "0=1|named=2|0=3|1=4|",
+    );
+}
+
+#[test]
 fn test_yield_from_return_value() {
     assert_eq!(
         run_php(
