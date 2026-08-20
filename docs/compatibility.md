@@ -8,8 +8,53 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `e9e20beb`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,751 pass, 1,548 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `8e41909f`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,752 pass, 1,547 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.806% and the whole-corpus rate is 67.012%; 4,709 of
+5,299 attempted cases reach runtime (88.866%). Relative to exact base
+`e9e20beb`, the pass-set delta is +1/-0: all 3,751 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries from sequential full runs are byte-for-byte identical. Their
+SHA-256 values are
+`727e79637bcaffa5e060c234c1ebc8c8e4e8fe74f0d5782f0590bb8d79d234ae`
+and `0f839828f17fb9868a44c3afb1916dea74e8c01cc555126fd8c0c19f51a75c9c`.
+
+An empty dynamic constant name is now valid: `define('', $value)` succeeds,
+`defined('')` and `constant('')` observe it, and a repeated definition emits
+the ordinary PHP 8.5 redefinition warning while preserving the first value.
+`define()` now also uses the existing strict internal-string boundary before
+weak coercion. In weak mode a null name emits PHP's null-to-string deprecation
+and becomes the empty name; under `strict_types=1` the same value raises the
+canonical `TypeError` without publishing a constant. Source `const` syntax and
+class constants cannot express an empty identifier and are outside this
+dynamic-name checkpoint.
+
+Original E2E coverage exercises explicit empty-string creation, lookup,
+redefinition and first-value preservation, weak null deprecation/coercion, and
+strict null rejection without a side effect. The existing weak integer-name
+coercion and invalid composite-name controls remain green. The exact
+full-corpus addition is `Zend/tests/constants/constants_001.phpt`, which passes
+in 32 consecutive focused runs; `Zend/tests/constants/constants_008.phpt` and
+`Zend/tests/constants/008.phpt` remain exact retained controls.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,618 unsafe blocks and 289 unsafe
+functions. On CPU 2 with the performance governor, four warmups per binary and
+32 order-balanced measured pairs with no removed observations, 1,000 ordinary
+successful `define()` calls move from 0.023857 to 0.023754 seconds (-0.435%
+independently, -0.378% paired), with paired p10/p90 of -2.152%/+5.243%.
+Checksums match and both decision medians remain below the five-percent
+regression ceiling. The exact base and candidate binary SHA-256 values are
+`021f46fd72fe1df8f738381457c5b17769a80dddaa00fb6819229f6cef366ef4`
+and `3491dac6f4901f6d79794b677c8e34f55d371217ce7c63e6e0f9c29fbee37be5`.
+
+In the preceding constant-redefinition checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`e9e20beb`. Across all 5,599 unmodified `Zend/tests` and `tests/lang` cases,
+3,751 pass, 1,548 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 70.787% and the whole-corpus rate is 66.994%; 4,709 of
 5,299 attempted cases reach runtime (88.866%). Relative to exact base
