@@ -8,14 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `fb054c97`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,693 pass, 1,606 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `9e9638f2`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,708 pass, 1,591 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
-headline pass rate is 69.692% and the whole-corpus rate is 65.958%; 4,708 of
+headline pass rate is 69.975% and the whole-corpus rate is 66.226%; 4,708 of
 5,299 attempted cases reach runtime (88.847%). Relative to exact base
-`acad10dc`, the pass-set delta is +13/-0: all 3,680 prior passes remain passes
-and no other status or failure category changes. Two final merged manifests
-and summaries are byte-for-byte identical. Their SHA-256 values are
+`b4790c97`, the pass-set delta is +15/-0: all 3,693 prior passes remain passes,
+all additions move from compile failure to exact pass, and no other status or
+failure category changes. Two final merged manifests and summaries are
+byte-for-byte identical. Their SHA-256 values are
+`b5fa4e7e93f4ebcaaf384260dcb125aa0076349151e796aa085ec7883920d024`
+and `104c71a475e79071efd292a7987ef8e75263f17909b8b2393bed252a77c77c6c`.
+
+Method-compatibility diagnostics now render PHP 8.5 parameter defaults for
+userland methods. Scalar values, null, empty and non-empty arrays, truncated
+strings, imported constants, class constants and dynamic class-constant
+expressions use the reference diagnostic forms. A default before a later
+required parameter remains part of the callable's nullable contract where
+applicable but is omitted from the rendered signature, matching PHP's
+effective required-argument boundary. The compiler retains these renderings in
+an optional cold `UserFunction` sidecar only when a method has an effective
+rendered default; ordinary functions and methods without one retain no sidecar
+allocation. Internal-function defaults, ordinary Reflection display and
+earlier parse failures remain separate compatibility slices.
+
+Four original E2E regressions cover scalar/null/array/string rendering,
+canonical imported constant and class names, dynamic class-constant expression
+placeholders, and omission before a later required parameter. The exact
+full-corpus additions are `Zend/tests/bug64988.phpt`,
+`Zend/tests/inheritance/abstract_inheritance_003.phpt`,
+`argument_restriction_001.phpt`, `bug71428.1.phpt`, `bug72119.phpt`,
+`bug73987.phpt` and `bug73987_2.phpt`, plus
+`Zend/tests/objects/objects_006.phpt`, `objects_007.phpt`,
+`Zend/tests/oss-fuzz-465488618.phpt`,
+`Zend/tests/parameter_default_values/userland_declaration_error_class_const.phpt`,
+`userland_declaration_error_const.phpt`, `Zend/tests/traits/bug60217b.phpt`,
+`bug60217c.phpt` and
+`Zend/tests/variadic/adding_additional_optional_parameter_error.phpt`.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four Symfony
+S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains 1,612 unsafe blocks and 289 unsafe functions. No separate hot
+runtime benchmark applies: the new optional metadata follows all execution
+fields, `FunctionCommon` remains at offset zero, rendering occurs only during
+cold declaration diagnostics, and S3 exercises the affected compilation and
+linking path end to end.
+
+In the preceding method-visibility and magic-method diagnostic checkpoint, the
+measured AMD64 PHP 8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8`
+and candidate commit `fb054c97`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,693 pass, 1,606 fail, 115 skip, none remain XFAIL, 185
+are unsupported, and none time out or crash. The headline pass rate is 69.692%
+and the whole-corpus rate is 65.958%; 4,708 of 5,299 attempted cases reach
+runtime (88.847%). Relative to exact base `acad10dc`, the pass-set delta is
++13/-0: all 3,680 prior passes remain passes and no other status or failure
+category changes. Two final merged manifests and summaries are byte-for-byte
+identical. Their SHA-256 values are
 `73ef76ffd950c144612f90bfa90eb34445c43a200cf9af17438e042588e553c3`
 and `4c4c1f6850bba5c97a92b73bc3002f08d555d93103353588772ba71d1c5856f6`.
 
