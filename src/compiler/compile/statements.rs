@@ -4732,7 +4732,7 @@ impl Compiler {
                 }
                 self.class_defs.push(ClassDef {
                     attributes: self.compile_attributes(attributes, 1),
-                    name: resolved_iface,
+                    name: resolved_iface.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
                     declaration_line: *interface_line,
@@ -4760,7 +4760,12 @@ impl Compiler {
                     deferred_instance_defaults: None,
                     class_id: 0,
                 });
-                self.class_declaration_keys.push(None);
+                let declaration_key =
+                    self.emit_named_class_declaration(&resolved_iface, *interface_line);
+                self.class_declaration_keys.push(Some((
+                    declaration_key,
+                    self.child_class_declarations_are_runtime,
+                )));
             }
             Stmt::Trait {
                 line: trait_line,
@@ -5255,7 +5260,12 @@ impl Compiler {
                     }),
                     class_id: 0,
                 });
-                self.class_declaration_keys.push(None);
+                let declaration_key =
+                    self.emit_named_class_declaration(&resolved_trait, *trait_line);
+                self.class_declaration_keys.push(Some((
+                    declaration_key,
+                    self.child_class_declarations_are_runtime,
+                )));
                 if !uses.is_empty() {
                     self.emit_deprecated_trait_uses(&resolved_trait, *trait_line);
                 }

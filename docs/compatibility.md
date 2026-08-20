@@ -9,6 +9,44 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,648 pass, 1,650 fail, 115 skip, one is an upstream XFAIL,
+185 are unsupported, and none time out or crash. The headline pass rate is
+68.856% and the whole-corpus rate is 65.154%; 4,710 of 5,298 attempted cases
+reach runtime (88.901%). Relative to exact base `81a93455`, the pass-set delta
+is +1/-0: all 3,647 prior passes remain passes and no other failure changes
+category. Two final merged manifests and summaries are byte-for-byte identical.
+The manifest SHA-256 is
+`9e1982b0f8a7a386f8a677d2f1c7dbc0f5f3e3c9f6ab524bdedcdf18af697784`.
+
+Named interfaces and traits compiled inside a function, method or closure now
+use the same execution-time declaration marker as nested classes and enums.
+Their definitions remain outside the public symbol table until the containing
+child op-array reaches the declaration, then reuse the existing dependency
+autoload, rollback, duplicate-name and registration path. Unconditional
+top-level interfaces and traits retain eager registration; their source marker
+is a cold no-op because no runtime definition is queued for it.
+
+An original E2E regression proves both `interface_exists(..., false)` and
+`trait_exists(..., false)` remain false before the containing function runs and
+become true afterward. The exact full-corpus addition is
+`Zend/tests/type_declarations/variance/class_order_autoload4.phpt`, whose nested
+interface inheritance cycle now preserves PHP 8.5's load and output order.
+`class_order_autoload2.phpt` and `class_order_autoload6.phpt` remain the next
+transactional boundary because they require provisional publication of a new
+child of the class currently linking.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3.
+The production inventory remains 1,612 unsafe blocks and 289 unsafe functions.
+No runtime performance benchmark applies: the change adds only cold declaration
+metadata and an execution-time marker for child interface/trait declarations;
+ordinary method execution is unchanged, and the cold-build S3 gate exercises
+the affected class-like loading path.
+
+In the preceding transactional class-link checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src
+8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,647 pass, 1,651 fail, 115 skip, one is an upstream XFAIL,
 185 are unsupported, and none time out or crash. The headline pass rate is
 68.837% and the whole-corpus rate is 65.137%; 4,710 of 5,298 attempted cases

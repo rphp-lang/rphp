@@ -1468,3 +1468,23 @@ echo get_parent_class('RetryChild');
         "load:RetryChild|load:RetryParent|retry-parent|load:RetryChild|load:RetryParent|parent:2|RetryParent"
     );
 }
+
+#[test]
+fn nested_interfaces_and_traits_publish_only_when_their_op_array_executes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function publish_nested_types(): void {
+    interface FunctionNestedInterface {}
+    trait FunctionNestedTrait {}
+}
+echo (int) interface_exists('FunctionNestedInterface', false), ':';
+echo (int) trait_exists('FunctionNestedTrait', false), ';';
+publish_nested_types();
+echo (int) interface_exists('FunctionNestedInterface', false), ':';
+echo (int) trait_exists('FunctionNestedTrait', false);
+"#,
+        ),
+        "0:0;1:1"
+    );
+}
