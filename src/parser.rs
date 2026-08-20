@@ -19,6 +19,11 @@ pub struct Parser {
     /// dead-branch elimination. The first one is replayed as a top-level AST
     /// marker after the full source has parsed successfully.
     deferred_compile_error: Option<(String, usize)>,
+    /// `strict_types` is legal only before the first non-declare source
+    /// statement. Empty statements and earlier declare directives do not end
+    /// eligibility. The state is shared by nested and namespace parsers
+    /// because the rule applies to the complete source unit.
+    strict_types_allowed: bool,
     /// Empty dimensions use a distinct diagnostic in unset() targets.
     empty_dimension_unset_context: bool,
     /// Some write/reference grammars parse the target prefix first and consume

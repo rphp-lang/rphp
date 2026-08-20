@@ -7,6 +7,45 @@ use rphp::parser::Parser;
 use rphp::vm::opcode::OpCode;
 
 #[test]
+fn invalid_strict_types_declarations_fail_at_the_directive_line() {
+    for (source, expected_line, expected) in [
+        (
+            "<?php\nfunction earlier() {}\ndeclare(strict_types=1);",
+            3,
+            "strict_types declaration must be the very first statement in the script",
+        ),
+        (
+            "<?php\nnamespace Example;\ndeclare(strict_types=1);",
+            3,
+            "strict_types declaration must be the very first statement in the script",
+        ),
+        (
+            "<?php\nfunction earlier() {}\ndeclare(strict_types=1) {\n    isset(compute());\n}",
+            3,
+            "strict_types declaration must be the very first statement in the script",
+        ),
+        (
+            "<?php\ndeclare(strict_types=1) {\n    isset(compute());\n}",
+            2,
+            "strict_types declaration must not use block mode",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "/virtual/strict-placement.php",
+            "/virtual",
+        );
+        assert_eq!(
+            format!("{error:?}"),
+            format!(
+                "Fatal(\"{expected} in /virtual/strict-placement.php on line {expected_line}\")"
+            ),
+            "unexpected diagnostic for {source}"
+        );
+    }
+}
+
+#[test]
 fn strict_union_calls_reject_non_members_and_widen_int_to_float() {
     assert_eq!(
         run_php(

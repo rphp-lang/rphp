@@ -9,18 +9,55 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
-`tests/lang` cases, 3,520 pass, 1,777 fail, 114 skip, one is an upstream XFAIL,
+`tests/lang` cases, 3,524 pass, 1,773 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
-66.453% and the whole-corpus rate is 62.868%; 4,639 of 5,297 attempted cases
-reach runtime (87.578%). Relative to exact base `4a0a82aa`, the pass-set delta
-is +4/-0: all 3,516 prior passes remain passes and no other status, failure
+66.528% and the whole-corpus rate is 62.940%; 4,637 of 5,297 attempted cases
+reach runtime (87.540%). Relative to exact base `9ddab8cc`, the pass-set delta
+is +4/-0: all 3,520 prior passes remain passes and no other status, failure
 category or stage moves. Two final merged manifests and summaries are
 byte-for-byte identical. The manifest SHA-256 is
-`c6635c6799763c140eb4b4e02bfe4b3e871b8867cbba372c162471114a84e6a0`.
+`b9423bb1ccf102148c11e1e19c878da974b3a6449d508206eec22599bd0cf2cd`.
 
-Exact call results used as write targets now produce PHP 8.5's compile-time
+PHP 8.5 `strict_types` declarations now retain source-unit placement state.
+Empty statements and earlier `declare` directives preserve eligibility, while
+the first non-declare statement ends it for the complete source unit,
+including namespace and nested parser paths. A later `strict_types` directive
+produces PHP's compile-time
+`strict_types declaration must be the very first statement in the script`
+fatal at the directive's physical source line. Block mode produces
+`strict_types declaration must not use block mode`; when both rules are
+violated, the earlier placement diagnostic wins.
+
+Original parser and source-aware E2E regressions cover valid first, weak,
+duplicate and declare-prefixed directives, a leading empty statement,
+namespace and function predecessors, both block-mode boundaries, exact source
+locations and first-deferred-error priority. The parser consumes an invalid
+block before replaying that first error, so a later nested compile error cannot
+replace it.
+
+The exact full-corpus additions are
+`Zend/tests/type_declarations/scalar_strict_declaration_placement_001.phpt`,
+`002.phpt`, `008.phpt` and
+`Zend/tests/type_declarations/strict_nested.phpt`. The adjacent positive
+`004.phpt` and `005.phpt` cases remain exact passes; `006.phpt` and `007.phpt`
+remain unsupported for their existing CLI/INI requirements. Placement case
+`003.phpt`, whose source starts with inline HTML before the opening PHP tag,
+remains a separate lexer-ownership checkpoint. Line-exact diagnostics for the
+currently line-less `static` and `unset` keyword tokens are likewise not
+claimed here.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains at 1,623 unsafe blocks and 289 unsafe functions. No runtime
+performance gate applies because the change only rejects PHP-invalid
+declaration placement during parsing and leaves successful bytecode unchanged.
+
+In the preceding call-result write-context checkpoint, exact call results used
+as write targets produce PHP 8.5's compile-time
 `Can't use function return value in write context` fatal, substituting
 `method` where required and retaining the target's physical source line.
+
 Direct and reference assignment, `??=`, compound assignment,
 `unset()` and foreach targets share the classifier already used by inc/dec and
 destructuring. The parser consumes the complete construct and retains the first

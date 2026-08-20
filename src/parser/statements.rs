@@ -37,6 +37,7 @@ impl Parser {
             class_scope_active: false,
             generic_scopes: Vec::new(),
             deferred_compile_error: None,
+            strict_types_allowed: true,
             empty_dimension_unset_context: false,
             preserve_empty_dimension_suffix: false,
             last_primary_line: None,
@@ -163,6 +164,10 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
+        let strict_types_allowed = self.strict_types_allowed;
+        if !matches!(self.peek(), Token::Declare | Token::Semicolon) {
+            self.strict_types_allowed = false;
+        }
         if let Token::Identifier(name, _) = self.peek() {
             if self.peek_at(1) == Token::Colon {
                 self.advance();
@@ -213,8 +218,8 @@ impl Parser {
             Token::Declare => {
                 self.advance(); // consume 'declare'
                 self.expect_lparen()?;
-                let directive = match self.advance() {
-                    Token::Identifier(n, _) => n,
+                let (directive, directive_line) = match self.advance() {
+                    Token::Identifier(n, line) => (n, line),
                     other => {
                         return Err(format!(
                             "Expected directive name in declare(), got {:?}",
@@ -222,6 +227,14 @@ impl Parser {
                         ));
                     }
                 };
+                let invalid_strict_placement = directive.eq_ignore_ascii_case("strict_types")
+                    && !strict_types_allowed;
+                if invalid_strict_placement {
+                    let _ = self.compile_error(
+                        "strict_types declaration must be the very first statement in the script",
+                        directive_line,
+                    );
+                }
                 self.expect(&Token::Assign)?;
                 let value = match self.advance() {
                     Token::Integer(n) => n,
@@ -235,8 +248,30 @@ impl Parser {
                     }
                 };
                 self.expect(&Token::RParen)?;
+                let invalid_strict_block = directive.eq_ignore_ascii_case("strict_types")
+                    && self.peek() == Token::LBrace;
+                if invalid_strict_block {
+                    let _ = self.compile_error(
+                        "strict_types declaration must not use block mode",
+                        directive_line,
+                    );
+                }
+                if (invalid_strict_placement || invalid_strict_block)
+                    && self.peek() == Token::LBrace
+                {
+                    self.advance();
+                    while self.peek() != Token::RBrace && !self.at_eof() {
+                        let _ = self.parse_stmt()?;
+                    }
+                    self.expect(&Token::RBrace)?;
+                    return Ok(Stmt::Noop);
+                }
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Declare { directive, value })
+                if invalid_strict_placement || invalid_strict_block {
+                    Ok(Stmt::Noop)
+                } else {
+                    Ok(Stmt::Declare { directive, value })
+                }
             }
             Token::Namespace => {
                 self.advance(); // consume 'namespace'

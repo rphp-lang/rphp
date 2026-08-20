@@ -697,6 +697,67 @@ fn literal_this_write_targets_are_deferred_compile_errors() {
 }
 
 #[test]
+fn misplaced_strict_types_declarations_are_deferred_compile_errors() {
+    for (source, expected_line) in [
+        ("<?php\nfunction earlier() {}\ndeclare(strict_types=1);", 3),
+        ("<?php\nnamespace Example;\ndeclare(strict_types=1);", 3),
+        (
+            "<?php\nfunction earlier() {}\ndeclare(strict_types=1) {\n    isset(compute());\n}",
+            3,
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+
+        assert!(
+            matches!(
+                statements.last(),
+                Some(Stmt::ExprStmt(Expr::CompileError { message, line }))
+                    if message == "strict_types declaration must be the very first statement in the script"
+                        && *line == expected_line
+            ),
+            "unexpected AST for {source}: {statements:#?}"
+        );
+    }
+}
+
+#[test]
+fn first_strict_types_and_non_strict_declarations_remain_valid() {
+    for source in [
+        "<?php\ndeclare(strict_types=1);\nfunction strict() {}",
+        "<?php\ndeclare(strict_types=0);\nfunction weak() {}",
+        "<?php\ndeclare(ticks=1);\nfunction ticked() {}",
+        "<?php\n;\ndeclare(strict_types=1);",
+        "<?php\ndeclare(ticks=1);\ndeclare(strict_types=1);",
+        "<?php\ndeclare(strict_types=1);\ndeclare(strict_types=1);",
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(
+            !matches!(
+                statements.last(),
+                Some(Stmt::ExprStmt(Expr::CompileError { .. }))
+            ),
+            "unexpected compile error for {source}: {statements:#?}"
+        );
+    }
+}
+
+#[test]
+fn first_strict_types_block_is_a_deferred_compile_error() {
+    let tokens = Lexer::new("<?php\ndeclare(strict_types=1) {\n    isset(compute());\n}")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(matches!(
+        statements.last(),
+        Some(Stmt::ExprStmt(Expr::CompileError { message, line: 2 }))
+            if message == "strict_types declaration must not use block mode"
+    ));
+}
+
+#[test]
 fn document_string_parse_tokens_receive_the_parser_source_location() {
     let tokens = Lexer::new("<?php\necho <<<DOC\n  first\nsecond\n  DOC;")
         .tokenize()
