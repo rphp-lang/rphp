@@ -8,9 +8,54 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `88b7abec`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,742 pass, 1,557 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `3c5af617`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,744 pass, 1,555 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.655% and the whole-corpus rate is 66.869%; 4,709 of
+5,299 attempted cases reach runtime (88.866%). Relative to exact base
+`88b7abec`, the pass-set delta is +2/-0: all 3,742 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`730443687b786f7b062b56cd593ff04eb961cee0e8b6587d7b82a9fabb0964de`
+and `be24233922d94d8de61abb714ba0ce75ec330e34ccb5731f2eeaae62885fa4f9`.
+
+User-function redeclarations now use the current declaration's qualified name
+and spelling and report both source locations when the previous declaration is
+also user-defined. A collision with an internal function omits the unavailable
+previous-source clause. The cold formatter reads declaration lines and source
+units already retained in each user `OpArray`, so successful registration and
+runtime layouts gain no metadata. Include and eval compilation propagate a
+duplicate for unconditional top-level, bare-block and namespace declarations;
+the lexical scan excludes conditional and nested declarations, whose actual
+runtime publication remains separate follow-up work.
+
+Original E2E coverage exercises case-insensitive and namespaced collisions,
+the internal `strlen()` boundary, repeated includes with matching first/current
+locations, and an inactive conditional declaration across a recursive include.
+The exact full-corpus additions are `Zend/tests/function_redecl.phpt` and
+`Zend/tests/line_numbers/gh16509.phpt`; both pass in 32 consecutive focused
+runs. `Zend/tests/autoload/bug63741.phpt` and `Zend/tests/bug35634.phpt` remain
+exact retained controls. Runtime publication of conditional/nested functions,
+including the separate lazy-object `gh20905.phpt` boundary, remains follow-up
+work.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory is 1,618 unsafe blocks and 289 unsafe functions.
+On CPU 2 with the performance governor, four warmups per binary and 32 order-
+balanced measured pairs with no removed observations, 1,000 successful simple
+function declarations move from 0.063433 to 0.063284 seconds (-0.234%
+independently, -0.192% paired), below the five-percent regression ceiling.
+Checksums match. The exact base and candidate binary SHA-256 values are
+`751a58e2e023509401708992ed63c7c1f4c3c203ff7b77a40af2433b0a7f980e`
+and `5c4d998f09a6a0a6f9eeef3ce48fdab25da745564a1f710a4cf93857935ab0ff`.
+
+In the preceding import/declaration collision checkpoint, the measured AMD64
+PHP 8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate
+commit `88b7abec`. Across all 5,599 unmodified `Zend/tests` and `tests/lang`
+cases, 3,742 pass, 1,557 fail, 115 skip, none remain XFAIL, 185 are unsupported,
+and none time out or crash. The
 headline pass rate is 70.617% and the whole-corpus rate is 66.833%; 4,709 of
 5,299 attempted cases reach runtime (88.866%). Relative to exact base
 `0e71faea`, the pass-set delta is +15/-0: all 3,727 prior passes remain passes,
