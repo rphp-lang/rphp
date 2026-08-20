@@ -8,6 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `10586f82`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,711 pass, 1,588 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 70.032% and the whole-corpus rate is 66.280%; 4,710 of
+5,299 attempted cases reach runtime (88.885%). Relative to exact base
+`9fcac3f4`, the pass-set delta is +1/-0: all 3,710 prior passes remain passes,
+and no other status or failure category changes. Two final merged manifests
+and summaries are byte-for-byte identical. Their SHA-256 values are
+`d457a819ba6a9a4719f97c0b249ae0d08f144743da1ade3805bfebdfc7b2a4a9`
+and `a66767ccd0887e98a614273c0ff28f8a0a6251d097989c9a967623f4f1a74d26`.
+
+An array-key conversion diagnostic may invoke user code before the dimension
+read finishes. The baseline VM now snapshots the diagnostic source spelling
+and retains the original array storage across that call. After the handler
+returns, a replaced uniquely owned target yields `false` for `isset()` or
+`null` for a read, while an existing copy-on-write owner preserves the read
+from its original storage. A pristine empty array retains PHP's subsequent
+undefined-key diagnostic even when the handler replaces the source variable,
+and an exception thrown by the handler propagates without completing the
+fetch. Rendering a non-representable float before the first warning also keeps
+the second conversion diagnostic stable if the handler mutates the key source.
+
+The empty-array lifetime marker occupies the otherwise unused high bit of the
+existing internal cursor and is cleared before mutable `Value` access;
+`PhpArray` remains 128 bytes. The cold diagnostic helper retains allocation
+identity and owner count without adding a production unsafe function. This
+checkpoint proves the exercised unique, shared COW, reference, pristine-empty
+and throwing-handler boundaries. It does not claim complete provenance for
+non-empty literals, every mutated-empty temporary-owner shape, or the separate
+compiler snapshot-container read path.
+
+One original E2E regression covers those lifetime and exception boundaries,
+and an array-layout unit test covers marker clearing plus cursor behavior. Both
+`Zend/tests/falsetoarray_003.phpt` and
+`Zend/tests/type_coercion/float_to_int/non-rep-float-as-int-extra3.phpt` pass
+in 32 consecutive runs. The latter is the exact full-corpus addition; the
+former remains a retained pass.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory is 1,617 unsafe blocks and 289 unsafe functions,
+within the established ceilings.
+
+On an AMD Ryzen 9 7950X, the exact release binaries were pinned to CPU 2 with
+the performance governor, four warmup pairs, 32 order-balanced measured pairs
+and no removed observations. A five-million-iteration integer `isset()`
+control moved from 0.215432 to 0.218616 seconds by independent medians
+(+1.478%) and +1.654% by paired ratios. The standard indexed-array control
+moved from 0.006784 to 0.006786 seconds (+0.038%) and +0.062% paired. Both
+checksums are exact and every median remains below the five-percent regression
+ceiling. The base and candidate binary SHA-256 values are respectively
+`2a7d3573826eba3a1ee2b7e808cf156dda4e41cbb9f015b5551211c2d553b47b`
+and `ecccf65168e45062cf40c67471297f9a97358484c8efd49ae48a625556bd187f`.
+
+In the preceding method-staticness diagnostic checkpoint, the measured AMD64
+PHP 8.5 contract was pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `77781600`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,710 pass, 1,589 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
