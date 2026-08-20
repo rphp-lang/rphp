@@ -3148,6 +3148,16 @@ impl ExecutorGlobals {
             &mut requirements,
             &mut std::collections::HashSet::new(),
         );
+        let mut interface_roots = class_def.implements.clone();
+        if let Some(parent) = &class_def.parent {
+            interface_roots.extend(self.collect_all_interfaces(parent));
+        }
+        let mut seen_interfaces = std::collections::HashSet::new();
+        for interface in interface_roots {
+            if seen_interfaces.insert(interface.to_ascii_lowercase()) {
+                requirements.extend(self.collect_interface_methods(&interface));
+            }
+        }
         let mut missing = Vec::new();
         let mut seen_missing = std::collections::HashSet::new();
         let mut requires_private_trait_implementation = false;
@@ -5404,7 +5414,7 @@ impl ExecutorGlobals {
                     continue;
                 }
                 errors.extend(
-                    self.method_contract_errors(requirement, implementation, None)
+                    self.method_contract_errors(requirement, implementation, Some(class_def))
                         .into_iter()
                         .map(|reason| {
                             (
@@ -5984,6 +5994,25 @@ impl ExecutorGlobals {
             return true;
         }
 
+        // The runtime representation retains source-level `T|null` as a union
+        // while `?T` is one nullable node. For covariance they denote the same
+        // two branches: both T and null must fit the required union.
+        if let (ParamTypeHint::Nullable(inner_impl), ParamTypeHint::Union(_)) =
+            (impl_hint, iface_hint)
+        {
+            return iface_hint.allows_null()
+                && (matches!(inner_impl.as_ref(), ParamTypeHint::None)
+                    || self.is_return_type_compatible_mode(
+                        inner_impl,
+                        iface_hint,
+                        impl_owner,
+                        iface_owner,
+                        linking_class,
+                        allow_unresolved_relation,
+                        allow_any_unresolved_relation,
+                    ));
+        }
+
         // Nullable unwrapping: impl T is compatible with iface ?T (narrowing)
         // impl ?T is compatible with iface ?T (checked above by equality)
         match (impl_hint, iface_hint) {
@@ -6140,12 +6169,14 @@ impl ExecutorGlobals {
             if iface_class.eq_ignore_ascii_case("object") {
                 return true;
             }
-            // `static` remains late-bound in a return declaration. It may
-            // narrow `self` or an ordinary ancestor contract, but replacing a
-            // required `static` with `self` would widen the result for further
-            // descendants and is therefore invalid.
+            // `static` remains late-bound in a return declaration. Replacing
+            // it with the implementation class is therefore safe only when
+            // that class is final and cannot acquire a later called scope.
             if iface_class.eq_ignore_ascii_case("static") {
-                return impl_class.eq_ignore_ascii_case("static");
+                return impl_class.eq_ignore_ascii_case("static")
+                    || linking_class.is_some_and(|definition| {
+                        definition.is_final && impl_class.eq_ignore_ascii_case(&definition.name)
+                    });
             }
             if allow_any_unresolved_relation
                 && (!self.variance_class_is_known(impl_class, linking_class)

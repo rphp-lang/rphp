@@ -44,6 +44,78 @@ echo (new LazyService())->initialize() instanceof LazyService ? "ok" : "fail";
 }
 
 #[test]
+fn final_class_may_close_late_static_return_contracts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface FinalStaticContract {
+    public function direct(): static;
+    public function compound(): static|string;
+    public function nullable(): static|null;
+}
+abstract class FinalStaticBase {
+    abstract public function inherited(): static;
+}
+trait FinalStaticRequirement {
+    abstract public function composed(): static;
+}
+final class FinalStaticResult extends FinalStaticBase implements FinalStaticContract {
+    use FinalStaticRequirement;
+    public function direct(): self { return $this; }
+    public function compound(): self|string { return $this; }
+    public function nullable(): ?self { return $this; }
+    public function inherited(): FinalStaticResult { return $this; }
+    public function composed(): self { return $this; }
+}
+$result = new FinalStaticResult();
+echo (int) ($result->direct() === $result);
+echo (int) ($result->compound() === $result);
+echo (int) ($result->nullable() === $result);
+echo (int) ($result->inherited() === $result);
+echo (int) ($result->composed() === $result);
+"#,
+        ),
+        "11111"
+    );
+}
+
+#[test]
+fn non_final_class_cannot_close_a_late_static_return_contract() {
+    let error = run_php_expect_error(
+        r#"<?php
+interface OpenStaticContract {
+    public function make(): static;
+}
+class OpenStaticResult implements OpenStaticContract {
+    public function make(): self { return $this; }
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of OpenStaticResult::make(): OpenStaticResult must be compatible with OpenStaticContract::make(): static\")"
+    );
+}
+
+#[test]
+fn final_static_union_still_rejects_an_unrelated_branch() {
+    let error = run_php_expect_error(
+        r#"<?php
+interface ClosedUnionContract {
+    public function make(): static|bool;
+}
+final class ClosedUnionResult implements ClosedUnionContract {
+    public function make(): self|array { return []; }
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of ClosedUnionResult::make(): ClosedUnionResult|array must be compatible with ClosedUnionContract::make(): static|bool\")"
+    );
+}
+
+#[test]
 fn test_interface_iterable_return_accepts_array_covariance() {
     assert_eq!(
         run_php(
