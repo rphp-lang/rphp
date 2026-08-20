@@ -1653,6 +1653,9 @@ pub struct UserFunction {
     /// unchanged.
     pub attributes: Vec<AttributeDefinition>,
     pub parameter_attributes: Vec<Vec<AttributeDefinition>>,
+    /// PHP-compatible default renderings used only by cold declaration
+    /// diagnostics. Methods without rendered defaults allocate no sidecar.
+    pub(crate) parameter_default_diagnostics: Option<Box<[Option<Box<str>>]>>,
 }
 
 pub(crate) struct TraitClassScopeCache {
@@ -1722,6 +1725,10 @@ mod layout_tests {
         assert!(
             std::mem::offset_of!(UserFunction, parameter_attributes)
                 > std::mem::offset_of!(UserFunction, attributes)
+        );
+        assert!(
+            std::mem::offset_of!(UserFunction, parameter_default_diagnostics)
+                > std::mem::offset_of!(UserFunction, parameter_attributes)
         );
     }
 }

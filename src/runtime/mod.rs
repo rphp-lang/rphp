@@ -91,6 +91,7 @@ struct MethodDeclaration<'a> {
     is_abstract: bool,
     source_line: usize,
     function: &'a FunctionCommon,
+    parameter_default_diagnostics: Option<&'a [Option<Box<str>>]>,
 }
 
 /// Stable sidecar for one reified static-property declaration. The weak
@@ -1902,6 +1903,7 @@ impl ExecutorGlobals {
                 .filter(|(opline, _)| *opline == u32::MAX)
                 .map_or(0, |(_, line)| *line as usize),
             function: &method.4.common,
+            parameter_default_diagnostics: method.4.parameter_default_diagnostics.as_deref(),
         }
     }
 
@@ -2644,6 +2646,14 @@ impl ExecutorGlobals {
                     .map(String::as_str)
                     .unwrap_or("arg"),
             );
+            if let Some(default) = declaration
+                .parameter_default_diagnostics
+                .and_then(|defaults| defaults.get(index))
+                .and_then(|default| default.as_deref())
+            {
+                parameter.push_str(" = ");
+                parameter.push_str(default);
+            }
             parameters.push(parameter);
         }
 

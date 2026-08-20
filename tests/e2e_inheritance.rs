@@ -1037,7 +1037,7 @@ class NarrowFirstInput extends OpenInputContract {
     );
     assert_eq!(
         format!("{narrowed_tail:?}"),
-        "Fatal(\"Declaration of NarrowFirstInput::ingest(int $first, int|string ...$rest) must be compatible with OpenInputContract::ingest(int|string ...$items)\")"
+        "Fatal(\"Declaration of NarrowFirstInput::ingest(int $first = 0, int|string ...$rest) must be compatible with OpenInputContract::ingest(int|string ...$items)\")"
     );
 }
 

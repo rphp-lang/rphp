@@ -4165,6 +4165,89 @@ pub(crate) fn enum_magic_method_is_forbidden(method: &str) -> bool {
 include!("compile/statements.rs");
 
 impl Compiler {
+    fn method_parameter_default_diagnostics(
+        &self,
+        parameters: &[Param],
+    ) -> Option<Box<[Option<Box<str>>]>> {
+        let required_num_args = parameters
+            .iter()
+            .rposition(|parameter| !parameter.is_variadic && parameter.default.is_none())
+            .map_or(0, |index| index + 1);
+        if !parameters
+            .iter()
+            .skip(required_num_args)
+            .any(|parameter| parameter.default.is_some())
+        {
+            return None;
+        }
+        Some(
+            parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| {
+                    if index < required_num_args {
+                        return None;
+                    }
+                    parameter.default.as_ref().map(|default| {
+                        self.method_parameter_default_diagnostic(default)
+                            .into_boxed_str()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )
+    }
+
+    fn method_parameter_default_diagnostic(&self, default: &Expr) -> String {
+        match default {
+            Expr::Integer(value) => value.to_string(),
+            Expr::Float(value) => Value::double(*value).echo_to_string_with_precision(14),
+            Expr::StringLiteral(value) => {
+                let mut characters = value.chars();
+                let prefix = characters.by_ref().take(10).collect::<String>();
+                let truncated = characters.next().is_some();
+                let escaped = prefix.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("'{escaped}{}'", if truncated { "..." } else { "" })
+            }
+            Expr::Null => "null".to_string(),
+            Expr::Bool(value) => value.to_string(),
+            Expr::ArrayLiteral(elements) if elements.is_empty() => "[]".to_string(),
+            Expr::ArrayLiteral(_) => "[...]".to_string(),
+            Expr::Constant(name) if name.eq_ignore_ascii_case("null") => "null".to_string(),
+            Expr::Constant(name) if name.eq_ignore_ascii_case("true") => "true".to_string(),
+            Expr::Constant(name) if name.eq_ignore_ascii_case("false") => "false".to_string(),
+            Expr::Constant(name) => self.resolve_constant_name(name).0,
+            Expr::ClassConstant {
+                class_name,
+                constant,
+                ..
+            } => {
+                let owner = if ["self", "parent", "static"]
+                    .iter()
+                    .any(|pseudo| class_name.eq_ignore_ascii_case(pseudo))
+                {
+                    class_name.clone()
+                } else {
+                    self.resolve_name(class_name)
+                };
+                format!("{owner}::{constant}")
+            }
+            Expr::UnaryPlus(inner) => match inner.as_ref() {
+                Expr::Integer(_) | Expr::Float(_) => {
+                    format!("+{}", self.method_parameter_default_diagnostic(inner))
+                }
+                _ => "<expression>".to_string(),
+            },
+            Expr::UnaryMinus(inner) => match inner.as_ref() {
+                Expr::Integer(_) | Expr::Float(_) => {
+                    format!("-{}", self.method_parameter_default_diagnostic(inner))
+                }
+                _ => "<expression>".to_string(),
+            },
+            _ => "<expression>".to_string(),
+        }
+    }
+
     fn record_magic_method_visibility_warning(
         &self,
         class: &str,

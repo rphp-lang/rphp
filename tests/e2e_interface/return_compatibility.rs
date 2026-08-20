@@ -191,6 +191,86 @@ class ArityTraitConsumer implements ArityTraitContract {
 }
 
 #[test]
+fn method_diagnostics_render_scalar_and_array_defaults() {
+    let error = run_php_expect_error(
+        r#"<?php
+class DefaultContract {
+    public function run(?array $items = NuLl, $label = "abcdefghijklmnop", $shape = [1]) {}
+}
+class DefaultImplementation extends DefaultContract {
+    public function run(array $items = [], $label = "short", $shape = []) {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of DefaultImplementation::run(array $items = [], $label = 'short', $shape = []) must be compatible with DefaultContract::run(?array $items = null, $label = 'abcdefghij...', $shape = [...])\")"
+    );
+}
+
+#[test]
+fn method_diagnostics_omit_defaults_before_required_parameters() {
+    let error = run_php_expect_error(
+        r#"<?php
+class RequiredContract {
+    public function run(?array $items = null, $required) {}
+}
+class RequiredImplementation extends RequiredContract {
+    public function run(?array $items) {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of RequiredImplementation::run(?array $items) must be compatible with RequiredContract::run(?array $items, $required)\")"
+    );
+}
+
+#[test]
+fn method_diagnostics_resolve_default_constant_names() {
+    let error = run_php_expect_error(
+        r#"<?php
+namespace DiagnosticSource {
+    const VALUE = 1;
+    class Token { public const VALUE = 2; }
+}
+namespace DiagnosticConsumer {
+    use const DiagnosticSource\VALUE;
+    use DiagnosticSource\Token as TokenAlias;
+    class DefaultContract {
+        public function run($value = VALUE, $token = TokenAlias::VALUE) {}
+    }
+    class DefaultImplementation extends DefaultContract {
+        public function run() {}
+    }
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of DiagnosticConsumer\\\\DefaultImplementation::run() must be compatible with DiagnosticConsumer\\\\DefaultContract::run($value = DiagnosticSource\\\\VALUE, $token = DiagnosticSource\\\\Token::VALUE)\")"
+    );
+}
+
+#[test]
+fn dynamic_class_constant_defaults_use_expression_placeholder() {
+    let error = run_php_expect_error(
+        r#"<?php
+class DynamicDefaultContract {
+    public function run(int $value) {}
+}
+class DynamicDefaultImplementation extends DynamicDefaultContract {
+    public function run(string $value = MissingOwner::{MISSING_NAME}) {}
+}
+"#,
+    );
+    assert_eq!(
+        format!("{error:?}"),
+        "Fatal(\"Declaration of DynamicDefaultImplementation::run(string $value = <expression>) must be compatible with DynamicDefaultContract::run(int $value)\")"
+    );
+}
+
+#[test]
 fn test_interface_iterable_return_accepts_array_covariance() {
     assert_eq!(
         run_php(

@@ -4011,6 +4011,8 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.parameter_default_diagnostics =
+                        self.method_parameter_default_diagnostics(&method.params);
                     user_func.set_attributes(self.compile_attributes_in_scope_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -4644,6 +4646,8 @@ impl Compiler {
                         cp.return_type_hint,
                         method.returns_by_ref,
                     );
+                    user_func.parameter_default_diagnostics =
+                        self.method_parameter_default_diagnostics(&method.params);
                     user_func.set_attributes(self.compile_attributes_in_scope_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -4950,6 +4954,8 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.parameter_default_diagnostics =
+                        self.method_parameter_default_diagnostics(&method.params);
                     user_func.set_attributes(self.compile_attributes_in_scope_mode_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -5833,6 +5839,8 @@ impl Compiler {
                         &method.name,
                         method.is_static,
                     );
+                    user_func.parameter_default_diagnostics =
+                        self.method_parameter_default_diagnostics(&method.params);
                     user_func.set_attributes(self.compile_attributes(
                         &method.attributes,
                         attribute_method_target(&method.name),
