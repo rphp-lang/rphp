@@ -38,6 +38,9 @@ use std::collections::HashMap;
 pub struct OpArray {
     pub num_cvs: u32,
     pub num_temps: u32,
+    /// Absolute frame slot initialized with the nearest final class that
+    /// composed shared trait bytecode. Ordinary functions leave it empty.
+    pub trait_class_scope_tmp: Option<u16>,
     pub instructions: Vec<Instruction>,
     /// Sorted sparse `(instruction index, source line)` metadata for opcodes
     /// whose location is observable. Kept out of `Instruction` so ordinary
@@ -226,6 +229,9 @@ impl OpArray {
         use crate::vm::opcode::OpCode;
         let offset = self.num_cvs;
         let offset16 = offset as u16;
+        if let Some(scope_tmp) = &mut self.trait_class_scope_tmp {
+            *scope_tmp += offset16;
+        }
         for instr in &mut self.instructions {
             if instr.op1_type == OpType::Tmp || instr.op1_type == OpType::Var {
                 instr.op1 += offset16;
@@ -925,6 +931,7 @@ pub fn make_user_function_full(
     variadic_cv_index: u32,
     ref_args: u64,
 ) -> UserFunction {
+    let needs_trait_class_scope = op_array.trait_class_scope_tmp.is_some();
     op_array.specialize_foreach_target_writes(ref_args, 0, &[]);
     op_array.resolve_tmp_offsets();
     op_array.specialize_opcodes();
@@ -1023,6 +1030,8 @@ pub fn make_user_function_full(
         composed_typed_long_plan: None,
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
+        trait_class_scope_cache: needs_trait_class_scope
+            .then(|| Box::new(crate::vm::function::TraitClassScopeCache::empty())),
     };
     function
         .common
@@ -1032,6 +1041,10 @@ pub fn make_user_function_full(
         .common
         .plan
         .set_has_embedded_late_static_scope(has_embedded_late_static_scope);
+    function
+        .common
+        .plan
+        .set_needs_trait_class_scope(needs_trait_class_scope);
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
@@ -1092,6 +1105,7 @@ pub(crate) fn make_user_function_typed_with_return_mode(
     return_type_hint: ParamTypeHint,
     returns_reference: bool,
 ) -> UserFunction {
+    let needs_trait_class_scope = op_array.trait_class_scope_tmp.is_some();
     op_array.specialize_foreach_target_writes(ref_args, 0, &[]);
     op_array.resolve_tmp_offsets();
     op_array.specialize_opcodes_with_hints(&param_type_hints);
@@ -1222,6 +1236,8 @@ pub(crate) fn make_user_function_typed_with_return_mode(
         composed_typed_long_plan: None,
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
+        trait_class_scope_cache: needs_trait_class_scope
+            .then(|| Box::new(crate::vm::function::TraitClassScopeCache::empty())),
     };
     function
         .common
@@ -1231,6 +1247,10 @@ pub(crate) fn make_user_function_typed_with_return_mode(
         .common
         .plan
         .set_has_embedded_late_static_scope(has_embedded_late_static_scope);
+    function
+        .common
+        .plan
+        .set_needs_trait_class_scope(needs_trait_class_scope);
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
@@ -3955,6 +3975,26 @@ pub(crate) fn build_scalar_string_function_plan(
         return None;
     }
 
+    if let Some(scope_tmp) = function.op_array.trait_class_scope_tmp
+        && let Some(first) = instructions.first()
+        && first.opcode == OpCode::Return
+        && first.extended_value != 0
+        && first.op1_type == OpType::Tmp
+        && first.op1 == scope_tmp
+        && instructions[1..]
+            .iter()
+            .all(|instruction| instruction.opcode == OpCode::Return)
+    {
+        return Some(Box::new(ScalarStringFunctionPlan {
+            public_args: public_args as u8,
+            operations: Box::new([]),
+            select: None,
+            when_false: Box::from(""),
+            when_true: Box::from(""),
+            trait_class_scope: true,
+        }));
+    }
+
     if let Some(value) = scalar_string_return_literal(function, 0, instructions.len()) {
         return Some(Box::new(ScalarStringFunctionPlan {
             public_args: public_args as u8,
@@ -3962,6 +4002,7 @@ pub(crate) fn build_scalar_string_function_plan(
             select: None,
             when_false: value.clone(),
             when_true: value,
+            trait_class_scope: false,
         }));
     }
 
@@ -4172,6 +4213,7 @@ pub(crate) fn build_scalar_string_function_plan(
         select: Some(ScalarStringSelect { kind, lhs, rhs }),
         when_true,
         when_false,
+        trait_class_scope: false,
     }))
 }
 
@@ -5860,7 +5902,8 @@ pub fn finalize_user_method(
 
 /// Clone a trait method for one concrete composed method name. Ordinary trait
 /// methods share their original pointer; this cold path covers independent
-/// function-static storage and consumer-specific declaration diagnostics.
+/// function-static storage, consumer-specific declaration diagnostics and
+/// final-class binding of trait `__CLASS__` sites.
 pub fn clone_trait_method_with_static_storage(
     source: &UserFunction,
     class_name: &str,
@@ -5877,6 +5920,7 @@ pub fn clone_trait_method_with_static_storage(
     let mut op_array = OpArray {
         num_cvs: source_op.num_cvs,
         num_temps: source_op.num_temps,
+        trait_class_scope_tmp: source_op.trait_class_scope_tmp,
         instructions: source_op.instructions.clone(),
         source_lines: source_op.source_lines.clone(),
         literals: source_op.literals.clone(),
@@ -5915,6 +5959,7 @@ pub fn clone_trait_method_with_static_storage(
     plan.set_borrow_this(source.common.plan.borrow_this());
     plan.set_needs_late_static_scope(source.common.plan.needs_late_static_scope());
     plan.set_has_embedded_late_static_scope(source.common.plan.has_embedded_late_static_scope());
+    plan.set_needs_trait_class_scope(source.common.plan.needs_trait_class_scope());
     plan.set_has_deprecated_attribute(source.common.plan.has_deprecated_attribute());
     plan.set_has_no_discard_attribute(source.common.plan.has_no_discard_attribute());
     let function = UserFunction {
@@ -5960,6 +6005,11 @@ pub fn clone_trait_method_with_static_storage(
         composed_typed_long_plan: None,
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
+        trait_class_scope_cache: source
+            .common
+            .plan
+            .needs_trait_class_scope()
+            .then(|| Box::new(crate::vm::function::TraitClassScopeCache::empty())),
     };
     finalize_user_method(function, method_name, is_static)
 }

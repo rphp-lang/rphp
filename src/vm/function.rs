@@ -850,6 +850,9 @@ pub struct ScalarStringFunctionPlan {
     pub select: Option<ScalarStringSelect>,
     pub when_true: Box<str>,
     pub when_false: Box<str>,
+    /// The returned string is the call-site-selected trait `__CLASS__`
+    /// value, whose length is supplied by the guarded method cache.
+    pub trait_class_scope: bool,
 }
 
 /// Dispatch identity required by a typed scalar call. Cache positions are
@@ -1353,6 +1356,7 @@ impl CallPlan {
     const EMBEDDED_LATE_STATIC_SCOPE: u8 = 1 << 2;
     const DEPRECATED_ATTRIBUTE: u8 = 1 << 3;
     const NO_DISCARD_ATTRIBUTE: u8 = 1 << 4;
+    const TRAIT_CLASS_SCOPE: u8 = 1 << 5;
 
     /// `$this` may be copied into a nested method frame without incrementing
     /// its Rc. The caller owns the object for the entire synchronous call and
@@ -1376,6 +1380,17 @@ impl CallPlan {
     pub fn set_needs_late_static_scope(&mut self, enabled: bool) {
         self.flags =
             (self.flags & !Self::LATE_STATIC_SCOPE) | u8::from(enabled) * Self::LATE_STATIC_SCOPE;
+    }
+
+    #[inline(always)]
+    pub fn needs_trait_class_scope(&self) -> bool {
+        self.flags & Self::TRAIT_CLASS_SCOPE != 0
+    }
+
+    #[inline]
+    pub fn set_needs_trait_class_scope(&mut self, enabled: bool) {
+        self.flags =
+            (self.flags & !Self::TRAIT_CLASS_SCOPE) | u8::from(enabled) * Self::TRAIT_CLASS_SCOPE;
     }
 
     #[inline(always)]
@@ -1630,11 +1645,28 @@ pub struct UserFunction {
     /// Public by-value parameters that may borrow an immutable heap Value from
     /// their synchronous caller. Indexed by public parameter position.
     pub borrowable_heap_args: u64,
+    /// Monomorphic owner/value cache for the hidden trait `__CLASS__` TMP.
+    /// Only functions carrying that TMP allocate this cold sidecar.
+    pub(crate) trait_class_scope_cache: Option<Box<TraitClassScopeCache>>,
     /// Reflection-only declaration metadata. Keeping it after every existing
     /// execution field leaves the call header, frame ABI and hot-plan offsets
     /// unchanged.
     pub attributes: Vec<AttributeDefinition>,
     pub parameter_attributes: Vec<Vec<AttributeDefinition>>,
+}
+
+pub(crate) struct TraitClassScopeCache {
+    pub(crate) class_id: Cell<u32>,
+    pub(crate) value: std::cell::UnsafeCell<Value>,
+}
+
+impl TraitClassScopeCache {
+    pub(crate) fn empty() -> Self {
+        Self {
+            class_id: Cell::new(0),
+            value: std::cell::UnsafeCell::new(Value::undef()),
+        }
+    }
 }
 
 impl UserFunction {

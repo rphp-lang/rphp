@@ -411,10 +411,14 @@ fn apply_scalar_double_condition(kind: ScalarLongConditionKind, lhs: f64, rhs: f
 }
 
 #[inline(always)]
-fn evaluate_scalar_string_plan<'a>(
-    plan: &'a ScalarStringFunctionPlan,
+fn evaluate_scalar_string_plan_len(
+    plan: &ScalarStringFunctionPlan,
     arguments: &[i64; 8],
-) -> Option<&'a str> {
+    trait_class_length: Option<usize>,
+) -> Option<usize> {
+    if plan.trait_class_scope {
+        return trait_class_length;
+    }
     if plan.operations.len() > 8 {
         return None;
     }
@@ -425,7 +429,7 @@ fn evaluate_scalar_string_plan<'a>(
         temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
     }
     let Some(select) = plan.select else {
-        return Some(&plan.when_true);
+        return Some(plan.when_true.len());
     };
     let resolve_condition_operand = |operand| match operand {
         ScalarLongConditionOperand::Source(source) => {
@@ -445,9 +449,9 @@ fn evaluate_scalar_string_plan<'a>(
         ScalarLongConditionKind::LessThanOrEqual => lhs <= rhs,
     };
     Some(if condition {
-        &plan.when_true
+        plan.when_true.len()
     } else {
-        &plan.when_false
+        plan.when_false.len()
     })
 }
 

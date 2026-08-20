@@ -457,6 +457,12 @@ fn prepare_user_return_value(
     // the compiler has validated the operand kind and slot index.
     unsafe {
         if !returns_reference {
+            if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+                let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                if !(&*ptr).is_reference() {
+                    return (frame_tmp_take!(frame, ptr), false);
+                }
+            }
             let ptr = (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
             return ((&*ptr).dereferenced().clone(), false);
         }

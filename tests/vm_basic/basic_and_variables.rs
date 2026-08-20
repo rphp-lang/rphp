@@ -11,6 +11,7 @@ fn test_echo_int() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 0,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![echo, ret],
         literals: vec![Value::long(42), Value::null()],
@@ -52,6 +53,7 @@ fn test_echo_negative() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 0,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![echo, ret],
         literals: vec![Value::long(-1), Value::null()],
@@ -102,6 +104,7 @@ fn test_add_and_echo() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![add, echo, ret],
         literals: vec![Value::long(20), Value::long(22), Value::null()],
@@ -146,6 +149,7 @@ fn test_overflow_to_float() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![add, ret],
         literals: vec![Value::long(i64::MAX), Value::long(1)],
@@ -187,6 +191,7 @@ fn test_timeout_interrupt() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 0,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![echo, ret],
         literals: vec![Value::long(1), Value::null()],
@@ -250,6 +255,7 @@ fn test_assign_and_echo_cv() {
     let op_array = OpArray {
         num_cvs: 1,
         num_temps: 0,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![assign, echo, ret],
         literals: vec![Value::long(42), Value::null()],
@@ -316,6 +322,7 @@ fn test_assign_add_echo() {
     let op_array = OpArray {
         num_cvs: 2,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![assign_a, assign_b, add, echo, ret],
         literals: vec![Value::long(20), Value::long(22), Value::null()],

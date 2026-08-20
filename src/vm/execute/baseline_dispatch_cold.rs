@@ -4096,8 +4096,22 @@ fn op_create_closure(
         ptr
     };
     let common = unsafe { &*func_ptr };
+    let trait_scope_class_id = if opline._pad
+        & crate::vm::instruction::CLOSURE_FLAG_TRAIT_LEXICAL_SCOPE
+        != 0
+    {
+        // SAFETY: this compiler-only flag accompanies an op2 that names the
+        // initialized hidden trait-scope TMP in the live frame.
+        unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) }
+            .as_str()
+            .map_or(0, |class| eg.class_id_of(class))
+    } else {
+        0
+    };
     let called_scope_class_id = if common.plan.needs_late_static_scope() {
         late_static_call_class_id(eg, frame)
+    } else if trait_scope_class_id != 0 {
+        trait_scope_class_id
     } else if opline.op2_type == OpType::Const {
         op_array.literals[opline.op2 as usize]
             .as_str()
@@ -4117,6 +4131,7 @@ fn op_create_closure(
         object_handle: 0,
         func: func_ptr,
         called_scope_class_id,
+        trait_scope_class_id,
         is_static,
         bound_this,
         captures: Vec::with_capacity(opline.extended_value as usize),

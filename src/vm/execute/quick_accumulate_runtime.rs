@@ -373,6 +373,7 @@ unsafe fn run_quick_long_accumulate_loop(
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
     let mut quick_composed_string_plans =
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
+    let mut quick_composed_trait_class_lengths = [None; COMPOSED_SCALAR_MAX_OPS];
     let quick_composed_string_arguments = [None; 8];
     let mut quick_composed_leaf_body = false;
     if let QuickLongTerm::ScalarFunctionCall {
@@ -465,6 +466,7 @@ unsafe fn run_quick_long_accumulate_loop(
                     &mut quick_composed_targets,
                     &mut quick_composed_plans,
                     &mut quick_composed_string_plans,
+                    &mut quick_composed_trait_class_lengths,
                 );
                 if !quick_composed_leaf_body {
                     stats::inc_quick_loop_guard_failed();
@@ -792,6 +794,7 @@ unsafe fn run_quick_long_accumulate_loop(
                                 &quick_composed_string_arguments,
                                 &quick_composed_plans,
                                 &quick_composed_string_plans,
+                                &quick_composed_trait_class_lengths,
                             )
                         } else if quick_composed_leaf_body {
                             evaluate_quick_composed_leaf_body(

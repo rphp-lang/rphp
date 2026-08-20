@@ -21,6 +21,74 @@ fn constant_php_version_branch_registers_only_the_selected_trait() {
     );
 }
 
+#[test]
+fn trait_class_magic_constant_uses_each_nearest_composition_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait InnerClassName {
+    public function instanceName() { echo __CLASS__, '|', __TRAIT__, '|', __METHOD__, "\n"; }
+    public static function staticName() { echo __CLASS__, '|', __METHOD__, "\n"; }
+    public function closureName() { return function () { echo __CLASS__, "\n"; }; }
+    public static function staticClosureName() { return static function () { echo __CLASS__, '|', static::class, "\n"; }; }
+    public function originalName() { echo __CLASS__, '|', __METHOD__, "\n"; }
+    public function recursiveName() {
+        echo __CLASS__, "\n";
+        if (get_parent_class(__CLASS__) !== false) { parent::recursiveName(); }
+    }
+    private function privateName($caller) { echo $caller, '|', __CLASS__, '|', __METHOD__, "\n"; }
+}
+trait OuterClassName { use InnerClassName; }
+class ClassNameBase {
+    use OuterClassName { originalName as aliasName; }
+    public function basePrivateName() { $this->privateName(__METHOD__); }
+}
+class ClassNameChild extends ClassNameBase {}
+class ClassNameReuse extends ClassNameBase { use OuterClassName { originalName as aliasAgain; } }
+class ClassNameOther { use InnerClassName; }
+
+(new ClassNameBase)->instanceName();
+(new ClassNameReuse)->instanceName();
+(new ClassNameChild)->instanceName();
+(new ClassNameOther)->instanceName();
+(new ClassNameBase)->instanceName();
+ClassNameChild::staticName();
+ClassNameReuse::staticName();
+ClassNameBase::staticName();
+$childClosure = (new ClassNameChild)->closureName();
+$reuseClosure = (new ClassNameReuse)->closureName();
+$childClosure();
+$reuseClosure();
+(new ClassNameBase)->aliasName();
+(new ClassNameReuse)->aliasAgain();
+(new ClassNameReuse)->recursiveName();
+ClassNameChild::staticClosureName()();
+ClassNameReuse::staticClosureName()();
+(new ClassNameChild)->basePrivateName();
+"#,
+        ),
+        concat!(
+            "ClassNameBase|InnerClassName|InnerClassName::instanceName\n",
+            "ClassNameReuse|InnerClassName|InnerClassName::instanceName\n",
+            "ClassNameBase|InnerClassName|InnerClassName::instanceName\n",
+            "ClassNameOther|InnerClassName|InnerClassName::instanceName\n",
+            "ClassNameBase|InnerClassName|InnerClassName::instanceName\n",
+            "ClassNameBase|InnerClassName::staticName\n",
+            "ClassNameReuse|InnerClassName::staticName\n",
+            "ClassNameBase|InnerClassName::staticName\n",
+            "ClassNameBase\n",
+            "ClassNameReuse\n",
+            "ClassNameBase|InnerClassName::originalName\n",
+            "ClassNameReuse|InnerClassName::originalName\n",
+            "ClassNameReuse\n",
+            "ClassNameBase\n",
+            "ClassNameBase|ClassNameChild\n",
+            "ClassNameReuse|ClassNameReuse\n",
+            "ClassNameBase::basePrivateName|ClassNameBase|InnerClassName::privateName\n",
+        )
+    );
+}
+
 // ─── Basic trait usage ────────────────────────────────────────────
 
 #[test]

@@ -1157,6 +1157,27 @@ formatting, unsafe policy, Composer S0, four Symfony S1 gates and exact PHP
 argument path is unchanged and the new work is confined to the deprecated
 no-argument branch.
 
+The `trait-magic-class-scope` checkpoint reaches 3,441 passes with 1,856
+failures, 114 skips, one XFAIL, 187 unsupported cases, zero timeouts and zero
+crashes. Trait method and closure `__CLASS__` reads now bind to the exact final
+composition selected by dispatch, while inherited methods keep the parent's
+composition, explicit trait reuse creates a new one and nested traits follow
+their final consumer. This lexical value remains separate from late-static
+scope; aliases, private calls and reentrant parent calls preserve the selected
+body, while `__TRAIT__`, `__FUNCTION__` and `__METHOD__` retain trait identity.
+An original E2E regression covers those boundaries plus alternating caches,
+static calls and escaping closures. The exact full-corpus delta from
+`462a7bd0` is +3/-0: `bug65419.phpt`, `bug76773.phpt` and
+`gh14009_005.phpt` become exact with every prior pass and all other categories
+unchanged. Two final manifests and summaries are byte-for-byte identical. All
+five feature configurations, all-target, formatting, unsafe policy, Composer
+S0, four Symfony S1 gates and PHP 8.5 S2/S3 pass. A CPU-pinned 32-pair release
+control of five million affected calls measures +4.553% independently and
++4.646% paired, below the +5% gate; the 1,000-composition cold-link control
+measures -0.645% independently and -0.298% paired. Trait property-default magic
+constants, deprecated parent callables and missing standard-library functions
+remain separate work.
+
 Composer S0 and the four bounded Symfony S1 gates plus warmed FrameworkBundle
 S2 pass on AMD64. The exact PHP 8.5 cold FrameworkBundle 7.4.16 S3 gate also
 passes after adding the missing `ReflectionParameter::__toString()` contract

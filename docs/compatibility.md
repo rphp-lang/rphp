@@ -9,6 +9,62 @@ behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 3,441 pass, 1,856 fail, 114 skip, one is an upstream XFAIL,
+187 are unsupported, and none time out or crash. The headline pass rate is
+64.961% and the whole-corpus rate is 61.457%; 4,624 of 5,297 attempted cases
+reach runtime (87.295%). Relative to exact base `462a7bd0`, the pass-set delta
+is +3/-0: all 3,438 prior passes remain passes.
+
+Inside a trait method or nested closure, `__CLASS__` now names the nearest
+final class that composed that trait body. Inheriting a composed method keeps
+the parent's composition, reusing the trait in a child creates the child's
+composition, and a nested trait follows its final consumer. Static calls,
+aliases, private dispatch and a reentrant `parent::method()` select the exact
+body that was dispatched; a static closure can therefore retain its lexical
+trait composition while `static::class` follows a different late-called
+class. `__TRAIT__`, `__FUNCTION__` and `__METHOD__` retain their original trait
+identity.
+
+The compiler reserves a hidden function-local value only for trait-bound
+`__CLASS__` reads. Call initialization fills it with the selected composition
+for that activation, so recursive calls through another composition cannot
+overwrite their caller. Closures carry that lexical composition separately
+from late-static scope, and method caches retain the guarded composition ID.
+Frame-free call plans are disabled only for affected bodies; the typed string
+length path consumes the same guarded value.
+
+An original E2E regression covers nested traits, inherited and repeated reuse,
+alternating cache entries, instance and static calls, escaping and static
+closures, aliases, private dispatch and reentrant parent calls. The six-case
+focused slice makes `bug65419.phpt`, `bug76773.phpt` and `gh14009_005.phpt`
+exact. The deprecated-callable peer, trait-property-default peer and missing
+`get_defined_constants()` peer remain at their independent output, compile and
+runtime boundaries.
+
+Those same three tests make the only full-corpus fail/output-to-pass
+transitions; no prior pass, remaining classification or execution stage moves.
+Two final manifests and summaries are byte-for-byte identical. The manifest
+SHA-256 is
+`237c849d564ff8ae7c884d6afdd046d9de171841ce50ee1797941a135d030441`.
+
+All five Cargo configurations, all-feature/all-target, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and PHP 8.5 warmed-kernel S2 and cold-build S3. The production
+inventory remains within its committed ceiling at 1,623 unsafe blocks and 289
+unsafe functions. On one pinned AMD64 CPU, 32 balanced alternating release
+pairs measure the five-million-call trait `__CLASS__` path at 1.032805 seconds
+for the exact baseline and 1.079833 seconds for the candidate: +4.553% by
+independent means and +4.646% by paired ratios, below the +5% gate. A 1,000-
+composition cold-link control measures -0.645% by independent means and
+-0.298% paired; this is evidence of no regression, not an optimization claim.
+
+This checkpoint does not claim trait property-default magic constants,
+deprecated `is_callable(['parent', ...])` behavior, missing standard-library
+functions, optional extension suites outside the selected corpus or broader
+PHP syntax and runtime compatibility.
+
+The preceding get-parent-class-noarg-deprecation checkpoint was pinned to
+php-src 8.5.6 commit `fcc29c8`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 3,438 pass, 1,859 fail, 114 skip, one is an upstream XFAIL,
 187 are unsupported, and none time out or crash. The headline pass rate is
 64.905% and the whole-corpus rate is 61.404%; 4,624 of 5,297 attempted cases

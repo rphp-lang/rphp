@@ -481,6 +481,7 @@ unsafe fn resolve_quick_composed_typed_body(
     targets: &mut [*const FunctionCommon; COMPOSED_SCALAR_MAX_OPS],
     scalar_plans: &mut [*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
     string_plans: &mut [*const ScalarStringFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
+    trait_class_lengths: &mut [Option<usize>; COMPOSED_SCALAR_MAX_OPS],
 ) -> bool {
     if plan.program.operations.len() > COMPOSED_SCALAR_MAX_OPS || plan.program.output_count != 1 {
         return false;
@@ -516,6 +517,20 @@ unsafe fn resolve_quick_composed_typed_body(
                 return false;
             };
             if target_plan.public_args as usize != call.arguments.len() {
+                return false;
+            }
+            if target_plan.operations.is_empty() && target_plan.select.is_none() {
+                let mut length = target_plan.when_true.len();
+                if target_plan.trait_class_scope {
+                    let class_id = owner.op_array.cache[call.guard.cache_ip()]
+                        .method_trait_scope_class_id();
+                    let Some(class) = eg.class_by_id(class_id) else {
+                        return false;
+                    };
+                    length = class.name.len();
+                }
+                trait_class_lengths[index] = Some(length);
+            } else if target_plan.trait_class_scope {
                 return false;
             }
             string_plans[index] = target_plan;
@@ -614,6 +629,7 @@ unsafe fn evaluate_quick_composed_typed_body(
     string_arguments: &[Option<usize>; 8],
     scalar_plans: &[*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
     string_plans: &[*const ScalarStringFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
+    trait_class_lengths: &[Option<usize>; COMPOSED_SCALAR_MAX_OPS],
 ) -> Option<i64> {
     if plan.program.output_count != 1 {
         return None;
@@ -651,8 +667,11 @@ unsafe fn evaluate_quick_composed_typed_body(
                     target_arguments[index] =
                         resolve_composed_body_source(source, arguments, &temporaries);
                 }
-                string_temporaries[operation_index] =
-                    Some(evaluate_scalar_string_plan(&*target_plan, &target_arguments)?.len());
+                string_temporaries[operation_index] = Some(
+                    trait_class_lengths[operation_index].or_else(|| {
+                        evaluate_scalar_string_plan_len(&*target_plan, &target_arguments, None)
+                    })?,
+                );
                 0
             }
             ComposedTypedLongOp::StringConcatLiteral { value, literal_len } => {

@@ -27,6 +27,7 @@ fn test_recursive_countdown() {
     let f1_func = make_user_function(OpArray {
         num_cvs: 0,
         num_temps: 0,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![f1_ret],
         literals: vec![Value::long(42)],
@@ -64,6 +65,7 @@ fn test_recursive_countdown() {
     let f2_func = make_user_function(OpArray {
         num_cvs: 0,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![f2_init, f2_do, f2_ret],
         literals: vec![Value::string("f1")],
@@ -101,6 +103,7 @@ fn test_recursive_countdown() {
     let f3_func = make_user_function(OpArray {
         num_cvs: 0,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![f3_init, f3_do, f3_ret],
         literals: vec![Value::string("f2")],
@@ -142,6 +145,7 @@ fn test_recursive_countdown() {
     let main_func = make_user_function(OpArray {
         num_cvs: 0,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![main_init, main_do, main_echo, main_ret],
         literals: vec![Value::string("f3"), Value::null()],
@@ -192,6 +196,7 @@ fn test_interrupt_during_deep_call() {
     let f1_func = make_user_function(OpArray {
         num_cvs: 0,
         num_temps: 0,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![f1_echo, f1_ret],
         literals: vec![Value::long(1), Value::null()],
@@ -232,6 +237,7 @@ fn test_interrupt_during_deep_call() {
     let main_func = make_user_function(OpArray {
         num_cvs: 0,
         num_temps: 0,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![init, do_fcall, echo2, ret],
         literals: vec![Value::string("f1"), Value::long(2), Value::null()],
@@ -303,6 +309,7 @@ fn test_assign_result_used() {
     let main_func = make_user_function(OpArray {
         num_cvs: 2,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![assign_b, assign_a, echo, ret],
         literals: vec![Value::long(42), Value::null()],

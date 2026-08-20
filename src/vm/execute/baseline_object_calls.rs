@@ -3396,7 +3396,7 @@ fn op_init_method_call<'a>(
         // — avoids class_name.clone() and full method resolution on cache hit.
         let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
         let ic = &op_array.cache[ip];
-        let (func_ptr, has_generic_contract, magic_method) = if !ic.func.is_null()
+        let (func_ptr, has_generic_contract, magic_method, trait_scope_class_id) = if !ic.func.is_null()
             && ic.class_id == obj_class_id
             && obj_class_id != 0
         {
@@ -3406,6 +3406,7 @@ fn op_init_method_call<'a>(
                 cfg!(any(feature = "php-generics-erased", feature = "php-generics-reified"))
                     && ic.method_has_generic_contract(),
                 None,
+                ic.method_trait_scope_class_id(),
             )
         } else {
             let target_class_name = obj.class_name.clone();
@@ -3471,6 +3472,14 @@ fn op_init_method_call<'a>(
                         method,
                         opline.extended_value,
                     );
+            // SAFETY: method resolution returns a request-owned function
+            // descriptor that remains live for the duration of execution.
+            let common = unsafe { &*resolved };
+            let trait_scope_class_id = if common.plan.needs_trait_class_scope() {
+                trait_class_scope_for_dispatch(eg, resolved, &dispatch_class)
+            } else {
+                0
+            };
 
             // Visibility check
             if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
@@ -3493,7 +3502,6 @@ fn op_init_method_call<'a>(
             // Cache the resolution (don't cache if class_id is 0 = unknown)
             if obj_class_id != 0 && magic_method.is_none() {
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
-                let common = unsafe { &*resolved };
                 let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
                     && common.supports_scalar_long_plan()
                 {
@@ -3515,8 +3523,16 @@ fn op_init_method_call<'a>(
                     resolved_has_generic_contract,
                     linked_generic_long_contract,
                 );
+                if trait_scope_class_id != 0 {
+                    ic_mut.set_method_trait_scope_class_id(trait_scope_class_id);
+                }
             }
-            (resolved, resolved_has_generic_contract, magic_method)
+            (
+                resolved,
+                resolved_has_generic_contract,
+                magic_method,
+                trait_scope_class_id,
+            )
         };
         #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
         let _ = has_generic_contract;
@@ -3545,6 +3561,7 @@ fn op_init_method_call<'a>(
         }
         let scalar_plan_eligible = magic_method.is_none()
             && !has_active_generic_contract
+            && !common.plan.needs_trait_class_scope()
             && common.fn_type == FunctionType::User
             && num_args == common.sig.public_arity()
             && {
@@ -3587,6 +3604,7 @@ fn op_init_method_call<'a>(
                 frame_set_this(call, obj_val.clone());
             }
         }
+        initialize_trait_class_scope(eg, call, func_ptr, trait_scope_class_id);
         if let Some(method) = magic_method {
             push_pending_magic_call(eg, call as usize, method);
         }
@@ -3694,14 +3712,19 @@ fn op_init_static_call<'a>(
     let class = resolved_class.unwrap_or_else(|| raw_class.clone());
     let num_args = opline.extended_value;
     let cached = op_array.cache[ip].func;
-    let (func_ptr, method_is_non_static, magic_method) = if !cached.is_null() {
+    let (func_ptr, method_is_non_static, magic_method, trait_scope_class_id) = if !cached.is_null() {
         let tagged = cached as usize;
         if tagged & 1 == 0 {
             // Keep the overwhelmingly common static-method cache hit as the
             // original pointer without an unconditional mask operation.
-            (cached, false, None)
+            (cached, false, None, op_array.cache[ip].class_id)
         } else {
-            ((tagged & !1usize) as *const FunctionCommon, true, None)
+            (
+                (tagged & !1usize) as *const FunctionCommon,
+                true,
+                None,
+                op_array.cache[ip].class_id,
+            )
         }
     } else {
         if eg.find_class(&class).is_none() {
@@ -3841,6 +3864,16 @@ fn op_init_static_call<'a>(
         let method_is_non_static = method_info
             .as_ref()
             .is_some_and(|(_, is_static, _)| !is_static);
+        // SAFETY: `find_function` returns a request-owned immutable function
+        // descriptor that remains live throughout execution.
+        let trait_scope_class_id = if unsafe { &*resolved }
+            .plan
+            .needs_trait_class_scope()
+        {
+            trait_class_scope_for_dispatch(eg, resolved, &class)
+        } else {
+            0
+        };
 
         // Visibility check on first resolve for each dynamic class.
         if let Some((vis, _, defining_class)) = method_info.as_ref() {
@@ -3873,9 +3906,15 @@ fn op_init_static_call<'a>(
                 // keeps the warmed scalar-call path at one cache load.
                 cache.func = ((resolved as usize) | usize::from(method_is_non_static))
                     as *const FunctionCommon;
+                cache.class_id = trait_scope_class_id;
             }
         }
-        (resolved, method_is_non_static, magic_method)
+        (
+            resolved,
+            method_is_non_static,
+            magic_method,
+            trait_scope_class_id,
+        )
     };
 
     let common = unsafe { &*func_ptr };
@@ -3898,6 +3937,7 @@ fn op_init_static_call<'a>(
         }
     }
     if magic_method.is_none()
+        && !common.plan.needs_trait_class_scope()
         && common.fn_type == FunctionType::User
         && num_args == common.sig.public_arity()
     {
@@ -3975,6 +4015,7 @@ fn op_init_static_call<'a>(
     if called_scope_class_id != 0 {
         publish_late_static_call_class_id(eg, call, called_scope_class_id);
     }
+    initialize_trait_class_scope(eg, call, func_ptr, trait_scope_class_id);
     if let Some(method) = magic_method {
         push_pending_magic_call(eg, call as usize, method);
     }
@@ -4007,8 +4048,8 @@ fn op_init_late_static_call<'a>(
     #[cfg(not(target_arch = "x86_64"))]
     let class_id = late_static_call_class_id(eg, frame);
     let cache = &op_array.cache[ip];
-    let func_ptr = if cache.class_id == class_id && !cache.func.is_null() {
-        cache.func
+    let (func_ptr, trait_scope_class_id) = if cache.class_id == class_id && !cache.func.is_null() {
+        (cache.func, cache.method_trait_scope_class_id())
     } else {
         let Some(class_definition) = eg.class_by_id(class_id) else {
             return Err(VmError::Fatal(
@@ -4035,6 +4076,16 @@ fn op_init_late_static_call<'a>(
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
             }
+        };
+        // SAFETY: `find_function` returns a request-owned immutable function
+        // descriptor that remains live throughout execution.
+        let trait_scope_class_id = if unsafe { &*resolved }
+            .plan
+            .needs_trait_class_scope()
+        {
+            trait_class_scope_for_dispatch(eg, resolved, &class)
+        } else {
+            0
         };
 
         if let Some((visibility, defining_class)) = eg.find_method_visibility(&class, method) {
@@ -4066,13 +4117,19 @@ fn op_init_late_static_call<'a>(
                 as *mut crate::vm::instruction::InlineCache);
             cache.class_id = class_id;
             cache.func = resolved;
+            if trait_scope_class_id != 0 {
+                cache.set_method_trait_scope_class_id(trait_scope_class_id);
+            }
         }
-        resolved
+        (resolved, trait_scope_class_id)
     };
 
     let num_args = opline.extended_value;
     let common = unsafe { &*func_ptr };
-    if common.fn_type == FunctionType::User && num_args == common.sig.public_arity() {
+    if !common.plan.needs_trait_class_scope()
+        && common.fn_type == FunctionType::User
+        && num_args == common.sig.public_arity()
+    {
         let user = unsafe { &*(func_ptr as *const UserFunction) };
         if let Some(plan) = user.scalar_long_plan.as_deref()
             && let Some((result, do_fcall_ptr)) = unsafe {
@@ -4115,6 +4172,7 @@ fn op_init_late_static_call<'a>(
     if class_id != 0 {
         publish_late_static_call_class_id(eg, call, class_id);
     }
+    initialize_trait_class_scope(eg, call, func_ptr, trait_scope_class_id);
     Ok(ColdResult::Done)
 }
 
@@ -4238,6 +4296,30 @@ fn init_resolved_user_call_mode(
     mut resolved: crate::stdlib::ResolvedCallback,
     defer_method_receiver: bool,
 ) {
+    let trait_scope_class_id = if resolved.common().plan.needs_trait_class_scope() {
+        resolved
+            .bound_this
+            .as_ref()
+            .and_then(Value::as_object)
+            .map(|object| object.class_name.to_string())
+            .or_else(|| {
+                resolved
+                    .prepend_args
+                    .first()
+                    .and_then(Value::as_object)
+                    .map(|object| object.class_name.to_string())
+            })
+            .or_else(|| {
+                eg.class_by_id(resolved.called_scope_class_id)
+                    .map(|class| class.name.clone())
+            })
+            .as_deref()
+            .map_or(0, |class| {
+                trait_class_scope_for_dispatch(eg, resolved.func_ptr, class)
+            })
+    } else {
+        0
+    };
     let magic_method = if resolved.is_magic_call {
         debug_assert_eq!(resolved.use_vars.len(), 1);
         resolved.use_vars.pop()
@@ -4320,6 +4402,7 @@ fn init_resolved_user_call_mode(
         }
     }
     initialize_bound_this_frame(call, resolved.func_ptr, bound_this);
+    initialize_trait_class_scope(eg, call, resolved.func_ptr, trait_scope_class_id);
 }
 
 #[inline(never)]
@@ -4508,6 +4591,10 @@ fn op_init_dynamic_call<'a>(
         // the hidden receiver slot, so defer it until DoFcall shifts the
         // explicit argument prefix exactly like an array method callback.
         init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, is_method);
+        // SAFETY: `frame` is the active VM frame and call initialization above
+        // has populated its call-frame pointer.
+        let call = unsafe { (*frame).call };
+        initialize_trait_class_scope(eg, call, func_ptr, closure.trait_scope_class_id);
         return Ok(ColdResult::Done);
     } else if let Some(func_name) = callable.as_str() {
         // Simple string function call: $func = "my_func"; $func()

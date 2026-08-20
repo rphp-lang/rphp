@@ -8270,11 +8270,18 @@ impl ResolvedCallback {
         self.called_scope_class_id != 0 || self.bound_this.is_some()
     }
 
-    /// Resolved callback pointers are owned by the request's immutable
-    /// function table and remain stable for the lifetime of this descriptor.
+    /// Recover the immutable common header retained by the request for this
+    /// descriptor's lifetime.
+    #[inline]
+    pub(crate) fn common(&self) -> &FunctionCommon {
+        // SAFETY: callback resolution only publishes pointers owned by the
+        // request's immutable function table, which outlives the descriptor.
+        unsafe { &*self.func_ptr }
+    }
+
     #[inline]
     fn signature(&self) -> &crate::vm::function::SignatureInfo {
-        unsafe { &(*self.func_ptr).sig }
+        &self.common().sig
     }
 
     pub(crate) fn supports_suspended_root(&self) -> bool {
@@ -8299,6 +8306,33 @@ pub(crate) fn resolved_callback_into_closure(
     resolved: ResolvedCallback,
     eg: &ExecutorGlobals,
 ) -> Value {
+    let trait_scope_class_id = if resolved.common().plan.needs_trait_class_scope() {
+        let dispatch_class = resolved
+            .bound_this
+            .as_ref()
+            .and_then(Value::as_object)
+            .map(|object| object.class_name.to_string())
+            .or_else(|| {
+                resolved
+                    .prepend_args
+                    .first()
+                    .and_then(Value::as_object)
+                    .map(|object| object.class_name.to_string())
+            })
+            .or_else(|| {
+                eg.class_by_id(resolved.called_scope_class_id)
+                    .map(|class| class.name.clone())
+            });
+        eg.declaring_class_of(resolved.func_ptr)
+            .filter(|declared| {
+                eg.find_class(declared)
+                    .is_some_and(|definition| definition.is_trait)
+            })
+            .and_then(|declared| eg.trait_composition_scope(dispatch_class.as_deref()?, declared))
+            .map_or(0, |scope| eg.class_id_of(scope))
+    } else {
+        0
+    };
     let is_method = resolved.is_method();
     let bound_this = resolved.bound_this.or_else(|| {
         resolved
@@ -8315,6 +8349,7 @@ pub(crate) fn resolved_callback_into_closure(
         object_handle: 0,
         func: resolved.func_ptr,
         called_scope_class_id: resolved.called_scope_class_id,
+        trait_scope_class_id,
         is_static,
         bound_this,
         captures: resolved.use_vars,

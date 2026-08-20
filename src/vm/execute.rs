@@ -497,6 +497,74 @@ fn publish_late_static_call_class_id(
     }
 }
 
+/// Resolve the exact final class that selected shared trait bytecode. The
+/// dispatch class is intentionally distinct from the receiver/late-called
+/// class: `parent::method()` and private lexical dispatch can select an
+/// ancestor composition while `$this` remains a child instance.
+#[inline]
+fn trait_class_scope_for_dispatch(
+    eg: &ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    dispatch_class: &str,
+) -> u32 {
+    let Some(declared) = eg.declaring_class_of(func_ptr) else {
+        return 0;
+    };
+    if eg
+        .class_table
+        .get(declared)
+        .is_some_and(|definition| definition.is_trait)
+    {
+        eg.trait_composition_scope(dispatch_class, declared)
+            .map_or(0, |scope| eg.class_id_of(scope))
+    } else {
+        eg.class_id_of(declared)
+    }
+}
+
+/// Initialize the compiler-reserved TMP used by every trait-bound
+/// `__CLASS__` read in this activation. The function-local cache avoids a
+/// string allocation on monomorphic calls; each frame owns its Rc clone, so a
+/// recursive call through another composition cannot overwrite its caller.
+#[inline]
+fn initialize_trait_class_scope(
+    eg: &ExecutorGlobals,
+    call: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    class_id: u32,
+) {
+    if class_id == 0 {
+        return;
+    }
+    // SAFETY: the plan bit is emitted only for user functions carrying the
+    // matching OpArray TMP and sidecar. Call initialization owns the fresh
+    // destination slot; execution is single-threaded like opcode caches.
+    unsafe {
+        let common = &*func_ptr;
+        if !common.plan.needs_trait_class_scope() || common.fn_type != FunctionType::User {
+            return;
+        }
+        let function = &*(func_ptr as *const UserFunction);
+        let Some(scope_tmp) = function.op_array.trait_class_scope_tmp else {
+            return;
+        };
+        let cache = function
+            .trait_class_scope_cache
+            .as_ref()
+            .expect("trait class scope plan requires a value cache");
+        if cache.class_id.get() != class_id {
+            let Some(class) = eg.class_by_id(class_id) else {
+                return;
+            };
+            let old = std::ptr::replace(cache.value.get(), Value::string(class.name.clone()));
+            cache.class_id.set(class_id);
+            drop(old);
+        }
+        let value = (&*cache.value.get()).clone();
+        frame_slot_init(call, (*call).slot_ptr(scope_tmp as u32), value);
+    }
+}
+
 #[cold]
 fn resolve_static_method_owner(
     eg: &ExecutorGlobals,

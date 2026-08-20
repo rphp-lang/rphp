@@ -2114,6 +2114,7 @@ impl Compiler {
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
+                    trait_class_scope_tmp: func_compiler.trait_class_scope_tmp,
                     source_lines: func_compiler.materialize_source_lines_with_declaration(*line),
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
@@ -3946,6 +3947,7 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
+                        trait_class_scope_tmp: func_compiler.trait_class_scope_tmp,
                         source_lines: func_compiler
                             .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
@@ -4577,6 +4579,7 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
+                        trait_class_scope_tmp: func_compiler.trait_class_scope_tmp,
                         source_lines: func_compiler
                             .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
@@ -4867,6 +4870,7 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
+                        trait_class_scope_tmp: func_compiler.trait_class_scope_tmp,
                         source_lines: func_compiler
                             .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,
@@ -5703,6 +5707,7 @@ impl Compiler {
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
+                        trait_class_scope_tmp: func_compiler.trait_class_scope_tmp,
                         source_lines: func_compiler
                             .materialize_source_lines_with_declaration(method.line),
                         instructions: func_compiler.instructions,

@@ -4172,6 +4172,7 @@ mod closure_ownership_tests {
             object_handle: 0,
             func: std::ptr::null(),
             called_scope_class_id: 0,
+            trait_scope_class_id: 0,
             is_static: true,
             bound_this: None,
             captures: vec![capture],
@@ -4233,6 +4234,10 @@ pub struct PhpClosure {
     /// Late-called class captured when a class-scoped closure is created.
     /// Zero keeps ordinary closures on the existing path.
     pub called_scope_class_id: u32,
+    /// Final consuming class captured for trait-bound `__CLASS__`. This is
+    /// separate from late-static scope because inherited calls can observe a
+    /// child through `static::` while `__CLASS__` remains bound to its parent.
+    pub trait_scope_class_id: u32,
     /// True for PHP's `static function` and `static fn` forms. Retained on the
     /// value so Closure binding can enforce the language-level object rule.
     pub is_static: bool,
@@ -4303,6 +4308,7 @@ impl Clone for PhpClosure {
             object_handle: 0,
             func: self.func,
             called_scope_class_id: self.called_scope_class_id,
+            trait_scope_class_id: self.trait_scope_class_id,
             is_static: self.is_static,
             bound_this: self.bound_this.clone(),
             captures: self.clone_captures(),
@@ -4357,6 +4363,7 @@ impl std::fmt::Debug for PhpClosure {
         f.debug_struct("PhpClosure")
             .field("func", &self.func)
             .field("called_scope_class_id", &self.called_scope_class_id)
+            .field("trait_scope_class_id", &self.trait_scope_class_id)
             .field("is_static", &self.is_static)
             .field("bound_this", &self.bound_this.is_some())
             .field("captures", &self.captures.len())

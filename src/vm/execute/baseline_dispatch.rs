@@ -5870,6 +5870,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     {
                         let func_ptr = ic.func;
                         let common = unsafe { &*func_ptr };
+                        let needs_trait_class_scope = common.plan.needs_trait_class_scope();
                         let num_args = opline.extended_value;
                         let mut scalar_plan_eligible = false;
                         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -5883,7 +5884,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // the exact scalar proof before materializing or
                         // cloning a runtime contract. A side exit continues to
                         // the canonical resolver and full boundary checks.
-                        if linked_generic_long_proof
+                        if !needs_trait_class_scope
+                            && linked_generic_long_proof
                             && common.fn_type == FunctionType::User
                             && num_args == common.sig.public_arity()
                         {
@@ -5944,7 +5946,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // by the scalar plan's exact argument representation
                         // and checked Long result. Successful execution needs
                         // neither a frame nor pending/active sidecar state.
-                        if generic_long_fast_path
+                        if !needs_trait_class_scope
+                            && generic_long_fast_path
                             && common.fn_type == FunctionType::User
                             && num_args == common.sig.public_arity()
                         {
@@ -5982,7 +5985,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // the same frame-free ABI as ordinary functions. The
                         // receiver/class cache above still provides normal PHP
                         // virtual-dispatch semantics.
-                        if !has_active_generic_contract
+                        if !needs_trait_class_scope
+                            && !has_active_generic_contract
                             && common.fn_type == FunctionType::User
                             && num_args == common.sig.public_arity()
                         {
@@ -6271,6 +6275,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 frame_set_this(call, obj_val.clone());
                             }
                         }
+                        initialize_trait_class_scope(
+                            eg,
+                            call,
+                            func_ptr,
+                            ic.method_trait_scope_class_id(),
+                        );
                         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
                         if let Some(contract) = generic_contract {
                             eg.push_pending_generic_member_call(call as usize, contract);
@@ -6294,7 +6304,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // fold the adjacent DoFcall into this cache-hit method
                         // setup. This removes one more baseline dispatch from
                         // the ordinary `$object->method(...)` protocol.
-                        if !has_active_generic_contract
+                        if !needs_trait_class_scope
+                            && !has_active_generic_contract
                             && !common.plan.has_call_diagnostic_attribute()
                             && ic.method_fusion_eligible()
                             && bound == num_args as usize
@@ -6608,10 +6619,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 };
                                 unsafe { frame_return_copy_scalar(frame, return_target, src) };
                             } else {
-                                let retval = unsafe {
-                                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                                };
-                                unsafe { frame_return_set(frame, return_target, retval.clone()) };
+                                let (retval, _) =
+                                    prepare_user_return_value(frame, op_array, opline, false);
+                                // SAFETY: the non-null target is a writable
+                                // caller slot and `retval` is newly owned.
+                                unsafe { frame_return_set(frame, return_target, retval) };
                             }
                         }
                     }
@@ -6787,7 +6799,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 let retval = prepared_return.take().unwrap_or_else(|| {
                                     prepare_user_return_value(frame, op_array, opline, false).0
                                 });
-                                unsafe { frame_return_set(frame, return_target, retval.clone()) };
+                                // SAFETY: the non-null target is a writable
+                                // caller slot and `retval` is newly owned.
+                                unsafe { frame_return_set(frame, return_target, retval) };
                             }
                         }
                     }

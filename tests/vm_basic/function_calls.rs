@@ -52,6 +52,7 @@ fn test_internal_function_call() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![init, send, do_fcall, echo, ret],
         literals: vec![Value::string("my_double"), Value::long(21), Value::null()],
@@ -103,6 +104,7 @@ fn test_user_function_call() {
     let fn_op_array = OpArray {
         num_cvs: 1, // $x
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![add, fn_ret],
         literals: vec![Value::long(1)],
@@ -157,6 +159,7 @@ fn test_user_function_call() {
     let main_op_array = OpArray {
         num_cvs: 0,
         num_temps: 1,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![init, send, do_fcall, echo, ret],
         literals: vec![Value::string("add_one"), Value::long(41), Value::null()],
@@ -203,6 +206,7 @@ fn test_undefined_function_error() {
     let op_array = OpArray {
         num_cvs: 0,
         num_temps: 0,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![init, do_fcall, ret],
         literals: vec![Value::string("nonexistent"), Value::null()],
@@ -273,6 +277,7 @@ fn test_nested_calls() {
         OpArray {
             num_cvs: 1,
             num_temps: 1,
+            trait_class_scope_tmp: None,
             source_lines: vec![],
             instructions: vec![add, fn_ret],
             literals: vec![Value::long(1)],
@@ -351,6 +356,7 @@ fn test_nested_calls() {
     let main_func = make_user_function(OpArray {
         num_cvs: 1,
         num_temps: 2,
+        trait_class_scope_tmp: None,
         source_lines: vec![],
         instructions: vec![init1, send1, do1, init2, send2, do2, assign, echo, ret],
         literals: vec![

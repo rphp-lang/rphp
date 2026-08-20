@@ -122,6 +122,9 @@ pub const CLOSURE_FLAG_STATIC: u16 = 1;
 /// CreateClosure flag: allocate per-object function-static storage only when
 /// the compiled anonymous body contains a `static $variable` declaration.
 pub const CLOSURE_FLAG_HAS_STATICS: u16 = 1 << 1;
+/// The nested closure contains trait-bound `__CLASS__`; its enclosing trait
+/// method must be specialized for the final consuming class.
+pub const CLOSURE_FLAG_TRAIT_LEXICAL_SCOPE: u16 = 1 << 2;
 
 /// ClosureUseVar flag: preserve the captured CV's PHP reference cell instead
 /// of snapshotting its current value.
@@ -815,6 +818,28 @@ impl InlineCache {
         } else {
             0
         });
+    }
+
+    /// Trait-scope methods use the method-cache flags word for the exact
+    /// composition class selected by this monomorphic receiver site.
+    #[inline(always)]
+    pub fn set_method_trait_scope_class_id(&mut self, class_id: u32) {
+        // Trait-bound methods must enter a real frame so their hidden TMP is
+        // initialized. Retain only generic-contract guards in the low flag
+        // bits and use the remaining 27 bits for the ordinary class ID.
+        let encoded = if class_id <= (u32::MAX >> 5) {
+            class_id << 5
+        } else {
+            0
+        };
+        self.prop_info = (self.prop_info
+            & (Self::METHOD_GENERIC_CONTRACT | Self::METHOD_LINKED_GENERIC_LONG_CONTRACT))
+            | encoded;
+    }
+
+    #[inline(always)]
+    pub fn method_trait_scope_class_id(&self) -> u32 {
+        self.prop_info >> 5
     }
 
     #[inline(always)]

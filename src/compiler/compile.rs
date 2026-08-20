@@ -2545,6 +2545,9 @@ pub struct Compiler {
     definitely_defined_cvs: HashSet<u16>,
     next_cv: u32,
     next_tmp: u32,
+    /// One function-local TMP shared by every trait-bound `__CLASS__` read.
+    /// The method/closure call boundary initializes it before execution.
+    trait_class_scope_tmp: Option<u16>,
     /// Collected function declarations
     functions: Vec<(String, UserFunction)>,
     /// Loop context stack for break/continue
@@ -2778,6 +2781,7 @@ impl Compiler {
             definitely_defined_cvs: HashSet::new(),
             next_cv: 0,
             next_tmp: 0,
+            trait_class_scope_tmp: None,
             functions: Vec::new(),
             loop_stack: Vec::new(),
             labels: HashMap::new(),
@@ -3901,6 +3905,7 @@ impl Compiler {
             main: OpArray {
                 num_cvs: self.next_cv,
                 num_temps: self.next_tmp,
+                trait_class_scope_tmp: self.trait_class_scope_tmp,
                 instructions: self.instructions,
                 source_lines,
                 literals: self.literals,
@@ -8266,6 +8271,7 @@ impl Compiler {
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
+                    trait_class_scope_tmp: func_compiler.trait_class_scope_tmp,
                     source_lines: func_compiler.materialize_source_lines_with_declaration(*line),
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
@@ -8331,6 +8337,7 @@ impl Compiler {
                 self.generic_declarations
                     .extend(nested_generic_declarations);
                 let has_static_vars = !user_func.op_array.static_vars.is_empty();
+                let binds_trait_class_scope = user_func.common.plan.needs_trait_class_scope();
                 self.functions.push((closure_name.clone(), user_func));
 
                 // Build closure value with direct function pointer + captured values.
@@ -8359,6 +8366,18 @@ impl Compiler {
                 }
                 if has_static_vars {
                     create._pad |= crate::vm::instruction::CLOSURE_FLAG_HAS_STATICS;
+                }
+                if binds_trait_class_scope {
+                    let scope_tmp = if let Some(scope_tmp) = self.trait_class_scope_tmp {
+                        scope_tmp
+                    } else {
+                        let scope_tmp = self.alloc_tmp();
+                        self.trait_class_scope_tmp = Some(scope_tmp);
+                        scope_tmp
+                    };
+                    create.op2 = scope_tmp;
+                    create.op2_type = OpType::Tmp;
+                    create._pad |= crate::vm::instruction::CLOSURE_FLAG_TRAIT_LEXICAL_SCOPE;
                 }
                 self.instructions.push(create);
 
@@ -9599,6 +9618,16 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::MagicConstant { name, line } => {
+                if self.dynamic_static_scope && name.eq_ignore_ascii_case("__CLASS__") {
+                    let tmp = if let Some(tmp) = self.trait_class_scope_tmp {
+                        tmp
+                    } else {
+                        let tmp = self.alloc_tmp();
+                        self.trait_class_scope_tmp = Some(tmp);
+                        tmp
+                    };
+                    return (tmp, OpType::Tmp);
+                }
                 let value = self.magic_constant_value(name, *line);
                 let literal = self.add_literal(value);
                 (literal, OpType::Const)
