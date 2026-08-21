@@ -373,6 +373,10 @@ pub struct ExecutorGlobals {
     /// Request-wide fast rejection for programs with no constant whose use can
     /// emit a Deprecated diagnostic. Includes may turn it on but never off.
     pub(crate) constant_deprecation_metadata_present: bool,
+    /// Class IDs whose deferred class constants must be materialized before
+    /// the first object allocation. The sidecar is absent from ordinary
+    /// requests and retains pending entries after a retryable failure.
+    deferred_class_constant_activations: Option<Box<Vec<u8>>>,
     /// Recursion guard for self-referential Deprecated messages and aliases.
     pub(crate) deprecated_symbol_stack: Vec<String>,
     /// Parsed and compiled regular expressions shared by all preg_* calls for
@@ -1082,6 +1086,7 @@ impl ExecutorGlobals {
             constant_expressions: HashMap::new(),
             constant_deprecation_generation: 1,
             constant_deprecation_metadata_present: false,
+            deferred_class_constant_activations: None,
             deprecated_symbol_stack: Vec::new(),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -1191,6 +1196,7 @@ impl ExecutorGlobals {
             constant_expressions: HashMap::new(),
             constant_deprecation_generation: 1,
             constant_deprecation_metadata_present: false,
+            deferred_class_constant_activations: None,
             deprecated_symbol_stack: Vec::new(),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -4686,6 +4692,14 @@ impl ExecutorGlobals {
             )
         });
 
+        if class_def
+            .constants
+            .iter()
+            .any(|constant| constant.value_is_deferred)
+        {
+            self.register_deferred_class_constant_activation(class_def.class_id);
+        }
+
         // Shared ownership keeps the allocation stable and lets class_alias()
         // publish another lookup key without duplicating metadata or identity.
         let class_def = std::rc::Rc::new(class_def);
@@ -6049,6 +6063,35 @@ impl ExecutorGlobals {
                         .iter()
                         .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"))
                 });
+        }
+    }
+
+    fn register_deferred_class_constant_activation(&mut self, class_id: u32) {
+        let activations = self
+            .deferred_class_constant_activations
+            .get_or_insert_with(|| Box::new(Vec::new()));
+        let class_id = class_id as usize;
+        if activations.len() <= class_id {
+            activations.resize(class_id + 1, 0);
+        }
+        activations[class_id] = 1;
+    }
+
+    #[inline]
+    pub(crate) fn deferred_class_constants_require_activation(&self, class_id: u32) -> bool {
+        self.deferred_class_constant_activations
+            .as_deref()
+            .and_then(|activations| activations.get(class_id as usize))
+            .is_some_and(|state| *state == 1)
+    }
+
+    pub(crate) fn complete_deferred_class_constant_activation(&mut self, class_id: u32) {
+        if let Some(state) = self
+            .deferred_class_constant_activations
+            .as_deref_mut()
+            .and_then(|activations| activations.get_mut(class_id as usize))
+        {
+            *state = 2;
         }
     }
 

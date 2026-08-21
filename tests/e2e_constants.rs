@@ -542,6 +542,81 @@ catch (TypeError $error) { echo $error->getMessage(); }
 }
 
 #[test]
+fn object_activation_materializes_deferred_class_constants_before_allocation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DiamondActivation { public const self VALUE = DIAMOND_VALUE; }
+try { define('DIAMOND_VALUE', new DiamondActivation()); }
+catch (Error $error) { echo 'diamond:', $error->getMessage(); }
+echo defined('DIAMOND_VALUE') ? ':defined|' : ':missing|';
+
+class RetryActivation { public const VALUE = LATE_VALUE; }
+try { new RetryActivation(); }
+catch (Error $error) { echo 'retry:', $error->getMessage(), ':'; }
+define('LATE_VALUE', 7);
+echo get_class(new RetryActivation()), ':', RetryActivation::VALUE, '|';
+
+class InvalidActivation { public const int VALUE = INVALID_VALUE; }
+define('INVALID_VALUE', 'bad');
+for ($attempt = 0; $attempt < 2; $attempt++) {
+    try { new InvalidActivation(); }
+    catch (TypeError $error) { echo 'typed:', $error->getMessage(), ';'; }
+}
+
+class ReflectedActivation { public const int VALUE = REFLECTED_VALUE; }
+$reflection = new ReflectionClass(ReflectedActivation::class);
+try { $reflection->newInstanceWithoutConstructor(); }
+catch (Error $error) { echo 'reflection:', $error->getMessage(), ':'; }
+define('REFLECTED_VALUE', 9);
+echo get_class($reflection->newInstanceWithoutConstructor());
+"#,
+        ),
+        concat!(
+            "diamond:Undefined constant \"DIAMOND_VALUE\":missing|",
+            "retry:Undefined constant \"LATE_VALUE\":RetryActivation:7|",
+            "typed:Cannot assign string to class constant InvalidActivation::VALUE of type int;",
+            "typed:Cannot assign string to class constant InvalidActivation::VALUE of type int;",
+            "reflection:Undefined constant \"REFLECTED_VALUE\":ReflectedActivation",
+        )
+    );
+}
+
+#[test]
+fn deferred_class_constant_activation_is_inherited_but_not_eager() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PassiveActivation {
+    public const VALUE = PASSIVE_VALUE;
+    public static function ping() { return 'p'; }
+}
+echo class_exists(PassiveActivation::class) ? 'exists:' : 'missing:';
+echo PassiveActivation::ping(), ':';
+define('PASSIVE_VALUE', 3);
+echo (new PassiveActivation())::VALUE, '|';
+
+class ParentActivation { public const VALUE = INHERITED_VALUE; }
+class ChildActivation extends ParentActivation {}
+try { new ChildActivation(); }
+catch (Error $error) { echo $error->getMessage(), ':'; }
+define('INHERITED_VALUE', 4);
+echo get_class(new ChildActivation()), ':', ChildActivation::VALUE, '|';
+
+abstract class AbstractActivation { public const VALUE = ABSTRACT_VALUE; }
+try { new AbstractActivation(); }
+catch (Error $error) { echo $error->getMessage(); }
+"#,
+        ),
+        concat!(
+            "exists:p:3|",
+            "Undefined constant \"INHERITED_VALUE\":ChildActivation:4|",
+            "Cannot instantiate abstract class AbstractActivation",
+        )
+    );
+}
+
+#[test]
 fn typed_class_constant_covariance_accepts_subclasses_and_dnf_types() {
     assert_eq!(
         run_php(
@@ -550,29 +625,30 @@ class ConstantSuper implements Stringable {
     public function __toString() { return ''; }
 }
 class ConstantSub extends ConstantSuper {}
-class CovariantConstants {
+class ConstantOwner {}
+class CovariantConstants extends ConstantOwner {
     public const object OBJECT_VALUE = SUPER_VALUE;
     public const ConstantSuper CLASS_VALUE = SUPER_VALUE;
     public const ?ConstantSuper NULLABLE_VALUE = SUPER_VALUE;
-    public const CovariantConstants OWNER_VALUE = OWNER_VALUE;
+    public const ConstantOwner OWNER_VALUE = OWNER_VALUE;
 }
 class NarrowConstants extends CovariantConstants {
     public const ConstantSuper OBJECT_VALUE = SUB_VALUE;
     public const ConstantSub CLASS_VALUE = SUB_VALUE;
     public const (ConstantSuper&Stringable)|null NULLABLE_VALUE = SUB_VALUE;
-    public const NarrowConstants OWNER_VALUE = NARROW_VALUE;
+    public const CovariantConstants OWNER_VALUE = NARROW_VALUE;
 }
 define('SUPER_VALUE', new ConstantSuper());
 define('SUB_VALUE', new ConstantSub());
-define('OWNER_VALUE', new CovariantConstants());
-define('NARROW_VALUE', new NarrowConstants());
+define('OWNER_VALUE', new ConstantOwner());
+define('NARROW_VALUE', new CovariantConstants());
 echo get_class(NarrowConstants::OBJECT_VALUE), ':';
 echo get_class(NarrowConstants::CLASS_VALUE), ':';
 echo get_class(NarrowConstants::NULLABLE_VALUE), ':';
 echo get_class(NarrowConstants::OWNER_VALUE);
 "#,
         ),
-        "ConstantSub:ConstantSub:ConstantSub:NarrowConstants"
+        "ConstantSub:ConstantSub:ConstantSub:CovariantConstants"
     );
 }
 

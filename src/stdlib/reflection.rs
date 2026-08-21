@@ -1055,6 +1055,33 @@ pub(crate) fn evaluate_deferred_class_constant_value(
     }
 }
 
+pub(crate) fn activate_deferred_class_constants(
+    class_id: u32,
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, VmError> {
+    if !eg.deferred_class_constants_require_activation(class_id) {
+        return Ok(true);
+    }
+    let definitions = eg
+        .class_by_id(class_id)
+        .map(|class| {
+            class
+                .constants
+                .iter()
+                .filter(|constant| constant.value_is_deferred)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for definition in definitions {
+        if evaluate_deferred_class_constant_value(&definition, eg)?.is_none() {
+            return Ok(false);
+        }
+    }
+    eg.complete_deferred_class_constant_activation(class_id);
+    Ok(true)
+}
+
 fn normalize_deferred_class_constant_value(
     value: Value,
     hint: &ParamTypeHint,
@@ -5359,13 +5386,23 @@ fn class_new_instance_without_constructor(
             "Class {owner} cannot be instantiated without invoking its constructor"
         )));
     }
-    let object = if class.class_id == 0 {
-        PhpObject::dynamic(class.name.clone(), 0, HashMap::new())
+    let class_id = class.class_id;
+    let class_name = class.name.clone();
+    let property_layout = class.property_layout.clone();
+    let property_defaults = class.property_defaults.clone();
+    if class_id != 0
+        && eg.deferred_class_constants_require_activation(class_id)
+        && !activate_deferred_class_constants(class_id, eg)?
+    {
+        return return_value(rv, Value::null());
+    }
+    let object = if class_id == 0 {
+        PhpObject::dynamic(class_name, 0, HashMap::new())
     } else {
         PhpObject::with_layout(
-            class.class_id,
-            class.property_layout.clone(),
-            class.property_defaults.as_ref().to_vec(),
+            class_id,
+            property_layout,
+            property_defaults.as_ref().to_vec(),
         )
     };
     return_value(rv, Value::object(object))

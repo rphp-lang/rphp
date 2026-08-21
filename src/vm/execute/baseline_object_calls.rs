@@ -594,6 +594,25 @@ fn op_new_obj_resolved<'a>(
         }
     }
 
+    if let Some(class_id) = class_id
+        && eg.deferred_class_constants_require_activation(class_id)
+        && !crate::stdlib::reflection::activate_deferred_class_constants(class_id, eg)?
+    {
+        let exception = eg
+            .exception
+            .take()
+            .expect("deferred class-constant activation failure sets an exception");
+        attach_throwable_origin(&exception, eg, frame, op_array, ip);
+        return Ok(match throw_in_frame(eg, frame, exception) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
+    }
+
+    let class_def = class_id.and_then(|class_id| eg.class_by_id(class_id));
+
     // Create compact declared-property slots from the class layout. Ordinary
     // classes clone the established immutable template directly. A class with
     // unresolved symbolic defaults materializes a request-local template on
