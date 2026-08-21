@@ -8,6 +8,53 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `5254b59a`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,822 pass, 1,477 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.127% and the whole-corpus rate is 68.262%; 4,706 of
+5,299 attempted cases reach runtime (88.809%). Relative to exact base
+`51c111c4`, the pass-set delta is exactly +1/-0:
+`Zend/tests/type_declarations/typed_class_constants_ast_print.phpt` becomes a
+pass, every prior pass remains a pass, and there are no other status or
+failure-category transitions. Two sequential final full runs have byte-
+identical merged manifests and summaries. Their SHA-256 values are
+`602606b103fec01c92108143dbcda749ab10b3a3d960625f4212474216fdd756`
+and `15876d51a2cc16eb0fe7ae1a5f0fca2a76b920e3b5cbe9b0a9dd970f44622436`.
+
+The existing compile-time source synthesizer for one-argument `assert()` now
+renders separately declared class constants inside supported named and
+anonymous class bodies. It emits PHP 8.5's canonical visibility, optional type,
+name, renderable value, semicolon and indentation; implicit visibility becomes
+`public`, DNF type parentheses are omitted in the synthesized AST text, and
+PHP's assertion printer does not retain a class constant's `final` flag. This
+text is only the default `AssertionError` description: the class body remains
+short-circuited and is not evaluated to construct it.
+
+The renderer deliberately declines synthesis when the current AST cannot
+reconstruct exact source grouping or order: mixed property/constant bodies,
+same-line comma-grouped constants and attributed constants remain unsupported,
+as do methods, property hooks and attribute-expression AST families. One
+original E2E regression covers anonymous and named classes, explicit and
+implicit visibility, `final`, scalar and DNF types, literal values and
+multiline formatting; all 132 standard-library E2E tests pass. The complete
+496-case `Zend/tests/type_declarations` audit rises from 408 to 409 exact
+passes with no other movement, and its 29 typed-class-constant cases are now
+all exact.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,614 unsafe blocks and 289 unsafe
+functions. No runtime performance or layout gate applies: the change is
+confined to compilation of a one-argument assertion whose supported expression
+needs a synthesized default description; ordinary compilation, assertion
+execution, class linking and object execution paths are unchanged. The exact
+base and candidate binary SHA-256 values are
+`3d250b83d567944b80ccbf282deb07f86ff0978756794dd804ddb0542f803540`
+and `3dffa5f665c2f1ce9a87560505668950143ce370b411486c83d23010dd47bdb6`.
+
+In the preceding deferred class-constant activation checkpoint, the measured
+AMD64 PHP 8.5 contract was pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `51c111c4`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,821 pass, 1,478 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
