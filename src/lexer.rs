@@ -518,6 +518,7 @@ impl<'a> Lexer<'a> {
                     } else if self.pos + 1 < self.src.len()
                         && self.src[self.pos + 1].is_ascii_digit()
                         && !Self::is_value_token(tokens.last())
+                        && !Self::is_loop_control_operand_sign(&tokens)
                     {
                         self.pos += 1;
                         match self.read_number()? {
@@ -958,6 +959,20 @@ impl<'a> Lexer<'a> {
                     | Token::False
                     | Token::Null
             )
+        )
+    }
+
+    /// A sign is part of the historical break/continue operand grammar, not
+    /// part of its integer literal. Preserve it for the parser even though
+    /// ordinary negative literals use the lexer's compact signed token.
+    fn is_loop_control_operand_sign(tokens: &[Token]) -> bool {
+        matches!(
+            tokens
+                .iter()
+                .rev()
+                .skip_while(|token| matches!(token, Token::LParen(_)))
+                .next(),
+            Some(Token::Break { .. } | Token::Continue { .. })
         )
     }
 

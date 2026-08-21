@@ -1720,19 +1720,31 @@ impl Parser {
         Ok(targets)
     }
 
-    /// Parse optional integer level after break/continue (e.g. `break 2;`)
-    fn parse_break_continue_level(&mut self) -> Result<Option<u32>, String> {
-        if let Token::Integer(n) = self.peek() {
-            self.advance();
-            if n < 1 {
-                return Err(format!(
-                    "break/continue level must be at least 1, got {}",
-                    n
-                ));
-            }
-            Ok(Some(n as u32))
-        } else {
-            Ok(None)
+    /// Parse the optional level operand after `break` or `continue`.
+    /// PHP still accepts the historical expression grammar, but compilation
+    /// permits only a positive integer literal (optionally parenthesized).
+    fn parse_break_continue_level(
+        &mut self,
+        operator: &str,
+        line: usize,
+    ) -> Result<Option<u32>, String> {
+        if self.peek() == Token::Semicolon {
+            return Ok(None);
         }
+
+        let operand = self.parse_expr()?;
+        let literal_requires_positive_integer = match operand {
+            Expr::Integer(level) if level > 0 => return Ok(Some(level as u32)),
+            Expr::Integer(0) | Expr::StringLiteral(_) => true,
+            Expr::Float(level) if !level.is_sign_negative() => true,
+            _ => false,
+        };
+        let message = if literal_requires_positive_integer {
+            format!("'{operator}' operator accepts only positive integers")
+        } else {
+            format!("'{operator}' operator with non-integer operand is no longer supported")
+        };
+        self.compile_error(message, line);
+        Ok(Some(1))
     }
 }

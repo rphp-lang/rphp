@@ -43,7 +43,8 @@ fn invalid_loop_control_reports_the_php_compile_fatal_at_its_source_line() {
         assert_eq!(stdout, "");
         assert_eq!(
             stderr,
-            format!("Fatal error: {message} in Standard input code on line 3\n")
+            format!("Fatal error: {message} in Standard input code on line 3\n"),
+            "statement: {statement}"
         );
     }
 }
@@ -61,7 +62,57 @@ fn excessive_loop_control_levels_report_the_requested_depth() {
         assert_eq!(stdout, "");
         assert_eq!(
             stderr,
-            format!("Fatal error: {message} in Standard input code on line 3\n")
+            format!("Fatal error: {message} in Standard input code on line 3\n"),
+            "statement: {statement}"
+        );
+    }
+}
+
+#[test]
+fn invalid_loop_control_operands_are_located_compile_fatals() {
+    for (statement, message) in [
+        (
+            "break 0;",
+            "'break' operator accepts only positive integers",
+        ),
+        (
+            "continue 0;",
+            "'continue' operator accepts only positive integers",
+        ),
+        (
+            "break \"2\";",
+            "'break' operator accepts only positive integers",
+        ),
+        (
+            "break -1;",
+            "'break' operator with non-integer operand is no longer supported",
+        ),
+        (
+            "break -0;",
+            "'break' operator with non-integer operand is no longer supported",
+        ),
+        (
+            "continue (-0.0);",
+            "'continue' operator with non-integer operand is no longer supported",
+        ),
+        (
+            "break $depth;",
+            "'break' operator with non-integer operand is no longer supported",
+        ),
+        (
+            "continue 1 + 1;",
+            "'continue' operator with non-integer operand is no longer supported",
+        ),
+    ] {
+        let (status, stdout, stderr) = run_stdin(&format!(
+            "<?php\nfunction invalid() {{\n    {statement}\n}}\n"
+        ));
+        assert_eq!(status, 255);
+        assert_eq!(stdout, "");
+        assert_eq!(
+            stderr,
+            format!("Fatal error: {message} in Standard input code on line 3\n"),
+            "statement: {statement}"
         );
     }
 }
@@ -69,7 +120,7 @@ fn excessive_loop_control_levels_report_the_requested_depth() {
 #[test]
 fn valid_multilevel_loop_control_keeps_its_existing_execution_path() {
     let (status, stdout, stderr) = run_stdin(
-        "<?php\nfor ($i = 0; $i < 3; $i++) {\n    while (true) { break 2; }\n}\necho 'after';\n",
+        "<?php\nfor ($i = 0; $i < 3; $i++) {\n    while (true) { break ((2)); }\n}\necho 'after';\n",
     );
     assert_eq!(status, 0);
     assert_eq!(stdout, "after");

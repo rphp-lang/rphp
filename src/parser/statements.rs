@@ -778,13 +778,13 @@ impl Parser {
             }
             Token::Break { line } => {
                 self.advance();
-                let level = self.parse_break_continue_level()?;
+                let level = self.parse_break_continue_level("break", line)?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Break { level, line })
             }
             Token::Continue { line } => {
                 self.advance();
-                let level = self.parse_break_continue_level()?;
+                let level = self.parse_break_continue_level("continue", line)?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Continue { level, line })
             }
