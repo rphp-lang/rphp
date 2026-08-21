@@ -8,6 +8,67 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `7e59186c`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,915 pass, 1,384 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 73.882% and the whole-corpus rate is 69.923%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`ed43af85`, the pass-set delta is +18/-0 with no other status or failure-
+category movement.
+
+The exact additions are `Zend/tests/errmsg/errmsg_015.phpt`, `016.phpt`,
+`017.phpt`, `019.phpt`, `032.phpt`, `033.phpt`, `034.phpt`,
+`Zend/tests/magic_methods/bug70215.phpt`, `magic_methods_003.phpt`,
+`005.phpt`, `006.phpt`, `007.phpt`, `010.phpt`,
+`magic_methods_sleep.phpt`, `magic_methods_wakeup.phpt`,
+`magic_methods_serialize.phpt`, `magic_methods_unserialize.phpt` and
+`magic_methods_set_state.phpt`. Every previous pass remains a pass. Two
+sequential final runs have byte-identical merged manifests and summaries. Their
+manifest and summary SHA-256 values are
+`ede638fde978d880e0410c175f23fa87430a82005163a70b14179d168848be72`
+and `5a393cb28e4481799e3bf8a98544b3c715a35bc2a590e3ec7c5e4899349b5c8b`.
+
+The centralized magic-method signature validator now enforces PHP 8.5's
+declared arity and staticness across classes, abstract methods, interfaces,
+traits and admitted enum methods. Zero-argument lifecycle, serialization,
+string and debug methods reject fixed parameters; property/call/state methods
+require their exact one or two fixed parameters. A trailing variadic parameter
+is allowed after the canonical fixed parameters, including by reference, and a
+sole variadic does not satisfy a required fixed position. `__callStatic` and
+`__set_state` must be static; other recognized magic methods cannot be static.
+Diagnostics follow PHP's observable priority: arity, canonical by-reference
+parameters, staticness, return contract, then a non-public visibility warning.
+The existing return-type rules now share the same normalized method dispatch.
+
+An original source-aware E2E regression covers singular/plural and zero-arity
+wording, optional and trailing-variadic forms, class/trait/interface/abstract/
+enum declarations, constructor/`__invoke`/call/state staticness and compound
+arity/reference/static/return/visibility precedence. The combined 210-case
+`Zend/tests/magic_methods` plus `Zend/tests/errmsg` slice reaches 132 passes
+with 18 gains and no regression. All five Cargo configurations,
+all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
+and the exact unsafe ratchet pass. The production inventory remains 1,613
+unsafe blocks, 289 unsafe functions and 312 SAFETY annotations. Composer S0,
+all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and cold-build
+S3 also pass. The change adds no runtime opcode, bytecode/layout field,
+dependency or unsafe block.
+
+A local 21-pair alternating release control on an AMD Ryzen 9 7950X pinned to
+CPU 0 with the performance governor, exact-output validation, two additional
+warmups and JIT/quick loops disabled compiled 10,000 unique classes and 40,000
+successful method declarations per observation through `eval()`. No sample
+was excluded and every run returned checksum `198890`. Baseline median/mean
+was 2.235682/2.232795 seconds and candidate median/mean was
+2.243343/2.248204 seconds. The independent median and mean ratios are 1.003427
+and 1.006901; paired median and mean ratios are 1.006594 and 1.006937, below
+the +5% gate. The exact candidate binary SHA-256 is
+`dcf041d2af502666db5d257fcb97ff0deb7095fcdd99971d875e89bef88daa78`.
+
+Magic-method parameter type variance and runtime dispatch/alias semantics
+remain separate work; this checkpoint claims declaration shape and diagnostic
+ordering only.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `ed43af85`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,897 pass, 1,402 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
