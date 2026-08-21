@@ -17,6 +17,11 @@ pub enum Token {
     While,           // while
     For,             // for
     ElseIf,          // elseif
+    EndIf,           // endif
+    EndWhile,        // endwhile
+    EndFor,          // endfor
+    EndForeach,      // endforeach
+    EndSwitch,       // endswitch
     Do,              // do
     Break {
         line: usize,
@@ -25,8 +30,8 @@ pub enum Token {
         line: usize,
     }, // continue
     Switch,          // switch
-    Case,            // case
-    Default,         // default
+    Case(usize),     // case with source line
+    Default(usize),  // default with source line
     Null,            // null
     True,            // true
     False,           // false
@@ -137,7 +142,7 @@ pub enum Token {
     At,                     // @ (error-control operator)
     Colon,                  // :
     // Punctuation
-    Semicolon,        // ;
+    Semicolon(usize), // ; with source line
     LParen(usize),    // ( with source line
     RParen,           // )
     LBrace,           // {
@@ -193,8 +198,8 @@ enum StringPart {
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
-    comma_scan_pos: usize,
-    comma_scan_line: usize,
+    punctuation_scan_pos: usize,
+    punctuation_scan_line: usize,
     deferred_compile_errors: Vec<(String, usize)>,
     deferred_compile_diagnostics: Vec<DeferredCompileDiagnostic>,
 }
@@ -247,8 +252,8 @@ impl<'a> Lexer<'a> {
         Self {
             src: source.as_bytes(),
             pos: 0,
-            comma_scan_pos: 0,
-            comma_scan_line: 1,
+            punctuation_scan_pos: 0,
+            punctuation_scan_line: 1,
             deferred_compile_errors: Vec::new(),
             deferred_compile_diagnostics: Vec::new(),
         }
@@ -536,7 +541,8 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 b';' => {
-                    tokens.push(Token::Semicolon);
+                    let line = self.punctuation_source_line();
+                    tokens.push(Token::Semicolon(line));
                     self.pos += 1;
                 }
                 b'(' => {
@@ -560,12 +566,8 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b',' => {
-                    self.comma_scan_line += self.src[self.comma_scan_pos..self.pos]
-                        .iter()
-                        .filter(|&&byte| byte == b'\n')
-                        .count();
-                    self.comma_scan_pos = self.pos;
-                    tokens.push(Token::Comma(self.comma_scan_line));
+                    let line = self.punctuation_source_line();
+                    tokens.push(Token::Comma(line));
                     self.pos += 1;
                 }
                 b'[' => {
@@ -694,19 +696,24 @@ impl<'a> Lexer<'a> {
                         "if" => tokens.push(Token::If),
                         "else" => tokens.push(Token::Else),
                         "elseif" => tokens.push(Token::ElseIf),
+                        "endif" => tokens.push(Token::EndIf),
                         "while" => tokens.push(Token::While),
+                        "endwhile" => tokens.push(Token::EndWhile),
                         "for" => tokens.push(Token::For),
+                        "endfor" => tokens.push(Token::EndFor),
                         "do" => tokens.push(Token::Do),
                         "break" => tokens.push(Token::Break { line }),
                         "continue" => tokens.push(Token::Continue { line }),
                         "switch" => tokens.push(Token::Switch),
-                        "case" => tokens.push(Token::Case),
-                        "default" => tokens.push(Token::Default),
+                        "endswitch" => tokens.push(Token::EndSwitch),
+                        "case" => tokens.push(Token::Case(line)),
+                        "default" => tokens.push(Token::Default(line)),
                         "null" | "NULL" => tokens.push(Token::Null),
                         "true" | "TRUE" => tokens.push(Token::True),
                         "false" | "FALSE" => tokens.push(Token::False),
                         "array" => tokens.push(Token::ArrayKw),
                         "foreach" => tokens.push(Token::Foreach { line }),
+                        "endforeach" => tokens.push(Token::EndForeach),
                         "as" => tokens.push(Token::As),
                         "insteadof" => tokens.push(Token::Insteadof),
                         "isset" => tokens.push(Token::Isset),
@@ -985,6 +992,15 @@ impl<'a> Lexer<'a> {
         )
     }
 
+    fn punctuation_source_line(&mut self) -> usize {
+        self.punctuation_scan_line += self.src[self.punctuation_scan_pos..self.pos]
+            .iter()
+            .filter(|&&byte| byte == b'\n')
+            .count();
+        self.punctuation_scan_pos = self.pos;
+        self.punctuation_scan_line
+    }
+
     /// Close the current PHP segment, emit intervening inline HTML as an echo,
     /// and resume lexing at a later long opening tag. A closing tag also ends
     /// the current statement, so supply the semicolon when source omitted it.
@@ -992,9 +1008,11 @@ impl<'a> Lexer<'a> {
     fn finish_php_segment(&mut self, tokens: &mut Vec<Token>) -> Result<(), String> {
         if !matches!(
             tokens.last(),
-            Some(Token::Semicolon | Token::LBrace | Token::RBrace)
+            Some(Token::Semicolon(_) | Token::LBrace | Token::RBrace)
         ) {
-            tokens.push(Token::Semicolon);
+            tokens.push(Token::Semicolon(
+                self.source_line_at(self.pos.saturating_sub(1)),
+            ));
         }
 
         let mut inline_start = self.pos;
@@ -1018,7 +1036,9 @@ impl<'a> Lexer<'a> {
                 .count();
             tokens.push(Token::Echo { line });
             tokens.push(Token::StringLiteral(inline.to_string()));
-            tokens.push(Token::Semicolon);
+            tokens.push(Token::Semicolon(
+                self.source_line_at(inline_end.saturating_sub(1)),
+            ));
         }
         self.pos = match next_open {
             Some(open) => open + 5,
@@ -1055,7 +1075,7 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::Integer(42),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );
@@ -1070,7 +1090,7 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::Integer(42),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );
@@ -1087,13 +1107,13 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::Integer(1),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 echo(2),
                 Token::StringLiteral("plain".into()),
-                Token::Semicolon,
+                Token::Semicolon(2),
                 echo(2),
                 Token::Integer(2),
-                Token::Semicolon,
+                Token::Semicolon(2),
                 Token::Eof,
             ]
         );
@@ -1109,10 +1129,10 @@ mod tests {
                 Token::Variable("a".into(), 1),
                 Token::Assign,
                 Token::Integer(42),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 echo(1),
                 Token::Variable("a".into(), 1),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );
@@ -1128,7 +1148,7 @@ mod tests {
                 Token::Variable("value".into(), 1),
                 Token::QuestionQuestionAssign,
                 Token::Integer(42),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );
@@ -1189,7 +1209,7 @@ mod tests {
                 Token::LParen(1),
                 Token::Integer(21),
                 Token::RParen,
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );
@@ -1216,16 +1236,16 @@ mod tests {
                     name: "__property__".into(),
                     line: 2,
                 },
-                Token::Semicolon,
+                Token::Semicolon(2),
                 echo(2),
                 Token::Backslash,
                 Token::Identifier("__FILE__".into(), 2),
-                Token::Semicolon,
+                Token::Semicolon(2),
                 echo(2),
                 Token::Identifier("Example".into(), 2),
                 Token::DoubleColon,
                 Token::Identifier("__CLASS__".into(), 2),
-                Token::Semicolon,
+                Token::Semicolon(2),
                 Token::Eof,
             ]
         );
@@ -1245,13 +1265,13 @@ mod tests {
                     line: 2,
                 },
                 Token::Identifier("finish".into(), 2),
-                Token::Semicolon,
+                Token::Semicolon(2),
                 Token::Variable("object".into(), 2),
                 Token::Arrow,
                 Token::Identifier("goto".into(), 2),
                 Token::LParen(2),
                 Token::RParen,
-                Token::Semicolon,
+                Token::Semicolon(2),
                 Token::Identifier("finish".into(), 2),
                 Token::Colon,
                 Token::Eof,
@@ -1268,7 +1288,7 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::Integer(-1),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );
@@ -1300,7 +1320,7 @@ mod tests {
                 Token::LBrace,
                 echo(1),
                 Token::Variable("x".into(), 1),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::RBrace,
                 Token::Eof,
             ]
@@ -1318,7 +1338,7 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::StringLiteral("$name\\n".into()),
-                Token::Semicolon,
+                Token::Semicolon(3),
                 Token::Eof,
             ]
         );
@@ -1336,7 +1356,7 @@ mod tests {
                 Token::Variable("name".into(), 1),
                 Token::Assign,
                 Token::StringLiteral("PHP".into()),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 echo(1),
                 Token::LParen(0),
                 Token::StringLiteral("Hello ".into()),
@@ -1345,7 +1365,7 @@ mod tests {
                 Token::Dot,
                 Token::StringLiteral("!".into()),
                 Token::RParen,
-                Token::Semicolon,
+                Token::Semicolon(3),
                 Token::Eof,
             ]
         );
@@ -1364,7 +1384,7 @@ mod tests {
                 Token::Dot,
                 Token::Variable("value".into(), 2),
                 Token::RParen,
-                Token::Semicolon,
+                Token::Semicolon(2),
                 Token::Eof,
             ]
         );
@@ -1394,7 +1414,7 @@ mod tests {
                 Token::RParen,
                 Token::RParen,
                 Token::RParen,
-                Token::Semicolon,
+                Token::Semicolon(3),
                 Token::Eof,
             ]
         );
@@ -1414,7 +1434,7 @@ mod tests {
                 Token::Variable("nullable".into(), 2),
                 Token::Assign,
                 Token::Null,
-                Token::Semicolon,
+                Token::Semicolon(2),
                 echo(3),
                 Token::LParen(0),
                 Token::Variable("nullable".into(), 3),
@@ -1431,7 +1451,7 @@ mod tests {
                 Token::RParen,
                 Token::RParen,
                 Token::RParen,
-                Token::Semicolon,
+                Token::Semicolon(3),
                 Token::Eof,
             ]
         );
@@ -1448,7 +1468,7 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::StringLiteral("first\n  second".into()),
-                Token::Semicolon,
+                Token::Semicolon(4),
                 Token::Eof,
             ]
         );
@@ -1477,10 +1497,10 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::StringLiteral("first".into()),
-                Token::Semicolon,
+                Token::Semicolon(3),
                 echo(3),
                 Token::StringLiteral("second".into()),
-                Token::Semicolon,
+                Token::Semicolon(5),
                 Token::Eof,
             ]
         );
@@ -1549,7 +1569,7 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::StringLiteral("${".into()),
-                Token::Semicolon,
+                Token::Semicolon(3),
                 Token::Eof,
             ]
         );
@@ -1567,7 +1587,7 @@ mod tests {
                 Token::OpenTag,
                 echo(1),
                 Token::StringLiteral("first\r\rsecond".into()),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );
@@ -1711,13 +1731,13 @@ mod tests {
                 Token::OpenTag,
                 Token::Integer(0),
                 Token::Identifier("x_1".into(), 1),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Integer(0),
                 Token::Identifier("b2".into(), 1),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Integer(0),
                 Token::Identifier("o8".into(), 1),
-                Token::Semicolon,
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );

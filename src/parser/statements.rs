@@ -112,6 +112,8 @@ impl Parser {
                 | Token::Goto {
                     line: token_line, ..
                 }
+                | Token::Case(token_line)
+                | Token::Default(token_line)
                 | Token::Echo { line: token_line } => *token_line,
                 _ => line,
             };
@@ -170,7 +172,7 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         let strict_types_allowed = self.strict_types_allowed;
-        if !matches!(self.peek(), Token::Declare | Token::Semicolon) {
+        if !matches!(self.peek(), Token::Declare | Token::Semicolon(_)) {
             self.strict_types_allowed = false;
         }
         if let Token::Identifier(name, _) = self.peek() {
@@ -186,7 +188,7 @@ impl Parser {
                 Token::Identifier(label, _) => label,
                 token => return Err(format!("Expected label after goto, got {token:?}")),
             };
-            self.expect(&Token::Semicolon)?;
+            self.expect(&Token::Semicolon(0))?;
             return Ok(Stmt::Goto { name, line });
         }
         match self.peek() {
@@ -216,7 +218,7 @@ impl Parser {
                 self.advance();
                 Ok(Stmt::ExprStmt(Expr::CompileDeprecation { message, line }))
             }
-            Token::Semicolon => {
+            Token::Semicolon(_) => {
                 self.advance();
                 Ok(Stmt::Noop)
             }
@@ -271,7 +273,7 @@ impl Parser {
                     self.expect(&Token::RBrace)?;
                     return Ok(Stmt::Noop);
                 }
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 if invalid_strict_placement || invalid_strict_block {
                     Ok(Stmt::Noop)
                 } else {
@@ -299,7 +301,7 @@ impl Parser {
                     Ok(Stmt::Namespace { name, body })
                 } else {
                     // Unbraced namespace: namespace App\Models; (rest of file belongs to this namespace)
-                    self.expect(&Token::Semicolon)?;
+                    self.expect(&Token::Semicolon(0))?;
                     let mut body = Vec::new();
                     while self.peek() != Token::Eof && self.peek() != Token::Namespace {
                         body.push(self.parse_stmt()?);
@@ -432,7 +434,7 @@ impl Parser {
                         fqn = next_name;
                     }
                 }
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::UseDecl {
                     line: use_line,
                     imports,
@@ -464,7 +466,7 @@ impl Parser {
                     }
                     self.advance();
                 }
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Const {
                     line: const_line,
                     attributes: Vec::new(),
@@ -478,7 +480,7 @@ impl Parser {
                     self.advance();
                     expressions.push(self.parse_expr()?);
                 }
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Echo { expressions, line })
             }
             Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
@@ -491,7 +493,7 @@ impl Parser {
                     _ => unreachable!(),
                 };
                 let path = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Include {
                     path,
                     is_require,
@@ -518,7 +520,7 @@ impl Parser {
                         self.advance(); // consume ']'
                         self.advance(); // consume '='
                         let expr = self.parse_expr()?;
-                        self.expect(&Token::Semicolon)?;
+                        self.expect(&Token::Semicolon(0))?;
                         if var_name == "GLOBALS" {
                             return Ok(Stmt::ExprStmt(
                                 self.compile_error("Cannot append to $GLOBALS", line),
@@ -546,7 +548,7 @@ impl Parser {
                         }
                         self.expect(&Token::Assign)?;
                         let expr = self.parse_expr()?;
-                        self.expect(&Token::Semicolon)?;
+                        self.expect(&Token::Semicolon(0))?;
                         return Ok(if indices.len() == 1 {
                             Stmt::ArrayAssign {
                                 var: var_name,
@@ -585,7 +587,7 @@ impl Parser {
                         self.advance();
                         let target = self.parse_empty_dimension_target_prefix()?;
                         if !self.is_empty_array_dimension_suffix() {
-                            self.expect(&Token::Semicolon)?;
+                            self.expect(&Token::Semicolon(0))?;
                             if var_name == "GLOBALS" {
                                 return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
                             }
@@ -621,7 +623,7 @@ impl Parser {
                         }
                         self.expect_lbracket()?;
                         self.expect(&Token::RBracket)?;
-                        self.expect(&Token::Semicolon)?;
+                        self.expect(&Token::Semicolon(0))?;
                         return Ok(Stmt::BindArrayAppendReference {
                             var: var_name,
                             target,
@@ -651,7 +653,7 @@ impl Parser {
                     // PHP treats the end of the source unit like a closing PHP
                     // tag, so the final statement may omit its semicolon.
                     if !self.at_eof() {
-                        self.expect(&Token::Semicolon)?;
+                        self.expect(&Token::Semicolon(0))?;
                     }
                     match expression {
                         Expr::Assign { var, expr } => Ok(Stmt::Assign { var, expr: *expr }),
@@ -664,7 +666,7 @@ impl Parser {
                     };
                     self.advance(); // consume the compound operator
                     let rhs = self.parse_expr()?;
-                    self.expect(&Token::Semicolon)?;
+                    self.expect(&Token::Semicolon(0))?;
                     if var_name == "GLOBALS" {
                         return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
                     }
@@ -702,7 +704,7 @@ impl Parser {
                             {
                                 self.advance(); // consume '='
                                 let rhs = self.parse_expr()?;
-                                self.expect(&Token::Semicolon)?;
+                                self.expect(&Token::Semicolon(0))?;
                                 return Ok(Stmt::AssignProp {
                                     object: *object,
                                     property,
@@ -718,7 +720,7 @@ impl Parser {
                             let (root, mut indices) = Self::split_array_access(expr);
                             self.advance(); // consume '='
                             let rhs = self.parse_expr()?;
-                            self.expect(&Token::Semicolon)?;
+                            self.expect(&Token::Semicolon(0))?;
                             if indices.len() == 1
                                 && let Expr::PropertyAccess {
                                     object, property, ..
@@ -763,7 +765,7 @@ impl Parser {
                 self.expect_lparen()?;
                 let condition = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
-                let body = self.parse_block_or_stmt()?;
+                let body = self.parse_control_body(Token::EndWhile)?;
                 Ok(Stmt::While { condition, body })
             }
             Token::Do => {
@@ -773,19 +775,19 @@ impl Parser {
                 self.expect_lparen()?;
                 let condition = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::DoWhile { condition, body })
             }
             Token::Break { line } => {
                 self.advance();
                 let level = self.parse_break_continue_level("break", line)?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Break { level, line })
             }
             Token::Continue { line } => {
                 self.advance();
                 let level = self.parse_break_continue_level("continue", line)?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Continue { level, line })
             }
             Token::Switch => {
@@ -793,19 +795,32 @@ impl Parser {
                 self.expect_lparen()?;
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
-                self.expect(&Token::LBrace)?;
+                let alternative = match self.peek() {
+                    Token::LBrace => {
+                        self.advance();
+                        false
+                    }
+                    Token::Colon => {
+                        self.advance();
+                        true
+                    }
+                    token => return Err(format!("Expected switch body, got {token:?}")),
+                };
                 let mut cases = Vec::new();
                 let mut has_default = false;
-                while self.peek() != Token::RBrace && !self.at_eof() {
+                while !matches!(self.peek(), Token::RBrace | Token::EndSwitch) && !self.at_eof() {
                     match self.peek() {
-                        Token::Case => {
+                        Token::Case(_) => {
                             self.advance();
                             let value = self.parse_expr()?;
-                            self.expect(&Token::Colon)?;
+                            self.consume_switch_label_separator()?;
                             let mut body = Vec::new();
                             while !matches!(
                                 self.peek(),
-                                Token::Case | Token::Default | Token::RBrace
+                                Token::Case(_)
+                                    | Token::Default(_)
+                                    | Token::RBrace
+                                    | Token::EndSwitch
                             ) && !self.at_eof()
                             {
                                 body.push(self.parse_stmt()?);
@@ -815,7 +830,7 @@ impl Parser {
                                 body,
                             });
                         }
-                        Token::Default => {
+                        Token::Default(_) => {
                             if has_default {
                                 return Err(
                                     "Switch statements may only contain one default clause".into(),
@@ -823,11 +838,14 @@ impl Parser {
                             }
                             has_default = true;
                             self.advance();
-                            self.expect(&Token::Colon)?;
+                            self.consume_switch_label_separator()?;
                             let mut body = Vec::new();
                             while !matches!(
                                 self.peek(),
-                                Token::Case | Token::Default | Token::RBrace
+                                Token::Case(_)
+                                    | Token::Default(_)
+                                    | Token::RBrace
+                                    | Token::EndSwitch
                             ) && !self.at_eof()
                             {
                                 body.push(self.parse_stmt()?);
@@ -842,7 +860,12 @@ impl Parser {
                         }
                     }
                 }
-                self.expect(&Token::RBrace)?;
+                if alternative {
+                    self.expect(&Token::EndSwitch)?;
+                    self.expect(&Token::Semicolon(0))?;
+                } else {
+                    self.expect(&Token::RBrace)?;
+                }
                 Ok(Stmt::Switch { expr, cases })
             }
             Token::For => {
@@ -851,19 +874,19 @@ impl Parser {
 
                 // Init: optional assignment or expression before first ;
                 let mut init = Vec::new();
-                while self.peek() != Token::Semicolon {
+                while !matches!(self.peek(), Token::Semicolon(_)) {
                     init.push(self.parse_for_init()?);
                     if !matches!(self.peek(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
                 }
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
 
                 // Every comma-separated condition is evaluated; the last one
                 // determines whether the loop continues.
                 let mut condition = Vec::new();
-                while self.peek() != Token::Semicolon {
+                while !matches!(self.peek(), Token::Semicolon(_)) {
                     condition.push(self.parse_expr()?);
                     if !matches!(self.peek(), Token::Comma(_)) {
                         break;
@@ -881,7 +904,7 @@ impl Parser {
                         *line,
                     ));
                 }
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
 
                 let mut update = Vec::new();
                 while self.peek() != Token::RParen {
@@ -893,7 +916,7 @@ impl Parser {
                 }
                 self.expect(&Token::RParen)?;
 
-                let body = self.parse_block_or_stmt()?;
+                let body = self.parse_control_body(Token::EndFor)?;
                 Ok(Stmt::For {
                     init,
                     condition,
@@ -922,7 +945,7 @@ impl Parser {
                         return Err("Cannot use list as key element".to_string());
                     }
                     self.expect(&Token::RParen)?;
-                    let body = self.parse_block_or_stmt()?;
+                    let body = self.parse_control_body(Token::EndForeach)?;
                    return Ok(Stmt::Foreach {
                        line,
                        array,
@@ -961,7 +984,7 @@ impl Parser {
                     (None, first, first_by_ref)
                };
                 self.expect(&Token::RParen)?;
-                let body = self.parse_block_or_stmt()?;
+                let body = self.parse_control_body(Token::EndForeach)?;
                 Ok(Stmt::Foreach {
                    line,
                    array,
@@ -1024,12 +1047,12 @@ impl Parser {
             }
             Token::Return { line } => {
                 self.advance(); // consume 'return'
-                if self.peek() == Token::Semicolon {
+                if matches!(self.peek(), Token::Semicolon(_)) {
                     self.advance();
                     Ok(Stmt::Return { expr: None, line })
                 } else {
                     let expr = self.parse_expr()?;
-                    self.expect(&Token::Semicolon)?;
+                    self.expect(&Token::Semicolon(0))?;
                     Ok(Stmt::Return {
                         expr: Some(expr),
                         line,
@@ -1052,7 +1075,7 @@ impl Parser {
                     targets.push(expr);
                 }
                 self.expect(&Token::RParen)?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Unset(targets))
             }
             Token::Try => self.parse_try_catch(),
@@ -1060,7 +1083,7 @@ impl Parser {
                 let line = line as usize;
                 self.advance();
                 let expr = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Throw { expr, line })
             }
             Token::AttributeStart(_) => {
@@ -1178,7 +1201,7 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Global(vars))
             }
             Token::Static(_)
@@ -1218,7 +1241,7 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::StaticVar { vars, line })
             }
             other => Err(format!("Unexpected token: {:?}", other)),
@@ -1273,7 +1296,7 @@ impl Parser {
             }
             self.advance();
             let value = self.parse_expr()?;
-            self.expect(&Token::Semicolon)?;
+            self.expect(&Token::Semicolon(0))?;
             return Ok(Stmt::NestedArrayAssign {
                 root,
                 indices,
@@ -1294,7 +1317,7 @@ impl Parser {
             if self.peek() == Token::Assign {
                 self.advance();
                 let value = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 return Ok(Stmt::AssignStaticProp {
                     class_name,
                     property,
@@ -1305,7 +1328,7 @@ impl Parser {
             if let Some(op) = Self::compound_assign_op(&self.peek()) {
                 self.advance();
                 let right = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 return Ok(Stmt::AssignStaticProp {
                     class_name,
                     property,
@@ -1355,7 +1378,7 @@ impl Parser {
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
         let expr = self.parse_expr()?;
-        self.expect(&Token::Semicolon)?;
+        self.expect(&Token::Semicolon(0))?;
         if let Expr::Globals { line } = target {
             return Ok(Stmt::ExprStmt(
                 self.compile_error("Cannot append to $GLOBALS", line),
@@ -1388,7 +1411,7 @@ impl Parser {
         }
         self.expect(&Token::QuestionQuestionAssign)?;
         let expr = self.parse_expr()?;
-        self.expect(&Token::Semicolon)?;
+        self.expect(&Token::Semicolon(0))?;
         if let Expr::Globals { line } = target {
             return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
         }
@@ -1419,7 +1442,7 @@ impl Parser {
         let op = Self::compound_assign_op(&self.advance())
             .ok_or_else(|| "Expected compound assignment operator".to_string())?;
         let expr = self.parse_expr()?;
-        self.expect(&Token::Semicolon)?;
+        self.expect(&Token::Semicolon(0))?;
         if let Expr::Globals { line } = target {
             return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
         }
@@ -1432,6 +1455,9 @@ impl Parser {
         self.expect_lparen()?;
         let condition = self.parse_expr()?;
         self.expect(&Token::RParen)?;
+        if self.peek() == Token::Colon {
+            return self.parse_alternative_if_after_condition(condition);
+        }
         let then_body = self.parse_block_or_stmt()?;
         let else_body = if self.peek() == Token::ElseIf {
             // elseif desugars to else { if (...) { ... } }
@@ -1446,6 +1472,41 @@ impl Parser {
             }
         } else {
             vec![]
+        };
+        Ok(Stmt::If {
+            condition,
+            then_body,
+            else_body,
+        })
+    }
+
+    fn parse_alternative_if_after_condition(&mut self, condition: Expr) -> Result<Stmt, String> {
+        self.expect(&Token::Colon)?;
+        let then_body = self.parse_statements_until(|token| {
+            matches!(token, Token::ElseIf | Token::Else | Token::EndIf)
+        })?;
+        let else_body = match self.peek() {
+            Token::ElseIf => {
+                self.advance();
+                self.expect_lparen()?;
+                let elseif_condition = self.parse_expr()?;
+                self.expect(&Token::RParen)?;
+                vec![self.parse_alternative_if_after_condition(elseif_condition)?]
+            }
+            Token::Else => {
+                self.advance();
+                self.expect(&Token::Colon)?;
+                let body = self.parse_statements_until(|token| *token == Token::EndIf)?;
+                self.expect(&Token::EndIf)?;
+                self.expect(&Token::Semicolon(0))?;
+                body
+            }
+            Token::EndIf => {
+                self.advance();
+                self.expect(&Token::Semicolon(0))?;
+                Vec::new()
+            }
+            token => return Err(format!("Expected elseif, else, or endif, got {token:?}")),
         };
         Ok(Stmt::If {
             condition,
@@ -1507,6 +1568,51 @@ impl Parser {
         }
     }
 
+    fn parse_statements_until(
+        &mut self,
+        mut is_terminator: impl FnMut(&Token) -> bool,
+    ) -> Result<Vec<Stmt>, String> {
+        let mut statements = Vec::new();
+        while !self.at_eof() {
+            let token = self.peek();
+            if is_terminator(&token) {
+                break;
+            }
+            statements.push(self.parse_stmt()?);
+        }
+        Ok(statements)
+    }
+
+    fn parse_control_body(&mut self, end_token: Token) -> Result<Vec<Stmt>, String> {
+        if self.peek() != Token::Colon {
+            return self.parse_block_or_stmt();
+        }
+        self.advance();
+        let body = self.parse_statements_until(|token| *token == end_token)?;
+        self.expect(&end_token)?;
+        self.expect(&Token::Semicolon(0))?;
+        Ok(body)
+    }
+
+    fn consume_switch_label_separator(&mut self) -> Result<(), String> {
+        match self.peek() {
+            Token::Colon => {
+                self.advance();
+                Ok(())
+            }
+            Token::Semicolon(line) => {
+                self.advance();
+                self.deferred_compile_deprecations.push((
+                    "Case statements followed by a semicolon (;) are deprecated, use a colon (:) instead"
+                        .to_string(),
+                    line,
+                ));
+                Ok(())
+            }
+            token => Err(format!("Expected ':' or ';' after switch label, got {token:?}")),
+        }
+    }
+
     /// Parse an expression used only for its side effects. Keeping all simple
     /// expression-statement entry points on this path prevents the statement
     /// grammar from lagging behind expressions already accepted by
@@ -1526,7 +1632,7 @@ impl Parser {
     }
 
     fn finish_value_expression_statement(&mut self, expr: Expr) -> Result<Stmt, String> {
-        self.expect(&Token::Semicolon)?;
+        self.expect(&Token::Semicolon(0))?;
         match expr {
             Expr::CoalesceAssign { target, expr } => Ok(Stmt::CoalesceAssign {
                 target: *target,

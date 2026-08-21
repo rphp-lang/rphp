@@ -365,7 +365,7 @@ impl Parser {
         // yield; or yield at end of expression context (no value)
         if matches!(
             self.peek(),
-            Token::Semicolon
+            Token::Semicolon(_)
                 | Token::RParen
                 | Token::RBracket
                 | Token::RBrace

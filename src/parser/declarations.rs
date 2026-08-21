@@ -156,13 +156,13 @@ impl Parser {
                     promotion_hooks: Vec::new(),
                 }]
             };
-            let (body, hook_is_abstract) = if self.peek() == Token::Semicolon {
+            let (body, hook_is_abstract) = if matches!(self.peek(), Token::Semicolon(_)) {
                 self.advance();
                 (Vec::new(), true)
             } else if self.peek() == Token::DoubleArrow {
                 self.advance();
                 let expression = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 let body = if is_get {
                     vec![Stmt::Return {
                         expr: Some(expression),
@@ -366,13 +366,13 @@ impl Parser {
                         promotion_hooks: Vec::new(),
                     }]
                 };
-                let (body, hook_is_abstract) = if self.peek() == Token::Semicolon {
+                let (body, hook_is_abstract) = if matches!(self.peek(), Token::Semicolon(_)) {
                     self.advance();
                     (Vec::new(), true)
                 } else if self.peek() == Token::DoubleArrow {
                     self.advance();
                     let expression = self.parse_expr()?;
-                    self.expect(&Token::Semicolon)?;
+                    self.expect(&Token::Semicolon(0))?;
                     let body = if is_get {
                         vec![Stmt::Return {
                             expr: Some(expression),
@@ -421,7 +421,7 @@ impl Parser {
             self.expect(&Token::RBrace)?;
             return Ok((properties, hook_methods));
         }
-        self.expect(&Token::Semicolon)?;
+        self.expect(&Token::Semicolon(0))?;
         Ok((properties, hook_methods))
     }
 
@@ -470,7 +470,7 @@ impl Parser {
                         if visibility.is_some() {
                             self.advance();
                         }
-                        let alias = if self.peek() == Token::Semicolon {
+                        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
                             None
                         } else {
                             let token = self.advance();
@@ -478,7 +478,7 @@ impl Parser {
                                 format!("Expected trait method alias, got {token:?}")
                             })?)
                         };
-                        self.expect(&Token::Semicolon)?;
+                        self.expect(&Token::Semicolon(0))?;
                         trait_aliases.push(TraitAlias {
                             trait_name,
                             method,
@@ -488,7 +488,7 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
-                    self.expect(&Token::Semicolon)?;
+                    self.expect(&Token::Semicolon(0))?;
                 }
                 continue;
             }
@@ -748,7 +748,7 @@ impl Parser {
                                     break;
                                 }
                             }
-                            self.expect(&Token::Semicolon)?;
+                            self.expect(&Token::Semicolon(0))?;
                             trait_precedences.push(TraitPrecedence {
                                 trait_name,
                                 method,
@@ -766,7 +766,7 @@ impl Parser {
                         if visibility.is_some() {
                             self.advance();
                         }
-                        let alias = if self.peek() == Token::Semicolon {
+                        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
                             None
                         } else {
                             let token = self.advance();
@@ -774,7 +774,7 @@ impl Parser {
                                 format!("Expected trait method alias, got {token:?}")
                             })?)
                         };
-                        self.expect(&Token::Semicolon)?;
+                        self.expect(&Token::Semicolon(0))?;
                         trait_aliases.push(TraitAlias {
                             trait_name,
                             method,
@@ -784,7 +784,7 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
-                    self.expect(&Token::Semicolon)?;
+                    self.expect(&Token::Semicolon(0))?;
                 }
                 continue;
             }
@@ -931,7 +931,7 @@ impl Parser {
                                     break;
                                 }
                             }
-                            self.expect(&Token::Semicolon)?;
+                            self.expect(&Token::Semicolon(0))?;
                             trait_precedences.push(TraitPrecedence {
                                 trait_name,
                                 method,
@@ -949,7 +949,7 @@ impl Parser {
                         if visibility.is_some() {
                             self.advance();
                         }
-                        let alias = if self.peek() == Token::Semicolon {
+                        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
                             None
                         } else {
                             let token = self.advance();
@@ -957,7 +957,7 @@ impl Parser {
                                 format!("Expected trait method alias, got {token:?}")
                             })?)
                         };
-                        self.expect(&Token::Semicolon)?;
+                        self.expect(&Token::Semicolon(0))?;
                         trait_aliases.push(TraitAlias {
                             trait_name,
                             method,
@@ -967,7 +967,7 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
-                    self.expect(&Token::Semicolon)?;
+                    self.expect(&Token::Semicolon(0))?;
                 }
                 continue;
             }
@@ -1121,7 +1121,7 @@ impl Parser {
                     .flat_map(|parameter| parameter.promotion_hooks.iter().cloned())
                     .collect::<Vec<_>>();
                 let return_type = self.parse_return_type(line, false)?;
-                self.expect(&Token::Semicolon)?; // interface methods end with ;
+                self.expect(&Token::Semicolon(0))?; // interface methods end with ;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
@@ -1230,7 +1230,7 @@ impl Parser {
                         if visibility.is_some() {
                             self.advance();
                         }
-                        let alias = if self.peek() == Token::Semicolon {
+                        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
                             None
                         } else {
                             let token = self.advance();
@@ -1238,7 +1238,7 @@ impl Parser {
                                 format!("Expected trait method alias, got {token:?}")
                             })?)
                         };
-                        self.expect(&Token::Semicolon)?;
+                        self.expect(&Token::Semicolon(0))?;
                         trait_aliases.push(TraitAlias {
                             trait_name,
                             method,
@@ -1248,9 +1248,9 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                 } else {
-                    self.expect(&Token::Semicolon)?;
+                    self.expect(&Token::Semicolon(0))?;
                 }
-            } else if self.peek() == Token::Case {
+            } else if matches!(self.peek(), Token::Case(_)) {
                 self.advance(); // consume 'case'
                 let (case_name, case_line) = match self.advance() {
                     Token::Identifier(n, line) => (n, line),
@@ -1262,7 +1262,7 @@ impl Parser {
                 } else {
                     None
                 };
-                self.expect(&Token::Semicolon)?;
+                self.expect(&Token::Semicolon(0))?;
                 cases.push(EnumCase {
                     attributes,
                     line: case_line,
@@ -1523,7 +1523,7 @@ impl Parser {
             }
             self.advance();
         }
-        self.expect(&Token::Semicolon)?;
+        self.expect(&Token::Semicolon(0))?;
         Ok(constants)
     }
 
@@ -1564,7 +1564,7 @@ impl Parser {
         allow_private_abstract: bool,
     ) -> Result<Vec<Stmt>, String> {
         if modifiers.duplicate.is_some() {
-            if self.peek() == Token::Semicolon {
+            if matches!(self.peek(), Token::Semicolon(_)) {
                 self.advance();
                 return Ok(Vec::new());
             }
@@ -1589,7 +1589,7 @@ impl Parser {
                     method_name
                 ));
             }
-            self.expect(&Token::Semicolon)?;
+            self.expect(&Token::Semicolon(0))?;
             return Ok(Vec::new());
         }
         self.expect(&Token::LBrace)?;
@@ -1614,7 +1614,7 @@ impl Parser {
 
         let mut arms = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
-            if self.peek() == Token::Default {
+            if matches!(self.peek(), Token::Default(_)) {
                 self.advance();
                 if matches!(self.peek(), Token::Comma(_))
                     && self.peek_at(1) == Token::DoubleArrow

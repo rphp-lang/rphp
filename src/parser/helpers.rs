@@ -14,6 +14,8 @@ impl Parser {
                 | Token::Use(line)
                 | Token::Static(line)
                 | Token::Comma(line)
+                | Token::Case(line)
+                | Token::Default(line)
                 | Token::DotDotDot(line)
                 | Token::PipeGreater(line)
                 | Token::Function(line)
@@ -162,8 +164,13 @@ impl Parser {
             Token::Foreach { .. } => Some("foreach".to_string()),
             Token::As => Some("as".to_string()),
             Token::Switch => Some("switch".to_string()),
-            Token::Case => Some("case".to_string()),
-            Token::Default => Some("default".to_string()),
+            Token::Case(_) => Some("case".to_string()),
+            Token::Default(_) => Some("default".to_string()),
+            Token::EndIf => Some("endif".to_string()),
+            Token::EndWhile => Some("endwhile".to_string()),
+            Token::EndFor => Some("endfor".to_string()),
+            Token::EndForeach => Some("endforeach".to_string()),
+            Token::EndSwitch => Some("endswitch".to_string()),
             Token::Break { .. } => Some("break".to_string()),
             Token::Continue { .. } => Some("continue".to_string()),
             Token::Try => Some("try".to_string()),
@@ -417,7 +424,11 @@ impl Parser {
                 *line,
             ))
         } else {
-            Err(format!("Expected {:?}, got {:?}", expected, tok))
+            let expected = match expected {
+                Token::Semicolon(_) => "Semicolon".to_string(),
+                token => format!("{token:?}"),
+            };
+            Err(format!("Expected {expected}, got {tok:?}"))
         }
     }
 
@@ -1437,7 +1448,7 @@ impl Parser {
         self.expect(&Token::RParen)?;
         self.expect(&Token::Assign)?;
         let expr = self.parse_expr()?;
-        self.expect(&Token::Semicolon)?;
+        self.expect(&Token::Semicolon(0))?;
         Ok(Stmt::ListAssign {
             targets,
             expr,
@@ -1456,7 +1467,7 @@ impl Parser {
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
         let expr = self.parse_expr()?;
-        self.expect(&Token::Semicolon)?;
+        self.expect(&Token::Semicolon(0))?;
         Ok(Stmt::ListAssign {
             targets,
             expr,
@@ -1730,7 +1741,7 @@ impl Parser {
         operator: &str,
         line: usize,
     ) -> Result<Option<u32>, String> {
-        if self.peek() == Token::Semicolon {
+        if matches!(self.peek(), Token::Semicolon(_)) {
             return Ok(None);
         }
 
