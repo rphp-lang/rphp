@@ -8,6 +8,60 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `4257b3e0`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,840 pass, 1,459 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.467% and the whole-corpus rate is 68.584%; 4,733 of
+5,299 attempted cases reach runtime (89.319%). Relative to exact base
+`d7480f5f`, the pass-set delta is exactly +2/-0:
+`Zend/tests/assign_op_type_error.phpt` and `pow_array_leak.phpt` become passes,
+and every prior pass remains a pass.
+
+One remaining failure advances past the old internal exponentiation fatal
+without becoming a compatibility pass.
+`Zend/tests/operator_unsupported_types.phpt` moves from compile to output at
+independent numeric-string warning/coercion and broader operator-output
+boundaries. There are no other status or
+failure-category transitions. Two sequential final full runs have
+byte-identical merged manifests and summaries. Their SHA-256 values are
+`69c16bae8bb481ccdc9cb9450572b1317fa67ebb6a9c9410af7fada49eddbf0b`
+and `2f9f5510f652e939bb5f0a521b978af2be8e610b1de9f3caaddb52997de1ec9e`.
+
+Unsupported binary exponentiation now throws a catchable `TypeError` through
+the ordinary PHP unwind path instead of terminating with an internal
+compile-style fatal. The existing `Pow` opcode reports PHP's
+`Unsupported operand types: <left> ** <right>` message with concrete diagnostic
+types in operand order, attaches source file, line and live trace before
+unwinding, and commits no compound-assignment write after failure. Successful
+integer, negative-exponent and double power operations retain their existing
+execution paths and result types.
+
+The compiler records source provenance for exponentiation compound assignments
+through the same existing mechanism as addition, subtraction, multiplication
+and division. The cold error arm reuses the shared operator throw helper and
+adds no opcode, layout field or unsafe block. One original E2E regression
+covers array and object operands, exact type order, origin and trace, unchanged
+`**=` state, successful numeric values and assignment, source lines and an
+eval-time constant declaration; all 24 operator E2E tests pass.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe diff ratchet pass, as do
+Composer S0, all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3. The production inventory remains 1,616 unsafe blocks and 289
+unsafe functions. Twenty-one alternating CPU-pinned default-release pairs of
+the ten-million-iteration mixed arithmetic control measured baseline
+p10/median/p90 1.203929/1.298987/1.334285 seconds and candidate
+1.223908/1.233313/1.246742 seconds. The independent median ratio is 0.9494 and
+the paired-median ratio is 0.9558, below the +5% gate; paired p10/p90 ratios are
+0.9441/1.0225, and every run retained checksum `419,729999927,1`. This sample
+does not establish a speedup because the successful exponentiation branch is
+unchanged. The exact base and candidate binary SHA-256 values are
+`253971ae8621b7329d249fc531e40aab21e4a66e60001b5ee198ded6544b1844`
+and `e3b9e4152ec62ab37758db34b59674c7a2d06c251ef5bf2b4eccb550bd8af557`.
+Partial numeric-string arithmetic and the broader operator audit remain
+separate work.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `d7480f5f`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,838 pass, 1,461 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
