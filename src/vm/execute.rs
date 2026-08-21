@@ -823,6 +823,39 @@ fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString> {
     complete.then_some(parsed)
 }
 
+pub(crate) struct ArithmeticOperatorOperand {
+    pub(crate) value: Value,
+    pub(crate) leading_numeric: bool,
+}
+
+/// Convert one operand for ordinary PHP arithmetic while retaining whether a
+/// leading-numeric string must emit `E_WARNING`. The runtime reports that
+/// diagnostic before committing the result and before converting the next
+/// operand, so a throwing handler can interrupt the operation in PHP order.
+#[inline]
+pub(crate) fn arithmetic_operator_operand(value: &Value) -> Result<ArithmeticOperatorOperand, ()> {
+    let value = value.dereferenced();
+    let exact = |value| ArithmeticOperatorOperand {
+        value,
+        leading_numeric: false,
+    };
+    match value.value_type() {
+        ValueType::Long | ValueType::Double => Ok(exact(value.clone())),
+        ValueType::True => Ok(exact(Value::long(1))),
+        ValueType::False | ValueType::Null | ValueType::Undef => Ok(exact(Value::long(0))),
+        ValueType::String => {
+            let (parsed, complete) = parse_php_numeric_prefix(value.as_str().unwrap()).ok_or(())?;
+            Ok(ArithmeticOperatorOperand {
+                value: parsed
+                    .integer
+                    .map_or_else(|| Value::double(parsed.number), Value::long),
+                leading_numeric: !complete,
+            })
+        }
+        _ => Err(()),
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct IntegerOperatorOperand {
     pub(crate) value: i64,

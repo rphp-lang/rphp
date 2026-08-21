@@ -5582,7 +5582,7 @@ impl Compiler {
         left: &Value,
         right: &Value,
     ) -> Result<Value, String> {
-        let integer_pair = || left.as_long().zip(right.as_long());
+        let integer_pair = || left.to_arithmetic_long().zip(right.to_arithmetic_long());
         let numeric_pair = || left.to_double().zip(right.to_double());
         let integer_operator_pair = || {
             let left = crate::vm::execute::integer_operator_operand(left).ok()?;

@@ -833,6 +833,117 @@ fn prepare_integer_operator_operand(
 }
 
 #[cold]
+fn prepare_arithmetic_operator_pair(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    left: &Value,
+    right: &Value,
+) -> Result<Option<(Value, Value)>, VmError> {
+    let Ok(left) = arithmetic_operator_operand(left) else {
+        return Ok(None);
+    };
+    if left.leading_numeric {
+        report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            "A non-numeric value encountered",
+            false,
+        )?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+    }
+
+    let Ok(right) = arithmetic_operator_operand(right) else {
+        return Ok(None);
+    };
+    if right.leading_numeric {
+        report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            "A non-numeric value encountered",
+            false,
+        )?;
+    }
+    Ok(Some((left.value, right.value)))
+}
+
+#[cold]
+fn prepared_add_result(left: &Value, right: &Value) -> Value {
+    if let (Some(left), Some(right)) = (left.as_long(), right.as_long()) {
+        left.checked_add(right)
+            .map(Value::long)
+            .unwrap_or_else(|| Value::double(left as f64 + right as f64))
+    } else {
+        Value::double(left.to_double().unwrap() + right.to_double().unwrap())
+    }
+}
+
+#[cold]
+fn prepared_sub_result(left: &Value, right: &Value) -> Value {
+    if let (Some(left), Some(right)) = (left.as_long(), right.as_long()) {
+        left.checked_sub(right)
+            .map(Value::long)
+            .unwrap_or_else(|| Value::double(left as f64 - right as f64))
+    } else {
+        Value::double(left.to_double().unwrap() - right.to_double().unwrap())
+    }
+}
+
+#[cold]
+fn prepared_mul_result(left: &Value, right: &Value) -> Value {
+    if let (Some(left), Some(right)) = (left.as_long(), right.as_long()) {
+        left.checked_mul(right)
+            .map(Value::long)
+            .unwrap_or_else(|| Value::double(left as f64 * right as f64))
+    } else {
+        Value::double(left.to_double().unwrap() * right.to_double().unwrap())
+    }
+}
+
+#[cold]
+fn prepared_div_result(left: &Value, right: &Value) -> Option<Value> {
+    let left_number = left.to_double().unwrap();
+    let right_number = right.to_double().unwrap();
+    if right_number == 0.0 {
+        return None;
+    }
+    if let (Some(left), Some(right)) = (left.as_long(), right.as_long())
+        && let Some(quotient) = left.checked_div(right)
+        && left.checked_rem(right) == Some(0)
+    {
+        return Some(Value::long(quotient));
+    }
+    Some(Value::double(left_number / right_number))
+}
+
+#[cold]
+fn prepared_pow_result(left: &Value, right: &Value) -> Value {
+    if let (Some(left), Some(right)) = (left.as_long(), right.as_long())
+        && let Ok(exponent) = u32::try_from(right)
+        && let Some(value) = left.checked_pow(exponent)
+    {
+        return Value::long(value);
+    }
+    Value::double(left.to_double().unwrap().powf(right.to_double().unwrap()))
+}
+
+#[inline]
+fn split_arithmetic_result(value: Value) -> Result<i64, Value> {
+    if let Some(value) = value.as_long() {
+        Ok(value)
+    } else {
+        Err(value)
+    }
+}
+
+#[cold]
 #[inline(never)]
 fn finally_jump_state(
     frame: *mut ExecuteData,
@@ -2219,14 +2330,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} + {}",
-                            op1.diagnostic_type_name(),
-                            op2.diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} + {}",
+                                op1.diagnostic_type_name(),
+                                op2.diagnostic_type_name()
+                            )
+                        );
+                    };
+                    let result = prepared_add_result(&left, &right);
+                    // SAFETY: the specialized opcode's TMP result index was
+                    // validated with this op-array, and both operand borrows
+                    // have ended before the owned result replaces that slot.
+                    unsafe {
+                        let result_ptr =
+                            (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize);
+                        frame_tmp_set(frame, result_ptr, result)
+                    };
                 }
             }
 
@@ -2251,14 +2377,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} + {}",
-                            op1.diagnostic_type_name(),
-                            op2.diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} + {}",
+                                op1.diagnostic_type_name(),
+                                op2.diagnostic_type_name()
+                            )
+                        );
+                    };
+                    // SAFETY: `result_ptr` is the validated TMP slot for this
+                    // specialized opcode, and the owned result is constructed
+                    // before it replaces that slot.
+                    unsafe {
+                        frame_tmp_set(frame, result_ptr, prepared_add_result(&left, &right))
+                    };
                 }
             }
 
@@ -2299,14 +2437,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} - {}",
-                            op1.diagnostic_type_name(),
-                            op2.diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} - {}",
+                                op1.diagnostic_type_name(),
+                                op2.diagnostic_type_name()
+                            )
+                        );
+                    };
+                    let result = prepared_sub_result(&left, &right);
+                    // SAFETY: the specialized opcode's TMP result index was
+                    // validated with this op-array, and both operand borrows
+                    // have ended before the owned result replaces that slot.
+                    unsafe {
+                        let result_ptr =
+                            (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize);
+                        frame_tmp_set(frame, result_ptr, result)
+                    };
                 }
             }
 
@@ -2327,14 +2480,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} - {}",
-                            op1.diagnostic_type_name(),
-                            op2.diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} - {}",
+                                op1.diagnostic_type_name(),
+                                op2.diagnostic_type_name()
+                            )
+                        );
+                    };
+                    // SAFETY: `result_ptr` is the validated TMP slot for this
+                    // specialized opcode, and the owned result is constructed
+                    // before it replaces that slot.
+                    unsafe {
+                        frame_tmp_set(frame, result_ptr, prepared_sub_result(&left, &right))
+                    };
                 }
             }
 
@@ -2546,14 +2711,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} + {}",
-                            op1.diagnostic_type_name(),
-                            op2.diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} + {}",
+                                op1.diagnostic_type_name(),
+                                op2.diagnostic_type_name()
+                            )
+                        );
+                    };
+                    let result = prepared_add_result(&left, &right);
+                    // SAFETY: `result_ptr` is this instruction's resolved result slot,
+                    // and both operand borrows have ended before the owned result write.
+                    unsafe { frame_tmp_set(frame, result_ptr, result) };
                 }
             }
 
@@ -2562,26 +2737,39 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) =
+                let result = if let (Some(l1), Some(l2)) =
                     (op1.to_arithmetic_long(), op2.to_arithmetic_long())
                 {
-                    match l1.checked_sub(l2) {
-                        Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
-                        None => unsafe {
-                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 - l2 as f64))
-                        },
-                    }
+                    l1.checked_sub(l2).map_or_else(
+                        || Err(Value::double(l1 as f64 - l2 as f64)),
+                        Ok,
+                    )
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
+                    Err(Value::double(d1 - d2))
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} - {}",
-                            op1.dereferenced().diagnostic_type_name(),
-                            op2.dereferenced().diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} - {}",
+                                op1.dereferenced().diagnostic_type_name(),
+                                op2.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    split_arithmetic_result(prepared_sub_result(&left, &right))
+                };
+                // SAFETY: `result_ptr` is this instruction's resolved result slot,
+                // and the operand borrows are no longer used after building `result`.
+                unsafe {
+                    match result {
+                        Ok(value) => frame_tmp_set_long(frame, result_ptr, value),
+                        Err(value) => frame_tmp_set(frame, result_ptr, value),
+                    };
                 }
             }
 
@@ -2602,14 +2790,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 * d2)) };
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} * {}",
-                            op1.dereferenced().diagnostic_type_name(),
-                            op2.dereferenced().diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} * {}",
+                                op1.dereferenced().diagnostic_type_name(),
+                                op2.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    let result = prepared_mul_result(&left, &right);
+                    // SAFETY: `result_ptr` is this instruction's resolved result slot,
+                    // and both operand borrows have ended before the owned result write.
+                    unsafe { frame_tmp_set(frame, result_ptr, result) };
                 }
             }
 
@@ -2618,33 +2816,51 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                let result = if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
+                    if l2 == 0 {
+                        throw_operator!("DivisionByZeroError", "Division by zero");
+                    }
+                    if let Some(quotient) = l1.checked_div(l2)
+                        && l1.checked_rem(l2) == Some(0)
+                    {
+                        Ok(quotient)
+                    } else {
+                        Err(Value::double(l1 as f64 / l2 as f64))
+                    }
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     if d2 == 0.0 {
                         throw_operator!("DivisionByZeroError", "Division by zero");
                     }
-                    // PHP: if both are long and divisible, result is long
-                    if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
-                        if let Some(quotient) = l1.checked_div(l2) {
-                            if l1.checked_rem(l2) == Some(0) {
-                                unsafe { frame_tmp_set_long(frame, result_ptr, quotient) };
-                            } else {
-                                unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 / d2)) };
-                            }
-                        } else {
-                            unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 / d2)) };
-                        }
-                    } else {
-                        unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 / d2)) };
-                    }
+                    Err(Value::double(d1 / d2))
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} / {}",
-                            op1.dereferenced().diagnostic_type_name(),
-                            op2.dereferenced().diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} / {}",
+                                op1.dereferenced().diagnostic_type_name(),
+                                op2.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    let Some(result) = prepared_div_result(&left, &right) else {
+                        throw_operator!("DivisionByZeroError", "Division by zero");
+                    };
+                    split_arithmetic_result(result)
+                };
+                // SAFETY: `result_ptr` is this instruction's resolved result slot,
+                // and the operand borrows are no longer used after building `result`.
+                unsafe {
+                    match result {
+                        Ok(value) => frame_tmp_set_long(frame, result_ptr, value),
+                        Err(value) => frame_tmp_set(frame, result_ptr, value),
+                    };
                 }
             }
 
@@ -2776,23 +2992,42 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
-                    if l2 >= 0 {
-                        unsafe { frame_tmp_set_long(frame, result_ptr, l1.wrapping_pow(l2 as u32)) };
+                let result = if let (Some(l1), Some(l2)) =
+                    (op1.to_arithmetic_long(), op2.to_arithmetic_long())
+                {
+                    if let Ok(exponent) = u32::try_from(l2)
+                        && let Some(value) = l1.checked_pow(exponent)
+                    {
+                        Ok(value)
                     } else {
-                        unsafe { frame_tmp_set(frame, result_ptr, Value::double((l1 as f64).powf(l2 as f64))) };
+                        Err(Value::double((l1 as f64).powf(l2 as f64)))
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1.powf(d2))) };
+                    Err(Value::double(d1.powf(d2)))
                 } else {
-                    throw_operator!(
-                        "TypeError",
-                        &format!(
-                            "Unsupported operand types: {} ** {}",
-                            op1.dereferenced().diagnostic_type_name(),
-                            op2.dereferenced().diagnostic_type_name()
-                        )
-                    );
+                    let pair = prepare_arithmetic_operator_pair(
+                        eg, frame, op_array, opline, op1, op2,
+                    )?;
+                    resume_pending_exception!();
+                    let Some((left, right)) = pair else {
+                        throw_operator!(
+                            "TypeError",
+                            &format!(
+                                "Unsupported operand types: {} ** {}",
+                                op1.dereferenced().diagnostic_type_name(),
+                                op2.dereferenced().diagnostic_type_name()
+                            )
+                        );
+                    };
+                    split_arithmetic_result(prepared_pow_result(&left, &right))
+                };
+                // SAFETY: `result_ptr` is this instruction's resolved result slot,
+                // and the operand borrows are no longer used after building `result`.
+                unsafe {
+                    match result {
+                        Ok(value) => frame_tmp_set_long(frame, result_ptr, value),
+                        Err(value) => frame_tmp_set(frame, result_ptr, value),
+                    };
                 }
             }
 

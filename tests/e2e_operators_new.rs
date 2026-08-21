@@ -84,6 +84,124 @@ try {
 }
 
 #[test]
+fn leading_numeric_arithmetic_warns_in_conversion_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo 'warn:', $level, ':', $message, "\n";
+});
+
+function probeArithmetic(string $label, Closure $operation): void {
+    echo $label, ":\n";
+    try {
+        var_dump($operation());
+    } catch (Throwable $error) {
+        echo get_class($error), ':', $error->getMessage(), "\n";
+    }
+}
+
+function dynamicArithmetic($value) {
+    return $value;
+}
+
+probeArithmetic('add', fn() => '2 tail' + '3 rest');
+$left = '2 tail';
+probeArithmetic('add-cv-tmp', fn() => $left + dynamicArithmetic('3 rest'));
+probeArithmetic('add-tmp-tmp', fn() => dynamicArithmetic('2 tail') + dynamicArithmetic('3 rest'));
+probeArithmetic('sub', fn() => '5 tail' - '7 rest');
+$left = '5 tail';
+probeArithmetic('sub-cv-const', fn() => $left - 7);
+probeArithmetic('sub-tmp-tmp', fn() => dynamicArithmetic('5 tail') - dynamicArithmetic('7 rest'));
+probeArithmetic('mul', fn() => '11 tail' * '13 rest');
+probeArithmetic('div', fn() => '17 tail' / '19 rest');
+$left = '6';
+$right = '3';
+probeArithmetic('div-exact', fn() => $left / $right);
+probeArithmetic('pow', fn() => '23 tail' ** '29 rest');
+$left = '2';
+$right = '3';
+probeArithmetic('pow-exact', fn() => $left ** $right);
+probeArithmetic('plus', fn() => +'149 in');
+probeArithmetic('minus', fn() => -'151 velit');
+probeArithmetic('invalid-left', fn() => 'bad' + '2 tail');
+probeArithmetic('invalid-right', fn() => '2 tail' + 'bad');
+
+$slot = '2 tail';
+$slot += '3 rest';
+var_dump($slot);
+
+$slot = '2 tail';
+set_error_handler(function ($level, $message) {
+    throw new RuntimeException('handler:' . $message);
+});
+try {
+    $slot += '3 rest';
+} catch (Throwable $error) {
+    echo 'assign:', get_class($error), ':', $error->getMessage(), '|slot=', $slot, "\n";
+}
+"#,
+        ),
+        concat!(
+            "add:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(5)\n",
+            "add-cv-tmp:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(5)\n",
+            "add-tmp-tmp:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(5)\n",
+            "sub:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(-2)\n",
+            "sub-cv-const:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(-2)\n",
+            "sub-tmp-tmp:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(-2)\n",
+            "mul:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(143)\n",
+            "div:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "float(0.8947368421052632)\n",
+            "div-exact:\n",
+            "int(2)\n",
+            "pow:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "float(3.0910586430935376E+39)\n",
+            "pow-exact:\n",
+            "int(8)\n",
+            "plus:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(149)\n",
+            "minus:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(-151)\n",
+            "invalid-left:\n",
+            "TypeError:Unsupported operand types: string + string\n",
+            "invalid-right:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "TypeError:Unsupported operand types: string + string\n",
+            "warn:2:A non-numeric value encountered\n",
+            "warn:2:A non-numeric value encountered\n",
+            "int(5)\n",
+            "assign:RuntimeException:handler:A non-numeric value encountered|slot=2 tail\n",
+        )
+    );
+}
+
+#[test]
 fn unsupported_subtraction_throws_typed_errors_without_committing_assignments() {
     assert_eq!(
         run_php_with_source_context(
