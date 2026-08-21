@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `a97e06ee`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,951 pass, 1,348 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.561% and the whole-corpus rate is 70.566%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`73364c32`, the pass-set delta is +2/-0 with no other status or failure-
+category movement.
+
+The exact additions are `Zend/tests/bug51827.phpt` and
+`Zend/tests/bug71221.phpt`. Every previous pass remains a pass. Two sequential
+final runs have byte-identical merged manifests and summaries. Their manifest
+and summary SHA-256 values are
+`f8eead8e4836e094789c85ff088781647f2e8d03db133b25bfd2b75717420878` and
+`7e6b7d0a9bc387ded6777371f2ed5f6fb8b20540436049288a18b526aee2f90d`.
+
+An engine-invoked shutdown callback that fails before entering its body now
+retains PHP's inactive call origin. Required-arity failures such as an empty
+`explode()` callback and dynamically forbidden scope-introspection callbacks
+such as `get_defined_vars()` expose `[no active file]:0`, an immutable
+`#0 [internal function]` callback frame and the terminating `{main}` frame.
+The same metadata is visible to an installed exception handler before fatal
+rendering.
+
+The detached callback boundary reuses its existing pending-call frame and
+Throwable trace snapshot instead of synthesizing a diagnostic string. A cold,
+explicit flag enables pre-entry capture only for request-shutdown dispatch;
+ordinary direct and dynamic calls, error handlers, exception handlers,
+Reflection and successful shutdown callbacks retain their existing entry
+semantics. The inactive origin remains distinct from the `Unknown:0` trace
+sentinel so the stored Throwable renders `[no active file]:0` while its frame
+continues to render as `[internal function]`.
+
+One original E2E regression covers both pre-entry classes with exact stderr,
+exit status, origin and trace. The adjacent callable, Reflection, standard-
+library, error-handler, exception-presentation and request-shutdown suites
+pass. All five Cargo configurations, all-features/all-targets, formatting,
+PHPT runner self-test and the exact unsafe ratchet pass. The production
+inventory remains 1,612 unsafe blocks, 289 unsafe functions and 321 SAFETY
+annotations. Composer 2.8.12 S0, all four Symfony S1 gates, and exact PHP 8.5.9
+warmed-kernel S2 and cold-build S3 also pass.
+
+A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
+pinned to CPU 0 with the performance governor, four warmups, 100 cold requests
+per observation and no excluded sample, keeps both relevant controls below the
++5% gate. Empty requests measure candidate/baseline ratios of 1.008708 by
+independent medians and 1.009192 by paired medians; one successful shutdown
+callback measures 1.007522 and 1.007585 respectively. Outputs are exact. The
+candidate binary SHA-256 is
+`ec977a2dc64467499d3ba2ea3a7c012cf1f6d2e35c385c84ae8f1dbf53ae4475` and the
+exact TSV SHA-256 is
+`7fb9aa4a78340ae0e6bdb8fc35a831eecc090b2c24f329ea43e561d864245cba`.
+
+This checkpoint claims only pre-entry Throwable metadata for the exercised
+CLI request-shutdown callbacks. Direct-call trace completeness, other engine-
+callback kinds, SAPI-specific inactive origins and unrelated shutdown failures
+remain separate work.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `73364c32`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,949 pass, 1,350 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
