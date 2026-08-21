@@ -8984,6 +8984,15 @@ pub(crate) fn is_property_hook_method_name(method: &str) -> bool {
         })
 }
 
+/// PHP accepts one leading namespace separator on a string function callable,
+/// but keeps empty names and names beginning with multiple separators invalid.
+pub(crate) fn dynamic_function_lookup_name(name: &str) -> &str {
+    match name.as_bytes() {
+        [b'\\', next, ..] if *next != b'\\' => &name[1..],
+        _ => name,
+    }
+}
+
 fn resolve_callback(
     val: &Value,
     eg: &ExecutorGlobals,
@@ -9048,15 +9057,16 @@ fn resolve_callback(
                     is_magic_call: false,
                 });
             }
-            eg.find_function(name).map(|ptr| ResolvedCallback {
-                func_ptr: ptr,
-                prepend_args: vec![],
-                use_vars: vec![],
-                called_scope_class_id: 0,
-                bound_this: None,
-                closure_static_vars: None,
-                is_magic_call: false,
-            })
+            eg.find_function(dynamic_function_lookup_name(name))
+                .map(|ptr| ResolvedCallback {
+                    func_ptr: ptr,
+                    prepend_args: vec![],
+                    use_vars: vec![],
+                    called_scope_class_id: 0,
+                    bound_this: None,
+                    closure_static_vars: None,
+                    is_magic_call: false,
+                })
         }
         ValueType::Array => {
             let arr = val.as_array()?;

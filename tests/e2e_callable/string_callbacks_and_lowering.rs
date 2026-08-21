@@ -32,6 +32,53 @@ echo call_user_func('double', 5);
 }
 
 #[test]
+fn leading_namespace_separator_normalizes_string_function_callables() {
+    let out = run_php(
+        r#"<?php
+namespace DynamicFqn;
+function decorate($value) { return "D:$value"; }
+class Decorator {
+    public static function marker() { return 'S'; }
+}
+$slash = chr(92);
+$callbacks = [
+    $slash . 'strlen',
+    $slash . 'DynamicFqn\\decorate',
+    'DynamicFqn\\decorate',
+];
+foreach ($callbacks as $callback) {
+    echo is_callable($callback) ? 'yes' : 'no', '|', $callback('abcd'), "\n";
+}
+$method = $slash . 'DynamicFqn\\Decorator::marker';
+echo is_callable($method) ? 'yes' : 'no', '|', $method(), "\n";
+echo call_user_func($slash . 'strlen', 'abc'), "\n";
+echo \Closure::fromCallable($slash . 'strlen')('abcde'), "\n";
+try {
+    ('\literalMissing')();
+} catch (\Throwable $error) {
+    echo $error->getMessage(), "\n";
+}
+foreach ([$slash . 'missing', $slash . $slash . 'strlen', $slash] as $callback) {
+    try {
+        $callback();
+    } catch (\Throwable $error) {
+        echo $error->getMessage(), '|';
+    }
+    echo is_callable($callback) ? 'yes' : 'no', "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "yes|4\nyes|D:abcd\nyes|D:abcd\nyes|S\n3\n5\n\
+Call to undefined function literalMissing()\n\
+Call to undefined function \\missing()|no\n\
+Call to undefined function \\\\strlen()|no\n\
+Call to undefined function \\()|no\n"
+    );
+}
+
+#[test]
 fn test_call_user_func_multiple_args() {
     let out = run_php(
         r#"<?php

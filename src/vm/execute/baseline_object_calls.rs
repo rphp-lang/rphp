@@ -4897,10 +4897,16 @@ fn op_init_dynamic_call<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         }
-        let Some(func_ptr) = eg.find_function(func_name) else {
+        let lookup_name = crate::stdlib::dynamic_function_lookup_name(func_name);
+        let Some(func_ptr) = eg.find_function(lookup_name) else {
+            let diagnostic_name = if opline.op1_type == OpType::Const {
+                lookup_name
+            } else {
+                func_name
+            };
             let error = make_error_value(
                 "Error",
-                &format!("Call to undefined function {}()", func_name),
+                &format!("Call to undefined function {diagnostic_name}()"),
             );
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             return Ok(match throw_in_frame(eg, frame, error) {
