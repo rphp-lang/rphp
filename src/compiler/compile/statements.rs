@@ -2617,13 +2617,15 @@ impl Compiler {
                 }
                 self.definitely_defined_cvs = loop_exit_definitions;
             }
-            Stmt::Break(level) => {
+            Stmt::Break { level, line } => {
                 let depth = level.unwrap_or(1) as usize;
                 if depth == 0 || depth > self.loop_stack.len() {
-                    return Err(format!(
-                        "'break {}' is not in a deep enough nesting level",
-                        depth
-                    ));
+                    let message = if depth == 1 && self.loop_stack.is_empty() {
+                        "'break' not in the 'loop' or 'switch' context".to_string()
+                    } else {
+                        format!("Cannot 'break' {depth} levels")
+                    };
+                    return Err(self.goto_error(&message, *line));
                 }
                 let target_idx = self.loop_stack.len() - depth;
                 let jmp_idx = self.instructions.len();
@@ -2632,13 +2634,15 @@ impl Compiler {
                 self.instructions.push(jmp);
                 self.loop_stack[target_idx].break_patches.push(jmp_idx);
             }
-            Stmt::Continue(level) => {
+            Stmt::Continue { level, line } => {
                 let depth = level.unwrap_or(1) as usize;
                 if depth == 0 || depth > self.loop_stack.len() {
-                    return Err(format!(
-                        "'continue {}' is not in a deep enough nesting level",
-                        depth
-                    ));
+                    let message = if depth == 1 && self.loop_stack.is_empty() {
+                        "'continue' not in the 'loop' or 'switch' context".to_string()
+                    } else {
+                        format!("Cannot 'continue' {depth} levels")
+                    };
+                    return Err(self.goto_error(&message, *line));
                 }
                 let target_idx = self.loop_stack.len() - depth;
                 let ctx = &mut self.loop_stack[target_idx];

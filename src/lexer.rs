@@ -18,8 +18,12 @@ pub enum Token {
     For,             // for
     ElseIf,          // elseif
     Do,              // do
-    Break,           // break
-    Continue,        // continue
+    Break {
+        line: usize,
+    }, // break
+    Continue {
+        line: usize,
+    }, // continue
     Switch,          // switch
     Case,            // case
     Default,         // default
@@ -683,8 +687,8 @@ impl<'a> Lexer<'a> {
                         "while" => tokens.push(Token::While),
                         "for" => tokens.push(Token::For),
                         "do" => tokens.push(Token::Do),
-                        "break" => tokens.push(Token::Break),
-                        "continue" => tokens.push(Token::Continue),
+                        "break" => tokens.push(Token::Break { line }),
+                        "continue" => tokens.push(Token::Continue { line }),
                         "switch" => tokens.push(Token::Switch),
                         "case" => tokens.push(Token::Case),
                         "default" => tokens.push(Token::Default),

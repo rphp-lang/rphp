@@ -776,17 +776,17 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::DoWhile { condition, body })
             }
-            Token::Break => {
+            Token::Break { line } => {
                 self.advance();
                 let level = self.parse_break_continue_level()?;
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Break(level))
+                Ok(Stmt::Break { level, line })
             }
-            Token::Continue => {
+            Token::Continue { line } => {
                 self.advance();
                 let level = self.parse_break_continue_level()?;
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Continue(level))
+                Ok(Stmt::Continue { level, line })
             }
             Token::Switch => {
                 self.advance(); // consume 'switch'

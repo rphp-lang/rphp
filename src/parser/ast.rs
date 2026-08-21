@@ -829,8 +829,14 @@ pub enum Stmt {
         condition: Expr,
         body: Vec<Stmt>,
     },
-    Break(Option<u32>),
-    Continue(Option<u32>),
+    Break {
+        level: Option<u32>,
+        line: usize,
+    },
+    Continue {
+        level: Option<u32>,
+        line: usize,
+    },
     Switch {
         expr: Expr,
         cases: Vec<SwitchCase>,
@@ -1127,8 +1133,8 @@ impl Stmt {
             Stmt::Noop
             | Stmt::Label(_)
             | Stmt::Goto { .. }
-            | Stmt::Break(_)
-            | Stmt::Continue(_)
+            | Stmt::Break { .. }
+            | Stmt::Continue { .. }
             | Stmt::Function { .. }
             | Stmt::Class { .. }
             | Stmt::Interface { .. }
