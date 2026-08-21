@@ -8,61 +8,56 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `3d28712a`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,968 pass, 1,331 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `94c4ee01`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,974 pass, 1,325 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
-headline pass rate is 74.882% and the whole-corpus rate is 70.870%; 4,757 of
-5,299 attempted cases reach runtime (89.772%). Relative to exact candidate
-`a47f14fc`, the pass-set delta is +9/-0 with no other status or failure-
+headline pass rate is 74.995% and the whole-corpus rate is 70.977%; 4,763 of
+5,299 attempted cases reach runtime (89.885%). Relative to exact candidate
+`3d28712a`, the pass-set delta is +6/-0 with no other status or failure-
 category movement.
 
-The exact additions are `Zend/tests/catch_static.phpt`,
-`interface_extends_static.phpt`, `Zend/tests/lsb/lsb_006.phpt` through
-`lsb_009.phpt`, `Zend/tests/this-reserved/this_as_static.phpt`,
-`Zend/tests/traits/class_uses_static.phpt` and
-`static_in_trait_insteadof_list.phpt`. Every previous pass remains a pass. Two
-sequential final runs have byte-identical merged manifests and summaries.
-Their manifest and summary SHA-256 values are
-`e1d4546099e8f2b06db1c40c454b22e1ebe3cb571ed3786ed683d2f3ab5a0af5` and
-`a5c8490c14c6e2d58a31b3f8dbcde916c87f52ef286ff537f16f8aee01831721`.
+The exact additions are `Zend/tests/bug75426.phpt`,
+`Zend/tests/constexpr/gh9138.phpt`, `gh9138_2.phpt`,
+`Zend/tests/list/list_012.phpt`, `list_013.phpt` and
+`Zend/tests/match/041.phpt`. Every previous pass remains a pass. Two sequential
+final runs have byte-identical merged manifests and summaries. Their manifest
+and summary SHA-256 values are
+`bba78d41417a5a49a2d96f0df9f50290adc152853b6e2fceec969c60e5cdf4f1` and
+`836ab694b84ba69f1e4310557d75c857b63d0596202908a010f3cd02e279c7e9`.
 
-The `static` keyword token now retains its source line. Class, interface,
-trait, enum, anonymous-class and catch parsers admit a bare reserved `static`
-only far enough to preserve PHP's error stage: declaration names remain
-located syntax errors, while parent/interface relationships, trait composition
-and precedence lists, and catch types become role-specific source-unit compile
-fatals. The first deferred compile error therefore also survives dead code and
-unentered functions. `static $this` uses the same located compile-error path
-instead of exposing an internal token-debug parse error.
+Comma tokens now retain their source line through an incremental monotonic
+counter, so comma-heavy lexing remains linear. An empty element in ordinary
+short or long array syntax is admitted far enough to become PHP's source-unit
+compile fatal, including the preceding separator line PHP reports for a middle
+hole. Short and `list()` destructuring holes remain valid. Match condition
+lists and `default` arms now accept PHP 8.5's trailing comma immediately before
+`=>`; ordinary commas between conditions and arms keep their existing paths.
 
-Ordinary class-like names, trait precedence, `static` closures, static
-variables, static return types, named arguments, `new static` and late-static
-calls keep their existing parse, compile and VM paths. One original CLI suite
-covers the four declaration kinds, named and anonymous relationships, enum and
-trait composition, catch in an unentered function, trait precedence, exact
-stage/message/file/line/exit behavior, `static $this`, and a combined valid
-control. All five Cargo configurations, all-features/all-targets, formatting,
-PHPT runner self-test, unsafe self-test and the exact unsafe ratchet pass. The
-production inventory remains 1,612 unsafe blocks, 289 unsafe functions and 321
-SAFETY annotations. Composer 2.8.12 S0, all four Symfony S1 gates, and exact
-PHP 8.5.9 warmed-kernel S2 and cold-build S3 also pass.
+One original CLI suite covers leading, middle and tail empty array elements,
+short and long syntax, exact fatal stage/message/file/line/exit behavior,
+condition-list and default-arm commas, ordinary trailing array commas, and both
+destructuring forms. All five Cargo configurations, all-features/all-targets,
+formatting, PHPT runner self-test, unsafe self-test and the exact unsafe ratchet
+pass. The production inventory remains 1,612 unsafe blocks, 289 unsafe
+functions and 321 SAFETY annotations. Composer 2.8.12 S0, all four Symfony S1
+gates, and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3 also pass.
 
 A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
 pinned to CPU 0 with the performance governor, four warmups and no excluded
 sample, keeps both front-end controls below the +5% gate. One hundred empty
-cold requests per observation measure candidate/baseline ratios of 0.994281 by
-independent medians and 0.973380 by paired medians. One request independently
-compiling 1,000 valid static-heavy trait/class compositions measures 1.001503
-and 1.004756 respectively, with exact output. The candidate binary SHA-256 is
-`d8f534fd270cae67d710e3b2469d5b8694164bf56327d2e19a8f7a6a7ffc2166` and the
+cold requests per observation measure candidate/baseline ratios of 0.983319 by
+independent medians and 0.994966 by paired medians. One request independently
+generating and compiling 1,000 valid comma-heavy array and match expressions
+measures 1.005776 and 1.003583 respectively, with exact output. The candidate
+binary SHA-256 is
+`445caffea7acf622bb5c3c855ca7958ce8cca23dbde061cbebf277445d5ad89a` and the
 exact TSV SHA-256 is
-`cca5172fa2ce871b5e9e32148bf36d0d83710c0e9d50b05ae3c29cdd3f8b50f0`.
+`cf21166393c1e1399d1e4ca637a2e2fa4e6412cee5335d65e6ba36119cdb6201`.
 
-This checkpoint claims the exercised bare reserved-keyword declaration,
-class-like relationship, catch, trait and static-variable diagnostics.
-Absolute `\static`, a `static` namespace segment such as `Foo\static`, other
-reserved-name grammar and unrelated runtime class-resolution diagnostics
-remain separate surfaces.
+This checkpoint claims the exercised ordinary-array empty-element diagnostics
+and match-arm comma grammar. Other comma-specific syntax diagnostics, omitted
+expressions outside arrays, and unrelated match diagnostics remain separate
+surfaces.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `a47f14fc`. Across all 5,599
