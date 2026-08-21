@@ -8,6 +8,68 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `e7c108fc`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,886 pass, 1,413 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 73.335% and the whole-corpus rate is 69.405%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact base
+`ef6f6385`, the pass-set delta is +3/-0:
+`Zend/tests/assign_by_val_function_by_ref_return_value.phpt`,
+`Zend/tests/assign_obj_ref_byval_function.phpt` and
+`tests/lang/bug21600.phpt` become exact passes. Every previous pass remains a
+pass.
+
+Three expected non-pass cases advance from runtime failure to their independent
+output boundaries. `Zend/tests/assign_ref_error_var_handling.phpt` reaches its
+overflow and notice-ordering checks, `Zend/tests/bug69732.phpt` reaches the
+existing overloaded-property behavior, and `Zend/tests/bug70083.phpt` reaches
+the existing missing overloaded-property reference error. There are no other
+status or failure-category transitions. Two sequential final runs have byte-
+identical merged manifests and summaries. Their manifest and summary SHA-256
+values are
+`085da6b97776d815681100eca30c740e998e8c5acb630a3b74b68ed5fffa41b4`
+and `ba66d0d3b02ff7112b778f1104d2afef20d8eef26833596c9ae6758cb1b7d2fd`.
+
+Reference assignment to dynamic-variable, global, object-property, static-
+property and one-dimensional array targets now accepts a function, method,
+static-method or dynamic-call result. The compiler prepares the observable
+target location before invoking the source, then materializes the call result
+through the existing `BindCvRef` contract. A reference-returning call therefore
+preserves its alias, while a by-value result emits PHP 8.5's notice before the
+write commits. Existing mutable-l-value sources retain source-before-target
+ordering, including rehash-sensitive array aliases. Direct variable-array
+append from a call result uses the same internal reference materialization.
+This adds no opcode, VM path, instruction-layout field, dependency or unsafe
+block.
+
+Original E2E regressions cover target/source order and cardinality, re-entrant
+one-dimensional array mutation, returned-reference identity and copy-on-write,
+direct append, dynamic calls, the by-value notice and a throwing notice handler
+that prevents the write. The complete 154-case adjacent `=&` source slice
+retains 91 passes, 41 failures and 22 unsupported capability cases with no
+regression. All five Cargo configurations, all-features/all-targets,
+formatting, PHPT runner self-test, unsafe self-test and the exact unsafe ratchet
+pass. The production inventory remains 1,613 unsafe blocks, 289 unsafe
+functions and 312 SAFETY annotations. Composer S0, all four Symfony S1 gates
+and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3 also pass.
+
+A local 21-pair alternating release control on an AMD Ryzen 9 7950X pinned to
+CPU 0 with the performance governor, three warmups and JIT/quick loops disabled
+compiled and executed 50,000 existing array-target reference assignments per
+observation through `eval()`. No sample was excluded and every run returned
+checksum `1250025000`. Baseline median/mean was 0.813000/0.815333 seconds and
+candidate median/mean was 0.804000/0.813429 seconds. The independent median and
+mean ratios are 0.988930 and 0.997664; paired median and mean ratios are
+0.986618 and 0.998675, below the +5% gate. The host ran x86-64 Linux 7.0.0 with
+30 GiB RAM and rustc 1.93.1. The exact candidate binary SHA-256 is
+`af20557d6d5d00996da6609654ee6439c8521700af597ae6ddd92aed0cb91f21`.
+
+Nested array target paths and call-result appends through a complex mutable
+root still require a deferred path representation that survives source-call
+re-entry. They remain explicitly rejected instead of committing from a stale
+container snapshot and are not claimed by this checkpoint.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `ef6f6385`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,883 pass, 1,416 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
