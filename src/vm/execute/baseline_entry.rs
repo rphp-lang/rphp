@@ -480,7 +480,7 @@ where
         None,
         logical_caller,
         false,
-        internal_trace_origin.then(|| ("Unknown".to_string(), 0, None)),
+        internal_trace_origin.then(|| ("Unknown".to_string(), 0, None, false)),
     )?;
     Ok(return_value)
 }
@@ -660,6 +660,8 @@ pub(crate) fn call_function_owned_iter_with_context_and_named_from<I>(
     closure_static_vars: Option<crate::value::ClosureStaticVars>,
     named_variadic: Vec<(String, Value)>,
     trace_origin: (String, usize),
+    pending_preentry_error: Option<&Value>,
+    capture_generated_preentry_error: bool,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = Value>,
@@ -676,7 +678,12 @@ where
         Some(named_variadic),
         logical_caller,
         false,
-        Some((trace_origin.0, trace_origin.1, None)),
+        Some((
+            trace_origin.0,
+            trace_origin.1,
+            pending_preentry_error,
+            capture_generated_preentry_error,
+        )),
     )?;
     Ok(return_value)
 }
@@ -756,7 +763,7 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     named_variadic: Option<Vec<(String, Value)>>,
     logical_caller: *mut ExecuteData,
     trace_caller_at_current_site: bool,
-    trace_origin: Option<(String, usize, Option<&Value>)>,
+    trace_origin: Option<(String, usize, Option<&Value>, bool)>,
 ) -> Result<(Value, Option<Value>), VmError>
 where
     I: Iterator<Item = Value>,
@@ -782,7 +789,7 @@ where
     if user_callee.is_some_and(|user| user.common.plan.has_deprecated_attribute()) {
         let source_override = trace_origin
             .as_ref()
-            .map(|(file, line, _)| (file.as_str(), *line));
+            .map(|(file, line, _, _)| (file.as_str(), *line));
         report_deprecated_user_call(
             eg,
             saved_execute_data,
@@ -799,7 +806,7 @@ where
     {
         let source_override = trace_origin
             .as_ref()
-            .map(|(file, line, _)| (file.as_str(), *line));
+            .map(|(file, line, _, _)| (file.as_str(), *line));
         report_no_discard_user_call(
             eg,
             saved_execute_data,
@@ -837,7 +844,16 @@ where
     let positional_public_num_args = num_args.saturating_sub(this_offset + capture_count);
     let public_num_args = positional_public_num_args
         .saturating_add(named_variadic.as_ref().map_or(0, Vec::len));
-    if public_num_args < signature.required_num_args as usize {
+    let supplied_preentry_error = trace_origin
+        .as_ref()
+        .and_then(|(_, _, throwable, _)| *throwable);
+    let capture_generated_preentry_error = trace_origin
+        .as_ref()
+        .is_some_and(|(_, _, _, capture)| *capture);
+    let mut generated_preentry_error = None;
+    if supplied_preentry_error.is_none()
+        && public_num_args < signature.required_num_args as usize
+    {
         let common = unsafe { &*func_ptr };
         let required = signature.required_num_args;
         let relation = if common.fn_type == FunctionType::Internal {
@@ -866,20 +882,30 @@ where
                 "Too few arguments to function {name}(), {public_num_args} passed and {relation} {required} expected"
             )
         };
-        eg.exception = Some(make_error_value("ArgumentCountError", &message));
-        return Ok((Value::null(), None));
+        let error = make_error_value("ArgumentCountError", &message);
+        eg.exception = Some(error.clone());
+        if !capture_generated_preentry_error {
+            return Ok((Value::null(), None));
+        }
+        generated_preentry_error = Some(error);
     }
-    if function_type == FunctionType::Internal
+    if supplied_preentry_error.is_none()
+        && generated_preentry_error.is_none()
+        && function_type == FunctionType::Internal
         && !signature.is_variadic
         && public_num_args > signature.public_arity() as usize
     {
-        eg.exception = Some(too_many_internal_arguments_error(
+        let error = too_many_internal_arguments_error(
             eg,
             func_ptr,
             signature,
             public_num_args as u32,
-        ));
-        return Ok((Value::null(), None));
+        );
+        eg.exception = Some(error.clone());
+        if !capture_generated_preentry_error {
+            return Ok((Value::null(), None));
+        }
+        generated_preentry_error = Some(error);
     }
     let capture_destination = signature.parameter_cv_count() as usize;
     let storage_num_args = if capture_count == 0 {
@@ -909,10 +935,8 @@ where
             eg.publish_detached_trace_caller(frame as usize, trace_caller as usize);
         }
     }
-    let pending_argument_error = trace_origin
-        .as_ref()
-        .and_then(|(_, _, throwable)| *throwable);
-    if let Some((file, line, _)) = trace_origin.as_ref() {
+    let pending_argument_error = supplied_preentry_error.or(generated_preentry_error.as_ref());
+    if let Some((file, line, _, _)) = trace_origin.as_ref() {
         eg.publish_detached_trace_origin(frame as usize, file.clone(), *line);
     }
     let mut return_value = Value::null();
@@ -975,9 +999,13 @@ where
                     .filter(|_| !op_array.source_file.is_empty())
                     .map(|line| (op_array.source_file.to_string(), line))
             } else {
-                trace_origin
-                    .as_ref()
-                    .map(|(file, line, _)| (file.clone(), *line))
+                trace_origin.as_ref().map(|(file, line, _, _)| {
+                    if file == "Unknown" && *line == 0 {
+                        ("[no active file]".to_string(), 0)
+                    } else {
+                        (file.clone(), *line)
+                    }
+                })
             };
             if let Some((file, line)) = location
                 && let Some(mut object) = throwable.as_object_mut()
@@ -1234,7 +1262,12 @@ where
         None,
         logical_caller,
         false,
-        Some((call_file.to_string(), call_line, Some(throwable))),
+        Some((
+            call_file.to_string(),
+            call_line,
+            Some(throwable),
+            false,
+        )),
     )?;
     Ok(())
 }

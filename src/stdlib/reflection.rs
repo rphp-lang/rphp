@@ -2083,6 +2083,8 @@ fn instantiate_attribute_definition_at_use(
         None,
         named_variadic,
         (source_file, source_line),
+        None,
+        false,
     )?;
     if eg.exception.is_some() {
         return Ok(());

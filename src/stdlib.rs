@@ -5340,6 +5340,7 @@ pub(crate) fn dispatch_php_error(
         ed,
         file,
         line,
+        false,
     );
     eg.handling_error = false;
     // SAFETY: `ed` is the suspended active call frame supplied to this
@@ -5372,6 +5373,7 @@ pub(crate) fn dispatch_uncaught_exception_handler(
         caller,
         "Unknown",
         0,
+        false,
     )?;
     Ok(eg.exception.is_none())
 }
@@ -5624,6 +5626,7 @@ pub fn run_shutdown_functions(
             logical_caller,
             "Unknown",
             0,
+            true,
         );
         release_roots.extend(next.into_release_roots());
         if let Err(error) = result {
@@ -8549,16 +8552,19 @@ fn reject_scope_introspection_callback(
     eg: &mut ExecutorGlobals,
     resolved: &ResolvedCallback,
 ) -> bool {
-    let name = scope_introspection_callback_name(resolved);
-    if let Some(name) = name {
-        eg.exception = Some(crate::value::make_error_value(
-            "Error",
-            &format!("Cannot call {name}() dynamically"),
-        ));
+    if let Some(error) = scope_introspection_callback_error(resolved) {
+        eg.exception = Some(error);
         true
     } else {
         false
     }
+}
+
+#[inline]
+fn scope_introspection_callback_error(resolved: &ResolvedCallback) -> Option<Value> {
+    scope_introspection_callback_name(resolved).map(|name| {
+        crate::value::make_error_value("Error", &format!("Cannot call {name}() dynamically"))
+    })
 }
 
 /// Get the calling scope's class name from an ExecuteData frame.
@@ -9989,6 +9995,7 @@ fn call_resolved_with_values_from(
     logical_caller: *mut ExecuteData,
     file: &str,
     line: usize,
+    capture_preentry_error_origin: bool,
 ) -> Result<Value, VmError> {
     if resolved.is_magic_call {
         let method = resolved
@@ -10010,7 +10017,35 @@ fn call_resolved_with_values_from(
             logical_caller,
             file,
             line,
+            capture_preentry_error_origin,
         );
+    }
+    if capture_preentry_error_origin
+        && let Some(error) = scope_introspection_callback_error(resolved)
+    {
+        let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
+        crate::vm::execute::call_function_owned_iter_with_context_and_named_from(
+            eg,
+            logical_caller,
+            resolved.func_ptr,
+            num_args,
+            resolved
+                .prepend_args
+                .iter()
+                .cloned()
+                .chain(args.iter().cloned())
+                .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+            resolved.called_scope_class_id,
+            resolved.bound_this.clone(),
+            resolved.use_vars.len(),
+            resolved.closure_static_vars.clone(),
+            Vec::new(),
+            (file.to_string(), line),
+            Some(&error),
+            false,
+        )?;
+        eg.exception = Some(error);
+        return Ok(Value::null());
     }
     if reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
@@ -10034,6 +10069,8 @@ fn call_resolved_with_values_from(
         resolved.closure_static_vars.clone(),
         Vec::new(),
         (file.to_string(), line),
+        None,
+        capture_preentry_error_origin,
     )
 }
 

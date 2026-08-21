@@ -4,6 +4,47 @@ use common::run_php;
 use std::process::Command;
 
 #[test]
+fn shutdown_preentry_errors_have_the_inactive_file_origin_and_internal_trace() {
+    for (callback, class, message) in [
+        (
+            "explode",
+            "ArgumentCountError",
+            "explode() expects at least 2 arguments, 0 given",
+        ),
+        (
+            "get_defined_vars",
+            "Error",
+            "Cannot call get_defined_vars() dynamically",
+        ),
+    ] {
+        let source = format!("register_shutdown_function('{callback}');");
+        let output = Command::new(env!("CARGO_BIN_EXE_rphp"))
+            .args(["-r", &source])
+            .output()
+            .expect("RPHP CLI must execute the pre-entry shutdown error specimen");
+
+        assert_eq!(output.status.code(), Some(255), "{callback}");
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), "", "{callback}");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            format!(
+                concat!(
+                    "\nFatal error: Uncaught {class}: {message} in [no active file]:0\n",
+                    "Stack trace:\n",
+                    "#0 [internal function]: {callback}()\n",
+                    "#1 {{main}}\n",
+                    "  thrown in [no active file] on line 0\n",
+                ),
+                class = class,
+                message = message,
+                callback = callback,
+            ),
+            "{callback}",
+        );
+    }
+}
+
+#[test]
 fn shutdown_callback_owners_are_released_after_the_fifo_finishes() {
     assert_eq!(
         run_php(
