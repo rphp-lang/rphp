@@ -1,5 +1,28 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+#[cold]
+#[inline(never)]
+fn finish_request_shutdown(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    shutdown_error: Option<VmError>,
+) -> Result<(), VmError> {
+    eg.current_execute_data
+        .set(unsafe { (*frame).prev_execute_data });
+    if let Err(error) = run_frame_destructors(eg, frame) {
+        crate::value::end_object_handle_request();
+        return Err(error);
+    }
+    unsafe { cleanup_frame_slots(frame) };
+    if let Err(error) = run_request_static_destructors(eg, frame) {
+        crate::value::end_object_handle_request();
+        return Err(error);
+    }
+    pop_vm_call_frame(eg, frame);
+    crate::value::end_object_handle_request();
+    shutdown_error.map_or(Ok(()), Err)
+}
+
 pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Value, VmError> {
     crate::value::begin_object_handle_request();
     let func_ptr = &main_func.common as *const FunctionCommon;
@@ -42,18 +65,15 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
             Err(error) => execution = Err(error),
         }
     }
-    if execution.is_ok() && eg.exception.is_none() && eg.shutdown_functions.is_some()
-        && let Err(error) = crate::stdlib::run_shutdown_functions(eg, frame)
-    {
-        execution = Err(error);
+    let mut shutdown_error = None;
+    if execution.is_ok() && eg.exception.is_none() && eg.shutdown_functions.is_some() {
+        shutdown_error = crate::stdlib::run_shutdown_functions(eg, frame).err();
     }
-    crate::value::end_object_handle_request();
-    execution?;
-
-    eg.current_execute_data.set(unsafe { (*frame).prev_execute_data });
-    run_frame_destructors(eg, frame)?;
-    unsafe { cleanup_frame_slots(frame) };
-    pop_vm_call_frame(eg, frame);
+    if let Err(error) = execution {
+        crate::value::end_object_handle_request();
+        return Err(error);
+    }
+    finish_request_shutdown(eg, frame, shutdown_error)?;
 
     crate::stdlib::flush_all_output_buffers(eg)?;
 
@@ -440,6 +460,7 @@ where
 fn call_function_iter_from_logical_caller<'a, I>(
     eg: &mut ExecutorGlobals,
     logical_caller: *mut ExecuteData,
+    internal_trace_origin: bool,
     func_ptr: *const FunctionCommon,
     num_args: usize,
     args: I,
@@ -459,7 +480,7 @@ where
         None,
         logical_caller,
         false,
-        None,
+        internal_trace_origin.then(|| ("Unknown".to_string(), 0, None)),
     )?;
     Ok(return_value)
 }

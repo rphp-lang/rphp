@@ -433,6 +433,7 @@ fn run_final_object_destructor_tree(
     release_references: Option<&HashMap<usize, usize>>,
     detach_lazy_state: bool,
     logical_caller: *mut ExecuteData,
+    internal_trace_origin: bool,
 ) -> Result<bool, VmError> {
     if owner.weak_object_strong_count() != Some(expected_references) {
         return Ok(false);
@@ -482,6 +483,7 @@ fn run_final_object_destructor_tree(
                 release_references,
                 detach_lazy_state,
                 logical_caller,
+                internal_trace_origin,
             )?;
             if eg.exception.is_some() {
                 if detach_lazy_state {
@@ -500,6 +502,7 @@ fn run_final_object_destructor_tree(
                 let _ = call_magic_method_from_logical_caller(
                     eg,
                     logical_caller,
+                    internal_trace_origin,
                     &owner,
                     "__destruct",
                     &[],
@@ -539,6 +542,7 @@ fn run_final_object_destructor_tree(
                 release_references,
                 detach_lazy_state,
                 logical_caller,
+                internal_trace_origin,
             )?;
             if eg.exception.is_some() {
                 return Ok(true);
@@ -605,6 +609,7 @@ fn run_final_object_destructor_tree(
             release_references,
             detach_lazy_state,
             logical_caller,
+            internal_trace_origin,
         )?;
         if eg.exception.is_some() {
             break;
@@ -617,6 +622,147 @@ fn run_final_object_destructor_tree(
         eg.release_fiber_object(identity);
     }
     Ok(ran_destructor)
+}
+
+/// Run the PHP destructor phase for a detached set of request-owned roots.
+/// Roots remain alive throughout dispatch, so grouped reference counts can
+/// distinguish a final owner from an object that is still retained elsewhere.
+#[cold]
+pub(crate) fn run_value_destructors(
+    eg: &mut ExecutorGlobals,
+    roots: &[Value],
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    run_value_destructors_inner(eg, roots, logical_caller, false).map(|_| ())
+}
+
+#[cold]
+fn run_value_destructors_inner(
+    eg: &mut ExecutorGlobals,
+    roots: &[Value],
+    logical_caller: *mut ExecuteData,
+    canonical_direct_roots_retained: bool,
+) -> Result<bool, VmError> {
+    let mut candidates = Vec::<(usize, usize, Value)>::new();
+    let mut seen_arrays = std::collections::HashSet::new();
+    let mut seen_references = std::collections::HashSet::new();
+    let mut seen_closures = std::collections::HashSet::new();
+    let mut seen_generators = std::collections::HashSet::new();
+    for root in roots {
+        collect_destructor_children(
+            eg,
+            root,
+            &mut candidates,
+            &mut seen_arrays,
+            &mut seen_references,
+            &mut seen_closures,
+            &mut seen_generators,
+        );
+    }
+    if canonical_direct_roots_retained {
+        for root in roots {
+            let Some(identity) = root.object_identity() else {
+                continue;
+            };
+            if let Some((_, references, _)) = candidates
+                .iter_mut()
+                .find(|(candidate, _, _)| *candidate == identity)
+            {
+                *references += 1;
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(false);
+    }
+
+    let release_references = candidates
+        .iter()
+        .map(|(identity, references, _)| (*identity, *references))
+        .collect::<HashMap<_, _>>();
+    let mut pending = candidates;
+    let mut any_progress = false;
+    loop {
+        let mut deferred = Vec::new();
+        let mut progressed = false;
+        for (identity, references, owner) in pending {
+            if owner.weak_object_strong_count() != Some(references + 1) {
+                deferred.push((identity, references, owner));
+                continue;
+            }
+            progressed |= run_final_object_destructor_tree(
+                eg,
+                owner,
+                references + 1,
+                Some(&release_references),
+                false,
+                logical_caller,
+                true,
+            )?;
+            if eg.exception.is_some() {
+                return Ok(true);
+            }
+        }
+        any_progress |= progressed;
+        if !progressed {
+            return Ok(any_progress);
+        }
+        pending = deferred;
+    }
+}
+
+/// Release class and named-function static roots to a fixed point. A
+/// destructor may publish another object into either storage family; the next
+/// pass observes that new root without revisiting an already-retired object.
+#[cold]
+pub(crate) fn run_request_static_destructors(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    if !eg.request_static_values_may_retain_objects() {
+        return Ok(());
+    }
+    let dispatch_pending = |eg: &mut ExecutorGlobals| -> Result<bool, VmError> {
+        let Some(exception) = eg.exception.take() else {
+            return Ok(true);
+        };
+        match crate::stdlib::dispatch_uncaught_exception_handler(
+            eg,
+            logical_caller,
+            &exception,
+        ) {
+            Ok(true) => Ok(true),
+            Ok(false) => {
+                if eg.exception.is_none() {
+                    eg.exception = Some(exception);
+                }
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    };
+    loop {
+        let class_values = eg.shutdown_class_static_values();
+        let function_values = eg.shutdown_function_static_values();
+        if class_values.is_empty() && function_values.is_empty() {
+            return Ok(());
+        }
+        let mut progressed =
+            run_value_destructors_inner(eg, &class_values, logical_caller, true)?;
+        drop(class_values);
+        if eg.exception.is_some() && !dispatch_pending(eg)? {
+            return Ok(());
+        }
+        progressed |=
+            run_value_destructors_inner(eg, &function_values, logical_caller, true)?;
+        drop(function_values);
+        if eg.exception.is_some() && !dispatch_pending(eg)? {
+            return Ok(());
+        }
+        if !progressed {
+            return Ok(());
+        }
+    }
 }
 
 /// Invoke only the user-destructor phase for a cycle candidate. Cycle edges
@@ -742,6 +888,7 @@ fn run_frame_destructors(
                     Some(&counts),
                     false,
                     logical_caller,
+                    false,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -849,6 +996,7 @@ pub(crate) fn run_prepared_value_destructor(
         None,
         true,
         logical_caller,
+        false,
     )?;
     Ok(())
 }
@@ -942,6 +1090,7 @@ fn release_statement_temps(
                     Some(&object_counts),
                     false,
                     frame,
+                    false,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -1409,6 +1558,7 @@ fn call_magic_method(
 fn call_magic_method_from_logical_caller(
     eg: &mut ExecutorGlobals,
     logical_caller: *mut ExecuteData,
+    internal_trace_origin: bool,
     obj_val: &Value,
     method_name: &str,
     args: &[Value],
@@ -1429,6 +1579,7 @@ fn call_magic_method_from_logical_caller(
     let result = call_function_iter_from_logical_caller(
         eg,
         logical_caller,
+        internal_trace_origin,
         func_ptr,
         call_args.len(),
         call_args.iter(),

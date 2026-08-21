@@ -5599,6 +5599,14 @@ pub fn run_shutdown_functions(
     eg: &mut ExecutorGlobals,
     logical_caller: *mut ExecuteData,
 ) -> Result<(), VmError> {
+    let mut release_roots = Vec::new();
+    let drain_pending_roots = |eg: &mut ExecutorGlobals, release_roots: &mut Vec<Value>| {
+        if let Some(mut pending) = eg.shutdown_functions.take() {
+            while let Some(callback) = pending.pop_front() {
+                release_roots.extend(callback.into_release_roots());
+            }
+        }
+    };
     loop {
         let next = eg
             .shutdown_functions
@@ -5606,6 +5614,7 @@ pub fn run_shutdown_functions(
             .and_then(std::collections::VecDeque::pop_front);
         let Some(next) = next else {
             eg.shutdown_functions = None;
+            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
             return Ok(());
         };
         let result = call_resolved_with_values_from(
@@ -5616,8 +5625,10 @@ pub fn run_shutdown_functions(
             "Unknown",
             0,
         );
+        release_roots.extend(next.into_release_roots());
         if let Err(error) = result {
-            eg.shutdown_functions = None;
+            drain_pending_roots(eg, &mut release_roots);
+            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
             return Err(error);
         }
         if let Some(exception) = eg.exception.take() {
@@ -5629,7 +5640,8 @@ pub fn run_shutdown_functions(
                     }
                 }
                 Err(error) => {
-                    eg.shutdown_functions = None;
+                    drain_pending_roots(eg, &mut release_roots);
+                    crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
                     return Err(error);
                 }
             }
@@ -5637,7 +5649,8 @@ pub fn run_shutdown_functions(
                 .exception
                 .take()
                 .expect("unhandled shutdown exception must remain pending");
-            eg.shutdown_functions = None;
+            drain_pending_roots(eg, &mut release_roots);
+            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
             return Err(VmError::Fatal(
                 crate::vm::execute::format_uncaught_throwable(eg, &exception),
             ));
@@ -8362,6 +8375,22 @@ pub(crate) struct ResolvedCallback {
 pub(crate) struct ShutdownFunction {
     callback: ResolvedCallback,
     arguments: Vec<Value>,
+}
+
+impl ShutdownFunction {
+    fn into_release_roots(self) -> Vec<Value> {
+        let ResolvedCallback {
+            prepend_args,
+            use_vars,
+            bound_this,
+            ..
+        } = self.callback;
+        let mut roots = prepend_args;
+        roots.extend(use_vars);
+        roots.extend(bound_this);
+        roots.extend(self.arguments);
+        roots
+    }
 }
 
 impl Clone for ResolvedCallback {

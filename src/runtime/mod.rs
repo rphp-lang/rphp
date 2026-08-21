@@ -572,6 +572,10 @@ pub struct ExecutorGlobals {
     /// cannot invalidate a warmed site and inherited declarations can share
     /// one slot exactly.
     static_property_values: Vec<Value>,
+    /// Runtime writes may place destructor-bearing objects in class or named-
+    /// function static storage. Ordinary requests leave this false and skip
+    /// the cold fixed-point scan entirely.
+    request_static_values_may_retain_objects: bool,
     /// Per-class property-index → canonical storage-slot mapping. Slot zero in
     /// this outer vector is reserved alongside `class_by_id`.
     static_property_slots_by_class: Vec<Box<[u32]>>,
@@ -1138,6 +1142,7 @@ impl ExecutorGlobals {
             internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
+            request_static_values_may_retain_objects: false,
             static_property_slots_by_class: vec![Box::new([])],
             #[cfg(feature = "php-generics-reified")]
             static_generic_property_contracts: Vec::new(),
@@ -1248,6 +1253,7 @@ impl ExecutorGlobals {
             internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
+            request_static_values_may_retain_objects: false,
             static_property_slots_by_class: vec![Box::new([])],
             #[cfg(feature = "php-generics-reified")]
             static_generic_property_contracts: Vec::new(),
@@ -1592,6 +1598,9 @@ impl ExecutorGlobals {
             let mut values = storage.borrow_mut();
             callback(&mut values)
         } else {
+            // Named static cells outlive the activation and may be mutated
+            // through their installed CV reference after this call returns.
+            self.request_static_values_may_retain_objects = true;
             callback(self.static_vars.entry(function.to_string()).or_default())
         }
     }
@@ -5044,6 +5053,9 @@ impl ExecutorGlobals {
 
     #[inline(always)]
     pub(crate) fn static_property_value_mut(&mut self, storage_slot: usize) -> Option<&mut Value> {
+        // Indirect/reference access can publish an object without returning
+        // through the ordinary static-property setter.
+        self.request_static_values_may_retain_objects = true;
         self.static_property_values.get_mut(storage_slot)
     }
 
@@ -5056,6 +5068,7 @@ impl ExecutorGlobals {
         storage_slot: usize,
         value: Value,
     ) -> bool {
+        self.note_request_static_value(&value);
         let Some(current) = self.static_property_values.get_mut(storage_slot) else {
             return false;
         };
@@ -5092,6 +5105,7 @@ impl ExecutorGlobals {
         value: Value,
     ) {
         debug_assert!(storage_slot < self.static_property_values.len());
+        self.note_request_static_value(&value);
         let current = unsafe { self.static_property_values.get_unchecked_mut(storage_slot) };
         if current.is_reference() {
             unsafe {
@@ -5102,6 +5116,47 @@ impl ExecutorGlobals {
         } else {
             *current = value;
         }
+    }
+
+    #[inline(always)]
+    fn note_request_static_value(&mut self, value: &Value) {
+        self.request_static_values_may_retain_objects |= matches!(
+            value.value_type(),
+            crate::value::ValueType::Array
+                | crate::value::ValueType::Object
+                | crate::value::ValueType::Reference
+                | crate::value::ValueType::Closure
+        );
+    }
+
+    #[inline(always)]
+    pub(crate) fn request_static_values_may_retain_objects(&self) -> bool {
+        self.request_static_values_may_retain_objects
+    }
+
+    /// Snapshot heap-backed class-static roots for the request shutdown phase.
+    /// Canonical slots remain readable while destructors run; shallow Value
+    /// clones preserve container identity so later mutations become visible to
+    /// the next fixed-point pass.
+    #[cold]
+    pub(crate) fn shutdown_class_static_values(&self) -> Vec<Value> {
+        self.static_property_values
+            .iter()
+            .filter(|value| value.needs_cleanup())
+            .cloned()
+            .collect()
+    }
+
+    /// Snapshot named-function static roots after class statics while leaving
+    /// their canonical cells visible to reentrant destructor code.
+    #[cold]
+    pub(crate) fn shutdown_function_static_values(&self) -> Vec<Value> {
+        self.static_vars
+            .values()
+            .flat_map(HashMap::values)
+            .filter(|value| value.needs_cleanup())
+            .cloned()
+            .collect()
     }
 
     /// Check if a class is an instance of another (walks parent chain AND implements)
