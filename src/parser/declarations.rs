@@ -1502,15 +1502,17 @@ impl Parser {
         let type_hint = self.try_parse_class_constant_type()?;
         let mut constants = Vec::new();
         loop {
-            let name = match self.advance() {
-                Token::Identifier(name, _) | Token::MagicConstant { name, .. } => name,
-                Token::Goto { name, .. } => name,
+            let (name, line) = match self.advance() {
+                Token::Identifier(name, line)
+                | Token::MagicConstant { name, line }
+                | Token::Goto { name, line } => (name, line),
                 other => return Err(format!("Expected class constant name, got {:?}", other)),
             };
             self.expect(&Token::Assign)?;
             let value = self.parse_expr()?;
             constants.push(ClassConstant {
                 attributes: attributes.to_vec(),
+                line,
                 visibility: modifiers.visibility,
                 name,
                 value,
@@ -1544,6 +1546,7 @@ impl Parser {
                 | Token::True
                 | Token::False
                 | Token::Static
+                | Token::LParen(_)
         ) {
             let first = self.parse_base_type_hint()?;
             self.maybe_parse_compound_type(first)?
@@ -1551,34 +1554,7 @@ impl Parser {
             return Ok(None);
         };
 
-        if Self::class_constant_type_is_forbidden(&hint) {
-            return Err(format!(
-                "Class constant type {} is not permitted",
-                match hint {
-                    TypeHint::Void => "void",
-                    TypeHint::Never => "never",
-                    TypeHint::Callable => "callable",
-                    _ => "declaration",
-                }
-            ));
-        }
         Ok(Some(hint))
-    }
-
-    fn class_constant_type_is_forbidden(hint: &TypeHint) -> bool {
-        match hint {
-            TypeHint::Void | TypeHint::Never | TypeHint::Callable => true,
-            TypeHint::Nullable(inner) | TypeHint::GenericParameter { erased: inner, .. } => {
-                Self::class_constant_type_is_forbidden(inner)
-            }
-            TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
-                parts.iter().any(Self::class_constant_type_is_forbidden)
-            }
-            TypeHint::GenericApplication { arguments, .. } => arguments
-                .iter()
-                .any(Self::class_constant_type_is_forbidden),
-            _ => false,
-        }
     }
 
     fn parse_method_body(

@@ -396,6 +396,7 @@ fn reflected_attribute_definitions(
 
 enum DeferredAttributeError {
     Message(String),
+    TypedClassConstant(String),
     Vm(VmError),
 }
 
@@ -560,6 +561,9 @@ fn deferred_class_constant(
     }
     if let Some(error) = definition.evaluation_error {
         return Err(DeferredAttributeError::Message(error));
+    }
+    if definition.value_is_deferred {
+        return evaluate_deferred_class_constant_definition(&definition, eg);
     }
     Ok(definition.value)
 }
@@ -1037,19 +1041,81 @@ pub(crate) fn evaluate_deferred_class_constant_value(
     definition: &ClassConstantDefinition,
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<Value>, VmError> {
-    let (Some(expression), Some(scope)) =
-        (&definition.source_expression, &definition.evaluation_scope)
-    else {
-        return Ok(Some(definition.value.clone()));
-    };
-    match evaluate_deferred_attribute_expression(expression, scope, &definition.source_file, eg) {
+    match evaluate_deferred_class_constant_definition(definition, eg) {
         Ok(value) => Ok(Some(value)),
         Err(DeferredAttributeError::Message(error)) => {
             eg.exception = Some(make_error_value("Error", &error));
             Ok(None)
         }
+        Err(DeferredAttributeError::TypedClassConstant(error)) => {
+            eg.exception = Some(make_error_value("TypeError", &error));
+            Ok(None)
+        }
         Err(DeferredAttributeError::Vm(error)) => Err(error),
     }
+}
+
+fn normalize_deferred_class_constant_value(
+    value: Value,
+    hint: &ParamTypeHint,
+    declaring_class: &str,
+    eg: &ExecutorGlobals,
+) -> Result<Value, Value> {
+    if crate::vm::execute::check_type_hint(&value, hint, eg, true, Some(declaring_class)) {
+        return Ok(value);
+    }
+    match hint {
+        ParamTypeHint::Float if value.value_type() == ValueType::Long => Ok(Value::double(
+            value
+                .as_long()
+                .expect("checked deferred class-constant integer") as f64,
+        )),
+        ParamTypeHint::Nullable(inner) => {
+            normalize_deferred_class_constant_value(value, inner, declaring_class, eg)
+        }
+        ParamTypeHint::Union(parts) => {
+            for part in parts {
+                if let Ok(value) = normalize_deferred_class_constant_value(
+                    value.clone(),
+                    part,
+                    declaring_class,
+                    eg,
+                ) {
+                    return Ok(value);
+                }
+            }
+            Err(value)
+        }
+        _ => Err(value),
+    }
+}
+
+fn evaluate_deferred_class_constant_definition(
+    definition: &ClassConstantDefinition,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, DeferredAttributeError> {
+    let (Some(expression), Some(scope)) =
+        (&definition.source_expression, &definition.evaluation_scope)
+    else {
+        return Ok(definition.value.clone());
+    };
+    let value =
+        evaluate_deferred_attribute_expression(expression, scope, &definition.source_file, eg)?;
+    normalize_deferred_class_constant_value(
+        value,
+        &definition.type_hint,
+        &definition.declaring_class,
+        eg,
+    )
+    .map_err(|value| {
+        DeferredAttributeError::TypedClassConstant(format!(
+            "Cannot assign {} to class constant {}::{} of type {}",
+            value.diagnostic_type_name(),
+            definition.declaring_class,
+            definition.name,
+            definition.type_hint.display_name()
+        ))
+    })
 }
 
 pub(crate) fn evaluate_deferred_property_default_value(
@@ -1069,6 +1135,12 @@ pub(crate) fn evaluate_deferred_property_default_value(
             // unresolved constant-expression dependency.
             if eg.exception.is_none() {
                 eg.exception = Some(make_error_value("Error", &error));
+            }
+            Ok(None)
+        }
+        Err(DeferredAttributeError::TypedClassConstant(error)) => {
+            if eg.exception.is_none() {
+                eg.exception = Some(make_error_value("TypeError", &error));
             }
             Ok(None)
         }
@@ -1302,6 +1374,10 @@ fn evaluate_attribute_arguments(
                     Ok(value) => value,
                     Err(DeferredAttributeError::Message(error)) => {
                         eg.exception = Some(make_error_value("Error", &error));
+                        return Ok(None);
+                    }
+                    Err(DeferredAttributeError::TypedClassConstant(error)) => {
+                        eg.exception = Some(make_error_value("TypeError", &error));
                         return Ok(None);
                     }
                     Err(DeferredAttributeError::Vm(error)) => return Err(error),

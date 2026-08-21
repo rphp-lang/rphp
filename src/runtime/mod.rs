@@ -4058,13 +4058,19 @@ impl ExecutorGlobals {
                 // hierarchy, so descendants inherit the opt-out even when
                 // they do not repeat the attribute.
                 class_def.allow_dynamic_properties |= parent.allow_dynamic_properties;
-                merge_parent_constant_definitions(
+                let mut constants = std::mem::take(&mut class_def.constants);
+                let result = merge_parent_constant_definitions(
                     &class_name,
-                    &mut class_def.constants,
+                    &mut constants,
                     &parent.constants,
                     declaration_file.as_deref(),
                     declaration_line,
-                )?;
+                    &|actual, target| {
+                        self.class_is_a_while_linking(actual, target, Some(&class_def))
+                    },
+                );
+                class_def.constants = constants;
+                result?;
             }
         }
 
@@ -4498,13 +4504,17 @@ impl ExecutorGlobals {
             let Some(interface) = self.class_table.get(interface_name.as_str()) else {
                 continue;
             };
-            merge_interface_constant_definitions(
+            let mut constants = std::mem::take(&mut class_def.constants);
+            let result = merge_interface_constant_definitions(
                 &class_name,
-                &mut class_def.constants,
+                &mut constants,
                 &interface.constants,
                 declaration_file.as_deref(),
                 declaration_line,
-            )?;
+                &|actual, target| self.class_is_a_while_linking(actual, target, Some(&class_def)),
+            );
+            class_def.constants = constants;
+            result?;
         }
 
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

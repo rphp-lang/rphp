@@ -6170,6 +6170,19 @@ impl Compiler {
         declaration_key
     }
 
+    fn forbidden_class_constant_type_name(hint: &ParamTypeHint) -> Option<&'static str> {
+        match hint {
+            ParamTypeHint::Callable => Some("callable"),
+            ParamTypeHint::Void => Some("void"),
+            ParamTypeHint::Never => Some("never"),
+            ParamTypeHint::Nullable(inner) => Self::forbidden_class_constant_type_name(inner),
+            ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => parts
+                .iter()
+                .find_map(Self::forbidden_class_constant_type_name),
+            _ => None,
+        }
+    }
+
     fn compile_class_constants(
         &mut self,
         owner: &str,
@@ -6181,6 +6194,17 @@ impl Compiler {
             self.validate_attribute_target(&constant.attributes, "class constant")?;
             self.validate_deprecated_target(&constant.attributes, "class constant")?;
             self.validate_override_target(&constant.attributes, "class constant", false)?;
+            if let Some(forbidden) = Self::forbidden_class_constant_type_name(
+                &self.convert_type_hint(&constant.type_hint),
+            ) {
+                return Err(self.goto_error(
+                    &format!(
+                        "Class constant {}::{} cannot have type {forbidden}",
+                        owner, constant.name
+                    ),
+                    constant.line,
+                ));
+            }
             if let Some((message, line)) = forbidden_static_constant_expression(&constant.value) {
                 return Err(self.goto_error(message, line));
             }
@@ -6241,17 +6265,82 @@ impl Compiler {
                     .filter(|(index, _)| values[*index].is_none())
                     .map(|(_, constant)| constant.name.as_str())
                     .collect::<std::collections::HashSet<_>>();
+                let unresolved = constants
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| values[*index].is_none())
+                    .map(|(index, constant)| {
+                        let reason = self
+                            .eval_const_expr_in_source(&constant.value, &known)
+                            .expect_err("unresolved class constant expression");
+                        let reference = reason
+                            .strip_prefix("class constant ")
+                            .and_then(|reason| reason.strip_suffix(unavailable_suffix))
+                            .map(str::to_owned);
+                        (index, reason, reference)
+                    })
+                    .collect::<Vec<_>>();
+
+                // First retain declarations blocked directly on a global or
+                // external runtime constant. Their local dependants are not
+                // cycles: they must be retained for the same first-use walk.
+                for (index, reason, reference) in &unresolved {
+                    let local_reference = reference.as_deref().is_some_and(|reference| {
+                        reference.split_once("::").is_some_and(|(scope, target)| {
+                            (scope.eq_ignore_ascii_case("self")
+                                || scope.eq_ignore_ascii_case(owner))
+                                && unresolved_names.contains(target)
+                        })
+                    });
+                    if !local_reference
+                        && deferred_constant_expression_is_supported(&constants[*index].value)
+                        && constant_expression_dependency_is_unavailable(reason)
+                    {
+                        deferred_values[*index] = true;
+                        remaining -= 1;
+                    }
+                }
+
+                loop {
+                    let mut propagated = false;
+                    for (index, _, reference) in &unresolved {
+                        if deferred_values[*index] {
+                            continue;
+                        }
+                        let Some((scope, target)) =
+                            reference.as_deref().and_then(|reference| reference.split_once("::"))
+                        else {
+                            continue;
+                        };
+                        if !(scope.eq_ignore_ascii_case("self")
+                            || scope.eq_ignore_ascii_case(owner))
+                        {
+                            continue;
+                        }
+                        let Some(target_index) = constants
+                            .iter()
+                            .position(|constant| constant.name == target)
+                        else {
+                            continue;
+                        };
+                        if deferred_values[target_index]
+                            && deferred_constant_expression_is_supported(&constants[*index].value)
+                        {
+                            deferred_values[*index] = true;
+                            remaining -= 1;
+                            propagated = true;
+                        }
+                    }
+                    if !propagated {
+                        break;
+                    }
+                }
+
                 let mut lazy_errors = Vec::new();
-                for (index, constant) in constants.iter().enumerate() {
-                    if values[index].is_some() {
+                for (index, reason, reference) in unresolved {
+                    if deferred_values[index] {
                         continue;
                     }
-                    let reason = self
-                        .eval_const_expr_in_source(&constant.value, &known)
-                        .expect_err("unresolved class constant expression");
-                    let reference = reason
-                        .strip_prefix("class constant ")
-                        .and_then(|reason| reason.strip_suffix(unavailable_suffix));
                     if let Some(reference) = reference
                         && let Some((scope, target)) = reference.split_once("::")
                         && (scope.eq_ignore_ascii_case("self")
@@ -6262,19 +6351,10 @@ impl Compiler {
                             index,
                             format!("Cannot declare self-referencing constant {reference}"),
                         ));
-                    } else if deferred_constant_expression_is_supported(&constant.value)
-                        && constant_expression_dependency_is_unavailable(&reason)
-                    {
-                        // PHP 8.5 permits a class-constant expression to depend
-                        // on a global constant published by an earlier runtime
-                        // define(). Retain that rare expression for first-use
-                        // materialization instead of rejecting the class.
-                        deferred_values[index] = true;
-                        remaining -= 1;
                     } else {
                         return Err(format!(
                             "Cannot use non-constant expression as value for class constant {}::{}: {}",
-                            owner, constant.name, reason
+                            owner, constants[index].name, reason
                         ));
                     }
                 }
@@ -6290,8 +6370,14 @@ impl Compiler {
             .zip(values.into_iter().zip(evaluation_errors))
             .enumerate()
             .map(|(index, (constant, (value, evaluation_error)))| {
-                let type_hint = self.resolve_declared_property_type_hint(
-                    self.convert_type_hint(&constant.type_hint),
+                let declared_type_hint = self.convert_type_hint(&constant.type_hint);
+                let type_hint = self.resolve_declared_class_constant_type_hint(
+                    declared_type_hint.clone(),
+                    owner,
+                    parent,
+                );
+                let eager_validation_type_hint = self.resolve_declared_property_type_hint(
+                    declared_type_hint,
                     owner,
                     parent,
                 );
@@ -6299,16 +6385,19 @@ impl Compiler {
                     Value::null()
                 } else {
                     let value = value.expect("resolved class constant");
-                    let value_type = value.value_type();
-                    normalize_typed_declaration_default(value, &type_hint).map_err(|_| {
-                        format!(
-                            "Cannot use value of type {:?} for class constant {}::{} of type {}",
-                            value_type,
-                            owner,
-                            constant.name,
-                            type_hint.display_name()
-                        )
-                    })?
+                    normalize_typed_declaration_default(value, &eager_validation_type_hint)
+                        .map_err(|value| {
+                            self.goto_error(
+                                &format!(
+                                    "Cannot use {} as value for class constant {}::{} of type {}",
+                                    value.diagnostic_type_name(),
+                                    owner,
+                                    constant.name,
+                                    type_hint.display_name()
+                                ),
+                                constant.line,
+                            )
+                        })?
                 };
                 let retain_expression = deferred_values[index]
                     || constant_expression_references_symbol(&constant.value);

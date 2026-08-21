@@ -1180,6 +1180,7 @@ pub struct ClassProperty {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassConstant {
     pub attributes: Vec<Attribute>,
+    pub line: usize,
     pub visibility: Visibility,
     pub name: String,
     pub value: Expr,

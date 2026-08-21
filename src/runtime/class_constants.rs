@@ -17,6 +17,7 @@ fn constant_definitions_compatible(
 fn class_constant_type_is_covariant(
     implementation: &crate::vm::function::ParamTypeHint,
     inherited: &crate::vm::function::ParamTypeHint,
+    class_is_a: &dyn Fn(&str, &str) -> bool,
 ) -> bool {
     use crate::vm::function::ParamTypeHint;
 
@@ -31,29 +32,34 @@ fn class_constant_type_is_covariant(
     if let ParamTypeHint::Union(parts) = implementation {
         return parts
             .iter()
-            .all(|part| class_constant_type_is_covariant(part, inherited));
+            .all(|part| class_constant_type_is_covariant(part, inherited, class_is_a));
     }
     if let ParamTypeHint::Union(parts) = inherited {
         return parts
             .iter()
-            .any(|part| class_constant_type_is_covariant(implementation, part));
+            .any(|part| class_constant_type_is_covariant(implementation, part, class_is_a));
     }
     if let ParamTypeHint::Intersection(parts) = inherited {
         return parts
             .iter()
-            .all(|part| class_constant_type_is_covariant(implementation, part));
+            .all(|part| class_constant_type_is_covariant(implementation, part, class_is_a));
     }
     if let ParamTypeHint::Intersection(parts) = implementation {
         return parts
             .iter()
-            .any(|part| class_constant_type_is_covariant(part, inherited));
+            .any(|part| class_constant_type_is_covariant(part, inherited, class_is_a));
     }
     if let ParamTypeHint::Nullable(inner) = inherited {
-        return class_constant_type_is_covariant(implementation, inner)
+        return class_constant_type_is_covariant(implementation, inner, class_is_a)
             || matches!(
                 implementation,
                 ParamTypeHint::Nullable(implementation_inner)
-                    if class_constant_type_is_covariant(implementation_inner, inner)
+                    if matches!(implementation_inner.as_ref(), ParamTypeHint::None)
+            )
+            || matches!(
+                implementation,
+                ParamTypeHint::Nullable(implementation_inner)
+                    if class_constant_type_is_covariant(implementation_inner, inner, class_is_a)
             );
     }
     match (implementation, inherited) {
@@ -68,7 +74,7 @@ fn class_constant_type_is_covariant(
             true
         }
         (ParamTypeHint::ClassName(left), ParamTypeHint::ClassName(right)) => {
-            left.eq_ignore_ascii_case(right)
+            left.eq_ignore_ascii_case(right) || class_is_a(left, right)
         }
         _ => false,
     }
@@ -92,6 +98,7 @@ fn merge_parent_constant_definitions(
     parent: &[ClassConstantDefinition],
     source_file: Option<&str>,
     declaration_line: usize,
+    class_is_a: &dyn Fn(&str, &str) -> bool,
 ) -> Result<(), String> {
     let location = class_constant_declaration_location(source_file, declaration_line);
     for inherited in parent {
@@ -114,7 +121,11 @@ fn merge_parent_constant_definitions(
                     owner, existing.name, inherited.visibility, location
                 ));
             }
-            if !class_constant_type_is_covariant(&existing.type_hint, &inherited.type_hint) {
+            if !class_constant_type_is_covariant(
+                &existing.type_hint,
+                &inherited.type_hint,
+                class_is_a,
+            ) {
                 return Err(format!(
                     "Type of {}::{} must be compatible with {}::{} of type {}{}",
                     owner,
@@ -186,6 +197,7 @@ fn merge_interface_constant_definitions(
     interface_constants: &[ClassConstantDefinition],
     source_file: Option<&str>,
     declaration_line: usize,
+    class_is_a: &dyn Fn(&str, &str) -> bool,
 ) -> Result<(), String> {
     let location = class_constant_declaration_location(source_file, declaration_line);
     for inherited in interface_constants {
@@ -210,7 +222,11 @@ fn merge_interface_constant_definitions(
                         owner, existing.name, inherited.visibility, location
                     ));
                 }
-                if !class_constant_type_is_covariant(&existing.type_hint, &inherited.type_hint) {
+                if !class_constant_type_is_covariant(
+                    &existing.type_hint,
+                    &inherited.type_hint,
+                    class_is_a,
+                ) {
                     return Err(format!(
                         "Type of {}::{} must be compatible with {}::{} of type {}{}",
                         owner,

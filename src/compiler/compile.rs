@@ -6574,6 +6574,52 @@ impl Compiler {
         }
     }
 
+    fn resolve_declared_class_constant_type_hint(
+        &self,
+        hint: ParamTypeHint,
+        class_name: &str,
+        parent_name: Option<&str>,
+    ) -> ParamTypeHint {
+        match hint {
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
+                ParamTypeHint::ClassName(class_name.to_string())
+            }
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
+                ParamTypeHint::ClassName(parent_name.unwrap_or("parent").to_string())
+            }
+            // Unlike property declarations, a class-constant `static` type
+            // remains late-bound and is also preserved in PHP diagnostics.
+            ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
+                self.resolve_declared_class_constant_type_hint(*inner, class_name, parent_name),
+            )),
+            ParamTypeHint::Union(parts) => ParamTypeHint::Union(
+                parts
+                    .into_iter()
+                    .map(|part| {
+                        self.resolve_declared_class_constant_type_hint(
+                            part,
+                            class_name,
+                            parent_name,
+                        )
+                    })
+                    .collect(),
+            ),
+            ParamTypeHint::Intersection(parts) => ParamTypeHint::Intersection(
+                parts
+                    .into_iter()
+                    .map(|part| {
+                        self.resolve_declared_class_constant_type_hint(
+                            part,
+                            class_name,
+                            parent_name,
+                        )
+                    })
+                    .collect(),
+            ),
+            concrete => concrete,
+        }
+    }
+
     /// Emit default parameter initialization for a single param.
     /// Pattern: BindDefaultParam (skip if arg passed) → compute default →
     /// AssignCv → optional generic check → label.

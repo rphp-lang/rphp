@@ -487,6 +487,96 @@ class TypedConstant { public const int VALUE = "wrong"; }
 }
 
 #[test]
+fn typed_class_constant_declaration_diagnostics_match_php() {
+    for (source, expected) in [
+        (
+            "<?php\nclass EagerTyped {\n    public const int VALUE = 'wrong';\n}",
+            "Cannot use string as value for class constant EagerTyped::VALUE of type int in /virtual/typed-class-constants.php on line 3",
+        ),
+        (
+            "<?php\nclass ForbiddenTyped {\n    public const callable VALUE = null;\n}",
+            "Class constant ForbiddenTyped::VALUE cannot have type callable in /virtual/typed-class-constants.php on line 3",
+        ),
+    ] {
+        let error = run_php_expect_error_with_source_context(
+            source,
+            "/virtual/typed-class-constants.php",
+            "/virtual",
+        );
+        assert_eq!(format!("{error:?}"), format!("Fatal(\"{expected}\")"));
+    }
+}
+
+#[test]
+fn deferred_typed_class_constants_validate_the_origin_and_static_type() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DeferredFloat { public const float VALUE = FLOAT_SEED; }
+class DeferredBad {
+    public const stdClass&Stringable ORIGIN = BAD_SEED;
+    public const stdClass&Stringable DEPENDENT = self::ORIGIN;
+}
+enum StaticOwner { public const static VALUE = OtherEnum::CaseValue; }
+enum OtherEnum { case CaseValue; }
+
+define('FLOAT_SEED', 3);
+define('BAD_SEED', new stdClass());
+var_dump(DeferredFloat::VALUE);
+foreach (['DEPENDENT', 'ORIGIN', 'DEPENDENT'] as $name) {
+    try { var_dump(DeferredBad::{$name}); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+try { var_dump(StaticOwner::VALUE); }
+catch (TypeError $error) { echo $error->getMessage(); }
+"#,
+        ),
+        concat!(
+            "float(3)\n",
+            "Cannot assign stdClass to class constant DeferredBad::ORIGIN of type stdClass&Stringable\n",
+            "Cannot assign stdClass to class constant DeferredBad::ORIGIN of type stdClass&Stringable\n",
+            "Cannot assign stdClass to class constant DeferredBad::ORIGIN of type stdClass&Stringable\n",
+            "Cannot assign OtherEnum to class constant StaticOwner::VALUE of type static",
+        )
+    );
+}
+
+#[test]
+fn typed_class_constant_covariance_accepts_subclasses_and_dnf_types() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ConstantSuper implements Stringable {
+    public function __toString() { return ''; }
+}
+class ConstantSub extends ConstantSuper {}
+class CovariantConstants {
+    public const object OBJECT_VALUE = SUPER_VALUE;
+    public const ConstantSuper CLASS_VALUE = SUPER_VALUE;
+    public const ?ConstantSuper NULLABLE_VALUE = SUPER_VALUE;
+    public const CovariantConstants OWNER_VALUE = OWNER_VALUE;
+}
+class NarrowConstants extends CovariantConstants {
+    public const ConstantSuper OBJECT_VALUE = SUB_VALUE;
+    public const ConstantSub CLASS_VALUE = SUB_VALUE;
+    public const (ConstantSuper&Stringable)|null NULLABLE_VALUE = SUB_VALUE;
+    public const NarrowConstants OWNER_VALUE = NARROW_VALUE;
+}
+define('SUPER_VALUE', new ConstantSuper());
+define('SUB_VALUE', new ConstantSub());
+define('OWNER_VALUE', new CovariantConstants());
+define('NARROW_VALUE', new NarrowConstants());
+echo get_class(NarrowConstants::OBJECT_VALUE), ':';
+echo get_class(NarrowConstants::CLASS_VALUE), ':';
+echo get_class(NarrowConstants::NULLABLE_VALUE), ':';
+echo get_class(NarrowConstants::OWNER_VALUE);
+"#,
+        ),
+        "ConstantSub:ConstantSub:ConstantSub:NarrowConstants"
+    );
+}
+
+#[test]
 fn test_dynamic_class_constant_owners_and_names_rekey_one_cache_site() {
     let out = run_php(
         r#"<?php
