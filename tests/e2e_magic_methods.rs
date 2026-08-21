@@ -100,6 +100,95 @@ $callable->ordinary($value);
 }
 
 #[test]
+fn magic_method_arity_staticness_and_signature_precedence_match_php() {
+    for (source, file, expected) in [
+        (
+            "<?php\nclass CloneArguments {\n    public function __clone($value) {}\n}",
+            "/virtual/magic-clone-arity.php",
+            "Method CloneArguments::__clone() cannot take arguments in /virtual/magic-clone-arity.php on line 3",
+        ),
+        (
+            "<?php\ntrait GetterArity {\n    public function __get() {}\n}",
+            "/virtual/magic-getter-arity.php",
+            "Method GetterArity::__get() must take exactly 1 argument in /virtual/magic-getter-arity.php on line 3",
+        ),
+        (
+            "<?php\nabstract class SetterArity {\n    abstract public function __set($name);\n}",
+            "/virtual/magic-setter-arity.php",
+            "Method SetterArity::__set() must take exactly 2 arguments in /virtual/magic-setter-arity.php on line 3",
+        ),
+        (
+            "<?php\ninterface StaticCall {\n    public static function __call($name, $arguments);\n}",
+            "/virtual/magic-call-staticness.php",
+            "Method StaticCall::__call() cannot be static in /virtual/magic-call-staticness.php on line 3",
+        ),
+        (
+            "<?php\ninterface InstanceCallStatic {\n    public function __callStatic($name, $arguments);\n}",
+            "/virtual/magic-callstatic-staticness.php",
+            "Method InstanceCallStatic::__callStatic() must be static in /virtual/magic-callstatic-staticness.php on line 3",
+        ),
+        (
+            "<?php\nenum StaticInvoke {\n    case Value;\n    public static function __invoke() {}\n}",
+            "/virtual/magic-enum-staticness.php",
+            "Method StaticInvoke::__invoke() cannot be static in /virtual/magic-enum-staticness.php on line 4",
+        ),
+        (
+            "<?php\nclass InstanceState {\n    public function __set_state($properties): object { return new self; }\n}",
+            "/virtual/magic-state-staticness.php",
+            "Method InstanceState::__set_state() must be static in /virtual/magic-state-staticness.php on line 3",
+        ),
+        (
+            "<?php\nclass StaticConstructor {\n    public static function __construct() {}\n}",
+            "/virtual/magic-constructor-staticness.php",
+            "Method StaticConstructor::__construct() cannot be static in /virtual/magic-constructor-staticness.php on line 3",
+        ),
+        (
+            "<?php\nclass ArityFirst {\n    protected static function __toString(&$first, $second): int {}\n}",
+            "/virtual/magic-arity-precedence.php",
+            "Method ArityFirst::__toString() cannot take arguments in /virtual/magic-arity-precedence.php on line 3",
+        ),
+        (
+            "<?php\nclass ReferenceFirst {\n    public static function __get(&$name): void {}\n}",
+            "/virtual/magic-reference-precedence.php",
+            "Method ReferenceFirst::__get() cannot take arguments by reference in /virtual/magic-reference-precedence.php on line 3",
+        ),
+        (
+            "<?php\nclass StaticFirst {\n    public static function __get($name): void {}\n}",
+            "/virtual/magic-static-precedence.php",
+            "Method StaticFirst::__get() cannot be static in /virtual/magic-static-precedence.php on line 3",
+        ),
+        (
+            "<?php\nclass VariadicNeedsFixed {\n    public function __get(&...$names) {}\n}",
+            "/virtual/magic-variadic-arity.php",
+            "Method VariadicNeedsFixed::__get() must take exactly 1 argument in /virtual/magic-variadic-arity.php on line 3",
+        ),
+    ] {
+        assert_eq!(
+            run_php_expect_error_with_source_context(source, file, "/virtual").to_string(),
+            expected,
+        );
+    }
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+class VariadicMagicShapes {
+    public function __get($name = null, &...$extra) { return null; }
+    public function __sleep(&...$extra): array { return []; }
+    public function __destruct(&...$extra) {}
+    public function __invoke(&...$arguments) {}
+    public static function __set_state($properties, &...$extra): object {
+        return new self;
+    }
+}
+echo "ok";
+"#,
+        ),
+        "ok",
+    );
+}
+
+#[test]
 fn test_tostring_echo() {
     assert_eq!(
         run_php(

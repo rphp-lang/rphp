@@ -4781,72 +4781,91 @@ impl Compiler {
         class: &str,
         method: &str,
         parameters: &[Param],
-        declared: bool,
-        hint: &ParamTypeHint,
+        is_static: bool,
+        return_type_declared: bool,
+        return_hint: &ParamTypeHint,
         line: usize,
     ) -> Result<(), String> {
-        if parameters.iter().any(|parameter| parameter.is_ref) {
-            let reference_parameter_count = if method.eq_ignore_ascii_case("__get")
-                || method.eq_ignore_ascii_case("__isset")
-                || method.eq_ignore_ascii_case("__unset")
-                || method.eq_ignore_ascii_case("__unserialize")
-                || method.eq_ignore_ascii_case("__set_state")
+        if !method.starts_with("__") {
+            return Ok(());
+        }
+        let normalized = method.to_ascii_lowercase();
+        let (expected_parameters, must_be_static) = match normalized.as_str() {
+            "__construct" | "__invoke" => (None, false),
+            "__destruct" | "__clone" | "__sleep" | "__wakeup" | "__tostring" | "__debuginfo"
+            | "__serialize" => (Some(0), false),
+            "__get" | "__isset" | "__unset" | "__unserialize" => (Some(1), false),
+            "__set" | "__call" => (Some(2), false),
+            "__callstatic" => (Some(2), true),
+            "__set_state" => (Some(1), true),
+            _ => return Ok(()),
+        };
+        if let Some(expected) = expected_parameters {
+            let fixed_parameters = parameters.len().saturating_sub(usize::from(
+                parameters
+                    .last()
+                    .is_some_and(|parameter| parameter.is_variadic),
+            ));
+            if fixed_parameters != expected {
+                let message = if expected == 0 {
+                    format!("Method {class}::{method}() cannot take arguments")
+                } else {
+                    format!(
+                        "Method {class}::{method}() must take exactly {expected} argument{}",
+                        if expected == 1 { "" } else { "s" },
+                    )
+                };
+                return Err(self.goto_error(&message, line));
+            }
+            if parameters
+                .iter()
+                .take(expected)
+                .any(|parameter| parameter.is_ref)
             {
-                Some(1)
-            } else if method.eq_ignore_ascii_case("__set")
-                || method.eq_ignore_ascii_case("__call")
-                || method.eq_ignore_ascii_case("__callstatic")
-            {
-                Some(2)
-            } else {
-                None
-            };
-            if reference_parameter_count.is_some_and(|expected| {
-                parameters.len() == expected
-                    && parameters.iter().all(|parameter| !parameter.is_variadic)
-            }) {
                 return Err(self.goto_error(
                     &format!("Method {class}::{method}() cannot take arguments by reference"),
                     line,
                 ));
             }
         }
-        if !declared {
+        if is_static != must_be_static {
+            return Err(self.goto_error(
+                &format!(
+                    "Method {class}::{method}() {} static",
+                    if must_be_static {
+                        "must be"
+                    } else {
+                        "cannot be"
+                    }
+                ),
+                line,
+            ));
+        }
+        if !return_type_declared {
             return Ok(());
         }
-        if method.eq_ignore_ascii_case("__construct") || method.eq_ignore_ascii_case("__destruct") {
+        if matches!(normalized.as_str(), "__construct" | "__destruct") {
             return Err(self.goto_error(
                 &format!("Method {class}::{method}() cannot declare a return type"),
                 line,
             ));
         }
 
-        let (requirement, compatible): (&str, fn(&ParamTypeHint) -> bool) = if method
-            .eq_ignore_ascii_case("__clone")
-            || method.eq_ignore_ascii_case("__set")
-            || method.eq_ignore_ascii_case("__unset")
-            || method.eq_ignore_ascii_case("__unserialize")
-            || method.eq_ignore_ascii_case("__wakeup")
-        {
-            ("void", magic_return_is_void)
-        } else if method.eq_ignore_ascii_case("__isset") {
-            ("bool", magic_return_is_bool)
-        } else if method.eq_ignore_ascii_case("__tostring") {
-            ("string", magic_return_is_string)
-        } else if method.eq_ignore_ascii_case("__debuginfo") {
-            ("?array", magic_return_is_nullable_array)
-        } else if method.eq_ignore_ascii_case("__serialize")
-            || method.eq_ignore_ascii_case("__sleep")
-        {
-            ("array", magic_return_is_array)
-        } else if method.eq_ignore_ascii_case("__set_state") {
-            ("object", magic_return_is_object)
-        } else {
+        let (requirement, compatible): (&str, fn(&ParamTypeHint) -> bool) =
+            match normalized.as_str() {
+                "__clone" | "__set" | "__unset" | "__unserialize" | "__wakeup" => {
+                    ("void", magic_return_is_void)
+                }
+                "__isset" => ("bool", magic_return_is_bool),
+                "__tostring" => ("string", magic_return_is_string),
+                "__debuginfo" => ("?array", magic_return_is_nullable_array),
+                "__serialize" | "__sleep" => ("array", magic_return_is_array),
+                "__set_state" => ("object", magic_return_is_object),
+                _ => return Ok(()),
+            };
+        if compatible(return_hint) {
             return Ok(());
         };
-        if compatible(hint) {
-            return Ok(());
-        }
         Err(self.goto_error(
             &format!("{class}::{method}(): Return type must be {requirement} when declared"),
             line,
