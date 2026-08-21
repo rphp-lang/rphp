@@ -269,6 +269,18 @@ fn nested_uncaught_trace_uses_each_callers_source_line() {
 }
 
 #[test]
+fn undefined_named_calls_retain_the_origin_across_tostring_dispatch() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nfunction failNamed(): void {\n    missingNamedTarget();\n}\nclass FailString {\n    public function __toString(): string {\n        missingStringTarget();\n    }\n}\ntry {\n    failNamed();\n} catch (Throwable $error) {\n    echo 'named=', $error->getFile(), ':', $error->getLine(), \"\\n\",\n        $error->getTraceAsString(), \"\\n--\\n\";\n}\ntry {\n    echo new FailString;\n} catch (Throwable $error) {\n    echo 'string=', $error->getFile(), ':', $error->getLine(), \"\\n\",\n        $error->getTraceAsString();\n}",
+            "/fixture/undefined-call-origin.php",
+            "/fixture",
+        ),
+        "named=/fixture/undefined-call-origin.php:3\n#0 /fixture/undefined-call-origin.php(11): failNamed()\n#1 {main}\n--\nstring=/fixture/undefined-call-origin.php:7\n#0 /fixture/undefined-call-origin.php(17): FailString->__toString()\n#1 {main}"
+    );
+}
+
+#[test]
 fn bound_closure_property_modify_errors_keep_the_origin_and_closure_trace_name() {
     let error = run_php_expect_error_with_source_context(
         "<?php\nclass BoundTrace {\n    private int $value = 1;\n    public function make() {\n        return function() { return ++$this->value; };\n    }\n}\n$closure = (new BoundTrace)->make();\n$bound = $closure->bindTo(new BoundTrace, null);\n$bound();",

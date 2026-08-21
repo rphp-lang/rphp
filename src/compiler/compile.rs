@@ -8643,7 +8643,7 @@ impl Compiler {
                 init.op2 = name_idx;
                 init.extended_value = fallback_idx as u32;
                 let init_index = self.instructions.len();
-                self.instructions.push(init);
+                self.push_instruction_at_line(init, *line);
 
                 if let Some(compiled_args) = compiled_args.as_deref() {
                     self.emit_precompiled_runtime_call_args(
