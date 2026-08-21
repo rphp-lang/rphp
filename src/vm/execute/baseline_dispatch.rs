@@ -2637,7 +2637,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 / d2)) };
                     }
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for /".into()));
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} / {}",
+                            op1.dereferenced().diagnostic_type_name(),
+                            op2.dereferenced().diagnostic_type_name()
+                        )
+                    );
                 }
             }
 

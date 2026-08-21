@@ -224,6 +224,60 @@ echo 'defined=', defined('BrokenMultiply') ? 'yes' : 'no', "\n";
 }
 
 #[test]
+fn unsupported_division_throws_typed_errors_and_preserves_zero_errors() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function reportDivision(string $label, Closure $operation): void {
+    try {
+        $operation();
+        echo $label, ":no-error\n";
+    } catch (Throwable $error) {
+        echo $label, ':', get_class($error), ':', $error->getMessage(), '|',
+            $error->getFile() === __FILE__ ? 'source' : 'nested', ':',
+            $error->getLine(), '|trace=', count($error->getTrace()), "\n";
+    }
+}
+
+reportDivision('array-array', fn() => [1] / [0]);
+reportDivision('object-int', fn() => new stdClass() / 1);
+reportDivision('zero', fn() => 1 / 0);
+
+$slot = [1];
+try {
+    $slot /= 'x';
+} catch (TypeError $error) {
+    echo 'assign:', $error->getMessage(), '|slot=', count($slot),
+        '|line=', $error->getLine(), "\n";
+}
+
+$zeroSlot = '12';
+try {
+    $zeroSlot /= 0;
+} catch (DivisionByZeroError $error) {
+    echo 'assign-zero:', $error->getMessage(), '|slot=', $zeroSlot,
+        '|line=', $error->getLine(), "\n";
+}
+
+reportDivision('eval-const', fn() => eval('const BrokenDivide = [1] / [0];'));
+echo 'defined=', defined('BrokenDivide') ? 'yes' : 'no', "\n";
+"#,
+            "/virtual/division-type-error.php",
+            "/virtual",
+        ),
+        concat!(
+            "array-array:TypeError:Unsupported operand types: array / array|source:13|trace=2\n",
+            "object-int:TypeError:Unsupported operand types: stdClass / int|source:14|trace=2\n",
+            "zero:DivisionByZeroError:Division by zero|source:15|trace=2\n",
+            "assign:Unsupported operand types: array / string|slot=1|line=19\n",
+            "assign-zero:Division by zero|slot=12|line=27\n",
+            "eval-const:TypeError:Unsupported operand types: array / array|nested:1|trace=3\n",
+            "defined=no\n",
+        )
+    );
+}
+
+#[test]
 fn compound_and_cross_type_comparisons_follow_php_85_ordering() {
     assert_eq!(
         run_php(
