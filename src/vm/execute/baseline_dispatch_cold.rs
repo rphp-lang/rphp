@@ -2473,6 +2473,18 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                         .exception
                         .take()
                         .expect("deferred class constant failure sets an exception");
+                    let instruction_index = op_array
+                        .instructions
+                        .iter()
+                        .position(|instruction| std::ptr::eq(instruction, opline))
+                        .expect("class-constant opcode belongs to the active op-array");
+                    attach_constant_expression_trace(
+                        &exception,
+                        eg,
+                        frame,
+                        op_array,
+                        instruction_index,
+                    );
                     return Ok(match throw_in_frame(eg, frame, exception) {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             ColdResult::NewFrame(new_frame, new_op_array)
@@ -2679,6 +2691,18 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 .exception
                 .take()
                 .expect("deferred class constant failure sets an exception");
+            let instruction_index = op_array
+                .instructions
+                .iter()
+                .position(|instruction| std::ptr::eq(instruction, opline))
+                .expect("class-constant opcode belongs to the active op-array");
+            attach_constant_expression_trace(
+                &exception,
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+            );
             return Ok(match throw_in_frame(eg, frame, exception) {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)

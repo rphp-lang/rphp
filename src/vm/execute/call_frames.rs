@@ -1016,15 +1016,138 @@ fn attach_internal_call_trace_if_missing(
     if !missing_trace {
         return;
     }
-    let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
-        .as_deref()
-        .is_some_and(crate::stdlib::ini_boolean);
-    let trace_options = if ignore_arguments { 2 } else { 0 };
+    let trace = collect_internal_call_trace(call, caller, eg);
+    if let Some(mut object) = throwable.as_object_mut() {
+        object.set_property("trace", Value::array(trace));
+    }
+}
 
+/// A deferred constant expression is evaluated at its first runtime use. PHP
+/// keeps the Throwable origin at the failing declaration subexpression, while
+/// frame zero records the use site as a synthetic `[constant expression]`
+/// call. Only located deferred-evaluation errors enter this helper; ordinary
+/// runtime and typed-constant failures retain the established throw path.
+#[cold]
+#[inline(never)]
+pub(crate) fn attach_constant_expression_trace(
+    throwable: &Value,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    instruction_index: usize,
+) {
+    if !located_throwable_needs_trace(throwable) {
+        return;
+    }
+    let Some(line) = op_array.source_line(instruction_index) else {
+        return;
+    };
+    if op_array.source_file.is_empty() {
+        return;
+    }
+    let trace_options = exception_trace_options(eg);
+    // SAFETY: opcode dispatch keeps the complete synchronous frame chain live
+    // for this cold metadata snapshot.
+    let trace = unsafe {
+        crate::stdlib::collect_debug_backtrace(frame, trace_options, 0, eg, true)
+    };
+    attach_constant_expression_trace_value(
+        throwable,
+        trace,
+        Value::shared_string(op_array.source_file.clone()),
+        line,
+    );
+}
+
+/// Internal constant()/Reflection handlers still own their synchronous call
+/// frame when deferred evaluation fails. Snapshot it before the dispatcher
+/// releases the frame, then prepend the same synthetic use-site entry.
+#[cold]
+#[inline(never)]
+pub(crate) fn attach_internal_constant_expression_trace(
+    throwable: &Value,
+    call: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+) {
+    if !located_throwable_needs_trace(throwable) {
+        return;
+    }
+    // SAFETY: an internal handler executes beneath its linked, live caller.
+    let caller = unsafe { (*call).prev_execute_data };
+    if caller.is_null() {
+        return;
+    }
+    let trace = collect_internal_call_trace(call, caller, eg);
+    let use_site = trace.get_value_at(0).and_then(Value::as_array).and_then(|entry| {
+        let file = entry.get_str("file")?.as_str()?.to_string();
+        let line = entry.get_str("line")?.as_long()?;
+        (line > 0).then_some((file, line as usize))
+    });
+    let Some((file, line)) = use_site else {
+        return;
+    };
+    attach_constant_expression_trace_value(throwable, trace, Value::string(file), line);
+}
+
+fn attach_constant_expression_trace_value(
+    throwable: &Value,
+    trace: PhpArray,
+    file: Value,
+    line: usize,
+) {
+    let mut constant_frame = PhpArray::with_hash_capacity(3);
+    constant_frame.set_str("file", file);
+    constant_frame.set_str("line", Value::long(line as i64));
+    constant_frame.set_str("function", Value::string("[constant expression]"));
+    let mut with_constant_frame = PhpArray::with_packed_capacity(trace.len() + 1);
+    with_constant_frame.push(Value::array(constant_frame));
+    for entry in trace.values() {
+        with_constant_frame.push(entry.clone());
+    }
+    if let Some(mut object) = throwable.as_object_mut() {
+        object.set_property("trace", Value::array(with_constant_frame));
+    }
+}
+
+fn located_throwable_needs_trace(throwable: &Value) -> bool {
+    throwable.as_object().is_some_and(|object| {
+        let has_origin = object
+            .get_property("file")
+            .and_then(Value::as_str)
+            .is_some_and(|file| !file.is_empty())
+            && object
+                .get_property("line")
+                .and_then(Value::as_long)
+                .is_some_and(|line| line > 0);
+        has_origin
+            && object
+                .get_property("trace")
+                .and_then(Value::as_array)
+                .is_none_or(PhpArray::is_empty)
+    })
+}
+
+fn exception_trace_options(eg: &ExecutorGlobals) -> i64 {
+    if crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+        .as_deref()
+        .is_some_and(crate::stdlib::ini_boolean)
+    {
+        2
+    } else {
+        0
+    }
+}
+
+fn collect_internal_call_trace(
+    call: *mut ExecuteData,
+    caller: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+) -> PhpArray {
+    let trace_options = exception_trace_options(eg);
     // SAFETY: call and caller are the linked, live synchronous frames passed
     // by DoFcall. The caller opline belongs to its immutable op-array and is
     // restored before either frame can execute or be released.
-    let trace = unsafe {
+    unsafe {
         // collect_debug_backtrace expects a caller to point one instruction
         // past the active call so it can recover the call-site location.
         let caller_opline = (*caller).opline;
@@ -1042,9 +1165,6 @@ fn attach_internal_call_trace_if_missing(
             (*caller).opline = caller_opline;
         }
         trace
-    };
-    if let Some(mut object) = throwable.as_object_mut() {
-        object.set_property("trace", Value::array(trace));
     }
 }
 

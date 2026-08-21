@@ -5076,6 +5076,11 @@ fn fn_constant(
                     let Some(value) =
                         reflection::evaluate_deferred_class_constant_value(&definition, eg)?
                     else {
+                        if let Some(exception) = eg.exception.as_ref() {
+                            crate::vm::execute::attach_internal_constant_expression_trace(
+                                exception, ed, eg,
+                            );
+                        }
                         ret!(rv, Value::null());
                     };
                     value

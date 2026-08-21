@@ -602,6 +602,7 @@ fn op_new_obj_resolved<'a>(
             .exception
             .take()
             .expect("deferred class-constant activation failure sets an exception");
+        attach_constant_expression_trace(&exception, eg, frame, op_array, ip);
         attach_throwable_origin(&exception, eg, frame, op_array, ip);
         return Ok(match throw_in_frame(eg, frame, exception) {
             ThrowResult::Handled(new_frame, new_op_array) => {

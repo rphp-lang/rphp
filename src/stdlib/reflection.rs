@@ -396,8 +396,29 @@ fn reflected_attribute_definitions(
 
 enum DeferredAttributeError {
     Message(String),
+    LocatedMessage {
+        message: String,
+        source_file: String,
+        line: usize,
+    },
     TypedClassConstant(String),
     Vm(VmError),
+}
+
+impl DeferredAttributeError {
+    fn with_location_if_missing(self, source_file: &str, line: usize) -> Self {
+        if source_file.is_empty() || line == 0 {
+            return self;
+        }
+        match self {
+            Self::Message(message) => Self::LocatedMessage {
+                message,
+                source_file: source_file.to_string(),
+                line,
+            },
+            located => located,
+        }
+    }
 }
 
 impl From<VmError> for DeferredAttributeError {
@@ -606,8 +627,9 @@ fn evaluate_deferred_attribute_expression(
         Expr::ClassConstant {
             class_name,
             constant,
-            ..
-        } => deferred_class_constant(class_name, constant, scope, eg),
+            line,
+        } => deferred_class_constant(class_name, constant, scope, eg)
+            .map_err(|error| error.with_location_if_missing(source_file, *line)),
         Expr::DynamicNamedClassConstant {
             class_name,
             constant,
@@ -1047,6 +1069,19 @@ pub(crate) fn evaluate_deferred_class_constant_value(
             eg.exception = Some(make_error_value("Error", &error));
             Ok(None)
         }
+        Err(DeferredAttributeError::LocatedMessage {
+            message,
+            source_file,
+            line,
+        }) => {
+            let error = make_error_value("Error", &message);
+            if let Some(mut object) = error.as_object_mut() {
+                object.set_property("file", Value::string(source_file));
+                object.set_property("line", Value::long(line as i64));
+            }
+            eg.exception = Some(error);
+            Ok(None)
+        }
         Err(DeferredAttributeError::TypedClassConstant(error)) => {
             eg.exception = Some(make_error_value("TypeError", &error));
             Ok(None)
@@ -1162,6 +1197,12 @@ pub(crate) fn evaluate_deferred_property_default_value(
             // unresolved constant-expression dependency.
             if eg.exception.is_none() {
                 eg.exception = Some(make_error_value("Error", &error));
+            }
+            Ok(None)
+        }
+        Err(DeferredAttributeError::LocatedMessage { message, .. }) => {
+            if eg.exception.is_none() {
+                eg.exception = Some(make_error_value("Error", &message));
             }
             Ok(None)
         }
@@ -1401,6 +1442,10 @@ fn evaluate_attribute_arguments(
                     Ok(value) => value,
                     Err(DeferredAttributeError::Message(error)) => {
                         eg.exception = Some(make_error_value("Error", &error));
+                        return Ok(None);
+                    }
+                    Err(DeferredAttributeError::LocatedMessage { message, .. }) => {
+                        eg.exception = Some(make_error_value("Error", &message));
                         return Ok(None);
                     }
                     Err(DeferredAttributeError::TypedClassConstant(error)) => {
@@ -3843,6 +3888,9 @@ fn class_get_constant(
     }
     if definition.value_is_deferred {
         let Some(value) = evaluate_deferred_class_constant_value(&definition, eg)? else {
+            if let Some(exception) = eg.exception.as_ref() {
+                crate::vm::execute::attach_internal_constant_expression_trace(exception, ed, eg);
+            }
             return return_value(rv, Value::null());
         };
         return return_value(rv, value);
@@ -5394,6 +5442,9 @@ fn class_new_instance_without_constructor(
         && eg.deferred_class_constants_require_activation(class_id)
         && !activate_deferred_class_constants(class_id, eg)?
     {
+        if let Some(exception) = eg.exception.as_ref() {
+            crate::vm::execute::attach_internal_constant_expression_trace(exception, ed, eg);
+        }
         return return_value(rv, Value::null());
     }
     let object = if class_id == 0 {

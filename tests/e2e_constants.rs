@@ -583,6 +583,55 @@ echo get_class($reflection->newInstanceWithoutConstructor());
 }
 
 #[test]
+fn deferred_class_constant_errors_keep_the_expression_origin_and_use_trace() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class DeferredOrigin {
+    public const VALUE =
+        self::BASE
+        + MissingDeferredOrigin::VALUE;
+    public const BASE = 42;
+}
+
+function inspectDeferred(string $label, Closure $operation): void {
+    try {
+        $operation();
+    } catch (Throwable $error) {
+        $trace = $error->getTrace();
+        $first = $trace[0];
+        $second = $trace[1] ?? [];
+        $next = ($second['class'] ?? '') . ($second['type'] ?? '') . ($second['function'] ?? '');
+        $next = str_starts_with($next, '{closure:') ? '{closure}' : strtolower($next);
+        echo $label, ':', $error->getFile() === __FILE__ ? 'definition' : 'wrong-file',
+            ':', $error->getLine(), '|',
+            $first['file'] === __FILE__ ? 'use' : 'wrong-use', ':', $first['line'],
+            ':', $first['function'], '|',
+            $next, "\n";
+    }
+}
+
+inspectDeferred('new', fn() => new DeferredOrigin());
+inspectDeferred('read', fn() => DeferredOrigin::VALUE);
+inspectDeferred('constant', fn() => constant('DeferredOrigin::VALUE'));
+$class = new ReflectionClass(DeferredOrigin::class);
+inspectDeferred('reflection-constant', fn() => $class->getConstant('VALUE'));
+inspectDeferred('reflection-new', fn() => $class->newInstanceWithoutConstructor());
+"#,
+            "/virtual/deferred-constant-origin.php",
+            "/virtual",
+        ),
+        concat!(
+            "new:definition:5|use:26:[constant expression]|{closure}\n",
+            "read:definition:5|use:27:[constant expression]|{closure}\n",
+            "constant:definition:5|use:28:[constant expression]|constant\n",
+            "reflection-constant:definition:5|use:30:[constant expression]|reflectionclass->getconstant\n",
+            "reflection-new:definition:5|use:31:[constant expression]|reflectionclass->newinstancewithoutconstructor\n",
+        )
+    );
+}
+
+#[test]
 fn deferred_class_constant_activation_is_inherited_but_not_eager() {
     assert_eq!(
         run_php(
