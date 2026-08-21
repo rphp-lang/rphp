@@ -178,6 +178,52 @@ echo 'defined=', defined('BrokenAdd') ? 'yes' : 'no', "\n";
 }
 
 #[test]
+fn unsupported_multiplication_throws_typed_errors_without_committing_assignments() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function reportMultiplication(string $label, Closure $operation): void {
+    try {
+        $operation();
+        echo $label, ":no-error\n";
+    } catch (Throwable $error) {
+        echo $label, ':', get_class($error), ':', $error->getMessage(), '|',
+            $error->getFile() === __FILE__ ? 'source' : 'nested', ':',
+            $error->getLine(), '|trace=', count($error->getTrace()), "\n";
+    }
+}
+
+$array = [1];
+reportMultiplication('array-array', fn() => $array * [0]);
+reportMultiplication('object-int', fn() => new stdClass() * 1);
+reportMultiplication('unary', fn() => -'bad');
+
+$slot = [1];
+try {
+    $slot *= 'x';
+} catch (TypeError $error) {
+    echo 'assign:', $error->getMessage(), '|slot=', count($slot),
+        '|line=', $error->getLine(), "\n";
+}
+
+reportMultiplication('eval-const', fn() => eval('const BrokenMultiply = [1] * [0];'));
+echo 'defined=', defined('BrokenMultiply') ? 'yes' : 'no', "\n";
+"#,
+            "/virtual/multiplication-type-error.php",
+            "/virtual",
+        ),
+        concat!(
+            "array-array:TypeError:Unsupported operand types: array * array|source:14|trace=2\n",
+            "object-int:TypeError:Unsupported operand types: stdClass * int|source:15|trace=2\n",
+            "unary:TypeError:Unsupported operand types: string * int|source:16|trace=2\n",
+            "assign:Unsupported operand types: array * string|slot=1|line=20\n",
+            "eval-const:TypeError:Unsupported operand types: array * array|nested:1|trace=3\n",
+            "defined=no\n",
+        )
+    );
+}
+
+#[test]
 fn compound_and_cross_type_comparisons_follow_php_85_ordering() {
     assert_eq!(
         run_php(
