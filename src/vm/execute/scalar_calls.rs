@@ -477,7 +477,7 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
     call: *mut ExecuteData,
 ) -> Option<i64> {
     let common = &*(*call).func;
-    if !(*call).deferred_scalar_call
+    if !(*call).is_deferred_scalar_call()
         || common.fn_type != FunctionType::User
         || !common.supports_scalar_long_plan()
         || (*call).num_args != common.sig.public_arity()
@@ -558,7 +558,7 @@ pub(crate) unsafe fn try_execute_deferred_scalar_double_call(
     call: *mut ExecuteData,
 ) -> Option<f64> {
     let common = &*(*call).func;
-    if !(*call).deferred_scalar_call
+    if !(*call).is_deferred_scalar_call()
         || common.fn_type != FunctionType::User
         || !common.supports_scalar_double_plan()
         || (*call).num_args != common.sig.public_arity()
@@ -596,7 +596,7 @@ unsafe fn try_execute_deferred_object_long_call(
     call: *mut ExecuteData,
 ) -> Option<i64> {
     let common = &*(*call).func;
-    if !(*call).deferred_scalar_call
+    if !(*call).is_deferred_scalar_call()
         || common.fn_type != FunctionType::User
         || !common.plan.call.is_compact_user_call()
         || common.plan.ret != ReturnStrategy::Fast
@@ -686,7 +686,7 @@ unsafe fn try_execute_deferred_object_long_call(
 #[inline(always)]
 unsafe fn try_execute_deferred_long_property_method(call: *mut ExecuteData) -> bool {
     let common = &*(*call).func;
-    if !(*call).deferred_scalar_call
+    if !(*call).is_deferred_scalar_call()
         || common.fn_type != FunctionType::User
         || !common.supports_scalar_long_plan()
         || (*call).num_args != common.sig.public_arity()
@@ -729,7 +729,7 @@ pub(crate) unsafe fn materialize_deferred_scalar_call(
     eg: &mut ExecutorGlobals,
     compact: *mut ExecuteData,
 ) -> *mut ExecuteData {
-    debug_assert!((*compact).deferred_scalar_call);
+    debug_assert!((*compact).is_deferred_scalar_call());
     let storage_num_args = (*compact).num_cvs;
     let full = eg.vm_stack.push_call_frame(
         (*compact).func,
@@ -748,6 +748,7 @@ pub(crate) unsafe fn materialize_deferred_scalar_call(
     // Ownership moved to the ordinary frame. The compact storage is now just
     // raw bump memory and must not release any captured heap value.
     (*compact).has_heap_slots = false;
+    (*compact).set_deferred_scalar_call(false);
     (*compact).heap_bitmap = 0;
     eg.pending_call_stack.pop_call_frame(compact);
     full

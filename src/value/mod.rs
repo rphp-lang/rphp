@@ -4914,6 +4914,40 @@ impl Value {
         true
     }
 
+    /// Whether this allocation's own destructor is already retired. Failed
+    /// construction uses the same terminal state as completed dispatch, while
+    /// property values remain independently eligible for release.
+    #[inline]
+    pub(crate) fn is_object_destructor_retired(&self) -> bool {
+        self.as_object()
+            .is_some_and(|object| object.lifecycle & OBJECT_DESTRUCTOR_RAN != 0)
+    }
+
+    /// Keep a freshly allocated object out of automatic destructor dispatch
+    /// until its original `new` constructor call has completed. Zend never
+    /// invokes `__destruct()` for an object whose construction failed, even
+    /// when the constructor published `$this` before throwing.
+    #[inline]
+    pub(crate) fn suppress_unconstructed_object_destructor(&self) {
+        let Some(mut object) = self.as_object_mut() else {
+            return;
+        };
+        debug_assert_eq!(object.lifecycle & OBJECT_DESTRUCTOR_RAN, 0);
+        object.lifecycle |= OBJECT_DESTRUCTOR_RAN;
+    }
+
+    /// Publish successful completion of the original constructor call. This
+    /// deliberately does not run for later explicit `->__construct()` calls:
+    /// retrying a constructor cannot make a previously failed allocation
+    /// eligible for automatic destruction.
+    #[inline]
+    pub(crate) fn enable_constructed_object_destructor(&self) {
+        let Some(mut object) = self.as_object_mut() else {
+            return;
+        };
+        object.lifecycle &= !OBJECT_DESTRUCTOR_RAN;
+    }
+
     /// Begin a fresh lifecycle after Reflection successfully resets an object
     /// as lazy. The destructor that retired the previous state remains marked
     /// if it threw, while the new lazy state may be destructed after it is

@@ -82,7 +82,7 @@ impl VmStack {
                 pending_return_after_finally: false,
                 has_heap_slots: false,
                 named_args_used: false,
-                deferred_scalar_call: true,
+                call_kind_flags: 1,
                 heap_bitmap: 0,
             });
         }
@@ -138,7 +138,7 @@ impl VmStack {
                 pending_return_after_finally: false,
                 has_heap_slots: false,
                 named_args_used: false,
-                deferred_scalar_call: false,
+                call_kind_flags: 0,
                 heap_bitmap: 0,
             });
         }

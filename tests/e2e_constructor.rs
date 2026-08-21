@@ -246,3 +246,252 @@ try {
         "3:4|19|typed"
     );
 }
+
+#[test]
+fn failed_constructor_never_reenables_destructor_after_this_escapes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RetryAllocation {
+    public static $attempt = 0;
+
+    public function __construct() {
+        echo 'ctor:', self::$attempt, '|';
+        $GLOBALS['escaped'] = $this;
+        if (self::$attempt++ === 0) {
+            throw new Exception('first');
+        }
+    }
+
+    public function __destruct() { echo 'retry-dtor|'; }
+}
+
+try {
+    new RetryAllocation();
+} catch (Throwable $error) {
+    echo 'caught|';
+}
+$GLOBALS['escaped']->__construct();
+unset($GLOBALS['escaped']);
+gc_collect_cycles();
+echo 'done';
+"#
+        ),
+        "ctor:0|caught|ctor:1|done"
+    );
+}
+
+#[test]
+fn failed_constructor_preserves_completed_temporary_destruction() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CompletedOperand {
+    public function __construct() { echo 'complete-ctor|'; }
+    public function __destruct() { echo 'complete-dtor|'; }
+}
+class FailedOperand {
+    public function __construct() {
+        echo 'failed-ctor|';
+        throw new Exception('stop');
+    }
+    public function __destruct() { echo 'failed-dtor|'; }
+}
+function acceptOperands($left, $right) { echo 'called|'; }
+
+try {
+    acceptOperands(new CompletedOperand(), new FailedOperand());
+} catch (Throwable $error) {
+    echo 'caught|';
+}
+echo 'done';
+"#
+        ),
+        "complete-ctor|failed-ctor|complete-dtor|caught|done"
+    );
+}
+
+#[test]
+fn destructor_exception_during_constructor_frame_cleanup_keeps_owner_ineligible() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ConstructorLocalBomb {
+    public function __destruct() {
+        echo 'local-dtor|';
+        throw new Exception('cleanup');
+    }
+}
+class CleanupInterrupted {
+    public function __construct() {
+        $GLOBALS['cleanup_escaped'] = $this;
+        $local = new ConstructorLocalBomb();
+        echo 'body-end|';
+    }
+    public function __destruct() { echo 'outer-dtor|'; }
+}
+
+try {
+    new CleanupInterrupted();
+    echo 'new-done|';
+} catch (Throwable $error) {
+    echo 'caught:', $error->getMessage(), '|';
+}
+unset($GLOBALS['cleanup_escaped']);
+gc_collect_cycles();
+echo 'done';
+"#
+        ),
+        "body-end|local-dtor|caught:cleanup|done"
+    );
+}
+
+#[test]
+fn successful_and_constructorless_allocations_remain_destructor_eligible() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PlannedComplete {
+    public $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function __destruct() { echo 'planned:', $this->value, '|'; }
+}
+class NoConstructor {
+    public function __destruct() { echo 'no-ctor|'; }
+}
+class ReflectionSkipped {
+    public function __construct() { echo 'unexpected-ctor|'; }
+    public function __destruct() { echo 'reflection|'; }
+}
+
+function releaseBoundaries() {
+    new PlannedComplete(7);
+    new NoConstructor();
+    $reflection = new ReflectionClass(ReflectionSkipped::class);
+    $skipped = $reflection->newInstanceWithoutConstructor();
+    $skipped = null;
+}
+releaseBoundaries();
+echo 'done';
+"#
+        ),
+        "planned:7|no-ctor|reflection|done"
+    );
+}
+
+#[test]
+fn failed_owner_still_releases_destructor_bearing_properties() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FailedChildLeaf {
+    public function __destruct() { echo 'leaf-dtor|'; }
+}
+class FailedParentOwner {
+    public $leaf;
+    public function __construct() {
+        $this->leaf = new FailedChildLeaf();
+        throw new Exception('parent');
+    }
+    public function __destruct() { echo 'owner-dtor|'; }
+}
+
+try {
+    new FailedParentOwner();
+} catch (Throwable $error) {
+    echo 'caught|';
+}
+echo 'done';
+"#
+        ),
+        "leaf-dtor|caught|done"
+    );
+}
+
+#[test]
+fn abandoned_temporary_destructor_can_replace_constructor_exception_before_catch() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class OriginalConstructionFailure extends Exception {}
+class TemporaryCleanupFailure extends Exception {}
+class ThrowingTemporary {
+    public function __destruct() {
+        echo 'temporary-dtor|';
+        throw new TemporaryCleanupFailure('cleanup');
+    }
+}
+class FailedConstruction {
+    public function __construct() {
+        echo 'failed-ctor|';
+        throw new OriginalConstructionFailure('original');
+    }
+}
+function consumeTemporaries($first, $second) {}
+
+try {
+    consumeTemporaries(new ThrowingTemporary(), new FailedConstruction());
+} catch (OriginalConstructionFailure $error) {
+    echo 'caught-original|';
+} catch (TemporaryCleanupFailure $error) {
+    echo 'caught-cleanup:', $error->getPrevious()->getMessage(), '|';
+}
+echo 'done';
+"#
+        ),
+        "failed-ctor|temporary-dtor|caught-cleanup:original|done"
+    );
+}
+
+#[test]
+fn constructor_validation_inheritance_and_unpack_share_lifecycle_boundary() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ValidatedFailure {
+    public function __construct(int $value) {
+        echo 'validated-body|';
+        throw new Exception('body');
+    }
+    public function __destruct() { echo 'validated-dtor|'; }
+}
+class InheritedFailure {
+    public function __construct() {
+        echo 'inherited-body|';
+        throw new Exception('inherited');
+    }
+    public function __destruct() { echo 'inherited-dtor|'; }
+}
+class InheritedFailureChild extends InheritedFailure {}
+class SpreadComplete {
+    public $value;
+    public function __construct(int $value) { $this->value = $value; }
+    public function __destruct() { echo 'spread-complete:', $this->value, '|'; }
+}
+
+try {
+    new ValidatedFailure('wrong');
+} catch (TypeError $error) {
+    echo 'validated-type|';
+}
+try {
+    new ValidatedFailure(...[4]);
+} catch (Exception $error) {
+    echo 'spread-failed|';
+}
+try {
+    new InheritedFailureChild();
+} catch (Exception $error) {
+    echo 'inherited-caught|';
+}
+$complete = new SpreadComplete(...[9]);
+$complete = null;
+echo 'done';
+"#
+        ),
+        concat!(
+            "validated-type|validated-body|spread-failed|",
+            "inherited-body|inherited-caught|spread-complete:9|done"
+        )
+    );
+}

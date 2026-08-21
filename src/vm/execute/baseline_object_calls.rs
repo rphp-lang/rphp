@@ -706,20 +706,28 @@ fn op_new_obj_resolved<'a>(
     // name every time. A changed/re-registered class gets a different ID and
     // therefore resolves again.
     let num_args = opline.extended_value;
-    let func_ptr = if class_id != 0 && ic.class_id == class_id {
-        ic.func
+    let (func_ptr, constructor_has_destructor) = if class_id != 0 && ic.class_id == class_id {
+        (ic.func, ic.constructor_has_destructor())
     } else {
         let construct_name = format!("{}::__construct", name);
         let resolved = eg.find_function(&construct_name).unwrap_or(std::ptr::null());
+        let has_destructor = !resolved.is_null()
+            && eg.find_method_info(name, "__destruct").is_some();
         if class_id != 0 {
             let ic_mut = unsafe {
                 &mut *(op_array.cache.as_ptr().add(ip)
                     as *mut crate::vm::instruction::InlineCache)
             };
-            ic_mut.set_constructor(resolved, class_id);
+            ic_mut.set_constructor(resolved, class_id, has_destructor);
         }
-        resolved
+        (resolved, has_destructor)
     };
+    if constructor_has_destructor {
+        // A failed constructor permanently retires this allocation's own
+        // destructor. Property values still follow their ordinary release
+        // tree, because the marker suppresses only owner dispatch.
+        unsafe { &*result_ptr }.suppress_unconstructed_object_destructor();
+    }
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     let generic_constructor_contract = if func_ptr.is_null() {
         None
@@ -774,6 +782,9 @@ fn op_new_obj_resolved<'a>(
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
             }
+            if constructor_has_destructor {
+                unsafe { &*result_ptr }.enable_constructed_object_destructor();
+            }
         }
         return Ok(ColdResult::Done);
     }
@@ -801,6 +812,9 @@ fn op_new_obj_resolved<'a>(
                 }
                 .is_some()
                 {
+                    if constructor_has_destructor {
+                        unsafe { &*result_ptr }.enable_constructed_object_destructor();
+                    }
                     return Ok(ColdResult::Continue);
                 }
             }
@@ -819,6 +833,9 @@ fn op_new_obj_resolved<'a>(
             // Write $this directly — cleanup handles it separately.
             let obj_ref = &*result_ptr;
             frame_set_this(call, obj_ref.clone());
+        }
+        if constructor_has_destructor {
+            unsafe { (*call).set_original_constructor_call(true) };
         }
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
         if let Some(contract) = generic_constructor_contract {

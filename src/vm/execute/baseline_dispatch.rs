@@ -4544,7 +4544,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // deferred resolution either materializes that same call on
                 // the main stack or consumes it and returns null.
                 let resolved_deferred_call = unsafe {
-                    (*call).deferred_scalar_call.then(|| {
+                    (*call).is_deferred_scalar_call().then(|| {
                         resolve_deferred_scalar_call(eg, frame, call, opline, opline_ptr)
                     })
                 };
@@ -4796,6 +4796,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let internal_exception = eg.exception.take();
                         if let Some(exception) = internal_exception.as_ref() {
                             attach_internal_call_trace_if_missing(exception, call, frame, eg);
+                        }
+                        if internal_exception.is_none() && handler_result.is_ok() {
+                            complete_object_construction(eg, call);
                         }
                         unsafe { cleanup_frame_slots(call) };
                         pop_vm_call_frame(eg, call);
@@ -7803,12 +7806,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // Recursive execute_ex boundary: callee done → return to caller's macro loop
                     if frame == initial_frame {
                         run_frame_destructors(eg, frame)?;
+                        complete_object_construction(eg, frame);
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
                         pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
                     run_frame_destructors(eg, frame)?;
+                    complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     pop_vm_call_frame(eg, frame);
@@ -7981,12 +7986,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // Recursive execute_ex boundary: callee done → return to caller's macro loop
                     if frame == initial_frame {
                         run_frame_destructors(eg, frame)?;
+                        complete_object_construction(eg, frame);
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
                         pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
                     run_frame_destructors(eg, frame)?;
+                    complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     pop_vm_call_frame(eg, frame);
@@ -8338,6 +8345,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         return Ok(());
                     }
                     run_frame_destructors(eg, frame)?;
+                    complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     pop_vm_call_frame(eg, frame);
@@ -8398,6 +8406,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // Recursive execute_ex boundary: callee done → return to caller's macro loop
                 if frame == initial_frame {
                     run_frame_destructors(eg, frame)?;
+                    complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
                     pop_vm_call_frame(eg, frame);
@@ -8405,6 +8414,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 run_frame_destructors(eg, frame)?;
+                complete_object_construction(eg, frame);
                 eg.current_execute_data.set(prev);
                 unsafe { cleanup_frame_slots(frame) };
                 pop_vm_call_frame(eg, frame);

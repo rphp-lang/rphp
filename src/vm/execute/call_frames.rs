@@ -109,6 +109,7 @@ fn value_requires_vm_release(eg: &ExecutorGlobals, value: &Value) -> bool {
                 || eg
                     .find_method_info(&object.class_name, "__destruct")
                     .is_some()
+                    && !value.is_object_destructor_retired()
                 || {
                     let mut nested_object = false;
                     object.for_each_property(|_, property| {
@@ -874,6 +875,27 @@ fn release_statement_temps(
             )
         };
 
+        // Most exceptional statements either own no heap temporary or only a
+        // failed-construction shell whose destructor is already retired. Keep
+        // that path allocation-free; nested property/fiber/lazy work still
+        // selects the full destructor planner through value_requires_vm_release.
+        if !(first..end).any(|index| {
+            is_owned(index) && value_requires_vm_release(eg, &*base.add(index))
+        }) {
+            for index in first..end {
+                if !is_owned(index) {
+                    continue;
+                }
+                let value = base.add(index);
+                std::ptr::drop_in_place(value);
+                std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
+                if compact {
+                    (*frame).heap_bitmap &= !(1u64 << index);
+                }
+            }
+            return Ok(());
+        }
+
         let mut object_counts = HashMap::<usize, usize>::new();
         for index in first..end {
             if !is_owned(index) {
@@ -953,7 +975,7 @@ unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.discard_dynamic_scope(call as usize);
     eg.end_error_suppression(call as usize);
     eg.finally_exceptions.remove(&(call as usize));
-    if (*call).deferred_scalar_call {
+    if (*call).is_deferred_scalar_call() {
         eg.pending_call_stack.pop_call_frame(call);
     } else {
         eg.vm_stack.pop_call_frame(call);
@@ -970,6 +992,26 @@ fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     eg.finally_exceptions.remove(&(call as usize));
     eg.function_arguments.remove(&(call as usize));
     eg.vm_stack.pop_call_frame(call);
+}
+
+/// Enable automatic destruction only for the exact constructor frame created
+/// by `new`. The caller invokes this after every observable return boundary,
+/// including local destructor cleanup, has completed without an exception.
+#[inline]
+pub(crate) fn complete_object_construction(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) {
+    if eg.exception.is_some() {
+        return;
+    }
+    if !unsafe { (*frame).is_original_constructor_call() } {
+        return;
+    }
+    unsafe { (*frame).set_original_constructor_call(false) };
+    // SAFETY: registered construction frames are method activations whose CV
+    // zero owns the fresh `$this` for the complete original constructor call.
+    unsafe { (*frame).cv(0) }.enable_constructed_object_destructor();
 }
 
 /// Release a pending ordinary call that cannot enter its body.
@@ -1895,7 +1937,7 @@ fn throw_in_frame<'a>(
     attach_throwable_origin(&thrown, eg, frame, origin_op_array, origin_ip);
 
     let mut search_frame = frame;
-    loop {
+    'search: loop {
         let sf_op_array = unsafe { (*search_frame).op_array() };
         // An exception raised while a finally block is completing replaces a
         // pending goto/break continuation in that frame.
@@ -1905,6 +1947,36 @@ fn throw_in_frame<'a>(
                 .opline
                 .offset_from(sf_op_array.instructions.as_ptr()) as u32
         };
+
+        // A handler in this activation abandons the interrupted expression's
+        // TMP/VAR values but keeps every CV live for the catch/finally body.
+        // Retire those temporaries before matching a clause: a destructor may
+        // replace the exception and thereby select a different catch type.
+        let active_handler = sf_op_array.try_entries.iter().find(|entry| {
+            current_ip >= entry.try_start
+                && current_ip < entry.try_end
+                && (entry.finally_start == u32::MAX || current_ip != entry.finally_end)
+        });
+        if let Some(active_handler) = active_handler {
+            let release = sf_op_array.instructions[current_ip as usize
+                ..active_handler.try_end as usize]
+                .iter()
+                .find(|instruction| instruction.opcode == OpCode::ReleaseTemps);
+            if let Some(release) = release {
+                release_statement_temps(
+                    eg,
+                    search_frame,
+                    release.op1 as usize,
+                    release.op2 as usize,
+                )?;
+                if let Some(replacement) = eg.exception.take() {
+                    append_replaced_exception(&replacement, &thrown, eg);
+                    thrown = replacement;
+                    frame = search_frame;
+                    continue 'search;
+                }
+            }
+        }
 
         // A non-Throwable Fiber-exit sentinel deliberately bypasses ordinary
         // catches. Continue through catch-only inner regions and select the

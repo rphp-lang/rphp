@@ -773,6 +773,7 @@ pub fn execute_hot_frame(
                                     super::execute::frame_return_set_long(frame, return_target, sum)
                                 };
                             }
+                            super::execute::complete_object_construction(eg, frame);
                             // Cleanup heap slots (e.g. $this) before popping
                             if unsafe { (*frame).has_heap_slots } {
                                 unsafe { super::execute::cleanup_frame_slots(frame) };
@@ -983,7 +984,7 @@ pub fn execute_hot_frame(
                 let mut call = unsafe { (*frame).call };
                 unsafe { (*frame).call = (*call).call };
 
-                if unsafe { (*call).deferred_scalar_call } {
+                if unsafe { (*call).is_deferred_scalar_call() } {
                     call = unsafe {
                         super::execute::resolve_deferred_scalar_call(
                             eg, frame, call, opline, opline_ptr,
@@ -1140,6 +1141,7 @@ pub fn execute_hot_frame(
                         };
                     }
                 }
+                super::execute::complete_object_construction(eg, frame);
                 // Cleanup heap slots (e.g. $this in method frames) before popping
                 if unsafe { (*frame).has_heap_slots } {
                     unsafe { super::execute::cleanup_frame_slots(frame) };

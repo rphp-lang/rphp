@@ -3708,6 +3708,9 @@ fn execute_full_call<'a>(
             if let Some(exception) = internal_exception.as_ref() {
                 attach_internal_call_trace_if_missing(exception, call, frame, eg);
             }
+            if internal_exception.is_none() && handler_result.is_ok() {
+                complete_object_construction(eg, call);
+            }
             unsafe { cleanup_frame_slots(call) };
             pop_vm_call_frame(eg, call);
             if let Some(exc) = internal_exception {

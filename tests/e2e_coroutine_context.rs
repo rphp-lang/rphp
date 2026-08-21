@@ -201,7 +201,7 @@ unsafe fn cleanup_pending_calls(
             let next = (*call).call;
             pending_named_variadic.remove(&(call as usize));
             cleanup_frame_slots(call);
-            if (*call).deferred_scalar_call {
+            if (*call).is_deferred_scalar_call() {
                 stacks.pending_call_stack.pop_call_frame(call);
             } else {
                 stacks.vm_stack.pop_call_frame(call);

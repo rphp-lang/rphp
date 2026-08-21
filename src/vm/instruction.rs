@@ -525,6 +525,7 @@ impl InlineCache {
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
     const DEPRECATED_ENUM_CASE: *const FunctionCommon = 1usize as *const FunctionCommon;
     const GENERIC_CLASS_SCOPE: u32 = 1 << 31;
+    const CONSTRUCTOR_HAS_DESTRUCTOR: u32 = 1;
 
     pub fn empty() -> Self {
         Self {
@@ -794,11 +795,24 @@ impl InlineCache {
     /// a non-zero class ID is a valid negative cache entry for classes without
     /// `__construct`.
     #[inline]
-    pub fn set_constructor(&mut self, func: *const FunctionCommon, class_id: u32) {
+    pub fn set_constructor(
+        &mut self,
+        func: *const FunctionCommon,
+        class_id: u32,
+        has_destructor: bool,
+    ) {
         debug_assert!(class_id != 0);
         self.func = func;
         self.class_id = class_id;
-        self.prop_info = 0;
+        self.prop_info = u32::from(has_destructor) * Self::CONSTRUCTOR_HAS_DESTRUCTOR;
+    }
+
+    /// Whether this constructor site must defer automatic destruction until
+    /// the original constructor frame returns successfully. NewObj is the
+    /// sole owner of this cache meaning, so the packed property word is idle.
+    #[inline(always)]
+    pub fn constructor_has_destructor(&self) -> bool {
+        self.prop_info & Self::CONSTRUCTOR_HAS_DESTRUCTOR != 0
     }
 
     /// Cache a monomorphic method resolution and whether its already-proven

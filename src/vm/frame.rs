@@ -67,7 +67,7 @@ pub struct ExecuteData {
     /// Compact argument-only activation owned by ExecutorGlobals::pending_call_stack.
     /// Such a call has no body CVs/TMPs until a failed scalar guard materializes
     /// the ordinary ABI frame on the main VM stack.
-    pub deferred_scalar_call: bool,
+    pub call_kind_flags: u8,
     /// Per-slot heap bitmap: bit N = 1 means slot N currently holds an owned value
     /// (String, Array, Object, Resource, Closure) that needs cleanup or overwrite.
     /// Only valid for frames with <= 64 total slots (CVs + TMPs).
@@ -78,6 +78,39 @@ pub struct ExecuteData {
 
 impl ExecuteData {
     const EMBEDDED_LATE_STATIC_SHIFT: u32 = 32;
+    const DEFERRED_SCALAR_CALL: u8 = 1;
+    const ORIGINAL_CONSTRUCTOR_CALL: u8 = 1 << 1;
+
+    #[inline(always)]
+    pub fn is_deferred_scalar_call(&self) -> bool {
+        self.call_kind_flags & Self::DEFERRED_SCALAR_CALL != 0
+    }
+
+    #[inline(always)]
+    pub fn set_deferred_scalar_call(&mut self, enabled: bool) {
+        if enabled {
+            self.call_kind_flags |= Self::DEFERRED_SCALAR_CALL;
+        } else {
+            self.call_kind_flags &= !Self::DEFERRED_SCALAR_CALL;
+        }
+    }
+
+    /// Mark whether this is the exact constructor activation entered by
+    /// `new`, rather than a later explicit `->__construct()` call. Frame-local
+    /// metadata follows Fiber suspension without a sidecar allocation.
+    #[inline(always)]
+    pub fn set_original_constructor_call(&mut self, enabled: bool) {
+        if enabled {
+            self.call_kind_flags |= Self::ORIGINAL_CONSTRUCTOR_CALL;
+        } else {
+            self.call_kind_flags &= !Self::ORIGINAL_CONSTRUCTOR_CALL;
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_original_constructor_call(&self) -> bool {
+        self.call_kind_flags & Self::ORIGINAL_CONSTRUCTOR_CALL != 0
+    }
 
     /// Recover a late-called class stored in the unused half of the heap
     /// bitmap for compact frames. Slot ownership uses only the low half when
