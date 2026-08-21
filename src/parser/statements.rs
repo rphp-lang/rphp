@@ -504,8 +504,11 @@ impl Parser {
                 if matches!(next, Token::LBracket(_)) {
                     // Could be $a[] = ..., $a[idx] = ..., or expression
                     // Check for $a[] = (array push)
+                    // Reference appends need the general expression AST so
+                    // the compiler can preserve the source reference cell.
                     let is_push = self.tokens.get(self.pos + 2) == Some(&Token::RBracket)
-                        && self.tokens.get(self.pos + 3) == Some(&Token::Assign);
+                        && self.tokens.get(self.pos + 3) == Some(&Token::Assign)
+                        && self.tokens.get(self.pos + 4) != Some(&Token::Ampersand);
                     if is_push {
                         let (var_name, line) = match self.advance() {
                             Token::Variable(name, line) => (name, line),

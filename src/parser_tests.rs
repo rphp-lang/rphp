@@ -185,6 +185,32 @@ fn test_parse_nested_array_append() {
 }
 
 #[test]
+fn array_append_reference_uses_the_reference_ast_without_displacing_plain_pushes() {
+    let tokens = Lexer::new("<?php $items[] =& $source; $items[] = $value;")
+        .tokenize()
+        .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    assert!(matches!(
+        &statements[0],
+        Stmt::ExprStmt(Expr::ArrayAppendAssign {
+            target,
+            expr,
+            by_ref: true,
+        }) if matches!(target.as_ref(), Expr::Variable { name, .. } if name == "items")
+            && matches!(expr.as_ref(), Expr::Variable { name, .. } if name == "source")
+    ));
+    assert!(matches!(
+        &statements[1],
+        Stmt::ArrayPush {
+            var,
+            expr: Expr::Variable { name, .. },
+            ..
+        } if var == "items" && name == "value"
+    ));
+}
+
+#[test]
 fn excessive_mixed_syntax_nesting_reports_memory_exhaustion() {
     let pairs = 140;
     let source = format!(
