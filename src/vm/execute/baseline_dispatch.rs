@@ -2785,7 +2785,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1.powf(d2))) };
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for **".into()));
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} ** {}",
+                            op1.dereferenced().diagnostic_type_name(),
+                            op2.dereferenced().diagnostic_type_name()
+                        )
+                    );
                 }
             }
 

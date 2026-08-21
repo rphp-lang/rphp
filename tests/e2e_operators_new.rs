@@ -278,6 +278,58 @@ echo 'defined=', defined('BrokenDivide') ? 'yes' : 'no', "\n";
 }
 
 #[test]
+fn unsupported_exponentiation_throws_typed_errors_without_committing_assignments() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function reportPower(string $label, Closure $operation): void {
+    try {
+        $operation();
+        echo $label, ":no-error\n";
+    } catch (Throwable $error) {
+        echo $label, ':', get_class($error), ':', $error->getMessage(), '|',
+            $error->getFile() === __FILE__ ? 'source' : 'nested', ':',
+            $error->getLine(), '|trace=', count($error->getTrace()), "\n";
+    }
+}
+
+reportPower('array-array', fn() => [1] ** [0]);
+reportPower('object-int', fn() => new stdClass() ** 1);
+var_dump(2 ** -3, 2 ** 3, 2.5 ** 2);
+
+$slot = [1];
+try {
+    $slot **= 1;
+} catch (TypeError $error) {
+    echo 'assign:', $error->getMessage(), '|slot=', count($slot),
+        '|line=', $error->getLine(), "\n";
+}
+
+$numeric = 2;
+$numeric **= 3;
+echo 'assign-numeric:', $numeric, "\n";
+
+reportPower('eval-const', fn() => eval('const BrokenPower = [1] ** [0];'));
+echo 'defined=', defined('BrokenPower') ? 'yes' : 'no', "\n";
+"#,
+            "/virtual/exponentiation-type-error.php",
+            "/virtual",
+        ),
+        concat!(
+            "array-array:TypeError:Unsupported operand types: array ** array|source:13|trace=2\n",
+            "object-int:TypeError:Unsupported operand types: stdClass ** int|source:14|trace=2\n",
+            "float(0.125)\n",
+            "int(8)\n",
+            "float(6.25)\n",
+            "assign:Unsupported operand types: array ** int|slot=1|line=19\n",
+            "assign-numeric:8\n",
+            "eval-const:TypeError:Unsupported operand types: array ** array|nested:1|trace=3\n",
+            "defined=no\n",
+        )
+    );
+}
+
+#[test]
 fn compound_and_cross_type_comparisons_follow_php_85_ordering() {
     assert_eq!(
         run_php(
