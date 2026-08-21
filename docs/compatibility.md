@@ -8,37 +8,44 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `9ddfc055`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,978 pass, 1,321 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `bf9a63eb`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,984 pass, 1,315 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
-headline pass rate is 75.071% and the whole-corpus rate is 71.048%; 4,768 of
-5,299 attempted cases reach runtime (89.979%). Relative to exact candidate
-`94c4ee01`, the pass-set delta is +4/-0.
+headline pass rate is 75.184% and the whole-corpus rate is 71.156%; 4,782 of
+5,299 attempted cases reach runtime (90.243%). Relative to exact candidate
+`9ddfc055`, the pass-set delta is +6/-0.
 
-The exact additions are `Zend/tests/generators/yield_in_parenthesis.phpt`,
-`Zend/tests/grammar/bug45147.phpt`, `tests/lang/008.phpt` and
-`tests/lang/033.phpt`. Every previous pass remains a pass. The only other
-failure-category movement is `tests/lang/028.phpt`, which advances from its
-alternative-`for` parse rejection to the existing unrelated runtime boundary
-in its final `call_user_func()` array callback. Two sequential final runs have
-byte-identical merged manifests and summaries. Their manifest and summary
-SHA-256 values are
-`1bfd774c6dfbc651b78b3e776a93aa5c31236f95aae0a7f46fafde6dc4a5779b` and
-`2d4740f6a0a48088e04decc6a6d42580d1e95998ed7d188c57d40bbc8d496aaa`.
+The exact additions are `Zend/tests/backtrace/bug79108.phpt`,
+`Zend/tests/dereference/dereference_006.phpt`, `dereference_007.phpt`,
+`dereference_012.phpt`, `dereference_013.phpt` and
+`Zend/tests/modify_isref_value_return.phpt`. Every previous pass remains a
+pass. `Zend/tests/bug52614.phpt` advances from compile to output failure;
+`assert/gh11580.phpt`, `bug70089.phpt`,
+`builtin_in_write_context_error1.phpt`, `coalesce/assign_coalesce_009.phpt`,
+`oss_fuzz_60441.phpt` and `temporary_cleaning/temporary_cleaning_013.phpt`
+advance from compile to runtime failure; and
+`undefined_multidimensional_array.phpt` advances from parse to output failure.
+All remain visible. Two sequential final runs have byte-identical merged
+manifests and summaries. Their manifest and summary SHA-256 values are
+`24b541422ab343589269d21fba6b44de7250aa84c1d5afd1d2ba881dfd90dce5` and
+`714b42f95131ef5507d16599285f371936a18201ce63410f88b06967a451efbe`.
 
-The lexer now recognizes the closing keywords for PHP's alternative `if`,
-`while`, `for`, `foreach` and `switch` forms. Their colon-delimited bodies are
-lowered to the same statement AST and baseline VM paths as ordinary braced
-control flow, including nested `elseif`/`else`, break/continue, inline HTML and
-empty bodies. Switch `case` and `default` labels accept either `:` or PHP 8.5's
-deprecated `;`; the latter records the exact separator line and emits the
-source-unit compile deprecation before execution.
+PHP function, method, static and dynamic call results can now be array-write
+roots. A by-reference result retains its caller-visible alias, while a by-value
+result is mutated only as a discarded temporary. Indexed writes use the same
+rule, including internal calls that return arrays. Static-property expressions
+returned from `function &` use the existing reference fetch instead of
+triggering the non-variable-reference notice.
 
-Semicolon and comma locations share one incremental monotonic line counter, so
-the additional source metadata keeps punctuation-heavy lexing linear. One
-original CLI suite covers all five alternative forms, `elseif`/`else`, both
-switch label separators, a multiline deprecation line, ordinary braced
-controls and reserved-keyword named arguments. All five Cargo configurations,
+Nested anonymous dimensions reuse the existing internal append-reference cell:
+each new null element is published to its parent before the following write or
+property error. This append-only resolver deliberately does not widen the
+stricter by-reference `foreach` contract. Array literals and nullsafe chains
+retain the exercised PHP compile-fatal boundaries, while other non-call
+temporaries remain rejected. One original CLI suite covers call kinds,
+by-value/by-reference identity, Reflection by-value reads, evaluation order,
+nested append publication and both negative diagnostics. All five Cargo
+configurations,
 all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
 and the exact unsafe ratchet pass. The production inventory remains 1,612
 unsafe blocks, 289 unsafe functions and 321 SAFETY annotations. Composer
@@ -48,20 +55,20 @@ cold-build S3 also pass.
 A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
 pinned to CPU 0 with the performance governor, four warmups and no excluded
 sample, keeps both front-end controls below the +5% gate. One hundred empty
-cold requests per observation measure candidate/baseline ratios of 0.985875 by
-independent medians and 1.009690 by paired medians. One request independently
-generating, compiling and executing 1,000 valid semicolon-heavy braced control
-units measures 0.996417 and 1.001247 respectively, with exact output. The
-candidate binary SHA-256 is
-`9af5894e60ac581fd4ee7bd60e3ee237a31de0bda13bf546e846800560955c56` and the
+cold requests per observation measure candidate/baseline ratios of 0.968987 by
+independent medians and 0.986140 by paired medians. One request independently
+generating, compiling and executing 1,000 source units that combine a
+user-call indexed write with an ordinary array append measures 0.997520 and
+0.997903 respectively, with exact output. The candidate binary SHA-256 is
+`f72a40d9a2b7d717e2ff6879fb05eb8356ac25965ced12fa8bc9452f35b214db` and the
 exact TSV SHA-256 is
-`c00fe950791bb034878b2f44d72d2546361a3e32f0ab0d4bb61278c887151bc3`.
+`9a66b18a6e9056818742654912a9928933512e4375331573faac28fb48edf0cd`.
 
-This checkpoint claims the exercised alternative forms of the five control
-statements and switch-label semicolon deprecation. Alternative block-mode
-`declare`, mixed-form syntax diagnostics, case-insensitive keyword lexing and
-the remaining `call_user_func()` boundary in `tests/lang/028.phpt` are separate
-surfaces.
+This checkpoint claims the exercised call-result and nested anonymous-dimension
+array writes. Specialized compile diagnostics for scalar built-in results such
+as `strlen()`, automatic false-to-array conversion, string append diagnostics
+and clone-result diagnostic spelling, plus silent warning behavior for nested
+property writes, remain separate surfaces.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `a47f14fc`. Across all 5,599
