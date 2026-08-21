@@ -8,6 +8,54 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `f8e4233d`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,819 pass, 1,480 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.070% and the whole-corpus rate is 68.209%; 4,706 of
+5,299 attempted cases reach runtime (88.809%). Relative to exact base
+`3f05d6a8`, the pass-set delta is +13/-0: every prior pass remains a pass and
+there are no other status or failure-category transitions. Two sequential
+final full runs have byte-identical merged manifests and summaries. Their
+SHA-256 values are
+`f3f8d521430862d54b4cd8b887f35e270ae0989ddfd7c2fe3b496d953ceb047f`
+and `9ccd25053233fe0b455992e7f398c731ea88f37193fe924eda7ba9e2f23a7a8a`.
+
+Typed class constants now validate eager scalar and enum-case values during
+declaration compilation and runtime-published values when their dependency is
+first read. The runtime rule is strict, with PHP's sole integer-to-float
+widening, and a dependent constant propagates the originating declaration's
+retryable `TypeError` instead of being mistaken for a self-reference cycle.
+Declaration diagnostics identify the class, constant, declared type and source
+line; forbidden `callable`, `void` and `never` types use their PHP 8.5 forms.
+Parenthesized DNF declarations are accepted, `static` remains late-bound in
+runtime diagnostics, and inherited constant types use real class/interface
+subtyping across nullable, union and intersection forms.
+
+Three original E2E regressions cover eager and forbidden-type diagnostics,
+repeated deferred scalar/object failures, dependency-origin propagation,
+integer-to-float widening, late-static enum validation and class/DNF
+covariance; all 94 class-constant E2E tests pass. The complete 496-case
+`Zend/tests/type_declarations` audit rises from 394 to 407 exact passes with no
+loss or other movement. The 29-case typed-class-constant slice rises from 14 to
+27 passes; only the separate assertion-AST rendering and diamond dependency-
+ordering cases remain.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,614 unsafe blocks and 289 unsafe
+functions. Thirty-one CPU-pinned alternating AMD64 default-release pairs put
+five million dynamic typed class-constant reads at a 0.9767 candidate/control
+median ratio and 1.0114 p90 paired ratio with the identical `85000000`
+checksum, below the five-percent ceiling. The ordinary cached read path and
+runtime constant layout are unchanged; the added work is confined to parsing,
+cold compilation/linking and explicitly deferred evaluation. The exact base
+and candidate binary SHA-256 values are
+`6b9247121c2fbc9eb04338c59a765ccc928f3eef3f672ffd688d7925104cb58a`
+and `012a8b4eb84ce1f06ab9e251a75764e3fe8316c5e8f189b74536279d3d5c8daf`.
+
+In the preceding enum Reflection-constant checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `3f05d6a8`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,806 pass, 1,493 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
