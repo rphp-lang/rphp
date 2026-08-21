@@ -27,6 +27,79 @@ echo "ok";
 }
 
 #[test]
+fn magic_dispatch_methods_reject_reference_parameters_in_every_declaration_shape() {
+    for (source, file, expected) in [
+        (
+            "<?php\nnamespace App;\nclass InvalidGetter { public function __get(&$name) {} }",
+            "/virtual/magic-class.php",
+            "Method App\\InvalidGetter::__get() cannot take arguments by reference in /virtual/magic-class.php on line 3",
+        ),
+        (
+            "<?php\ntrait InvalidSetter {\n    public function __set($name, &$value) {}\n}",
+            "/virtual/magic-trait.php",
+            "Method InvalidSetter::__set() cannot take arguments by reference in /virtual/magic-trait.php on line 3",
+        ),
+        (
+            "<?php\ninterface InvalidIsset {\n    public function __isset(&$name);\n}",
+            "/virtual/magic-interface.php",
+            "Method InvalidIsset::__isset() cannot take arguments by reference in /virtual/magic-interface.php on line 3",
+        ),
+        (
+            "<?php\nabstract class InvalidUnset {\n    abstract public function __unset(&$name);\n}",
+            "/virtual/magic-abstract.php",
+            "Method InvalidUnset::__unset() cannot take arguments by reference in /virtual/magic-abstract.php on line 3",
+        ),
+        (
+            "<?php\nclass InvalidStaticCall {\n    public static function __callStatic($name, &$arguments) {}\n}",
+            "/virtual/magic-call-static.php",
+            "Method InvalidStaticCall::__callStatic() cannot take arguments by reference in /virtual/magic-call-static.php on line 3",
+        ),
+        (
+            "<?php\nenum InvalidEnumCall {\n    case Value;\n    public function __call(&$name, $arguments) {}\n}",
+            "/virtual/magic-enum.php",
+            "Method InvalidEnumCall::__call() cannot take arguments by reference in /virtual/magic-enum.php on line 4",
+        ),
+        (
+            "<?php\nclass InvalidUnserialize {\n    public function __unserialize(array &$data): void {}\n}",
+            "/virtual/magic-unserialize.php",
+            "Method InvalidUnserialize::__unserialize() cannot take arguments by reference in /virtual/magic-unserialize.php on line 3",
+        ),
+        (
+            "<?php\nclass InvalidState {\n    public static function __set_state(array &$properties): object { return new self; }\n}",
+            "/virtual/magic-state.php",
+            "Method InvalidState::__set_state() cannot take arguments by reference in /virtual/magic-state.php on line 3",
+        ),
+        (
+            "<?php\nclass ReferenceBeforeReturn {\n    public function __get(&$name): void {}\n}",
+            "/virtual/magic-precedence.php",
+            "Method ReferenceBeforeReturn::__get() cannot take arguments by reference in /virtual/magic-precedence.php on line 3",
+        ),
+    ] {
+        assert_eq!(
+            run_php_expect_error_with_source_context(source, file, "/virtual").to_string(),
+            expected,
+        );
+    }
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferenceParametersAllowed {
+    public function __construct(&$value) { echo "construct>"; }
+    public function __invoke(&$value) { echo "invoke>"; }
+    public function ordinary(&$value) { echo "ordinary>"; }
+}
+$value = 0;
+$callable = new ReferenceParametersAllowed($value);
+$callable($value);
+$callable->ordinary($value);
+"#,
+        ),
+        "construct>invoke>ordinary>",
+    );
+}
+
+#[test]
 fn test_tostring_echo() {
     assert_eq!(
         run_php(

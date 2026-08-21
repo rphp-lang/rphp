@@ -4128,9 +4128,10 @@ impl Compiler {
                         &cp.return_type_hint,
                     )?;
                     self.validate_override_target(&method.attributes, "method", true)?;
-                    self.validate_magic_method_return_type(
+                    self.validate_magic_method_signature(
                         &resolved_class,
                         &method.name,
+                        &method.params,
                         method.return_type.is_some(),
                         &cp.return_type_hint,
                         method.line,
@@ -4837,9 +4838,10 @@ impl Compiler {
                         &cp.return_type_hint,
                     )?;
                     self.validate_override_target(&method.attributes, "method", true)?;
-                    self.validate_magic_method_return_type(
+                    self.validate_magic_method_signature(
                         &resolved_iface,
                         &method.name,
+                        &method.params,
                         method.return_type.is_some(),
                         &cp.return_type_hint,
                         method.line,
@@ -5160,9 +5162,10 @@ impl Compiler {
                         &cp.return_type_hint,
                     )?;
                     self.validate_override_target(&method.attributes, "method", true)?;
-                    self.validate_magic_method_return_type(
+                    self.validate_magic_method_signature(
                         &resolved_trait,
                         &method.name,
+                        &method.params,
                         method.return_type.is_some(),
                         &cp.return_type_hint,
                         method.line,
@@ -6066,9 +6069,10 @@ impl Compiler {
                         &cp.return_type_hint,
                     )?;
                     self.validate_override_target(&method.attributes, "method", true)?;
-                    self.validate_magic_method_return_type(
+                    self.validate_magic_method_signature(
                         &resolved_enum,
                         &method.name,
+                        &method.params,
                         method.return_type.is_some(),
                         &cp.return_type_hint,
                         method.line,

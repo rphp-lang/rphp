@@ -4776,14 +4776,41 @@ impl Compiler {
             });
     }
 
-    fn validate_magic_method_return_type(
+    fn validate_magic_method_signature(
         &self,
         class: &str,
         method: &str,
+        parameters: &[Param],
         declared: bool,
         hint: &ParamTypeHint,
         line: usize,
     ) -> Result<(), String> {
+        if parameters.iter().any(|parameter| parameter.is_ref) {
+            let reference_parameter_count = if method.eq_ignore_ascii_case("__get")
+                || method.eq_ignore_ascii_case("__isset")
+                || method.eq_ignore_ascii_case("__unset")
+                || method.eq_ignore_ascii_case("__unserialize")
+                || method.eq_ignore_ascii_case("__set_state")
+            {
+                Some(1)
+            } else if method.eq_ignore_ascii_case("__set")
+                || method.eq_ignore_ascii_case("__call")
+                || method.eq_ignore_ascii_case("__callstatic")
+            {
+                Some(2)
+            } else {
+                None
+            };
+            if reference_parameter_count.is_some_and(|expected| {
+                parameters.len() == expected
+                    && parameters.iter().all(|parameter| !parameter.is_variadic)
+            }) {
+                return Err(self.goto_error(
+                    &format!("Method {class}::{method}() cannot take arguments by reference"),
+                    line,
+                ));
+            }
+        }
         if !declared {
             return Ok(());
         }
