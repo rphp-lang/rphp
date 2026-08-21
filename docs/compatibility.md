@@ -8,6 +8,70 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `82d5a4ea`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,933 pass, 1,366 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.222% and the whole-corpus rate is 70.245%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`1cb5d3b0`, the pass-set delta is +6/-0 with no other status or failure-
+category movement.
+
+The exact additions are
+`Zend/tests/magic_methods/magic_methods_inheritance_rules_non_trivial_01.phpt`,
+`magic_methods_inheritance_rules_non_trivial_02.phpt`,
+`Zend/tests/type_declarations/intersection_types/variance/invalid5.phpt`,
+`Zend/tests/type_declarations/iterable/iterable_004.phpt`,
+`iterable_005.phpt` and
+`Zend/tests/type_declarations/mixed/inheritance/mixed_parameter_inheritance_error3.phpt`.
+Every previous pass remains a pass. Two sequential final runs have byte-
+identical merged manifests and summaries. Their manifest and summary SHA-256
+values are
+`850f2f25c6b2b3324986dcce5e2b7d7b19e0776540326706cdb55da80189f4a4`
+and `3ab2f7c7cdecb947244a48d4c5df78d988bba4a035f17621f33633ce03485cff`.
+
+Method-compatibility fatals now render both parameter and return declarations
+through PHP 8.5's canonical diagnostic type spelling after resolving lexical
+`self`, `parent` and late-static types. Class, intersection, callable and
+late-static members remain ahead of the fixed scalar/container sequence;
+members are then ordered as `object`, `array`, `string`, `int`, `float`,
+`bool` and `null`. `iterable` expands to
+`Traversable|array`, nullable iterable adds `null`, and intersections retain
+the parentheses required inside DNF unions. The underlying arity, reference,
+visibility, parameter-contravariance and return-covariance decisions are
+unchanged.
+
+An original E2E regression covers source-order-independent parameter and
+return unions, complete built-in ordering, iterable and nullable-iterable
+expansion, DNF parentheses and an existing variadic-union expectation corrected
+against exact PHP 8.5.9. All 131 upstream cases containing the relevant
+method-compatibility diagnostic reach 109 passes, with the remaining failures
+unchanged. The 555 related inheritance, interface, autoload, property-hook,
+type-hint, magic and Reflection E2Es pass. All five Cargo configurations,
+all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
+and the exact unsafe ratchet pass. The production inventory remains 1,613
+unsafe blocks, 289 unsafe functions and 312 SAFETY annotations. Composer S0,
+all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and cold-build
+S3 also pass. The change adds no opcode, runtime layout field, dependency or
+unsafe block and executes only after a method incompatibility is established.
+
+A local 21-pair alternating release control on an AMD Ryzen 9 7950X pinned to
+CPU 0 with the performance governor, exact-output validation and two
+additional warmups compiled 2,000 valid parent/child pairs, 4,000 unique
+classes and 4,000 compatible union-typed method declarations per observation
+through `eval()`. The valid path never invokes the changed fatal renderer. No
+sample was excluded and every run returned checksum `2000`. Baseline
+median/mean was 1.316843/1.318944 seconds and candidate median/mean was
+1.312740/1.314178 seconds. The independent median and mean ratios are 0.996884
+and 0.996387; paired median and mean ratios are 0.995520 and 0.996494, below
+the +5% gate. The exact candidate binary SHA-256 is
+`850eadbae667c63043c6da8e1356a2c8cc14f0a2ebf573c88999fcf1395ee5c5`.
+
+General method-variance semantics, Reflection type rendering and independent
+property/class-constant diagnostics remain separate work. The remaining
+method-compatibility PHPT failures retain their existing parser, runtime or
+unrelated output boundaries.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `1cb5d3b0`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,927 pass, 1,372 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
