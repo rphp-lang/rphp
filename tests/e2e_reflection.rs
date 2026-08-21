@@ -1519,6 +1519,59 @@ foreach ($reflection->getConstants(32) as $name => $value) {
 }
 
 #[test]
+fn reflection_class_exposes_enum_cases_as_constants() {
+    let out = run_php(
+        r#"<?php
+namespace ReflectedEnumConstants;
+#[\Attribute(\Attribute::TARGET_CLASS_CONSTANT)]
+class Marker {
+    public function __construct(public string $label) {}
+}
+enum UnitProbe {
+    #[Marker('alpha')]
+    case Alpha;
+    case Beta;
+    public const ORDINARY = 7;
+}
+enum BackedProbe: string {
+    case One = 'one';
+}
+foreach ([UnitProbe::class, BackedProbe::class] as $name) {
+    $reflection = new \ReflectionClass($name);
+    foreach ($reflection->getConstants() as $constantName => $value) {
+        echo $constantName, '=';
+        echo $value instanceof \UnitEnum ? $value->name : $value;
+        echo ',';
+    }
+    echo '|';
+    foreach ($reflection->getReflectionConstants() as $constant) {
+        echo $constant->name, '@', $constant->getDeclaringClass()->name,
+            '#', count($constant->getAttributes()), ',';
+    }
+    echo '|';
+    $caseName = $name === UnitProbe::class ? 'Alpha' : 'One';
+    echo $reflection->getConstant($caseName) === constant($name . '::' . $caseName)
+        ? 'same:' : 'different:';
+    echo $reflection->getConstant('missing') === false ? 'missing|' : 'bad|';
+    $caseReflection = $reflection->getReflectionConstant($caseName);
+    echo $caseReflection->name, ':', count($caseReflection->getAttributes()), ':';
+    echo $reflection->getReflectionConstant('missing') === false ? 'missing|' : 'bad|';
+    echo implode(',', array_keys($reflection->getConstants(1))), '|';
+    echo count($reflection->getConstants(32)), '|';
+    echo count($reflection->getDefaultProperties()), "\n";
+}
+$direct = new \ReflectionClassConstant(UnitProbe::class, 'Alpha');
+echo $direct->name, ':', $direct->getDeclaringClass()->name, ':',
+    $direct->getAttributes()[0]->newInstance()->label;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Alpha=Alpha,Beta=Beta,ORDINARY=7,|Alpha@ReflectedEnumConstants\\UnitProbe#1,Beta@ReflectedEnumConstants\\UnitProbe#0,ORDINARY@ReflectedEnumConstants\\UnitProbe#0,|same:missing|Alpha:1:missing|Alpha,Beta,ORDINARY|0|0\nOne=One,|One@ReflectedEnumConstants\\BackedProbe#0,|same:missing|One:0:missing|One|0|0\nAlpha:ReflectedEnumConstants\\UnitProbe:alpha"
+    );
+}
+
+#[test]
 fn reflection_class_exposes_constant_objects_and_default_properties() {
     let out = run_php(
         r#"<?php

@@ -366,12 +366,24 @@ fn reflected_attribute_definitions(
                 .as_deref()
                 .zip(name.as_deref())
                 .and_then(|(owner, name)| {
-                    eg.find_class(owner)?
+                    let class = eg.find_class(owner)?;
+                    class
                         .constants
                         .iter()
                         .find(|constant| constant.name == name)
+                        .map(|constant| constant.attributes.clone())
+                        .or_else(|| {
+                            if class.is_enum {
+                                class
+                                    .static_properties
+                                    .iter()
+                                    .find(|case| case.name == name)
+                                    .map(|case| case.attributes.clone())
+                            } else {
+                                None
+                            }
+                        })
                 })
-                .map(|constant| constant.attributes.clone())
                 .unwrap_or_default()
         }
         Some("ReflectionConstant") => reflected_property(ed, "name")
@@ -2518,24 +2530,34 @@ fn class_constant_construct(
         reflection_exception(eg, format!("Class \"{class_name}\" does not exist"));
         return Ok(());
     }
-    let Some((declaring_class, value, modifiers)) = eg.find_class(&class_name).and_then(|class| {
-        class
+    let target = eg.find_class(&class_name).and_then(|class| {
+        if let Some(constant) = class
             .constants
             .iter()
             .find(|constant| constant.name == constant_name)
-            .map(|constant| {
-                let visibility = match constant.visibility {
-                    Visibility::Public => 1,
-                    Visibility::Protected => 2,
-                    Visibility::Private => 4,
-                };
-                (
-                    constant.declaring_class.clone(),
-                    constant.value.clone(),
-                    visibility | if constant.is_final { 32 } else { 0 },
-                )
-            })
-    }) else {
+        {
+            let visibility = match constant.visibility {
+                Visibility::Public => 1,
+                Visibility::Protected => 2,
+                Visibility::Private => 4,
+            };
+            return Some((
+                constant.declaring_class.clone(),
+                constant.value.clone(),
+                visibility | if constant.is_final { 32 } else { 0 },
+            ));
+        }
+        if !class.is_enum {
+            return None;
+        }
+        class
+            .static_properties
+            .iter()
+            .position(|case| case.name == constant_name)
+            .and_then(|index| enum_case_value(eg, class.class_id, index))
+            .map(|value| (class.name.clone(), value, 1))
+    });
+    let Some((declaring_class, value, modifiers)) = target else {
         reflection_exception(
             eg,
             format!("Constant {class_name}::{constant_name} does not exist"),
@@ -3604,6 +3626,33 @@ fn class_get_traits(
     return_value(rv, reflected_class_map(names))
 }
 
+fn enum_case_value(eg: &ExecutorGlobals, class_id: u32, case_index: usize) -> Option<Value> {
+    eg.static_property_storage_slot(class_id, case_index)
+        .and_then(|slot| eg.static_property_value(slot))
+        .cloned()
+}
+
+fn reflected_class_constant(
+    name: &str,
+    declaring_class: &str,
+    modifiers: i64,
+    value: Value,
+) -> Value {
+    object_value(
+        "ReflectionClassConstant",
+        [
+            ("name", Value::string(name)),
+            ("class", Value::string(declaring_class)),
+            (
+                "__reflection_declaring_class",
+                Value::string(declaring_class),
+            ),
+            ("__reflection_modifiers", Value::long(modifiers)),
+            ("__reflection_value", value),
+        ],
+    )
+}
+
 fn class_get_constants(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -3621,7 +3670,18 @@ fn class_get_constants(
         return return_value(rv, Value::array(PhpArray::new()));
     };
     let filter = with_argument(ed, 1, Value::as_long);
-    let mut constants = PhpArray::with_hash_capacity(class.constants.len());
+    let enum_case_count = class
+        .is_enum
+        .then_some(class.static_properties.len())
+        .unwrap_or(0);
+    let mut constants = PhpArray::with_hash_capacity(class.constants.len() + enum_case_count);
+    if class.is_enum && !filter.is_some_and(|filter| filter & 1 == 0) {
+        for (index, case) in class.static_properties.iter().enumerate() {
+            if let Some(value) = enum_case_value(eg, class.class_id, index) {
+                constants.set_str(&case.name, value);
+            }
+        }
+    }
     for constant in &class.constants {
         let visibility = match constant.visibility {
             Visibility::Public => 1,
@@ -3651,13 +3711,27 @@ fn class_get_constant(
         return return_value(rv, Value::bool(false));
     }
     let name = argument_string(ed, 1);
-    let Some(definition) = eg.find_class(&owner).and_then(|class| {
-        class
+    let (definition, enum_value) = eg.find_class(&owner).map_or((None, None), |class| {
+        let definition = class
             .constants
             .iter()
             .find(|constant| constant.name == name)
-            .cloned()
-    }) else {
+            .cloned();
+        let enum_value = (definition.is_none() && class.is_enum)
+            .then(|| {
+                class
+                    .static_properties
+                    .iter()
+                    .position(|case| case.name == name)
+                    .and_then(|index| enum_case_value(eg, class.class_id, index))
+            })
+            .flatten();
+        (definition, enum_value)
+    });
+    if let Some(value) = enum_value {
+        return return_value(rv, value);
+    }
+    let Some(definition) = definition else {
         return return_value(rv, Value::bool(false));
     };
     if let Some(error) = &definition.evaluation_error {
@@ -3690,7 +3764,18 @@ fn class_get_reflection_constants(
         return return_value(rv, Value::array(PhpArray::new()));
     };
     let filter = with_argument(ed, 1, Value::as_long);
-    let mut constants = PhpArray::with_packed_capacity(class.constants.len());
+    let enum_case_count = class
+        .is_enum
+        .then_some(class.static_properties.len())
+        .unwrap_or(0);
+    let mut constants = PhpArray::with_packed_capacity(class.constants.len() + enum_case_count);
+    if class.is_enum && !filter.is_some_and(|filter| filter & 1 == 0) {
+        for (index, case) in class.static_properties.iter().enumerate() {
+            if let Some(value) = enum_case_value(eg, class.class_id, index) {
+                constants.push(reflected_class_constant(&case.name, &class.name, 1, value));
+            }
+        }
+    }
     for constant in &class.constants {
         let visibility = match constant.visibility {
             Visibility::Public => 1,
@@ -3701,18 +3786,11 @@ fn class_get_reflection_constants(
         if filter.is_some_and(|filter| modifiers & filter == 0) {
             continue;
         }
-        constants.push(object_value(
-            "ReflectionClassConstant",
-            [
-                ("name", Value::string(constant.name.clone())),
-                ("class", Value::string(constant.declaring_class.clone())),
-                (
-                    "__reflection_declaring_class",
-                    Value::string(constant.declaring_class.clone()),
-                ),
-                ("__reflection_modifiers", Value::long(modifiers)),
-                ("__reflection_value", constant.value.clone()),
-            ],
+        constants.push(reflected_class_constant(
+            &constant.name,
+            &constant.declaring_class,
+            modifiers,
+            constant.value.clone(),
         ));
     }
     return_value(rv, Value::array(constants))
@@ -3732,36 +3810,39 @@ fn class_get_reflection_constant(
         return return_value(rv, Value::bool(false));
     }
     let name = argument_string(ed, 1);
-    let Some(constant) = eg.find_class(&owner).and_then(|class| {
-        class
+    let reflected = eg.find_class(&owner).and_then(|class| {
+        if let Some(constant) = class
             .constants
             .iter()
             .find(|constant| constant.name == name)
-    }) else {
+        {
+            let visibility = match constant.visibility {
+                Visibility::Public => 1,
+                Visibility::Protected => 2,
+                Visibility::Private => 4,
+            };
+            let modifiers = visibility | if constant.is_final { 32 } else { 0 };
+            return Some(reflected_class_constant(
+                &constant.name,
+                &constant.declaring_class,
+                modifiers,
+                constant.value.clone(),
+            ));
+        }
+        if !class.is_enum {
+            return None;
+        }
+        class
+            .static_properties
+            .iter()
+            .position(|case| case.name == name)
+            .and_then(|index| enum_case_value(eg, class.class_id, index))
+            .map(|value| reflected_class_constant(&name, &class.name, 1, value))
+    });
+    let Some(reflected) = reflected else {
         return return_value(rv, Value::bool(false));
     };
-    let visibility = match constant.visibility {
-        Visibility::Public => 1,
-        Visibility::Protected => 2,
-        Visibility::Private => 4,
-    };
-    let modifiers = visibility | if constant.is_final { 32 } else { 0 };
-    return_value(
-        rv,
-        object_value(
-            "ReflectionClassConstant",
-            [
-                ("name", Value::string(constant.name.clone())),
-                ("class", Value::string(constant.declaring_class.clone())),
-                (
-                    "__reflection_declaring_class",
-                    Value::string(constant.declaring_class.clone()),
-                ),
-                ("__reflection_modifiers", Value::long(modifiers)),
-                ("__reflection_value", constant.value.clone()),
-            ],
-        ),
-    )
+    return_value(rv, reflected)
 }
 
 fn class_get_default_properties(
@@ -3782,11 +3863,8 @@ fn class_get_default_properties(
     };
     let mut defaults =
         PhpArray::with_hash_capacity(class.properties.len() + class.static_properties.len());
-    for property in class
-        .static_properties
-        .iter()
-        .chain(class.properties.iter())
-    {
+    let static_properties = class.static_properties.iter().filter(|_| !class.is_enum);
+    for property in static_properties.chain(class.properties.iter()) {
         if let Some(default) = &property.default {
             defaults.set_str(&property.name, default.clone());
         }
