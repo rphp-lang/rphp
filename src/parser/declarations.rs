@@ -1904,7 +1904,7 @@ impl Parser {
             }
             Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
-            | Expr::FirstClassFunctionCallable(_) => {}
+            | Expr::FirstClassFunctionCallable { .. } => {}
             Expr::DynamicNamedStaticProperty { property, .. } => {
                 Self::collect_free_vars(property, bound, out);
             }

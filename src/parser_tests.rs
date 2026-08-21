@@ -888,7 +888,7 @@ fn test_parse_named_first_class_function_callable() {
     assert!(matches!(
         &body[0],
         Stmt::Assign {
-            expr: Expr::FirstClassFunctionCallable(name),
+            expr: Expr::FirstClassFunctionCallable { name, line: 1 },
             ..
         } if name == "is_int"
     ));

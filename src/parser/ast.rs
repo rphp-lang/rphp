@@ -431,7 +431,10 @@ pub enum Expr {
         generic_args: Vec<TypeHint>,
         line: usize,
     },
-    FirstClassFunctionCallable(String),
+    FirstClassFunctionCallable {
+        name: String,
+        line: usize,
+    },
     FirstClassCallable(Box<Expr>),
     Instanceof {
         // $obj instanceof ClassName
@@ -613,7 +616,7 @@ impl Expr {
             | Expr::PreDec { .. }
             | Expr::StaticProperty { .. }
             | Expr::ClassConstant { .. }
-            | Expr::FirstClassFunctionCallable(_)
+            | Expr::FirstClassFunctionCallable { .. }
             | Expr::Constant(_)
             | Expr::MagicConstant { .. } => false,
             Expr::DynamicClassConstant {

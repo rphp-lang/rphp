@@ -81,6 +81,7 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::CompileDeprecation { line, .. }
         | Expr::Pipe { line, .. }
         | Expr::FunctionCall { line, .. }
+        | Expr::FirstClassFunctionCallable { line, .. }
         | Expr::Eval { line, .. }
         | Expr::PostInc { line, .. }
         | Expr::PostDec { line, .. }
@@ -432,7 +433,7 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 let callable = render(callable, 100, false)?;
                 (format!("{callable}(...)"), 100)
             }
-            Expr::FirstClassFunctionCallable(name) => (format!("{name}(...)"), 100),
+            Expr::FirstClassFunctionCallable { name, .. } => (format!("{name}(...)"), 100),
             Expr::FunctionCall { name, args, .. } => {
                 let name = if name.eq_ignore_ascii_case("exit") || name.eq_ignore_ascii_case("die")
                 {
@@ -10726,7 +10727,7 @@ impl Compiler {
                 self.instructions.push(create);
                 (result, OpType::Tmp)
             }
-            Expr::FirstClassFunctionCallable(name) => {
+            Expr::FirstClassFunctionCallable { name, line } => {
                 let resolved = self.resolve_function_name(name);
                 let callable = self.add_literal(Value::string(resolved));
                 let fallback = if self.current_namespace.is_some()
@@ -10744,7 +10745,7 @@ impl Compiler {
                 create.result = result;
                 create.result_type = OpType::Tmp;
                 create.extended_value = fallback as u32;
-                self.instructions.push(create);
+                self.push_instruction_at_line(create, *line);
                 (result, OpType::Tmp)
             }
             Expr::Constant(name) => {

@@ -528,6 +528,18 @@ inside\n"
 }
 
 #[test]
+fn named_first_class_callable_errors_keep_the_creation_origin_and_trace() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nnamespace FccOrigin;\nfunction capture() {\n    try {\n        missing(...);\n    } catch (\\Throwable $error) {\n        echo $error->getMessage(), '|', $error->getFile(), ':', $error->getLine(), \"\\n\";\n        echo $error->getTraceAsString();\n    }\n}\ncapture();",
+            "/fixture/fcc-origin.php",
+            "/fixture",
+        ),
+        "Call to undefined function FccOrigin\\missing()|/fixture/fcc-origin.php:5\n#0 /fixture/fcc-origin.php(11): FccOrigin\\capture()\n#1 {main}"
+    );
+}
+
+#[test]
 fn first_class_callable_keeps_existing_closure_identity() {
     let out = run_php(
         r#"<?php

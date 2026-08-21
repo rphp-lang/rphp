@@ -661,7 +661,7 @@ impl Parser {
                 );
             }
             let callable = match self.parse_concat()? {
-                Expr::Constant(name) => Expr::FirstClassFunctionCallable(name),
+                Expr::Constant(name) => Expr::FirstClassFunctionCallable { name, line },
                 callable => callable,
             };
             input = Expr::Pipe {
@@ -1196,7 +1196,7 @@ impl Parser {
                     {
                         self.advance();
                         self.advance();
-                        return Ok(Expr::FirstClassFunctionCallable(name));
+                        return Ok(Expr::FirstClassFunctionCallable { name, line });
                     }
                     let args = self.parse_call_args()?;
                     Ok(Expr::FunctionCall {
@@ -1281,7 +1281,7 @@ impl Parser {
                     {
                         self.advance();
                         self.advance();
-                        return Ok(Expr::FirstClassFunctionCallable(name));
+                        return Ok(Expr::FirstClassFunctionCallable { name, line });
                     }
                     let args = self.parse_call_args()?;
                     if name.eq_ignore_ascii_case("eval") {
