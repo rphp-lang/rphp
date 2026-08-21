@@ -8,6 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `50e34e4c`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,925 pass, 1,374 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.071% and the whole-corpus rate is 70.102%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`7e59186c`, the pass-set delta is +10/-0 with no other status or failure-
+category movement.
+
+The exact additions are `Zend/tests/magic_methods/magic_methods_011.phpt`
+through `magic_methods_020.phpt`. Every previous pass remains a pass. Two
+sequential final runs have byte-identical merged manifests and summaries. Their
+manifest and summary SHA-256 values are
+`73a3f3090b427e94b0e8ea6c44cce85c7b872fc7641f8ee0c23438b0ef5671b3`
+and `07744dfead845f54a391ec0dfecfabba8f4e2547b67a93cb3cbdc2e6203c4370`.
+
+The centralized magic-method signature validator now enforces PHP 8.5's
+parameter type contracts after arity, canonical-reference and staticness
+validation. Property names on `__get`, `__isset`, `__unset` and `__set`, plus
+method names on `__call` and `__callStatic`, must accept `string`. Argument
+lists on `__call` and `__callStatic`, and payloads on `__unserialize` and
+`__set_state`, must accept `array`. Untyped and `mixed` parameters are valid;
+nullable, union and `iterable` declarations are accepted where they remain
+contravariant supertypes. A narrow scalar, object or class type and pure
+`null` are rejected. PHP's unrestricted second `__set` parameter is preserved.
+
+The rule applies consistently to classes, abstract methods, interfaces,
+traits and admitted enum methods. Diagnostics name the one-based parameter and
+its declared variable. Their observable priority is arity, reference shape,
+staticness, a non-public visibility warning, parameter type from left to right,
+then return type. This reuses compiled parameter hints and adds no runtime
+opcode, bytecode/layout field, dependency or unsafe block.
+
+An original source-aware E2E regression covers namespace-qualified classes,
+traits, interfaces, abstract declarations, enums, both typed parameter
+positions, serialization/state methods, pure `null`, diagnostic precedence,
+and accepted untyped, `mixed`, nullable, union and `iterable` supertypes. The
+complete 157-case `Zend/tests/magic_methods` directory reaches 113 passes with
+ten gains and no regression. All five Cargo configurations,
+all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
+and the exact unsafe ratchet pass. The production inventory remains 1,613
+unsafe blocks, 289 unsafe functions and 312 SAFETY annotations. Composer S0,
+all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and cold-build
+S3 also pass.
+
+A local 21-pair alternating release control on an AMD Ryzen 9 7950X pinned to
+CPU 0 with the performance governor, exact-output validation, two additional
+warmups and JIT/quick loops disabled compiled 10,000 unique classes and 40,000
+successful typed magic-method declarations per observation through `eval()`.
+No sample was excluded and every run returned checksum `198890`. Baseline
+median/mean was 2.359255/2.362190 seconds and candidate median/mean was
+2.348112/2.349366 seconds. The independent median and mean ratios are 0.995277
+and 0.994571; paired median and mean ratios are 0.994383 and 0.994667, below
+the +5% gate. The exact candidate binary SHA-256 is
+`fe022d2ca094ad8489959de3762aac87417c2e4fc8ccc57e781ea5441da31ba6`.
+
+General inherited-method variance and runtime magic dispatch remain separate
+work; this checkpoint claims declaration validation and diagnostic ordering
+only.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `7e59186c`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,915 pass, 1,384 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
