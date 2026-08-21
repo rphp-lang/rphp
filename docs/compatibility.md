@@ -8,6 +8,58 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `d7480f5f`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,838 pass, 1,461 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.429% and the whole-corpus rate is 68.548%; 4,730 of
+5,299 attempted cases reach runtime (89.262%). Relative to exact base
+`933cdc2d`, the pass-set delta is exactly +1/-0: `Zend/tests/div_002.phpt`
+becomes a pass and every prior pass remains a pass.
+
+One remaining failure advances past the old internal division fatal without
+becoming a compatibility pass. `tests/lang/operators/divide_variationStr.phpt`
+moves from compile to output at the independent numeric-string coercion and
+integer-versus-float formatting boundary. There are no other status or
+failure-category transitions. Two sequential final full runs have
+byte-identical merged manifests and summaries. Their SHA-256 values are
+`144a209b59d5727d9b96f840db09566f8534b8e64d56bd6e8acce67cea1a24c2`
+and `1113fb9efc5d130854d5d0c7627f7d533d6fec940b125277dbe8bd3808504b50`.
+
+Unsupported binary division now throws a catchable `TypeError` through the
+ordinary PHP unwind path instead of terminating with an internal compile-style
+fatal. The existing `Div` opcode reports PHP's
+`Unsupported operand types: <left> / <right>` message with concrete diagnostic
+types in operand order, attaches source file, line and live trace before
+unwinding, and commits no compound-assignment write after failure. Numeric
+division retains its existing path, including the distinct catchable
+`DivisionByZeroError` for zero divisors and its no-write compound-assignment
+semantics.
+
+The compiler records source provenance for division compound assignments
+through the same existing mechanism as addition, subtraction and
+multiplication. The cold error arm reuses the shared operator throw helper and
+adds no opcode, layout field or unsafe block. One original E2E regression
+covers array and object operands, exact type order, origin and trace, unchanged
+`/=` state, preserved division-by-zero type and message, source lines and an
+eval-time constant declaration; all 23 operator E2E tests pass.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe diff ratchet pass, as do
+Composer S0, all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3. The production inventory remains 1,616 unsafe blocks and 289
+unsafe functions. Twenty-one alternating CPU-pinned default-release pairs of
+the ten-million-iteration mixed arithmetic control measured baseline
+p10/median/p90 1.199973/1.212753/1.284650 seconds and candidate
+1.199960/1.252983/1.307749 seconds. The independent median ratio is 1.0332 and
+the paired-median ratio is 1.0168, below the +5% gate; paired p10/p90 ratios are
+0.9864/1.0869, and every run retained checksum `419,729999927,1`. The exact
+base and candidate binary SHA-256 values are
+`5a91d68075d89ed91f1598c95ec606fc4501bc82bee6e406acdf5982cd6dd8bd`
+and `253971ae8621b7329d249fc531e40aab21e4a66e60001b5ee198ded6544b1844`.
+Partial numeric-string arithmetic and unsupported exponentiation remain
+separate work.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `933cdc2d`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,837 pass, 1,462 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
