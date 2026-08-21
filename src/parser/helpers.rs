@@ -12,6 +12,7 @@ impl Parser {
                 | Token::LBracket(line)
                 | Token::Fn(line)
                 | Token::Use(line)
+                | Token::Static(line)
                 | Token::DotDotDot(line)
                 | Token::PipeGreater(line)
                 | Token::Function(line)
@@ -145,7 +146,7 @@ impl Parser {
             Token::True => Some("true".to_string()),
             Token::False => Some("false".to_string()),
             Token::Match(_) => Some("match".to_string()),
-            Token::Static => Some("static".to_string()),
+            Token::Static(_) => Some("static".to_string()),
             Token::Function(_) => Some("function".to_string()),
             Token::Class => Some("class".to_string()),
             Token::New(_) => Some("new".to_string()),
@@ -457,7 +458,7 @@ impl Parser {
                 | Token::Null
                 | Token::True
                 | Token::False
-                | Token::Static
+                | Token::Static(_)
                 | Token::LParen(_)
                 | Token::Identifier(_, _)
                 | Token::Public
@@ -696,7 +697,7 @@ impl Parser {
                     | Some(Token::Namespace)
                     | Some(Token::ArrayKw)
                     | Some(Token::Null)
-                    | Some(Token::Static)
+                    | Some(Token::Static(_))
             )
         {
             self.advance();
@@ -722,7 +723,7 @@ impl Parser {
                         | Some(Token::Null)
                         | Some(Token::True)
                         | Some(Token::False)
-                        | Some(Token::Static)
+                        | Some(Token::Static(_))
                 )
             }
             Token::Identifier(_, _) => {
@@ -745,7 +746,7 @@ impl Parser {
             // enters the parameter parser only so it can emit the precise
             // return-only diagnostic. Class-member modifiers are consumed
             // before this lookahead runs.
-            Token::Static => matches!(
+            Token::Static(_) => matches!(
                 self.tokens.get(self.pos + 1),
                 Some(Token::Less)
                     | Some(Token::Variable(_, _))
@@ -794,7 +795,7 @@ impl Parser {
             // Peek ahead: ?$var or ?... means ternary/other, not type hint
             // In param context, ?Identifier or ?ArrayKw means nullable type
             let next = self.tokens.get(self.pos + 1);
-            if matches!(next, Some(Token::Static)) {
+            if matches!(next, Some(Token::Static(_))) {
                 return Err(self.source_error(
                     "syntax error, unexpected token \"static\"",
                     declaration_line,
@@ -873,7 +874,7 @@ impl Parser {
                 }
                 Ok(None)
             }
-            Token::Static => {
+            Token::Static(_) => {
                 let hint = self.parse_base_type_hint()?;
                 let hint = self.maybe_parse_compound_type(hint)?;
                 self.finish_non_return_type_hint(hint, parameter, declaration_line)
@@ -972,7 +973,7 @@ impl Parser {
             Token::Null => Ok(TypeHint::Null),
             Token::True => Ok(TypeHint::ClassName("true".to_string())),
             Token::False => Ok(TypeHint::ClassName("false".to_string())),
-            Token::Static => {
+            Token::Static(_) => {
                 if self.peek() == Token::Less {
                     if !cfg!(any(
                         feature = "php-generics-erased",

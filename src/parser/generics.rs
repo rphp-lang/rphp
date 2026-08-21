@@ -1,8 +1,59 @@
 const MAX_GENERIC_ARITY: usize = 127;
 
+#[derive(Clone, Copy)]
+enum ReservedStaticRole {
+    Class,
+    Interface,
+    Trait,
+    Catch,
+}
+
+impl ReservedStaticRole {
+    fn diagnostic(self) -> &'static str {
+        match self {
+            Self::Class => "Cannot use \"static\" as class name, as it is reserved",
+            Self::Interface => "Cannot use \"static\" as interface name, as it is reserved",
+            Self::Trait => "Cannot use \"static\" as trait name, as it is reserved",
+            Self::Catch => "Bad class name in the catch statement",
+        }
+    }
+}
+
 impl Parser {
+    fn parse_classlike_declaration_name(
+        &mut self,
+        expected_kind: &str,
+    ) -> Result<(String, usize), String> {
+        match self.advance() {
+            Token::Identifier(name, line) => Ok((name, line)),
+            Token::Static(line) => Err(self.source_error(
+                "syntax error, unexpected token \"static\", expecting identifier",
+                line,
+            )),
+            token => Err(format!("Expected {expected_kind} name, got {token:?}")),
+        }
+    }
+
     fn parse_generic_ancestor(&mut self) -> Result<GenericAncestor, String> {
         let name = self.parse_qualified_name()?;
+        self.finish_generic_ancestor(name)
+    }
+
+    fn parse_generic_ancestor_with_reserved_static(
+        &mut self,
+        role: ReservedStaticRole,
+        diagnostic_line: Option<usize>,
+    ) -> Result<GenericAncestor, String> {
+        let Token::Static(static_line) = self.peek() else {
+            return self.parse_generic_ancestor();
+        };
+        self.advance();
+        self.last_primary_line = Some(static_line);
+        self.compile_error(role.diagnostic(), diagnostic_line.unwrap_or(static_line));
+        self.finish_generic_ancestor("static".to_string())
+    }
+
+    fn finish_generic_ancestor(&mut self, name: String) -> Result<GenericAncestor, String> {
         let arguments = if self.peek() == Token::Less {
             if !GenericRuntimeCapabilities::CONFIGURED.syntax_enabled() {
                 return Err(
@@ -15,6 +66,42 @@ impl Parser {
             Vec::new()
         };
         Ok(GenericAncestor { name, arguments })
+    }
+
+    fn parse_qualified_name_with_reserved_static(
+        &mut self,
+        role: ReservedStaticRole,
+        diagnostic_line: Option<usize>,
+    ) -> Result<String, String> {
+        let Token::Static(static_line) = self.peek() else {
+            return self.parse_qualified_or_namespace_relative_name();
+        };
+        self.advance();
+        self.last_primary_line = Some(static_line);
+        self.compile_error(role.diagnostic(), diagnostic_line.unwrap_or(static_line));
+        Ok("static".to_string())
+    }
+
+    fn parse_trait_ancestor_list(
+        &mut self,
+        use_line: usize,
+    ) -> Result<(Vec<GenericAncestor>, usize), String> {
+        let mut ancestors = Vec::new();
+        let mut first_ancestor_line = None;
+        loop {
+            ancestors.push(self.parse_generic_ancestor_with_reserved_static(
+                ReservedStaticRole::Trait,
+                first_ancestor_line,
+            )?);
+            if first_ancestor_line.is_none() {
+                first_ancestor_line = Some(self.last_primary_line.unwrap_or(use_line));
+            }
+            if self.peek() != Token::Comma {
+                break;
+            }
+            self.advance();
+        }
+        Ok((ancestors, first_ancestor_line.unwrap_or(use_line)))
     }
 
     /// Parse an optional RFC v0.22 type-parameter list immediately following

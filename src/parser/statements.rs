@@ -1088,11 +1088,11 @@ impl Parser {
             Token::Enum => self.parse_enum(),
             Token::Interface => self.parse_interface(),
             Token::Trait => self.parse_trait(),
-            Token::Static if self.peek_at(1) == Token::DoubleColon => {
+            Token::Static(_) if self.peek_at(1) == Token::DoubleColon => {
                 let expr = self.parse_expr()?;
                 self.finish_static_property_statement(expr)
             }
-            Token::Static
+            Token::Static(_)
                 if matches!(self.peek_at(1), Token::Function(_) | Token::Fn(_)) =>
             {
                 self.parse_expression_statement()
@@ -1181,17 +1181,23 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Global(vars))
             }
-            Token::Static if matches!(self.peek_at(1), Token::Variable(_, _)) => {
+            Token::Static(_)
+                if matches!(self.peek_at(1), Token::Variable(_, _) | Token::This(_)) =>
+            {
                 // static $var = expr; (function-level static variable)
                 self.advance(); // consume 'static'
                 let line = match self.peek() {
-                    Token::Variable(_, line) => line,
+                    Token::Variable(_, line) | Token::This(line) => line,
                     _ => unreachable!("static-variable lookahead was already validated"),
                 };
                 let mut vars = Vec::new();
                 loop {
                     let var_name = match self.advance() {
                         Token::Variable(name, _) => name,
+                        Token::This(this_line) => {
+                            self.compile_error("Cannot use $this as static variable", this_line);
+                            "this".to_string()
+                        }
                         other => {
                             return Err(format!(
                                 "Expected variable after 'static', got {:?}",

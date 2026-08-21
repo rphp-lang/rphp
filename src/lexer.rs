@@ -51,7 +51,7 @@ pub enum Token {
     Private,         // private
     This(usize),     // $this with source line (handled as special variable)
     Extends,         // extends
-    Static,          // static
+    Static(usize),   // static with source line
     Instanceof,      // instanceof
     Const,           // const
     Interface,       // interface
@@ -718,7 +718,7 @@ impl<'a> Lexer<'a> {
                         "protected" => tokens.push(Token::Protected),
                         "private" => tokens.push(Token::Private),
                         "extends" => tokens.push(Token::Extends),
-                        "static" => tokens.push(Token::Static),
+                        "static" => tokens.push(Token::Static(line)),
                         "instanceof" => tokens.push(Token::Instanceof),
                         "const" => tokens.push(Token::Const),
                         "interface" => tokens.push(Token::Interface),

@@ -585,7 +585,7 @@ impl Parser {
                         expr: Box::new(left),
                         class_name: self.parse_qualified_name()?,
                     }
-                } else if self.peek() == Token::Static {
+                } else if matches!(self.peek(), Token::Static(_)) {
                     self.advance();
                     Expr::Instanceof {
                         expr: Box::new(left),
@@ -778,7 +778,7 @@ impl Parser {
                             expr: Box::new(expr),
                             class_name: self.parse_qualified_name()?,
                         }
-                    } else if self.peek() == Token::Static {
+                    } else if matches!(self.peek(), Token::Static(_)) {
                         self.advance();
                         Expr::Instanceof {
                             expr: Box::new(expr),
@@ -1310,8 +1310,7 @@ impl Parser {
                     Ok(Expr::Constant(name))
                 }
             }
-            Token::Static => {
-                let line = self.closest_token_source_line();
+            Token::Static(line) => {
                 if matches!(self.peek_at(1), Token::Function(_)) {
                     self.advance(); // consume 'static'
                     return self.parse_closure(true);
@@ -1346,7 +1345,7 @@ impl Parser {
                 let mut expression = match self.peek() {
                     Token::Function(_) => self.parse_closure(false)?,
                     Token::Fn(_) => self.parse_arrow_function(false)?,
-                    Token::Static
+                    Token::Static(_)
                         if matches!(self.peek_at(1), Token::Function(_) | Token::Fn(_)) =>
                     {
                         self.advance();
@@ -1459,7 +1458,10 @@ impl Parser {
                     };
                     let parent = if self.peek() == Token::Extends {
                         self.advance();
-                        Some(self.parse_generic_ancestor()?)
+                        Some(self.parse_generic_ancestor_with_reserved_static(
+                            ReservedStaticRole::Class,
+                            Some(line),
+                        )?)
                     } else {
                         None
                     };
@@ -1467,7 +1469,10 @@ impl Parser {
                         self.advance();
                         let mut interfaces = Vec::new();
                         loop {
-                            interfaces.push(self.parse_generic_ancestor()?);
+                            interfaces.push(self.parse_generic_ancestor_with_reserved_static(
+                                ReservedStaticRole::Interface,
+                                Some(line),
+                            )?);
                             if self.peek() == Token::Comma {
                                 self.advance();
                             } else {
@@ -1541,7 +1546,7 @@ impl Parser {
                         };
                         (class_name, self.last_primary_line.unwrap_or(line))
                     }
-                    Token::Static => {
+                    Token::Static(_) => {
                         self.advance();
                         ("static".to_string(), line)
                     }

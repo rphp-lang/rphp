@@ -74,7 +74,7 @@ impl Parser {
                 Token::Public => Some("public"),
                 Token::Protected => Some("protected"),
                 Token::Private => Some("private"),
-                Token::Static => Some("static"),
+                Token::Static(_) => Some("static"),
                 _ => None,
             };
             if let Some(modifier) = invalid_modifier {
@@ -280,7 +280,7 @@ impl Parser {
                     Token::Public => Some("public"),
                     Token::Protected => Some("protected"),
                     Token::Private => Some("private"),
-                    Token::Static => Some("static"),
+                    Token::Static(_) => Some("static"),
                     _ => None,
                 };
                 if let Some(modifier) = invalid_modifier {
@@ -450,15 +450,12 @@ impl Parser {
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
             if matches!(self.peek(), Token::Use(_)) {
-                self.advance();
-                loop {
-                    uses.push(self.parse_generic_ancestor()?);
-                    if self.peek() == Token::Comma {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                }
+                let use_line = match self.advance() {
+                    Token::Use(line) => line,
+                    _ => unreachable!("trait use parser starts at use"),
+                };
+                let (trait_uses, _) = self.parse_trait_ancestor_list(use_line)?;
+                uses.extend(trait_uses);
                 if self.peek() == Token::LBrace {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
@@ -582,14 +579,20 @@ impl Parser {
         let mut catches = Vec::new();
         while self.peek() == Token::Catch {
             self.advance(); // consume 'catch'
-            self.expect_lparen()?;
+            let catch_line = self.expect_lparen()?;
             // Parse exception type(s): ExA | ExB
             let mut types = Vec::new();
-            let type_name = self.parse_qualified_or_namespace_relative_name()?;
+            let type_name = self.parse_qualified_name_with_reserved_static(
+                ReservedStaticRole::Catch,
+                None,
+            )?;
             types.push(type_name);
             while self.peek() == Token::Pipe {
                 self.advance();
-                let t = self.parse_qualified_or_namespace_relative_name()?;
+                let t = self.parse_qualified_name_with_reserved_static(
+                    ReservedStaticRole::Catch,
+                    Some(catch_line),
+                )?;
                 types.push(t);
             }
             let var = match self.peek() {
@@ -671,15 +674,15 @@ impl Parser {
             return Err("Cannot use the final modifier on an abstract class".into());
         }
         self.advance(); // consume 'class'
-        let (name, line) = match self.advance() {
-            Token::Identifier(n, line) => (n, line),
-            other => return Err(format!("Expected class name, got {:?}", other)),
-        };
+        let (name, line) = self.parse_classlike_declaration_name("class")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
         let parent = if self.peek() == Token::Extends {
             self.advance();
-            Some(self.parse_generic_ancestor()?)
+            Some(self.parse_generic_ancestor_with_reserved_static(
+                ReservedStaticRole::Class,
+                Some(line),
+            )?)
         } else {
             None
         };
@@ -687,7 +690,10 @@ impl Parser {
             self.advance();
             let mut ifaces = Vec::new();
             loop {
-                ifaces.push(self.parse_generic_ancestor()?);
+                ifaces.push(self.parse_generic_ancestor_with_reserved_static(
+                    ReservedStaticRole::Interface,
+                    Some(line),
+                )?);
                 if self.peek() == Token::Comma {
                     self.advance();
                 } else {
@@ -714,15 +720,13 @@ impl Parser {
             let attributes = self.parse_attribute_groups()?;
             // Trait `use` statements: use Foo, Bar;
             if matches!(self.peek(), Token::Use(_)) {
-                self.advance(); // consume 'use'
-                loop {
-                    uses.push(self.parse_generic_ancestor()?);
-                    if self.peek() == Token::Comma {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                }
+                let use_line = match self.advance() {
+                    Token::Use(line) => line,
+                    _ => unreachable!("trait use parser starts at use"),
+                };
+                let (trait_uses, adaptation_line) =
+                    self.parse_trait_ancestor_list(use_line)?;
+                uses.extend(trait_uses);
                 if self.peek() == Token::LBrace {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
@@ -734,9 +738,10 @@ impl Parser {
                             };
                             let mut instead_of = Vec::new();
                             loop {
-                                instead_of.push(
-                                    self.parse_qualified_or_namespace_relative_name()?,
-                                );
+                                instead_of.push(self.parse_qualified_name_with_reserved_static(
+                                    ReservedStaticRole::Trait,
+                                    Some(adaptation_line),
+                                )?);
                                 if self.peek() == Token::Comma {
                                     self.advance();
                                 } else {
@@ -883,10 +888,7 @@ impl Parser {
     /// Parse trait declaration
     fn parse_trait(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'trait'
-        let (name, line) = match self.advance() {
-            Token::Identifier(n, line) => (n, line),
-            other => return Err(format!("Expected trait name, got {:?}", other)),
-        };
+        let (name, line) = self.parse_classlike_declaration_name("trait")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
         self.expect(&Token::LBrace)?;
@@ -901,15 +903,13 @@ impl Parser {
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
             if matches!(self.peek(), Token::Use(_)) {
-                self.advance();
-                loop {
-                    uses.push(self.parse_generic_ancestor()?);
-                    if self.peek() == Token::Comma {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                }
+                let use_line = match self.advance() {
+                    Token::Use(line) => line,
+                    _ => unreachable!("trait use parser starts at use"),
+                };
+                let (trait_uses, adaptation_line) =
+                    self.parse_trait_ancestor_list(use_line)?;
+                uses.extend(trait_uses);
                 if self.peek() == Token::LBrace {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
@@ -921,9 +921,10 @@ impl Parser {
                             };
                             let mut instead_of = Vec::new();
                             loop {
-                                instead_of.push(
-                                    self.parse_qualified_or_namespace_relative_name()?,
-                                );
+                                instead_of.push(self.parse_qualified_name_with_reserved_static(
+                                    ReservedStaticRole::Trait,
+                                    Some(adaptation_line),
+                                )?);
                                 if self.peek() == Token::Comma {
                                     self.advance();
                                 } else {
@@ -1049,10 +1050,7 @@ impl Parser {
     /// Parse interface declaration
     fn parse_interface(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'interface'
-        let (name, line) = match self.advance() {
-            Token::Identifier(n, line) => (n, line),
-            other => return Err(format!("Expected interface name, got {:?}", other)),
-        };
+        let (name, line) = self.parse_classlike_declaration_name("interface")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
         // interface Foo extends Bar, Baz { ... }
@@ -1060,7 +1058,10 @@ impl Parser {
             self.advance();
             let mut parents = Vec::new();
             loop {
-                parents.push(self.parse_generic_ancestor()?);
+                parents.push(self.parse_generic_ancestor_with_reserved_static(
+                    ReservedStaticRole::Interface,
+                    Some(line),
+                )?);
                 if self.peek() == Token::Comma {
                     self.advance();
                 } else {
@@ -1168,10 +1169,7 @@ impl Parser {
     /// Parse enum declaration
     fn parse_enum(&mut self) -> Result<Stmt, String> {
         self.advance(); // consume 'enum'
-        let (name, line) = match self.advance() {
-            Token::Identifier(n, line) => (n, line),
-            other => return Err(format!("Expected enum name, got {:?}", other)),
-        };
+        let (name, line) = self.parse_classlike_declaration_name("enum")?;
         // Optional backing type: enum Foo: string { ... }
         let backing_type = if self.peek() == Token::Colon {
             self.advance(); // consume ':'
@@ -1184,7 +1182,10 @@ impl Parser {
             self.advance();
             let mut interfaces = Vec::new();
             loop {
-                interfaces.push(self.parse_generic_ancestor()?);
+                interfaces.push(self.parse_generic_ancestor_with_reserved_static(
+                    ReservedStaticRole::Interface,
+                    Some(line),
+                )?);
                 if self.peek() != Token::Comma {
                     break;
                 }
@@ -1209,14 +1210,12 @@ impl Parser {
         while self.peek() != Token::RBrace && !self.at_eof() {
             let attributes = self.parse_attribute_groups()?;
             if matches!(self.peek(), Token::Use(_)) {
-                self.advance();
-                loop {
-                    uses.push(self.parse_generic_ancestor()?);
-                    if self.peek() != Token::Comma {
-                        break;
-                    }
-                    self.advance();
-                }
+                let use_line = match self.advance() {
+                    Token::Use(line) => line,
+                    _ => unreachable!("trait use parser starts at use"),
+                };
+                let (trait_uses, _) = self.parse_trait_ancestor_list(use_line)?;
+                uses.extend(trait_uses);
                 if self.peek() == Token::LBrace {
                     self.advance();
                     while self.peek() != Token::RBrace && !self.at_eof() {
@@ -1442,7 +1441,7 @@ impl Parser {
                         modifiers.visibility = Visibility::Private;
                     }
                 }
-                Token::Static => {
+                Token::Static(_) => {
                     self.advance();
                     if modifiers.is_static {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Static);
@@ -1545,7 +1544,7 @@ impl Parser {
                 | Token::Null
                 | Token::True
                 | Token::False
-                | Token::Static
+                | Token::Static(_)
                 | Token::LParen(_)
         ) {
             let first = self.parse_base_type_hint()?;
