@@ -8,6 +8,60 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `c79a2045`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,852 pass, 1,447 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.693% and the whole-corpus rate is 68.798%; 4,733 of
+5,299 attempted cases reach runtime (89.319%). Relative to exact base
+`4553f347`, the pass-set delta is +2/-0:
+`Zend/tests/magic_methods/class_toString_concat_with_itself.phpt` and
+`Zend/tests/operator_unsupported_types.phpt` become exact passes, and every
+previous pass remains a pass.
+
+Three already failing cases move from output to runtime failure because the
+new conversion boundary now exposes their earlier independent gaps. Delayed
+attribute validation still lacks `ReflectionClassConstant` string rendering;
+`bug60909_2.phpt` now propagates its `__toString()` exception but retains a
+separate trace-shape mismatch; and nested coalesce assignment still reaches an
+extra `ArrayAccess::offsetSet()` whose object argument cannot be rendered.
+Two sequential final runs have byte-identical status maps, merged manifests
+and summaries. Their manifest and summary SHA-256 values are
+`c7250d7884c0897b181bd2fb0dfe799b17d9d3bbd1b13cd3412ed867ecc76b3a`
+and `d14ff2f770e44d7fb01280031ce02a30667990cc0df1a667a6fb78edc27b0c13`.
+
+Binary concatenation and compound `.=` now share one PHP 8.5 object-string
+conversion rule. Objects without `__toString()` and Closures raise the
+catchable class-specific `Error`; valid methods supply the string, weak method
+files coerce scalar returns, and strict files or non-scalar returns raise the
+exact `TypeError` including the returned runtime type. Ordinary binary `.`
+preflights array warnings before object conversion and re-reads a later
+operand after a re-entrant warning handler. Compound assignment instead
+converts in source order and commits only after both conversions succeed. The
+direct-CV `.=` path snapshots both evaluated operands, preserving aliases and
+overwriting re-entrant target mutations only on success; value-producing
+compound forms retain their compiler-materialized operands. Failed conversion
+performs no operator writeback.
+
+Two original E2E regressions cover plain objects, Closures, arrays, valid and
+invalid magic returns, weak and strict return coercion, warning order,
+re-entrant handlers, statement and value-producing compound forms, unchanged
+failure targets, aliases and successful re-entrant writeback. The change adds
+no opcode, layout field or dependency. Tighter operand and commit boundaries
+lower the production unsafe inventory from 1,615 to 1,613 blocks while
+retaining 289 unsafe functions. All five Cargo configurations,
+all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
+and the exact unsafe ratchet pass, as do Composer S0, all four Symfony S1 gates
+and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3.
+
+Twenty-one alternating CPU-pinned default-release pairs with JIT and quick
+loops disabled exercised eight million dynamic string concatenations per run.
+Baseline p10/median/p90 was 1.192663/1.217943/1.263336 seconds and candidate
+1.196339/1.222113/1.244458 seconds. The independent median ratio is 1.0034;
+paired p10/median/p90 ratios are 0.9666/0.9935/1.0231, below the +5% gate, and
+every run retained `32000000|cdab`. The exact candidate binary SHA-256 is
+`30b7cb7aa593e5e8b32dfdf621d43a3cf14345a74d9471e81531f0fdfd94c399`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `4553f347`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,850 pass, 1,449 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
