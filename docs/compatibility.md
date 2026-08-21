@@ -8,6 +8,59 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `2945750f`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,952 pass, 1,347 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.580% and the whole-corpus rate is 70.584%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`a97e06ee`, the pass-set delta is +1/-0 with no other status or failure-
+category movement.
+
+The exact addition is `Zend/tests/bug78396.phpt`. Every previous pass remains
+a pass. Two sequential final runs have byte-identical merged manifests and
+summaries. Their manifest and summary SHA-256 values are
+`383675b6bb942ca10f43281c4e93dc3c0f505763a056206093a37aa19f6cf33a` and
+`6f356d1a9dbe9446d0175152c80d1ded3249b54c6bf19aa22fa4c53cec957321`.
+
+The default build now publishes `FILE_APPEND=8` and accepts the optional flags
+argument of `file_put_contents()`. Regular-file append opens with atomic append
+semantics, while `LOCK_EX` acquires an operating-system exclusive lock for the
+complete write. Replacement under that lock opens without truncating, locks
+first, and only then truncates and writes. Repeated `FILE_APPEND | LOCK_EX`
+writes from a shutdown callback therefore complete in order and release each
+lock when its file handle closes.
+
+This bounded path extends the existing small default filesystem fallback; it
+does not enable or duplicate the full opt-in `file-write` handler. The ordinary
+two-argument overwrite continues through `std::fs::write`, and builds with
+`file-write` retain their stream-backed four-argument implementation. One
+original E2E regression checks both public flag values, shutdown completion and
+the exact appended bytes. Default, no-default, explicit `file-write` and all-
+feature filesystem suites pass.
+
+All five Cargo configurations, all-features/all-targets, formatting, PHPT
+runner self-test and the exact unsafe ratchet pass. The production inventory
+remains 1,612 unsafe blocks, 289 unsafe functions and 321 SAFETY annotations.
+Composer 2.8.12 S0, all four Symfony S1 gates, and exact PHP 8.5.9 warmed-
+kernel S2 and cold-build S3 also pass.
+
+A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
+pinned to CPU 0 with the performance governor, four warmups, 100 cold requests
+per observation and no excluded sample, keeps both relevant controls below the
++5% gate. Empty requests measure candidate/baseline ratios of 0.983392 by
+independent medians and 0.983178 by paired medians. Five ordinary two-argument
+overwrite writes per request measure 0.978608 and 0.979724 respectively, with
+exact output. The candidate binary SHA-256 is
+`24f1afe0e670e722059bfa5e4207a1cc6f3fd677c62ff4ccda7a4d6c0c3de4be` and the
+exact TSV SHA-256 is
+`f9843f82eaf258a3f46a79ee0005130d45d8a09ab64e1984846b5bb499991a9e`.
+
+This checkpoint claims only default-build string writes to ordinary files with
+the exercised append and exclusive-lock flags. Array or stream payloads,
+stream contexts, include-path resolution, wrapper-specific flag behavior and
+the broader opt-in `file-write` contract remain separate surfaces.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `a97e06ee`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,951 pass, 1,348 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
