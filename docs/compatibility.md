@@ -8,6 +8,53 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `4553f347`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,850 pass, 1,449 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.655% and the whole-corpus rate is 68.762%; 4,733 of
+5,299 attempted cases reach runtime (89.319%). Relative to exact base
+`8ec911bb`, the pass-set and failure-category delta is intentionally +0/-0.
+Two sequential final runs have byte-identical status maps, merged manifests
+and summaries. Their manifest and summary SHA-256 values are
+`76db41be2f0596ea31dc3b185dfe6be30c1cdfdacd1a711b71cdc3c1c1d00afc`
+and `9b281472d905591480dba693910580fb88d79a73ef0d8d5b8817b455338b295e`.
+
+Live and closed resources are no longer implicitly converted to their request
+ID by arithmetic or integer-only operators. Addition, subtraction,
+multiplication, division, exponentiation, modulo, shifts, bitwise operators,
+unary signs and bitwise not now use PHP 8.5's operator-specific `TypeError`
+contract. Explicit integer casts, loose resource-ID comparisons and resource
+array-key conversion retain their separate existing behavior. Resource
+increment/decrement also retains its already passing dedicated error contract.
+
+For commutative multiplication and bitwise operations, PHP canonicalizes an
+unsupported object/Closure or resource before a lower-priority operand and
+does not emit conversion diagnostics from that lower operand. Compound
+assignment instead converts in source order, so a leading-numeric warning or
+float-to-int deprecation can precede the resource `TypeError`; a failed write
+leaves its target unchanged. A low opcode-local flag distinguishes that cold
+compound boundary in both statement and value-producing compiler paths while
+preserving the 16-byte instruction layout. One original E2E regression covers
+ordinary and specialized opcode shapes, both operand directions, diagnostic
+ordering and suppression, compound statements and expressions, unchanged
+targets, unary forms, explicit casts and comparisons. The complete arithmetic
+and bitwise sections of `Zend/tests/operator_unsupported_types.phpt` now match
+its exact expectation; the case remains an output failure only at the separate
+object-concatenation gap.
+
+All five Cargo configurations, all-features/all-targets, formatting, unsafe
+self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3. The
+production unsafe inventory remains 1,615 blocks and 289 functions.
+Twenty-one alternating CPU-pinned default-release pairs with JIT and quick
+loops disabled exercised twelve million ordinary double operations per run.
+Baseline p10/median/p90 was 0.602771/0.610268/0.616555 seconds and candidate
+0.600825/0.603922/0.611089 seconds. The independent median ratio is 0.9896;
+paired p10/median/p90 ratios are 0.9770/0.9936/1.0023, below the +5% gate, and
+every run retained `10875000|3000000`. The exact candidate binary SHA-256 is
+`a9ef00c36fb3b717a7f5d7e029a5c36667a2ac2d95cbd143dbce39a060188e94`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `8ec911bb`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,850 pass, 1,449 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
