@@ -8,6 +8,52 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `3e787cfe`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,827 pass, 1,472 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.221% and the whole-corpus rate is 68.351%; 4,706 of
+5,299 attempted cases reach runtime (88.809%). Relative to exact base
+`a460345c`, the pass-set delta is exactly +2/-0:
+`Zend/tests/constants/bug41633_3.phpt` and
+`Zend/tests/constexpr/constant_expressions_self_referencing_array.phpt`
+become passes. Every prior pass remains a pass, and there are no other status
+or failure-category transitions. Two sequential final full runs have
+byte-identical merged manifests and summaries. Their SHA-256 values are
+`adc50d5e2238fc34e08530fc55f812771a80f0561dc09d064879195e73722ed0`
+and `4605d408b9815cb25ceecbc458c39ea6bf05f7df693dff3d8cf09a234c9d6fa3`.
+
+A lazily reported self-referencing class constant now exposes the source file
+and exact AST line of the local cycle edge through `Error::getFile()` and
+`Error::getLine()`. Its trace begins at the runtime use site with PHP 8.5's
+synthetic `[constant expression]` frame, followed by the existing live frame.
+The same rule covers direct reads and `ReflectionClass::getConstant()`, remains
+stable across repeated failures and does not force constant evaluation merely
+to link a class or invoke a static method.
+
+The implementation recovers the local reference line from the already retained
+constant-expression AST and the existing cycle diagnostic; it adds no field to
+class-constant metadata. The recursive lookup covers supported nested
+expressions and distinguishes an external class reference from the local cycle
+edge. Runtime cycle traversal through `constant()` and through a dependent
+constant can select a different edge under PHP 8.5.9 and remains a separate
+compatibility boundary rather than being generalized by this checkpoint. One
+original E2E regression exercises direct, nested-array, mixed-scope, repeated
+and Reflection paths; all 98 class-constant E2E tests pass. All five focused
+self-reference expectations pass, and the combined 133-case `constants` plus
+`constexpr` audit has the same exact +2/-0 delta.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe diff ratchet pass, as do
+Composer S0, all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3. The production inventory remains 1,616 unsafe blocks and 289
+unsafe functions. No runtime performance or layout gate applies: the new AST
+walk and Throwable origin/trace work execute only after an already recorded
+self-reference failure, while ordinary and successful constant paths and all
+runtime layouts remain unchanged. The exact base and candidate binary SHA-256
+values are `ff91b915572d99b4c2641dde593b86d0ce499070aaedecd05a0ae4a8eaa7b422`
+and `7ac4b4e070d721f12115d36473f806633de08a6bdef8b5d1dd9478556cb2746a`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `a460345c`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,825 pass, 1,474 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
