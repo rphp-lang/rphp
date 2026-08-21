@@ -3231,7 +3231,7 @@ fn execute_full_call<'a>(
         // compiler-sized slots were initialized by the preceding sends.
         unsafe { cleanup_frame_slots(call) };
         pop_vm_call_frame(eg, call);
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
             ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
         });
@@ -3316,7 +3316,7 @@ fn execute_full_call<'a>(
                         if let Some(exception) = eg.exception.take() {
                             cleanup_frame_slots(call);
                             pop_vm_call_frame(eg, call);
-                            return Ok(match throw_in_frame(eg, frame, exception) {
+                            return Ok(match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                             });
@@ -3349,7 +3349,7 @@ fn execute_full_call<'a>(
                             if let Some(exception) = eg.exception.take() {
                                 cleanup_frame_slots(call);
                                 pop_vm_call_frame(eg, call);
-                                return Ok(match throw_in_frame(eg, frame, exception) {
+                                return Ok(match throw_in_frame(eg, frame, exception)? {
                                     ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                                 });
@@ -3411,7 +3411,7 @@ fn execute_full_call<'a>(
                 }
                 cleanup_frame_slots(call);
                 pop_vm_call_frame(eg, call);
-                return Ok(match throw_in_frame(eg, frame, err) {
+                return Ok(match throw_in_frame(eg, frame, err)? {
                     ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                     ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
                 });
@@ -3436,7 +3436,7 @@ fn execute_full_call<'a>(
         // initialized send slot must be released before the frame is popped.
         unsafe { cleanup_frame_slots(call) };
         pop_vm_call_frame(eg, call);
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
             ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
         });
@@ -3471,7 +3471,7 @@ fn execute_full_call<'a>(
             // slots must be released before removing it from the VM stack.
             unsafe { cleanup_frame_slots(call) };
             pop_vm_call_frame(eg, call);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                 ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
             });
@@ -3544,7 +3544,7 @@ fn execute_full_call<'a>(
                         );
                         unsafe { cleanup_frame_slots(call) };
                         pop_vm_call_frame(eg, call);
-                        return Ok(match throw_in_frame(eg, frame, type_err) {
+                        return Ok(match throw_in_frame(eg, frame, type_err)? {
                             ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                             ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
                         });
@@ -3641,7 +3641,7 @@ fn execute_full_call<'a>(
                             return_hint.display_name()
                         ),
                     );
-                    return Ok(match throw_in_frame(eg, frame, error) {
+                    return Ok(match throw_in_frame(eg, frame, error)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             ColdResult::NewFrame(new_frame, new_op_array)
                         }
@@ -3711,7 +3711,7 @@ fn execute_full_call<'a>(
             unsafe { cleanup_frame_slots(call) };
             pop_vm_call_frame(eg, call);
             if let Some(exc) = internal_exception {
-                return Ok(match throw_in_frame(eg, frame, exc) {
+                return Ok(match throw_in_frame(eg, frame, exc)? {
                     ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                     ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
                 });
@@ -3721,7 +3721,7 @@ fn execute_full_call<'a>(
         }
         FunctionType::Undef => {
             let err = make_error_value("Error", "Call to undefined function");
-            Ok(match throw_in_frame(eg, frame, err) {
+            Ok(match throw_in_frame(eg, frame, err)? {
                 ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                 ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
             })

@@ -433,6 +433,37 @@ where
     Ok(return_value)
 }
 
+/// Invoke an engine-dispatched callback whose logical caller can differ from
+/// the currently active frame. Frame-unwind destructors use the caller of the
+/// retiring activation so stored traces never retain a frame that is about to
+/// be released.
+fn call_function_iter_from_logical_caller<'a, I>(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = &'a Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args.cloned(),
+        0,
+        None,
+        0,
+        None,
+        None,
+        logical_caller,
+        false,
+        None,
+    )?;
+    Ok(return_value)
+}
+
 /// Enter a user callback dispatched by the active source instruction. Magic
 /// property operations use this detached boundary: their body must return to
 /// the opcode helper, while live/stored traces still expose the source-level
@@ -2164,7 +2195,7 @@ fn execute_resumed_generator_frame(
             frame,
             saved_execute_data,
         );
-        match throw_in_frame(eg, frame, exception) {
+        match throw_in_frame(eg, frame, exception)? {
             ThrowResult::Handled(new_frame, _) => execute_ex(eg, new_frame),
             ThrowResult::Unhandled(exception) => {
                 eg.exception = Some(exception);
@@ -2530,8 +2561,8 @@ pub(crate) fn inject_suspended_exception(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     exception: Value,
-) -> Option<*mut ExecuteData> {
-    match throw_in_frame(eg, frame, exception) {
+) -> Result<Option<*mut ExecuteData>, VmError> {
+    Ok(match throw_in_frame(eg, frame, exception)? {
         ThrowResult::Handled(new_frame, _) => {
             eg.current_execute_data.set(new_frame);
             Some(new_frame)
@@ -2540,5 +2571,5 @@ pub(crate) fn inject_suspended_exception(
             eg.exception = Some(exception);
             None
         }
-    }
+    })
 }

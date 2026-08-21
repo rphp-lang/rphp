@@ -43,7 +43,9 @@ fn op_send_named<'a>(
             let err = make_error_value("Error", &format!(
                 "Unknown named parameter ${}", name
             ));
-            match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+            // SAFETY: `call` is the non-null pending call owned by this live frame;
+            // the error path consumes and retires it exactly once.
+            match unsafe { cleanup_call_and_throw(eg, frame, call, err) }? {
                 ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                 ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
             }
@@ -56,7 +58,9 @@ fn op_send_named<'a>(
                 let err = make_error_value("Error", &format!(
                     "Named parameter ${} overwrites previous argument", name
                 ));
-                match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                // SAFETY: `call` is the non-null pending call owned by this live frame;
+                // the duplicate-argument path consumes and retires it exactly once.
+                match unsafe { cleanup_call_and_throw(eg, frame, call, err) }? {
                     ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                     ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                 }
@@ -87,7 +91,7 @@ fn op_send_named<'a>(
                             parameter_name
                         ),
                     );
-                    return Ok(match cleanup_call_and_throw(eg, frame, call, error) {
+                    return Ok(match cleanup_call_and_throw(eg, frame, call, error)? {
                         ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                     });
@@ -108,7 +112,9 @@ fn op_send_named<'a>(
             snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?
         };
         if let Some(exception) = eg.exception.take() {
-            match unsafe { cleanup_call_and_throw(eg, frame, call, exception) } {
+            // SAFETY: `call` is the non-null pending call owned by this live frame;
+            // propagating the callback exception consumes it exactly once.
+            match unsafe { cleanup_call_and_throw(eg, frame, call, exception) }? {
                 ThrowResult::Handled(nf, no) => return Ok(ColdResult::NewFrame(nf, no)),
                 ThrowResult::Unhandled(t) => return Ok(ColdResult::Unhandled(t)),
             }
@@ -136,7 +142,9 @@ fn op_send_named<'a>(
                     let err = make_error_value("Error", &format!(
                         "Named parameter ${} overwrites previous argument", name
                     ));
-                    match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                    // SAFETY: `call` is the non-null pending call owned by this live frame;
+                    // the duplicate-argument path consumes and retires it exactly once.
+                    match unsafe { cleanup_call_and_throw(eg, frame, call, err) }? {
                         ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                         ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                     }
@@ -172,7 +180,7 @@ fn op_send_named<'a>(
                                     parameter_name
                                 ),
                             );
-                            return Ok(match cleanup_call_and_throw(eg, frame, call, error) {
+                            return Ok(match cleanup_call_and_throw(eg, frame, call, error)? {
                                 ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                                 ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                             });
@@ -193,7 +201,9 @@ fn op_send_named<'a>(
                     // By-value: same logic as SendVal
                     let cloned = snapshot_runtime_send_rvalue(eg, frame, op_array, opline)?;
                     if let Some(exception) = eg.exception.take() {
-                        match unsafe { cleanup_call_and_throw(eg, frame, call, exception) } {
+                        // SAFETY: `call` is the non-null pending call owned by this live frame;
+                        // propagating the value-snapshot exception consumes it exactly once.
+                        match unsafe { cleanup_call_and_throw(eg, frame, call, exception) }? {
                             ThrowResult::Handled(nf, no) => {
                                 return Ok(ColdResult::NewFrame(nf, no));
                             }
@@ -218,7 +228,9 @@ fn op_send_named<'a>(
                 let err = make_error_value("Error", &format!(
                     "Unknown named parameter ${}", name
                 ));
-                match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                // SAFETY: `call` is the non-null pending call owned by this live frame;
+                // the unknown-argument path consumes and retires it exactly once.
+                match unsafe { cleanup_call_and_throw(eg, frame, call, err) }? {
                     ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                     ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                 }

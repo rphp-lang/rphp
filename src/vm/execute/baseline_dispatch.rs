@@ -64,7 +64,7 @@ fn throw_invalid_dynamic_call_class<'a>(
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     instruction_index: usize,
-) -> ThrowResult<'a> {
+) -> Result<ThrowResult<'a>, VmError> {
     let error = make_error_value(
         "Error",
         "Class name must be a valid object or a string",
@@ -1101,7 +1101,7 @@ fn throw_object_as_array<'a>(
     op_array: &'a crate::compiler::OpArray,
     instruction_index: usize,
     receiver: &Value,
-) -> ThrowResult<'a> {
+) -> Result<ThrowResult<'a>, VmError> {
     let class_name = if receiver.value_type() == ValueType::Closure {
         "Closure".to_string()
     } else {
@@ -1125,7 +1125,7 @@ fn throw_array_dimension_error<'a>(
     op_array: &'a crate::compiler::OpArray,
     instruction_index: usize,
     message: &str,
-) -> ThrowResult<'a> {
+) -> Result<ThrowResult<'a>, VmError> {
     let error = make_error_value("Error", message);
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
     throw_in_frame(eg, frame, error)
@@ -1137,7 +1137,7 @@ fn throw_illegal_offset_type<'a>(
     op_array: &'a crate::compiler::OpArray,
     instruction_index: usize,
     message: &str,
-) -> ThrowResult<'a> {
+) -> Result<ThrowResult<'a>, VmError> {
     let error = make_error_value("TypeError", message);
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
     throw_in_frame(eg, frame, error)
@@ -1152,7 +1152,7 @@ fn throw_operator_error<'a>(
     instruction_index: usize,
     class_name: &str,
     message: &str,
-) -> ThrowResult<'a> {
+) -> Result<ThrowResult<'a>, VmError> {
     let error = make_error_value(class_name, message);
     // Arithmetic bytecode is commonly emitted before the located statement
     // consumer (Return, call, echo or constant definition). Use that nearest
@@ -1223,7 +1223,7 @@ fn fetch_dim_after_array_key_diagnostic<'a>(
     macro_rules! finish_diagnostic {
         () => {
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -1310,7 +1310,7 @@ fn fetch_dim_after_array_key_diagnostic<'a>(
                     &source,
                     opline._pad & (FETCH_DIM_ISSET | FETCH_DIM_EMPTY) != 0,
                 ),
-            ) {
+            )? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -1407,7 +1407,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array,
                             instruction_index,
                             $message,
-                        ) {
+                        )? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -1425,7 +1425,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         macro_rules! finish_array_key_diagnostic {
             () => {{
                 if let Some(exception) = eg.exception.take() {
-                    match throw_in_frame(eg, frame, exception) {
+                    match throw_in_frame(eg, frame, exception)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             frame = new_frame;
                             op_array = new_op_array;
@@ -1635,7 +1635,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 op_array,
                                 instruction_index,
                                 &message,
-                            ) {
+                            )? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -1684,7 +1684,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     instruction_index,
                     $class_name,
                     $message,
-                ) {
+                )? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         frame = new_frame;
                         op_array = new_op_array;
@@ -1717,7 +1717,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         macro_rules! resume_pending_exception {
             () => {
                 if let Some(exception) = eg.exception.take() {
-                    match throw_in_frame(eg, frame, exception) {
+                    match throw_in_frame(eg, frame, exception)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             frame = new_frame;
                             op_array = new_op_array;
@@ -1789,63 +1789,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         pending
                     }).unwrap();
-                    // Start from current frame (outer try/catch may be in same frame)
-                    let mut search_frame = frame;
-                    let mut found = false;
-                    loop {
-                        let sf_op_array = unsafe { (*search_frame).op_array() };
-                        let sf_ip = unsafe {
-                            (*search_frame).opline.offset_from(sf_op_array.instructions.as_ptr()) as u32
-                        };
-                        for entry in &sf_op_array.try_entries {
-                            // Skip the entry whose finally we just finished
-                            if entry.finally_start != 0xFFFFFFFF && sf_ip == entry.finally_end {
-                                continue;
-                            }
-                            if sf_ip >= entry.try_start && sf_ip < entry.try_end {
-                                // Unwind frames between current and search_frame
-                                while frame != search_frame {
-                                    let prev = unsafe { (*frame).prev_execute_data };
-                                    eg.current_execute_data.set(prev);
-                                    unsafe { cleanup_frame_slots(frame) };
-                                    pop_vm_call_frame(eg, frame);
-                                    frame = prev;
-                                }
-                                let base_ptr = sf_op_array.instructions.as_ptr();
-                                let matched_catch = entry.catches.iter().find(|c| {
-                                    exception_matches_catch(&pending, &c.types, eg)
-                                });
-                                if let Some(catch) = matched_catch {
-                                    if let Some(catch_cv) = catch.catch_cv {
-                                        let catch_cv_ptr = unsafe {
-                                            (*search_frame).get_op_mut(catch_cv, OpType::Cv)
-                                        };
-                                        unsafe { slot_set(catch_cv_ptr, pending.clone()) };
-                                    }
-                                    unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
-                                } else if entry.finally_start != 0xFFFFFFFF {
-                                    eg.finally_exceptions
-                                        .entry(frame as usize)
-                                        .or_default()
-                                        .push(pending.clone());
-                                    unsafe { (*frame).opline = base_ptr.add(entry.finally_start as usize) };
-                                }
-                                found = true;
-                                break;
-                            }
+                    match throw_in_frame(eg, frame, pending)? {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue;
                         }
-                        if found { break; }
-                        let prev = unsafe { (*search_frame).prev_execute_data };
-                        if prev.is_null() { break; }
-                        search_frame = prev;
+                        ThrowResult::Unhandled(exception) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
                     }
-                    if found {
-                        op_array = unsafe { (*frame).op_array() };
-                        continue;
-                    }
-                    // Propagate via eg.exception for re-entry boundary crossing
-                    eg.exception = Some(pending);
-                    return Ok(());
                 }
             }
         }
@@ -2074,7 +2028,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         )?;
                         if let Some(exception) = eg.exception.take() {
                             cleanup_pending_calls(eg, frame);
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -4082,7 +4036,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         None => {
                             let err = make_error_value("Error", &format!("Call to undefined function {}()", name_val.as_str().unwrap_or("?")));
-                            match throw_in_frame(eg, frame, err) {
+                            match throw_in_frame(eg, frame, err)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -4314,7 +4268,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 ),
                             );
                             cleanup_pending_calls(eg, frame);
-                            match throw_in_frame(eg, frame, error) {
+                            match throw_in_frame(eg, frame, error)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -4428,7 +4382,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             ),
                         );
                         cleanup_pending_calls(eg, frame);
-                        match throw_in_frame(eg, frame, error) {
+                        match throw_in_frame(eg, frame, error)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -4493,7 +4447,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         )?;
                         if let Some(exception) = eg.exception.take() {
                             unsafe { cleanup_pending_calls(eg, frame) };
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -4633,7 +4587,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             eg.end_error_suppression(call as usize);
                         }
                         discard_pending_vm_call_frame(eg, call);
-                        match throw_in_frame(eg, frame, exception) {
+                        match throw_in_frame(eg, frame, exception)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -4669,7 +4623,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             eg.end_error_suppression(call as usize);
                         }
                         discard_pending_vm_call_frame(eg, call);
-                        match throw_in_frame(eg, frame, exception) {
+                        match throw_in_frame(eg, frame, exception)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -4847,7 +4801,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         pop_vm_call_frame(eg, call);
 
                         if let Some(exc) = internal_exception {
-                            match throw_in_frame(eg, frame, exc) {
+                            match throw_in_frame(eg, frame, exc)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -5411,7 +5365,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     frame,
                                     op_array,
                                     instruction_index,
-                                ) {
+                                )? {
                                     ThrowResult::Handled(new_frame, new_op_array) => {
                                         frame = new_frame;
                                         op_array = new_op_array;
@@ -5627,7 +5581,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
                                     )?;
                                     if let Some(exception) = eg.exception.take() {
-                                        match throw_in_frame(eg, frame, exception) {
+                                        match throw_in_frame(eg, frame, exception)? {
                                             ThrowResult::Handled(new_frame, new_op_array) => {
                                                 frame = new_frame;
                                                 op_array = new_op_array;
@@ -5712,7 +5666,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
                             )?;
                             if let Some(exception) = eg.exception.take() {
-                                match throw_in_frame(eg, frame, exception) {
+                                match throw_in_frame(eg, frame, exception)? {
                                     ThrowResult::Handled(new_frame, new_op_array) => {
                                         frame = new_frame;
                                         op_array = new_op_array;
@@ -5773,7 +5727,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 op_array,
                                 instruction_index,
                                 &receiver,
-                            ) {
+                            )? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -5787,7 +5741,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     };
                     if let Some(exception) = eg.exception.take() {
-                        match throw_in_frame(eg, frame, exception) {
+                        match throw_in_frame(eg, frame, exception)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -5815,7 +5769,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             eg.end_error_suppression(frame as usize);
                         }
                         if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -5848,7 +5802,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             ),
                         )?;
                         if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -5875,7 +5829,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
                         )?;
                         if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -5912,7 +5866,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
                         )?;
                         if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -5940,7 +5894,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline._pad & FETCH_DIM_ERROR_SUPPRESS != 0,
                         )?;
                         if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -6052,7 +6006,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             "Automatic conversion of false to array is deprecated",
                         )?;
                         if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -6083,7 +6037,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         op_array,
                         instruction_index,
                         message,
-                    ) {
+                    )? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             frame = new_frame;
                             op_array = new_op_array;
@@ -6115,7 +6069,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array,
                             instruction_index,
                             &receiver,
-                        ) {
+                        )? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6128,7 +6082,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                     if let Some(exception) = eg.exception.take() {
-                        match throw_in_frame(eg, frame, exception) {
+                        match throw_in_frame(eg, frame, exception)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6242,7 +6196,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array,
                             instruction_index,
                             &receiver,
-                        ) {
+                        )? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6255,7 +6209,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                     if let Some(exception) = eg.exception.take() {
-                        match throw_in_frame(eg, frame, exception) {
+                        match throw_in_frame(eg, frame, exception)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6323,7 +6277,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 op_array,
                                 instruction_index,
                                 &receiver,
-                            ) {
+                            )? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -6336,7 +6290,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                         if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -6385,7 +6339,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array,
                             instruction_index,
                             &receiver,
-                        ) {
+                        )? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6398,7 +6352,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                     if let Some(exception) = eg.exception.take() {
-                        match throw_in_frame(eg, frame, exception) {
+                        match throw_in_frame(eg, frame, exception)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6438,7 +6392,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             "Automatic conversion of false to array is deprecated",
                         )?;
                         if let Some(exception) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exception) {
+                            match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     frame = new_frame;
                                     op_array = new_op_array;
@@ -6470,7 +6424,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array,
                             instruction_index,
                             message,
-                        ) {
+                        )? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6930,7 +6884,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             op_array,
                             instruction_index,
                             &receiver,
-                        ) {
+                        )? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6943,7 +6897,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                     if let Some(exception) = eg.exception.take() {
-                        match throw_in_frame(eg, frame, exception) {
+                        match throw_in_frame(eg, frame, exception)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -6994,7 +6948,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 "Cannot indirectly modify readonly property {object_class_name}::${prop_name}"
                             ),
                         );
-                        match throw_in_frame(eg, frame, error) {
+                        match throw_in_frame(eg, frame, error)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 frame = new_frame;
                                 op_array = new_op_array;
@@ -7052,7 +7006,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             obj.dereferenced().type_name()
                         ),
                     );
-                    match throw_in_frame(eg, frame, error) {
+                    match throw_in_frame(eg, frame, error)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             frame = new_frame;
                             op_array = new_op_array;
@@ -7885,7 +7839,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             ret_hint,
                             "none returned",
                         );
-                        match throw_in_frame(eg, frame, err) {
+                        match throw_in_frame(eg, frame, err)? {
                             ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                             ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                         }
@@ -7948,7 +7902,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                                     &outcome,
                                                 );
                                                 append_replaced_exception(&err, &exception, eg);
-                                                match throw_in_frame(eg, frame, err) {
+                                                match throw_in_frame(eg, frame, err)? {
                                                     ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                                     ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                                 }
@@ -7972,7 +7926,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         ret_hint,
                                         &outcome,
                                     );
-                                    match throw_in_frame(eg, frame, err) {
+                                    match throw_in_frame(eg, frame, err)? {
                                         ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                         ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                     }
@@ -8150,7 +8104,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 // Only bare `return;` (extended_value=0) is allowed.
                                 let err = make_error_value("TypeError",
                                     "A void function must not return a value");
-                                match throw_in_frame(eg, frame, err) {
+                                match throw_in_frame(eg, frame, err)? {
                                     ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                     ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                 }
@@ -8160,7 +8114,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         crate::vm::function::ParamTypeHint::Never => {
                             let err = make_error_value("TypeError",
                                 "A never-returning function must not return");
-                            match throw_in_frame(eg, frame, err) {
+                            match throw_in_frame(eg, frame, err)? {
                                 ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                 ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                             }
@@ -8175,7 +8129,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     hint,
                                     "none returned",
                                 );
-                                match throw_in_frame(eg, frame, err) {
+                                match throw_in_frame(eg, frame, err)? {
                                     ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                     ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                 }
@@ -8231,7 +8185,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                                         &exception,
                                                         eg,
                                                     );
-                                                    match throw_in_frame(eg, frame, err) {
+                                                    match throw_in_frame(eg, frame, err)? {
                                                         ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                                         ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                                     }
@@ -8255,7 +8209,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                             hint,
                                             &outcome,
                                         );
-                                        match throw_in_frame(eg, frame, err) {
+                                        match throw_in_frame(eg, frame, err)? {
                                             ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                             ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                         }

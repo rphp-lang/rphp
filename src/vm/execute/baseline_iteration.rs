@@ -68,15 +68,15 @@ fn unpack_throw<'a>(
     _is_root_frame: bool,
     class: &str,
     message: &str,
-) -> ColdResult<'a> {
+) -> Result<ColdResult<'a>, VmError> {
     let error = make_error_value(class, message);
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-    match throw_in_frame(eg, frame, error) {
+    Ok(match throw_in_frame(eg, frame, error)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-    }
+    })
 }
 
 fn unpack_error<'a>(
@@ -86,7 +86,7 @@ fn unpack_error<'a>(
     instruction_index: usize,
     is_root_frame: bool,
     message: &str,
-) -> ColdResult<'a> {
+) -> Result<ColdResult<'a>, VmError> {
     unpack_throw(
         eg,
         frame,
@@ -204,10 +204,7 @@ fn collect_generator_unpack(
                 return Ok(entries);
             }
         };
-        entries.push((
-            key,
-            kind.value(data.value.dereferenced().clone()),
-        ));
+        entries.push((key, kind.value(data.value.dereferenced().clone())));
     }
     Ok(entries)
 }
@@ -428,7 +425,7 @@ fn op_add_array_unpack<'a>(
             instruction_index,
             is_root_frame,
             "Only arrays can be unpacked in constant expression",
-        ));
+        )?);
     } else {
         collect_unpack_traversable(eg, source, TraversableUnpackKind::Array)?
     };
@@ -444,10 +441,10 @@ fn op_add_array_unpack<'a>(
             instruction_index,
             is_root_frame,
             &format!("Only arrays and Traversables can be unpacked, {given} given"),
-        ));
+        )?);
     };
     if let Some(exception) = eg.exception.take() {
-        return Ok(match throw_in_frame(eg, frame, exception) {
+        return Ok(match throw_in_frame(eg, frame, exception)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -469,7 +466,7 @@ fn op_add_array_unpack<'a>(
                 instruction_index,
                 is_root_frame,
                 message,
-            ));
+            )?);
         }
     }
     Ok(ColdResult::Done)
@@ -517,7 +514,7 @@ fn op_add_call_argument<'a>(
                 usize::MAX,
                 false,
                 &format!("Named parameter ${name} overwrites previous argument"),
-            ));
+            )?);
         }
         target.set_str(&name, value);
     } else {
@@ -605,11 +602,11 @@ fn op_add_call_unpack<'a>(
                 false,
                 "TypeError",
                 &format!("Only arrays and Traversables can be unpacked, {given} given"),
-            ));
+            )?);
         }
     };
     if let Some(exception) = eg.exception.take() {
-        return Ok(match throw_in_frame(eg, frame, exception) {
+        return Ok(match throw_in_frame(eg, frame, exception)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -632,7 +629,7 @@ fn op_add_call_unpack<'a>(
                 usize::MAX,
                 false,
                 &message,
-            ));
+            )?);
         }
     }
     Ok(ColdResult::Done)
@@ -770,14 +767,16 @@ fn set_foreach_iteration_state(
 fn take_foreach_protocol_exception<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-) -> Option<ColdResult<'a>> {
-    let exception = eg.exception.take()?;
-    Some(match throw_in_frame(eg, frame, exception) {
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    let Some(exception) = eg.exception.take() else {
+        return Ok(None);
+    };
+    Ok(Some(match throw_in_frame(eg, frame, exception)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
-    })
+    }))
 }
 
 #[inline]
@@ -882,7 +881,7 @@ fn op_foreach_init<'a>(
     } else {
         None
     };
-    if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+    if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
         return Ok(control);
     }
     let source = initialized_source.as_ref().unwrap_or(source);
@@ -906,7 +905,7 @@ fn op_foreach_init<'a>(
                     "Objects returned by {class_name}::getIterator() must be traversable or implement interface Iterator"
                 ),
             );
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -924,7 +923,7 @@ fn op_foreach_init<'a>(
         )?
         .ok_or_else(|| VmError::Fatal(format!("Call to undefined method {class_name}::getIterator()")))?;
         if let Some(exception) = eg.exception.take() {
-            return Ok(match throw_in_frame(eg, frame, exception) {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -943,7 +942,7 @@ fn op_foreach_init<'a>(
                 ),
             );
             attach_throwable_origin(&error, eg, frame, op_array, init_ip);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -968,7 +967,7 @@ fn op_foreach_init<'a>(
             let state = gen_ref.borrow().state;
             if state == crate::vm::generator::GeneratorState::Created {
                 let outcome = resume_generator(eg, &gen_ref, Value::null())?;
-                match generator_resume_result(eg, frame, outcome) {
+                match generator_resume_result(eg, frame, outcome)? {
                     ColdResult::Done => {}
                     control => return Ok(control),
                 }
@@ -980,7 +979,7 @@ fn op_foreach_init<'a>(
                 };
                 let error = make_error_value("Exception", message);
                 attach_throwable_origin(&error, eg, frame, op_array, init_ip);
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -1005,7 +1004,7 @@ fn op_foreach_init<'a>(
                     "Error",
                     "An iterator cannot be used with foreach by reference",
                 );
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -1022,7 +1021,7 @@ fn op_foreach_init<'a>(
                 "rewind",
                 &[],
             )?;
-            if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+            if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                 return Ok(control);
             }
             // Negative cursor values identify the user Iterator protocol. Each
@@ -1045,7 +1044,7 @@ fn op_foreach_init<'a>(
             } else {
                 materialize_foreach_object(arr_val, eg, frame)?
             };
-            if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+            if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                 return Ok(control);
             }
             Some(materialized)
@@ -1079,7 +1078,7 @@ fn op_foreach_init<'a>(
                     false,
                 )?;
                 if let Some(exception) = eg.exception.take() {
-                    return Ok(match throw_in_frame(eg, frame, exception) {
+                    return Ok(match throw_in_frame(eg, frame, exception)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             ColdResult::NewFrame(new_frame, new_op_array)
                         }
@@ -1155,7 +1154,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
     } else {
         None
     };
-    if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+    if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
         return Ok(control);
     }
     let arr_val = initialized_source.as_ref().unwrap_or(source);
@@ -1175,7 +1174,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 "next",
                 &[],
             )?;
-            if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+            if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                 return Ok(control);
             }
         }
@@ -1187,7 +1186,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
             &[],
         )?
         .unwrap_or_else(|| Value::bool(false));
-        if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+        if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
             return Ok(control);
         }
         if !valid.is_truthy() {
@@ -1201,7 +1200,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 &[],
             )?
             .unwrap_or_else(Value::null);
-            if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+            if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                 return Ok(control);
             }
             if BY_REFERENCE_LOOP && value.is_owned_reference() {
@@ -1225,7 +1224,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     &[],
                 )?
                 .unwrap_or_else(Value::null);
-                if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+                if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                     return Ok(control);
                 }
                 assign_foreach_cv(eg, frame, key_encoded - 1, key.dereferenced().clone())?;
@@ -1253,7 +1252,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                     mark_generator_not_rewindable(&gen_ref);
                 }
                 let outcome = resume_generator(eg, &gen_ref, Value::null())?;
-                let control = generator_resume_result(eg, frame, outcome);
+                let control = generator_resume_result(eg, frame, outcome)?;
                 if !matches!(control, ColdResult::Done) {
                     return Ok(control);
                 }
@@ -1438,7 +1437,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                                 declaring_class, name
                             ),
                         );
-                        return Ok(match throw_in_frame(eg, frame, error) {
+                        return Ok(match throw_in_frame(eg, frame, error)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 ColdResult::NewFrame(new_frame, new_op_array)
                             }
@@ -1456,7 +1455,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             &[],
                         )?
                         .unwrap_or_else(Value::null);
-                        if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+                        if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                             return Ok(control);
                         }
                         if returned.is_owned_reference() {
@@ -1478,7 +1477,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                                     "Cannot create reference to property {class_name}::${name}"
                                 ),
                             );
-                            return Ok(match throw_in_frame(eg, frame, error) {
+                            return Ok(match throw_in_frame(eg, frame, error)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     ColdResult::NewFrame(new_frame, new_op_array)
                                 }
@@ -1551,7 +1550,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         }
     };
 
-    if let Some(control) = take_foreach_protocol_exception(eg, frame) {
+    if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
         return Ok(control);
     }
 
@@ -1581,16 +1580,16 @@ fn generator_resume_result<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     outcome: GeneratorResumeOutcome,
-) -> ColdResult<'a> {
-    match outcome {
+) -> Result<ColdResult<'a>, VmError> {
+    Ok(match outcome {
         GeneratorResumeOutcome::Advanced => ColdResult::Done,
-        GeneratorResumeOutcome::Threw(exception) => match throw_in_frame(eg, frame, exception) {
+        GeneratorResumeOutcome::Threw(exception) => match throw_in_frame(eg, frame, exception)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
             ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
         },
-    }
+    })
 }
 
 #[cold]
@@ -1877,13 +1876,13 @@ fn throw_yield_from_exception<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     exception: Value,
-) -> ColdResult<'a> {
-    match throw_in_frame(eg, frame, exception) {
+) -> Result<ColdResult<'a>, VmError> {
+    Ok(match throw_in_frame(eg, frame, exception)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
-    }
+    })
 }
 
 fn suspend_yield_from<'a>(
@@ -1960,7 +1959,7 @@ fn op_yield_from<'a>(
         };
         if let Some(exception) = eg.exception.take() {
             eg.active_generator = Some(gen_ref);
-            return Ok(throw_yield_from_exception(eg, frame, exception));
+            return Ok(throw_yield_from_exception(eg, frame, exception)?);
         }
         let Some(source) = source else {
             eg.active_generator = Some(gen_ref);
@@ -1968,7 +1967,7 @@ fn op_yield_from<'a>(
                 "Error",
                 "Can use \"yield from\" only with arrays and Traversables",
             );
-            return Ok(throw_yield_from_exception(eg, frame, error));
+            return Ok(throw_yield_from_exception(eg, frame, error)?);
         };
 
         match source {
@@ -1979,7 +1978,7 @@ fn op_yield_from<'a>(
                         "Error",
                         "Impossible to yield from the Generator being currently run",
                     );
-                    return Ok(throw_yield_from_exception(eg, frame, error));
+                    return Ok(throw_yield_from_exception(eg, frame, error)?);
                 }
                 let inner_state = inner.borrow().state;
                 if return_mode == crate::vm::generator::YieldFromGeneratorMode::Traversable {
@@ -1997,7 +1996,7 @@ fn op_yield_from<'a>(
                     if let Some(message) = protocol_error {
                         eg.active_generator = Some(gen_ref);
                         let exception = make_error_value("Exception", message);
-                        return Ok(throw_yield_from_exception(eg, frame, exception));
+                        return Ok(throw_yield_from_exception(eg, frame, exception)?);
                     }
                 }
                 if inner_state == GeneratorState::Completed {
@@ -2019,7 +2018,7 @@ fn op_yield_from<'a>(
                             op_array,
                             instruction_index,
                         );
-                        return Ok(throw_yield_from_exception(eg, frame, error));
+                        return Ok(throw_yield_from_exception(eg, frame, error)?);
                     }
                     let result = if return_mode
                         == crate::vm::generator::YieldFromGeneratorMode::Direct
@@ -2098,7 +2097,7 @@ fn op_yield_from<'a>(
                 };
                 if let Some(exception) = eg.exception.take() {
                     eg.active_generator = Some(gen_ref);
-                    return Ok(throw_yield_from_exception(eg, frame, exception));
+                    return Ok(throw_yield_from_exception(eg, frame, exception)?);
                 }
                 let Some((key, value)) = step else {
                     eg.active_generator = Some(gen_ref);

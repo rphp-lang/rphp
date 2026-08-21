@@ -222,7 +222,7 @@ fn op_new_obj<'a>(
                     ),
                 );
                 attach_throwable_origin(&error, eg, frame, op_array, ip);
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -239,7 +239,7 @@ fn op_new_obj<'a>(
         } else if dynamic_class_name && class_operand.value_type() != ValueType::String {
             let error = make_error_value("Error", "Class name must be a valid object or a string");
             attach_throwable_origin(&error, eg, frame, op_array, ip);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -271,7 +271,7 @@ fn op_new_obj<'a>(
                 && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?
             {
                 if let Some(exception) = eg.exception.take() {
-                    return Ok(match throw_in_frame(eg, frame, exception) {
+                    return Ok(match throw_in_frame(eg, frame, exception)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             ColdResult::NewFrame(new_frame, new_op_array)
                         }
@@ -290,7 +290,7 @@ fn op_new_obj<'a>(
             }
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -312,7 +312,7 @@ fn op_new_obj<'a>(
             }
             let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -337,7 +337,7 @@ fn op_new_obj<'a>(
     {
         let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &name)?;
         if let Some(exception) = eg.exception.take() {
-            return Ok(match throw_in_frame(eg, frame, exception) {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -351,7 +351,7 @@ fn op_new_obj<'a>(
                 op_array,
                 ip,
                 &format!("Class \"{name}\" not found"),
-            ));
+            )?);
         }
     }
     // Literal object creation is monomorphic in ordinary PHP code. After the
@@ -382,15 +382,15 @@ fn new_object_validation_error<'a>(
     op_array: &'a crate::compiler::OpArray,
     ip: usize,
     message: &str,
-) -> ColdResult<'a> {
+) -> Result<ColdResult<'a>, VmError> {
     let error = make_error_value("Error", message);
     attach_throwable_origin(&error, eg, frame, op_array, ip);
-    match throw_in_frame(eg, frame, error) {
+    Ok(match throw_in_frame(eg, frame, error)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-    }
+    })
 }
 
 #[cold]
@@ -561,7 +561,7 @@ fn op_new_obj_resolved<'a>(
             op_array,
             ip,
             "The \"Generator\" class is reserved for internal use and cannot be manually instantiated",
-        ));
+        )?);
     }
     if let Some(class_def) = class_def {
         if class_def.is_interface {
@@ -571,7 +571,7 @@ fn op_new_obj_resolved<'a>(
                 op_array,
                 ip,
                 &format!("Cannot instantiate interface {}", class_def.name),
-            ));
+            )?);
         }
         if class_def.is_abstract {
             return Ok(new_object_validation_error(
@@ -580,14 +580,14 @@ fn op_new_obj_resolved<'a>(
                 op_array,
                 ip,
                 &format!("Cannot instantiate abstract class {}", class_def.name),
-            ));
+            )?);
         }
         if class_def.is_enum {
             let err = make_error_value("Error", &format!(
                 "Cannot instantiate enum {}",
                 class_def.name
             ));
-            match throw_in_frame(eg, frame, err) {
+            match throw_in_frame(eg, frame, err)? {
                 ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                 ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
             }
@@ -604,7 +604,7 @@ fn op_new_obj_resolved<'a>(
             .expect("deferred class-constant activation failure sets an exception");
         attach_constant_expression_trace(&exception, eg, frame, op_array, ip);
         attach_throwable_origin(&exception, eg, frame, op_array, ip);
-        return Ok(match throw_in_frame(eg, frame, exception) {
+        return Ok(match throw_in_frame(eg, frame, exception)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -631,7 +631,7 @@ fn op_new_obj_resolved<'a>(
                     .exception
                     .take()
                     .expect("deferred property default failure sets an exception");
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -767,7 +767,7 @@ fn op_new_obj_resolved<'a>(
                 op_array.strict_types,
             )?;
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -859,13 +859,16 @@ enum CachedFetchObjResult {
 fn take_magic_exception<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-) -> Option<ColdResult<'a>> {
-    eg.exception.take().map(|exception| match throw_in_frame(eg, frame, exception) {
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    let Some(exception) = eg.exception.take() else {
+        return Ok(None);
+    };
+    Ok(Some(match throw_in_frame(eg, frame, exception)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-    })
+    }))
 }
 
 enum ConvertedPropertyName<'a> {
@@ -922,7 +925,7 @@ fn convert_object_property_name<'a>(
         } else {
             call_magic_method(eg, &property, "__tostring", &[])?
         };
-        if let Some(result) = take_magic_exception(eg, frame) {
+        if let Some(result) = take_magic_exception(eg, frame)? {
             return Ok(ConvertedPropertyName::Control(result));
         }
         let Some(rendered) = rendered else {
@@ -931,7 +934,7 @@ fn convert_object_property_name<'a>(
                 frame,
                 "Error",
                 format!("Object of class {class_name} could not be converted to string"),
-            )));
+            )?));
         };
         let Some(rendered) = rendered.as_str() else {
             return Ok(ConvertedPropertyName::Control(object_property_throw(
@@ -939,7 +942,7 @@ fn convert_object_property_name<'a>(
                 frame,
                 "TypeError",
                 format!("{class_name}::__toString(): Return value must be of type string"),
-            )));
+            )?));
         };
         return Ok(ConvertedPropertyName::Name(rendered.to_string()));
     }
@@ -953,7 +956,7 @@ fn convert_object_property_name<'a>(
             "Array to string conversion",
             suppress_warning,
         )?;
-        if let Some(result) = take_magic_exception(eg, frame) {
+        if let Some(result) = take_magic_exception(eg, frame)? {
             return Ok(ConvertedPropertyName::Control(result));
         }
     }
@@ -1075,7 +1078,7 @@ fn scalar_property_write_fetch_throw<'a>(
     name: &str,
     receiver_type: &str,
     flags: u16,
-) -> ColdResult<'a> {
+) -> Result<ColdResult<'a>, VmError> {
     let action = if flags & FETCH_OBJ_COMPOUND != 0 {
         "assign"
     } else if flags & FETCH_OBJ_INCDEC != 0 {
@@ -1132,7 +1135,7 @@ fn op_fetch_obj_r_slow<'a>(
                 &name,
                 obj_val.type_name(),
                 write_flags,
-            ));
+            )?);
         }
         report_php_warning(
             eg,
@@ -1145,7 +1148,7 @@ fn op_fetch_obj_r_slow<'a>(
             ),
             opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
         )?;
-        if let Some(result) = take_magic_exception(eg, frame) {
+        if let Some(result) = take_magic_exception(eg, frame)? {
             return Ok(result);
         }
         set_result(Value::null());
@@ -1246,7 +1249,7 @@ fn op_fetch_obj_r_slow<'a>(
                                 vis_str, reported_class, name
                             );
                             drop(obj);
-                            return Ok(object_property_throw(eg, frame, "Error", message));
+                            return Ok(object_property_throw(eg, frame, "Error", message)?);
                         }
                         property_accessible = false;
                     }
@@ -1292,7 +1295,7 @@ fn op_fetch_obj_r_slow<'a>(
         } else {
             None
         };
-        if let Some(result) = take_magic_exception(eg, frame) {
+        if let Some(result) = take_magic_exception(eg, frame)? {
             return Ok(result);
         }
         let magic_receiver = obj_val;
@@ -1395,7 +1398,7 @@ fn op_fetch_obj_r_slow<'a>(
                 frame,
                 "Error",
                 format!("Property {class_name}::${name} is write-only"),
-            ));
+            )?);
         }
         if has_get_hook
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
@@ -1411,7 +1414,7 @@ fn op_fetch_obj_r_slow<'a>(
                 &hook_name,
                 &[],
             )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
             if let Some(mut value) = hook_value {
@@ -1428,7 +1431,7 @@ fn op_fetch_obj_r_slow<'a>(
                         frame,
                         "Error",
                         format!("Indirect modification of {class_name}::${name} is not allowed"),
-                    ));
+                    )?);
                 }
                 if opline._pad & FETCH_OBJ_MODIFY != 0 && value.is_reference() {
                     value.mark_indirect_property_modification_reference();
@@ -1464,7 +1467,7 @@ fn op_fetch_obj_r_slow<'a>(
                             "Cannot indirectly modify readonly property {class_name}::${name}"
                         )
                     },
-                ));
+                )?);
             }
             if val.is_undef() && typed_property.is_some() {
                 if opline._pad & FETCH_OBJ_SILENT != 0 {
@@ -1479,7 +1482,7 @@ fn op_fetch_obj_r_slow<'a>(
                         type_scope, property_name
                     ),
                 );
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -1495,7 +1498,7 @@ fn op_fetch_obj_r_slow<'a>(
                     &format!("Undefined property: {class_name}::${name}"),
                     opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
                 )?;
-                if let Some(result) = take_magic_exception(eg, frame) {
+                if let Some(result) = take_magic_exception(eg, frame)? {
                     return Ok(result);
                 }
                 set_result(current_incdec_value());
@@ -1529,7 +1532,7 @@ fn op_fetch_obj_r_slow<'a>(
                         &[Value::string(name.clone())],
                     )?
                 };
-                if let Some(result) = take_magic_exception(eg, frame) {
+                if let Some(result) = take_magic_exception(eg, frame)? {
                     return Ok(result);
                 }
                 let guarded_lazy_get = directly_isset_guarded
@@ -1551,7 +1554,7 @@ fn op_fetch_obj_r_slow<'a>(
                     frame,
                     "Error",
                     "Cannot access property starting with \"\\0\"".into(),
-                ));
+                )?);
             }
             let magic_value = call_guarded_property_magic_method(
                 eg,
@@ -1561,7 +1564,7 @@ fn op_fetch_obj_r_slow<'a>(
                 "__get",
                 &[Value::string(name.clone())],
             )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
             if let Some(mut result) = magic_value {
@@ -1575,7 +1578,7 @@ fn op_fetch_obj_r_slow<'a>(
                     frame,
                     "Error",
                     "Cannot access property starting with \"\\0\"".into(),
-                ));
+                )?);
             } else {
                 let class_name = obj_val
                     .as_object()
@@ -1590,7 +1593,7 @@ fn op_fetch_obj_r_slow<'a>(
                             frame,
                             "Error",
                             format!("Cannot create dynamic property {class_name}::${name}"),
-                        ));
+                        )?);
                     }
                     if eg
                         .class_table
@@ -1602,7 +1605,7 @@ fn op_fetch_obj_r_slow<'a>(
                             frame,
                             "Error",
                             format!("Cannot create dynamic property {class_name}::${name}"),
-                        ));
+                        )?);
                     }
                     let dynamic_properties_allowed = obj_val.as_object().is_some_and(|object| {
                         object.is_dynamic_std_class()
@@ -1621,7 +1624,7 @@ fn op_fetch_obj_r_slow<'a>(
                                 "Creation of dynamic property {class_name}::${name} is deprecated"
                             ),
                         )?;
-                        if let Some(result) = take_magic_exception(eg, frame) {
+                        if let Some(result) = take_magic_exception(eg, frame)? {
                             return Ok(result);
                         }
                     }
@@ -1640,7 +1643,7 @@ fn op_fetch_obj_r_slow<'a>(
                     &format!("Undefined property: {class_name}::${name}"),
                     opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
                 )?;
-                if let Some(result) = take_magic_exception(eg, frame) {
+                if let Some(result) = take_magic_exception(eg, frame)? {
                     return Ok(result);
                 }
                 let result = if opline._pad & FETCH_OBJ_INCDEC != 0 {
@@ -1767,7 +1770,7 @@ fn op_isset_obj<'a>(
     } else {
         eg.lazy_proxy_instance(object)
     };
-    if let Some(result) = take_magic_exception(eg, frame) {
+    if let Some(result) = take_magic_exception(eg, frame)? {
         return Ok(result);
     }
     let magic_receiver = object;
@@ -1785,7 +1788,7 @@ fn op_isset_obj<'a>(
             &hook_name,
             &[],
         )?;
-        if let Some(result) = take_magic_exception(eg, frame) {
+        if let Some(result) = take_magic_exception(eg, frame)? {
             return Ok(result);
         }
         set_result(value.is_some_and(|value| {
@@ -1817,7 +1820,7 @@ fn op_isset_obj<'a>(
             frame,
             "Error",
             format!("Property {object_class_name}::${name} is write-only"),
-        ));
+        )?);
     }
 
     let set = match property_state {
@@ -1832,7 +1835,7 @@ fn op_isset_obj<'a>(
         )?
         .is_some_and(|value| value.is_truthy()),
     };
-    if let Some(result) = take_magic_exception(eg, frame) {
+    if let Some(result) = take_magic_exception(eg, frame)? {
         return Ok(result);
     }
     set_result(set);
@@ -1917,7 +1920,7 @@ fn op_unset_obj<'a>(
             frame,
             "Error",
             format!("Cannot unset readonly property {class_name}::${name}"),
-        ));
+        )?);
     }
     if !accessible
         && eg.property_has_asymmetric_set_visibility(&object_ref.class_name, &name)
@@ -1940,7 +1943,7 @@ fn op_unset_obj<'a>(
                 .map_or_else(|| "global scope".to_string(), |scope| format!("scope {scope}")),
         );
         drop(object_ref);
-        return Ok(object_property_throw(eg, frame, "Error", message));
+        return Ok(object_property_throw(eg, frame, "Error", message)?);
     }
     let hooked_property = accessible
         && !hidden_parent_private
@@ -1956,7 +1959,7 @@ fn op_unset_obj<'a>(
             frame,
             "Error",
             format!("Cannot unset hooked property {class_name}::${name}"),
-        ));
+        )?);
     }
     let lazy_declared_property = accessible
         && !hidden_parent_private
@@ -1994,7 +1997,7 @@ fn op_unset_obj<'a>(
     } else {
         eg.lazy_proxy_instance(object)
     };
-    if let Some(result) = take_magic_exception(eg, frame) {
+    if let Some(result) = take_magic_exception(eg, frame)? {
         return Ok(result);
     }
     let magic_receiver = object;
@@ -2026,7 +2029,7 @@ fn op_unset_obj<'a>(
         "__unset",
         &[Value::string(&name)],
     )?;
-    if let Some(result) = take_magic_exception(eg, frame) {
+    if let Some(result) = take_magic_exception(eg, frame)? {
         return Ok(result);
     }
     Ok(ColdResult::Done)
@@ -2077,7 +2080,7 @@ fn op_bind_obj_prop_ref<'a>(
                     "Attempt to modify property \"{name}\" on {}",
                     receiver.dereferenced().type_name()
                 ),
-            ));
+            )?);
         };
         let class_name = object.class_name.to_string();
         drop(object);
@@ -2139,7 +2142,7 @@ fn op_bind_obj_prop_ref<'a>(
                         instruction_index,
                         "Error",
                         message,
-                    ));
+                    )?);
                 }
             }
         }
@@ -2164,7 +2167,7 @@ fn op_bind_obj_prop_ref<'a>(
                 instruction_index,
                 "Error",
                 format!("Cannot indirectly modify readonly property {class_name}::${name}"),
-            ));
+            )?);
         }
         let (lazy_declared_property, lazy_dynamic_property) = receiver
             .as_object()
@@ -2198,7 +2201,7 @@ fn op_bind_obj_prop_ref<'a>(
         } else {
             eg.lazy_proxy_instance(&receiver).unwrap_or(receiver)
         };
-        if let Some(result) = take_magic_exception(eg, frame) {
+        if let Some(result) = take_magic_exception(eg, frame)? {
             return Ok(result);
         }
         let (declared_slot, definition, owner) = {
@@ -2228,7 +2231,7 @@ fn op_bind_obj_prop_ref<'a>(
                 &hook_name,
                 &[],
             )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
             if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
@@ -2239,7 +2242,7 @@ fn op_bind_obj_prop_ref<'a>(
                     instruction_index,
                     "Error",
                     "Cannot assign by reference to overloaded object".to_string(),
-                ));
+                )?);
             }
             if let Some(returned) = returned {
                 let mut binding = if returned.is_owned_reference() {
@@ -2259,7 +2262,7 @@ fn op_bind_obj_prop_ref<'a>(
                         instruction_index,
                         "Error",
                         message,
-                    ));
+                    )?);
                 };
                 if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
                     binding.mark_internal_reference_alias();
@@ -2289,7 +2292,7 @@ fn op_bind_obj_prop_ref<'a>(
                 &format!("Undefined property: {receiver_class}::${name}"),
                 false,
             )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
             let mut binding = Value::owned_reference(Value::null());
@@ -2311,7 +2314,7 @@ fn op_bind_obj_prop_ref<'a>(
                 "__get",
                 &[Value::string(name.clone())],
             )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
             if let Some(returned) = returned {
@@ -2344,7 +2347,7 @@ fn op_bind_obj_prop_ref<'a>(
                         instruction_index,
                         "Error",
                         "Cannot assign by reference to overloaded object".to_string(),
-                    ));
+                    )?);
                 }
                 if !returned.is_reference()
                     && !matches!(
@@ -2361,7 +2364,7 @@ fn op_bind_obj_prop_ref<'a>(
                             "Indirect modification of overloaded property {class_name}::${name} has no effect"
                         ),
                     )?;
-                    if let Some(result) = take_magic_exception(eg, frame) {
+                    if let Some(result) = take_magic_exception(eg, frame)? {
                         return Ok(result);
                     }
                 }
@@ -2408,7 +2411,7 @@ fn op_bind_obj_prop_ref<'a>(
                     "Cannot access uninitialized non-nullable property {}::${} by reference",
                     definition.declaring_class, definition.name
                 ),
-            ));
+            )?);
         }
 
         let (creates_dynamic_property, dynamic_properties_allowed) = {
@@ -2445,7 +2448,7 @@ fn op_bind_obj_prop_ref<'a>(
                 instruction_index,
                 "Error",
                 format!("Cannot create dynamic property {class_name}::${name}"),
-            ));
+            )?);
         }
         if creates_dynamic_property
             && !dynamic_properties_allowed
@@ -2459,7 +2462,7 @@ fn op_bind_obj_prop_ref<'a>(
                 opline,
                 &format!("Creation of dynamic property {class_name}::${name} is deprecated"),
             )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
         }
@@ -2478,7 +2481,7 @@ fn op_bind_obj_prop_ref<'a>(
                     opline,
                     "Only variables should be assigned by reference",
                 )?;
-                if let Some(result) = take_magic_exception(eg, frame) {
+                if let Some(result) = take_magic_exception(eg, frame)? {
                     return Ok(result);
                 }
             }
@@ -2508,7 +2511,7 @@ fn op_bind_obj_prop_ref<'a>(
                             instruction_index,
                             "TypeError",
                             message,
-                        ));
+                        )?);
                     }
                 }
             } else {
@@ -2541,7 +2544,7 @@ fn op_bind_obj_prop_ref<'a>(
             }
             drop(object);
             run_prepared_value_destructor(eg, destructor)?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
             if let (Some(definition), Some(owner)) = (definition, owner)
@@ -2645,7 +2648,7 @@ fn op_bind_array_dim_ref<'a>(
             let instruction_index = (opline as *const Instruction)
                 .offset_from(op_array.instructions.as_ptr()) as usize;
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -2671,7 +2674,7 @@ fn op_bind_array_dim_ref<'a>(
                     op_array,
                     instruction_index,
                     &receiver,
-                ) {
+                )? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -2679,7 +2682,7 @@ fn op_bind_array_dim_ref<'a>(
                 });
             };
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -2728,7 +2731,7 @@ fn op_bind_array_dim_ref<'a>(
                         "Cannot access offset of type {} on array",
                         index.diagnostic_type_name()
                     ),
-                ) {
+                )? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -2805,7 +2808,7 @@ fn op_bind_array_dim_ref<'a>(
                     ArrayKeyError::Illegal => unreachable!(),
                 }
                 if let Some(exception) = eg.exception.take() {
-                    return Ok(match throw_in_frame(eg, frame, exception) {
+                    return Ok(match throw_in_frame(eg, frame, exception)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             ColdResult::NewFrame(new_frame, new_op_array)
                         }
@@ -3008,7 +3011,7 @@ fn op_assign_obj_prop<'a>(
                                 "Cannot {action} readonly property {defining_class}::${name}"
                             );
                             drop(php_obj);
-                            return Ok(object_property_throw(eg, frame, "Error", message));
+                            return Ok(object_property_throw(eg, frame, "Error", message)?);
                         }
                         let has_setter = eg
                             .find_function(&format!(
@@ -3047,7 +3050,7 @@ fn op_assign_obj_prop<'a>(
                                 format!("Cannot access {vis_str} property {defining_class}::${name}")
                             };
                             drop(php_obj);
-                            return Ok(object_property_throw(eg, frame, "Error", message));
+                            return Ok(object_property_throw(eg, frame, "Error", message)?);
                         }
                     }
                 }
@@ -3085,7 +3088,7 @@ fn op_assign_obj_prop<'a>(
         } else {
             eg.lazy_proxy_instance(obj)
         };
-        if let Some(result) = take_magic_exception(eg, frame) {
+        if let Some(result) = take_magic_exception(eg, frame)? {
             return Ok(result);
         }
         let magic_receiver = obj;
@@ -3111,7 +3114,7 @@ fn op_assign_obj_prop<'a>(
                 };
                 let err = make_error_value("Error", &message);
                 drop(php_obj);
-                match throw_in_frame(eg, frame, err) {
+                match throw_in_frame(eg, frame, err)? {
                     ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                     ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                 }
@@ -3142,7 +3145,7 @@ fn op_assign_obj_prop<'a>(
                             readonly_display_class, name
                         ));
                         drop(php_obj);
-                        match throw_in_frame(eg, frame, err) {
+                        match throw_in_frame(eg, frame, err)? {
                             ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                             ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                         }
@@ -3158,7 +3161,7 @@ fn op_assign_obj_prop<'a>(
                             readonly_display_class, name
                         ));
                         drop(php_obj);
-                        match throw_in_frame(eg, frame, err) {
+                        match throw_in_frame(eg, frame, err)? {
                             ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                             ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                         }
@@ -3175,7 +3178,7 @@ fn op_assign_obj_prop<'a>(
                             caller_class.as_deref().map_or("global scope".to_string(), |c| format!("scope {}", c))
                         ));
                         drop(php_obj);
-                        match throw_in_frame(eg, frame, err) {
+                        match throw_in_frame(eg, frame, err)? {
                             ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                             ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                         }
@@ -3249,7 +3252,7 @@ fn op_assign_obj_prop<'a>(
                 &hook_name,
                 std::slice::from_ref(&assigned),
             )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
             if hook_value.is_some() {
@@ -3262,7 +3265,7 @@ fn op_assign_obj_prop<'a>(
                 frame,
                 "Error",
                 format!("Property {object_display_class_name}::${name} is read-only"),
-            ));
+            )?);
         }
         if !prop_exists && internal_class_forbids_dynamic_properties(&object_class_name) {
             return Ok(object_property_throw(
@@ -3270,7 +3273,7 @@ fn op_assign_obj_prop<'a>(
                 frame,
                 "Error",
                 format!("Cannot create dynamic property {object_display_class_name}::${name}"),
-            ));
+            )?);
         }
         // A setter may execute arbitrary user code. Reacquire the stable
         // class-table definition after that call; inline caches must never
@@ -3300,7 +3303,7 @@ fn op_assign_obj_prop<'a>(
                         frame,
                         "TypeError",
                         message,
-                    ));
+                    )?);
                 }
             }
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -3317,7 +3320,7 @@ fn op_assign_obj_prop<'a>(
                     frame,
                     "TypeError",
                     message,
-                ));
+                )?);
             }
             if definition_ref.is_typed() && definition_ref.generic_declaration.is_none() {
                 assigned = match prepare_property_assignment(
@@ -3334,7 +3337,7 @@ fn op_assign_obj_prop<'a>(
                             frame,
                             "TypeError",
                             message,
-                        ));
+                        )?);
                     }
                 };
             }
@@ -3347,7 +3350,7 @@ fn op_assign_obj_prop<'a>(
         ) {
             Ok(value) => value,
             Err(message) => {
-                return Ok(object_property_throw(eg, frame, "TypeError", message));
+                return Ok(object_property_throw(eg, frame, "TypeError", message)?);
             }
         };
 
@@ -3394,7 +3397,7 @@ fn op_assign_obj_prop<'a>(
                 assignment_slot_set(property, assigned);
             }
             run_prepared_value_destructor(eg, destructor)?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
         } else {
@@ -3406,7 +3409,7 @@ fn op_assign_obj_prop<'a>(
                     frame,
                     "Error",
                     "Cannot access property starting with \"\\0\"".into(),
-                ));
+                )?);
             }
             let magic = call_guarded_property_magic_method(
                 eg,
@@ -3416,7 +3419,7 @@ fn op_assign_obj_prop<'a>(
                 "__set",
                 &[Value::string(name.clone()), assigned.clone()],
             )?;
-            if let Some(result) = take_magic_exception(eg, frame) {
+            if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
             }
             if guarded || magic.is_none() {
@@ -3426,7 +3429,7 @@ fn op_assign_obj_prop<'a>(
                         frame,
                         "Error",
                         "Cannot access property starting with \"\\0\"".into(),
-                    ));
+                    )?);
                 }
                 if readonly_class && !magic_get_handles_indirect_writeback {
                     return Ok(object_property_throw(
@@ -3436,7 +3439,7 @@ fn op_assign_obj_prop<'a>(
                         format!(
                             "Cannot create dynamic property {object_display_class_name}::${name}"
                         ),
-                    ));
+                    )?);
                 }
                 if !dynamic_properties_allowed && !magic_get_handles_indirect_writeback {
                     report_php_deprecation(
@@ -3448,7 +3451,7 @@ fn op_assign_obj_prop<'a>(
                             "Creation of dynamic property {object_display_class_name}::${name} is deprecated"
                         ),
                     )?;
-                    if let Some(result) = take_magic_exception(eg, frame) {
+                    if let Some(result) = take_magic_exception(eg, frame)? {
                         return Ok(result);
                     }
                 }
@@ -3477,7 +3480,7 @@ fn op_assign_obj_prop<'a>(
                 "Attempt to {action} property \"{name}\" on {}",
                 obj.type_name()
             ),
-        ));
+        )?);
     }
     Ok(ColdResult::Done)
 }
@@ -3502,7 +3505,7 @@ fn op_init_method_call<'a>(
                 "Error",
                 &format!("Call to undefined method Closure::{method}()"),
             );
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -3585,7 +3588,7 @@ fn op_init_method_call<'a>(
                         (magic, Some(Value::string(method)))
                     } else {
                         let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
-                        match throw_in_frame(eg, frame, err) {
+                        match throw_in_frame(eg, frame, err)? {
                             ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
                             ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
                         }
@@ -3764,7 +3767,7 @@ fn op_init_method_call<'a>(
             - op_array.instructions.as_ptr() as usize)
             / std::mem::size_of::<Instruction>();
         attach_throwable_origin(&err, eg, frame, op_array, instruction_index);
-        match throw_in_frame(eg, frame, err) {
+        match throw_in_frame(eg, frame, err)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 return Ok(ColdResult::NewFrame(new_frame, new_op_array));
             }
@@ -3802,18 +3805,18 @@ fn throw_non_static_callback_error<'a>(
     instruction_index: usize,
     class: &str,
     method: &str,
-) -> ColdResult<'a> {
+) -> Result<ColdResult<'a>, VmError> {
     let error = make_error_value(
         "Error",
         &format!("Non-static method {class}::{method}() cannot be called statically"),
     );
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-    match throw_in_frame(eg, frame, error) {
+    Ok(match throw_in_frame(eg, frame, error)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(error) => ColdResult::Unhandled(error),
-    }
+    })
 }
 
 fn op_init_static_call<'a>(
@@ -3840,7 +3843,7 @@ fn op_init_static_call<'a>(
             "Error",
             "Cannot use \"parent\" when current class scope has no parent",
         );
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -3876,7 +3879,7 @@ fn op_init_static_call<'a>(
         if !class_is_available {
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &class)?;
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -3885,7 +3888,7 @@ fn op_init_static_call<'a>(
             }
             if !loaded {
                 let error = make_error_value("Error", &format!("Class \"{class}\" not found"));
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -3913,7 +3916,7 @@ fn op_init_static_call<'a>(
                     "Error",
                     &format!("Undefined property {}::${property}", class),
                 );
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -3943,7 +3946,7 @@ fn op_init_static_call<'a>(
                         definition.declaring_class
                     ),
                 );
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -3965,7 +3968,7 @@ fn op_init_static_call<'a>(
                         class
                     ),
                 );
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -4002,7 +4005,7 @@ fn op_init_static_call<'a>(
                 if class_callback_requires_instance(eg, &class, &method) {
                     return Ok(throw_non_static_callback_error(
                         eg, frame, op_array, ip, &class, &method,
-                    ));
+                    )?);
                 }
                 let magic = eg
                     .find_method_info(&class, "__callStatic")
@@ -4016,7 +4019,7 @@ fn op_init_static_call<'a>(
                     (magic, Some(Value::string(&method)), false)
                 } else {
                     let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", raw_class, method));
-                    match throw_in_frame(eg, frame, err) {
+                    match throw_in_frame(eg, frame, err)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             return Ok(ColdResult::NewFrame(new_frame, new_op_array));
                         }
@@ -4101,7 +4104,7 @@ fn op_init_static_call<'a>(
         if !compatible_this {
             return Ok(throw_non_static_callback_error(
                 eg, frame, op_array, ip, &class, &method,
-            ));
+            )?);
         }
     }
     if magic_method.is_none()
@@ -4225,7 +4228,7 @@ fn op_init_late_static_call<'a>(
                 "Cannot access \"static\" when no class scope is active",
             );
             attach_throwable_origin(&error, eg, frame, op_array, ip);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -4245,7 +4248,7 @@ fn op_init_late_static_call<'a>(
                     "Error",
                     &format!("Call to undefined method {}::{}()", class, method),
                 );
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -4389,7 +4392,7 @@ fn op_init_user_call<'a>(
         Some(resolved) => resolved,
         None => {
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -4428,7 +4431,7 @@ fn op_init_user_call<'a>(
                 )
             };
             let error = make_error_value("TypeError", &message);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -4439,7 +4442,7 @@ fn op_init_user_call<'a>(
 
     if let Some(name) = crate::stdlib::scope_introspection_callback_name(&resolved) {
         let error = make_error_value("Error", &format!("Cannot call {name}() dynamically"));
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -4786,7 +4789,7 @@ fn op_init_dynamic_call<'a>(
                 "Array callback must have exactly two elements",
             );
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -4806,7 +4809,7 @@ fn op_init_dynamic_call<'a>(
                 "Class name must be a valid object or a string",
             );
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -4820,7 +4823,7 @@ fn op_init_dynamic_call<'a>(
         {
             let error = make_error_value("Error", "Method name must be a string");
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -4845,7 +4848,7 @@ fn op_init_dynamic_call<'a>(
                 ),
             );
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -4857,7 +4860,7 @@ fn op_init_dynamic_call<'a>(
         {
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, class_name)?;
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -4867,7 +4870,7 @@ fn op_init_dynamic_call<'a>(
             if !loaded {
                 let error = make_error_value("Error", &format!("Class \"{class_name}\" not found"));
                 attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -4886,7 +4889,7 @@ fn op_init_dynamic_call<'a>(
                 instruction_index,
                 class_name,
                 method,
-            ));
+            )?);
         }
         let Some(resolved) = resolve_user_call_at_opline(eg, frame, op_array, opline) else {
             let message = if closure_receiver {
@@ -4911,7 +4914,7 @@ fn op_init_dynamic_call<'a>(
             };
             let error = make_error_value("Error", &message);
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -4965,7 +4968,7 @@ fn op_init_dynamic_call<'a>(
                     instruction_index,
                     class_name,
                     method,
-                ));
+                )?);
             }
         }
         if let Some(normalized) = scope_introspection_function_name(func_name) {
@@ -4974,7 +4977,7 @@ fn op_init_dynamic_call<'a>(
                 &format!("Cannot call {normalized}() dynamically"),
             );
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -4993,7 +4996,7 @@ fn op_init_dynamic_call<'a>(
                 &format!("Call to undefined function {diagnostic_name}()"),
             );
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -5027,7 +5030,7 @@ fn op_init_dynamic_call<'a>(
                     &format!("Object of type {class_name} is not callable"),
                 );
                 attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-                return Ok(match throw_in_frame(eg, frame, error) {
+                return Ok(match throw_in_frame(eg, frame, error)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -5063,7 +5066,7 @@ fn op_init_dynamic_call<'a>(
             ),
         );
         attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }

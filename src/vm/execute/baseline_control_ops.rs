@@ -62,7 +62,7 @@ fn runtime_class_dependency_exception<'a>(
         )));
     }
     eg.restore_runtime_class_declaration(declaration_key, class_def);
-    Ok(match throw_in_frame(eg, frame, exception) {
+    Ok(match throw_in_frame(eg, frame, exception)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
@@ -130,7 +130,7 @@ fn op_declare_class<'a>(
                 .expect("DeclareClass instruction belongs to its op array");
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             eg.restore_runtime_class_declaration(declaration_key, class_def);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -239,7 +239,7 @@ fn op_declare_class<'a>(
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
             if let Some(exception) = eg.exception.take() {
                 eg.restore_runtime_class_declaration(declaration_key, class_def);
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -263,7 +263,7 @@ fn op_declare_class<'a>(
         let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?;
         if let Some(exception) = eg.exception.take() {
             eg.restore_runtime_class_declaration(declaration_key, class_def);
-            return Ok(match throw_in_frame(eg, frame, exception) {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -866,7 +866,7 @@ fn op_eval<'a>(
             write_include_result(frame, opline, value);
             Ok(ColdResult::Done)
         }
-        IncludeFileOutcome::Thrown(exception) => Ok(match throw_in_frame(eg, frame, exception) {
+        IncludeFileOutcome::Thrown(exception) => Ok(match throw_in_frame(eg, frame, exception)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -927,7 +927,7 @@ fn op_include<'a>(
             write_include_result(frame, opline, Value::bool(true));
             Ok(ColdResult::Done)
         }
-        IncludeFileOutcome::Thrown(exception) => Ok(match throw_in_frame(eg, frame, exception) {
+        IncludeFileOutcome::Thrown(exception) => Ok(match throw_in_frame(eg, frame, exception)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -939,7 +939,7 @@ fn op_include<'a>(
             );
             eg.write_output(format!("Warning: {message}\n").as_bytes());
             let exception = make_error_value("Error", &message);
-            Ok(match throw_in_frame(eg, frame, exception) {
+            Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -1059,7 +1059,7 @@ fn op_throw<'a>(
             &format!("Unhandled match case {detail}"),
         );
         attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -1079,7 +1079,7 @@ fn op_throw<'a>(
         };
         let error = make_error_value("Error", message);
         attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -1089,7 +1089,7 @@ fn op_throw<'a>(
     let thrown = val.clone();
     attach_throwable_origin(&thrown, eg, frame, op_array, instruction_index);
 
-    match throw_in_frame(eg, frame, thrown) {
+    match throw_in_frame(eg, frame, thrown)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             Ok(ColdResult::NewFrame(new_frame, new_op_array))
         }

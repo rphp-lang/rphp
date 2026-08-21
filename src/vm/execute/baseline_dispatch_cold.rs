@@ -631,7 +631,7 @@ fn op_dynamic_variable<'a>(
             .unwrap_or_else(|| "object".to_string());
         let rendered = call_magic_method(eg, &key, "__tostring", &[])?;
         if let Some(exception) = eg.exception.take() {
-            return Ok(match throw_in_frame(eg, frame, exception) {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -644,7 +644,7 @@ fn op_dynamic_variable<'a>(
                 frame,
                 "Error",
                 format!("Object of class {class_name} could not be converted to string"),
-            ));
+            )?);
         };
         let Some(rendered) = rendered.as_str() else {
             return Ok(static_property_throw(
@@ -654,7 +654,7 @@ fn op_dynamic_variable<'a>(
                 format!(
                     "{class_name}::__toString(): Return value must be of type string"
                 ),
-            ));
+            )?);
         };
             rendered.to_string()
         } else {
@@ -698,7 +698,7 @@ fn op_dynamic_variable<'a>(
             frame,
             "Error",
             "Cannot re-assign $this".to_string(),
-        ));
+        )?);
     }
 
     match opline.opcode {
@@ -760,7 +760,7 @@ fn op_dynamic_variable<'a>(
                                     frame,
                                     "TypeError",
                                     message,
-                                ));
+                                )?);
                             }
                         };
                         slot_set((*owner).get_op_mut(cv, OpType::Cv), value);
@@ -787,7 +787,7 @@ fn op_dynamic_variable<'a>(
                             frame,
                             "TypeError",
                             message,
-                        ));
+                        )?);
                     }
                 };
                 globals_assign(&mut eg.globals, &name, value);
@@ -812,7 +812,7 @@ fn op_dynamic_variable<'a>(
                             frame,
                             "TypeError",
                             message,
-                        ));
+                        )?);
                     }
                 };
                 let variables = eg.dynamic_variables.entry(owner as usize).or_default();
@@ -2006,7 +2006,7 @@ fn op_call_user_func_array<'a>(
     };
 
     if let Some(exc) = eg.exception.take() {
-        return Ok(match throw_in_frame(eg, frame, exc) {
+        return Ok(match throw_in_frame(eg, frame, exc)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -2106,14 +2106,14 @@ fn static_property_throw<'a>(
     frame: *mut ExecuteData,
     class: &str,
     message: String,
-) -> ColdResult<'a> {
+) -> Result<ColdResult<'a>, VmError> {
     let error = make_error_value(class, &message);
-    match throw_in_frame(eg, frame, error) {
+    Ok(match throw_in_frame(eg, frame, error)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-    }
+    })
 }
 
 #[inline(always)]
@@ -2312,7 +2312,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             frame,
             "Error",
             "Class name must be a valid object or a string".to_string(),
-        ));
+        )?);
     }
     if dynamic_owner
         && !dynamic_name
@@ -2324,7 +2324,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             frame,
             "TypeError",
             "Cannot use \"::class\" on string".to_string(),
-        ));
+        )?);
     }
     if dynamic_owner
         && !dynamic_name
@@ -2346,7 +2346,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     {
         let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, raw_class)?;
         if let Some(exception) = eg.exception.take() {
-            return Ok(match throw_in_frame(eg, frame, exception) {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -2396,7 +2396,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
         };
         attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -2410,7 +2410,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             frame,
             "Error",
             format!("Class \"{}\" not found", raw_class),
-        ));
+        )?);
     };
     let Some(constant) = constant else {
         return Ok(static_property_throw(
@@ -2421,7 +2421,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 "Cannot use value of type {} as class constant name",
                 constant_value.type_name()
             ),
-        ));
+        )?);
     };
     if constant.eq_ignore_ascii_case("class") && (!dynamic_name || !compile_time_name) {
         set_result(Value::string(class.name.clone()));
@@ -2455,7 +2455,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 eg,
             )?;
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -2485,7 +2485,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                         op_array,
                         instruction_index,
                     );
-                    return Ok(match throw_in_frame(eg, frame, exception) {
+                    return Ok(match throw_in_frame(eg, frame, exception)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             ColdResult::NewFrame(new_frame, new_op_array)
                         }
@@ -2519,7 +2519,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                     frame,
                     "Error",
                     "Cached enum case metadata is unavailable".to_string(),
-                ));
+                )?);
             };
             let use_site = deprecated_use_site(frame, op_array, opline);
             crate::stdlib::reflection::report_deprecated_enum_case_use(
@@ -2529,7 +2529,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 eg,
             )?;
             if let Some(exception) = eg.exception.take() {
-                return Ok(match throw_in_frame(eg, frame, exception) {
+                return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
                     }
@@ -2547,7 +2547,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
 
     if class.is_trait {
         let message = format!("Cannot access trait constant {}::{} directly", class.name, constant);
-        return Ok(static_property_throw(eg, frame, "Error", message));
+        return Ok(static_property_throw(eg, frame, "Error", message)?);
     }
     let display_class = class.name.clone();
     let Some((constant_index, definition)) = eg.find_class_constant(class_id, constant) else {
@@ -2576,7 +2576,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                     frame,
                     error.exception_class(),
                     error.message().to_string(),
-                ));
+                )?);
             }
             let case = class.static_properties[case_index].clone();
             let class_name = class.name.clone();
@@ -2593,7 +2593,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                     eg,
                 )?;
                 if let Some(exception) = eg.exception.take() {
-                    return Ok(match throw_in_frame(eg, frame, exception) {
+                    return Ok(match throw_in_frame(eg, frame, exception)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             ColdResult::NewFrame(new_frame, new_op_array)
                         }
@@ -2614,7 +2614,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             frame,
             "Error",
             format!("Undefined constant {}::{}", display_class, constant),
-        ));
+        )?);
     };
     // Fetching any declared constant from a backed enum makes Zend update the
     // class constants and build the backing lookup table. Undefined constants
@@ -2629,7 +2629,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             frame,
             error.exception_class(),
             error.message().to_string(),
-        ));
+        )?);
     }
     let caller = get_caller_class(frame, eg);
     if !eg.check_visibility(
@@ -2650,7 +2650,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 "Cannot access {} constant {}::{}",
                 visibility, display_class, constant
             ),
-        ));
+        )?);
     }
     if let Some(error) =
         crate::stdlib::reflection::class_constant_evaluation_error_value(&definition)
@@ -2661,7 +2661,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             .position(|instruction| std::ptr::eq(instruction, opline))
             .expect("class-constant opcode belongs to the active op-array");
         attach_constant_expression_trace(&error, eg, frame, op_array, instruction_index);
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -2683,7 +2683,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
         eg,
     )?;
     if let Some(exception) = eg.exception.take() {
-        return Ok(match throw_in_frame(eg, frame, exception) {
+        return Ok(match throw_in_frame(eg, frame, exception)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }
@@ -2711,7 +2711,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
                 op_array,
                 instruction_index,
             );
-            return Ok(match throw_in_frame(eg, frame, exception) {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -2803,7 +2803,7 @@ fn op_unset_static_prop<'a>(
                 "Cannot access \"{}\" when no class scope is active",
                 raw_class.to_ascii_lowercase()
             ),
-        ));
+        )?);
     }
     let Some(class) = eg.class_by_id(class_id) else {
         return Ok(static_property_throw(
@@ -2811,7 +2811,7 @@ fn op_unset_static_prop<'a>(
             frame,
             "Error",
             format!("Class \"{}\" not found", raw_class),
-        ));
+        )?);
     };
     let property = property_value.as_str().unwrap_or("");
     Ok(static_property_throw(
@@ -2819,7 +2819,7 @@ fn op_unset_static_prop<'a>(
         frame,
         "Error",
         format!("Attempt to unset static property {}::${}", class.name, property),
-    ))
+    )?)
 }
 
 #[cold]
@@ -2860,7 +2860,7 @@ fn commit_constrained_static_property_value<'a>(
                 frame,
                 "TypeError",
                 message,
-            ));
+            )?);
         }
     };
     // SAFETY: every caller supplies a checked inline-cache storage slot owned
@@ -3129,7 +3129,7 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     ) {
         Ok(resolved) => resolved,
         Err(VmError::Fatal(message)) => {
-            return Ok(static_property_throw(eg, frame, "Error", message));
+            return Ok(static_property_throw(eg, frame, "Error", message)?);
         }
         Err(error) => return Err(error),
     };
@@ -3150,7 +3150,7 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     ) {
         Ok(value) => value,
         Err(message) => {
-            return Ok(static_property_throw(eg, frame, "TypeError", message));
+            return Ok(static_property_throw(eg, frame, "TypeError", message)?);
         }
     };
 
@@ -3188,7 +3188,7 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
         return Err(VmError::Fatal("Invalid static property storage slot".into()));
     }
     run_prepared_value_destructor(eg, destructor)?;
-    if let Some(result) = take_magic_exception(eg, frame) {
+    if let Some(result) = take_magic_exception(eg, frame)? {
         return Ok(result);
     }
     if definition
@@ -3243,7 +3243,7 @@ fn validate_cached_typed_static_property<'a>(
         && let Some(message) =
             property_incdec_overflow_message(stored, definition, eg, called_class, overflow)
     {
-        return Ok(static_property_throw(eg, frame, "TypeError", message));
+        return Ok(static_property_throw(eg, frame, "TypeError", message)?);
     }
     value = match prepare_property_assignment(
         value,
@@ -3259,7 +3259,7 @@ fn validate_cached_typed_static_property<'a>(
                 frame,
                 "TypeError",
                 message,
-            ));
+            )?);
         }
     };
     #[cfg(feature = "php-generics-reified")]
@@ -3275,7 +3275,7 @@ fn validate_cached_typed_static_property<'a>(
             frame,
             "TypeError",
             message,
-        ));
+        )?);
     }
     #[cfg(feature = "php-generics-reified")]
     if !reified_contract.is_null() {
@@ -3316,7 +3316,7 @@ fn assign_static_property_cache_miss<'a>(
     ) {
         Ok(resolved) => resolved,
         Err(VmError::Fatal(message)) => {
-            return Ok(static_property_throw(eg, frame, "Error", message));
+            return Ok(static_property_throw(eg, frame, "Error", message)?);
         }
         Err(error) => return Err(error),
     };
@@ -3331,7 +3331,7 @@ fn assign_static_property_cache_miss<'a>(
             && let Some(message) =
                 property_incdec_overflow_message(stored, definition, eg, called_class, overflow)
         {
-            return Ok(static_property_throw(eg, frame, "TypeError", message));
+            return Ok(static_property_throw(eg, frame, "TypeError", message)?);
         }
         value = match prepare_property_assignment(
             value,
@@ -3347,7 +3347,7 @@ fn assign_static_property_cache_miss<'a>(
                     frame,
                     "TypeError",
                     message,
-                ));
+                )?);
             }
         };
         #[cfg(feature = "php-generics-reified")]
@@ -3363,7 +3363,7 @@ fn assign_static_property_cache_miss<'a>(
                 frame,
                 "TypeError",
                 message,
-            ));
+            )?);
         }
     }
     #[cfg(feature = "php-generics-reified")]
@@ -3385,7 +3385,7 @@ fn assign_static_property_cache_miss<'a>(
                 frame,
                 "TypeError",
                 message,
-            ));
+            )?);
         }
     };
     if !eg.set_static_property_value(resolved.storage_slot, value) {
@@ -3448,7 +3448,7 @@ fn resolve_static_property_read_cache_miss<'a>(
                 unsafe { frame_tmp_set(frame, result_ptr, Value::null()) };
                 return Ok(ColdResult::Done);
             }
-            return Ok(static_property_throw(eg, frame, "Error", message));
+            return Ok(static_property_throw(eg, frame, "Error", message)?);
         }
         Err(error) => return Err(error),
     };
@@ -3471,7 +3471,7 @@ fn resolve_static_property_read_cache_miss<'a>(
                 "Typed static property {}::${} must not be accessed before initialization",
                 definition.declaring_class, definition.name
             ),
-        ));
+        )?);
     }
     let value = clone_static_property_value(stored);
     if !indirect
@@ -3512,7 +3512,7 @@ fn resolve_static_property_reference_fetch<'a>(
     ) {
         Ok(resolved) => resolved,
         Err(VmError::Fatal(message)) => {
-            return Ok(static_property_throw(eg, frame, "Error", message));
+            return Ok(static_property_throw(eg, frame, "Error", message)?);
         }
         Err(error) => return Err(error),
     };
@@ -3537,7 +3537,7 @@ fn resolve_static_property_reference_fetch<'a>(
                 "Cannot access uninitialized non-nullable property {}::${} by reference",
                 definition.declaring_class, definition.name
             ),
-        ));
+        )?);
     }
 
     let slot = eg
@@ -4001,7 +4001,7 @@ fn op_global_dimension<'a>(
                             frame,
                             "TypeError",
                             message,
-                        ));
+                        )?);
                     }
                 };
                 globals_assign(&mut eg.globals, &name, value.clone());
@@ -4365,7 +4365,7 @@ fn op_create_first_class_callable<'a>(
         );
         let error = make_error_value("Error", &message);
         attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-        return Ok(match throw_in_frame(eg, frame, error) {
+        return Ok(match throw_in_frame(eg, frame, error)? {
             ThrowResult::Handled(new_frame, new_op_array) => {
                 ColdResult::NewFrame(new_frame, new_op_array)
             }

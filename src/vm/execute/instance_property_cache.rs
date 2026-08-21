@@ -4,14 +4,14 @@ fn object_property_throw<'a>(
     frame: *mut ExecuteData,
     class: &str,
     message: String,
-) -> ColdResult<'a> {
+) -> Result<ColdResult<'a>, VmError> {
     let error = make_error_value(class, &message);
-    match throw_in_frame(eg, frame, error) {
+    Ok(match throw_in_frame(eg, frame, error)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-    }
+    })
 }
 
 #[inline]
@@ -22,15 +22,15 @@ fn object_property_throw_at<'a>(
     instruction_index: usize,
     class: &str,
     message: String,
-) -> ColdResult<'a> {
+) -> Result<ColdResult<'a>, VmError> {
     let error = make_error_value(class, &message);
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-    match throw_in_frame(eg, frame, error) {
+    Ok(match throw_in_frame(eg, frame, error)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }
         ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-    }
+    })
 }
 
 #[inline]
@@ -112,7 +112,7 @@ fn try_assign_cached_typed_instance_property<'a>(
                 frame,
                 "TypeError",
                 message,
-            )));
+            )?));
         }
     }
     let set_value = |value| {
@@ -141,7 +141,7 @@ fn try_assign_cached_typed_instance_property<'a>(
             frame,
             "TypeError",
             message,
-        )));
+        )?));
     }
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     if definition.generic_declaration.is_some() {
@@ -154,7 +154,7 @@ fn try_assign_cached_typed_instance_property<'a>(
         ) {
             Ok(value) => value,
             Err(message) => {
-                return Ok(Some(object_property_throw(eg, frame, "TypeError", message)));
+                return Ok(Some(object_property_throw(eg, frame, "TypeError", message)?));
             }
         };
         set_value(value);
@@ -194,7 +194,7 @@ fn try_assign_cached_typed_instance_property<'a>(
             ) {
                 Ok(value) => value,
                 Err(message) => {
-                    return Ok(Some(object_property_throw(eg, frame, "TypeError", message)));
+                    return Ok(Some(object_property_throw(eg, frame, "TypeError", message)?));
                 }
             };
             set_value(value);
@@ -219,7 +219,7 @@ fn try_assign_cached_typed_instance_property<'a>(
                 frame,
                 "TypeError",
                 message,
-            )));
+            )?));
         }
     };
     let value = match prepare_cached_instance_reference_write(
@@ -231,7 +231,7 @@ fn try_assign_cached_typed_instance_property<'a>(
     ) {
         Ok(value) => value,
         Err(message) => {
-            return Ok(Some(object_property_throw(eg, frame, "TypeError", message)));
+            return Ok(Some(object_property_throw(eg, frame, "TypeError", message)?));
         }
     };
     set_value(value);

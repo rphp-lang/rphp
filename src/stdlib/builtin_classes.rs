@@ -581,6 +581,20 @@ fn fn_array_iterator_construct(
     Ok(())
 }
 
+fn fn_array_iterator_count(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let count = arg!(ed, 0).as_object().map_or(0, |object| {
+        object
+            .get_property("__rphp_iterator_values")
+            .and_then(Value::as_array)
+            .map_or(0, PhpArray::len)
+    });
+    ret!(rv, Value::long(count as i64));
+}
+
 const SPL_STORAGE_DATA: &str = "__rphp_spl_storage_data";
 const SPL_STORAGE_OBJECTS: &str = "__rphp_spl_storage_objects";
 const SPL_STORAGE_ITERATOR: &str = "__rphp_iterator_values";
@@ -1965,6 +1979,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0,
             "array"
         );
+        reg_method!(name, "count", fn_array_iterator_count, 1, 0);
     }
     let mut spl_object_storage = empty_internal_type(
         "SplObjectStorage",

@@ -93,6 +93,179 @@ fn destructor_identity(eg: &ExecutorGlobals, value: &Value) -> Option<usize> {
     })
 }
 
+#[inline]
+fn value_requires_vm_release(eg: &ExecutorGlobals, value: &Value) -> bool {
+    let value = value.dereferenced();
+    let Some(identity) = value.weak_object_identity() else {
+        return false;
+    };
+    eg.has_weak_object_release_work(identity)
+        || eg.lazy_object_state(value).is_some()
+        || value
+            .object_identity()
+            .is_some_and(|identity| eg.has_fiber_context(identity))
+        || value.as_object().is_some_and(|object| {
+            object.generator.is_some()
+                || eg
+                    .find_method_info(&object.class_name, "__destruct")
+                    .is_some()
+                || {
+                    let mut nested_object = false;
+                    object.for_each_property(|_, property| {
+                        nested_object |= matches!(
+                            property.dereferenced().value_type(),
+                            ValueType::Object | ValueType::Closure
+                        );
+                    });
+                    nested_object
+                }
+        })
+}
+
+fn value_tree_requires_vm_release(
+    eg: &ExecutorGlobals,
+    value: &Value,
+    seen_objects: &mut std::collections::HashSet<usize>,
+    seen_arrays: &mut std::collections::HashSet<usize>,
+    seen_references: &mut std::collections::HashSet<usize>,
+    seen_closures: &mut std::collections::HashSet<usize>,
+) -> bool {
+    if let Some(identity) = value.reference_identity()
+        && !seen_references.insert(identity)
+    {
+        return false;
+    }
+    let value = value.dereferenced();
+    if value_requires_vm_release(eg, value) {
+        return true;
+    }
+    if let Some(identity) = value.object_identity() {
+        if !seen_objects.insert(identity) {
+            return false;
+        }
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        let mut found = false;
+        object.for_each_property(|_, property| {
+            found |= value_tree_requires_vm_release(
+                eg,
+                property,
+                seen_objects,
+                seen_arrays,
+                seen_references,
+                seen_closures,
+            );
+        });
+        return found;
+    }
+    if value.value_type() == ValueType::Closure {
+        let Some(identity) = value.weak_object_identity() else {
+            return false;
+        };
+        if !seen_closures.insert(identity) {
+            return false;
+        }
+        let Some(closure) = value.as_closure() else {
+            return false;
+        };
+        if closure.bound_this.as_ref().is_some_and(|bound_this| {
+            value_tree_requires_vm_release(
+                eg,
+                bound_this,
+                seen_objects,
+                seen_arrays,
+                seen_references,
+                seen_closures,
+            )
+        }) {
+            return true;
+        }
+        if closure.captures.iter().any(|capture| {
+            value_tree_requires_vm_release(
+                eg,
+                capture,
+                seen_objects,
+                seen_arrays,
+                seen_references,
+                seen_closures,
+            )
+        }) {
+            return true;
+        }
+        return closure.static_vars.as_ref().is_some_and(|static_vars| {
+            static_vars.as_ref().borrow().values().any(|value| {
+                value_tree_requires_vm_release(
+                    eg,
+                    value,
+                    seen_objects,
+                    seen_arrays,
+                    seen_references,
+                    seen_closures,
+                )
+            })
+        });
+    }
+    let Some(identity) = value.array_identity() else {
+        return false;
+    };
+    if !seen_arrays.insert(identity) {
+        return false;
+    }
+    value.as_array().is_some_and(|array| {
+        array.values().any(|value| {
+            value_tree_requires_vm_release(
+                eg,
+                value,
+                seen_objects,
+                seen_arrays,
+                seen_references,
+                seen_closures,
+            )
+        })
+    })
+}
+
+fn frame_requires_vm_release(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    pending: &Value,
+) -> bool {
+    // SAFETY: callers pass the live activation that is about to be retired;
+    // its compiler-sized slot range and ownership bitmap remain valid.
+    unsafe {
+        if !(*frame).has_heap_slots {
+            return false;
+        }
+        let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
+        let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
+        let pending_identity = pending.object_identity();
+        let mut seen_objects = std::collections::HashSet::new();
+        let mut seen_arrays = std::collections::HashSet::new();
+        let mut seen_references = std::collections::HashSet::new();
+        let mut seen_closures = std::collections::HashSet::new();
+        let mut requires_release = |value: &Value| {
+            !pending_identity.is_some_and(|identity| {
+                value.dereferenced().object_identity() == Some(identity)
+            })
+                && value_tree_requires_vm_release(
+                    eg,
+                    value,
+                    &mut seen_objects,
+                    &mut seen_arrays,
+                    &mut seen_references,
+                    &mut seen_closures,
+                )
+        };
+        if total <= 64 {
+            HeapSlotIter::new((*frame).owned_heap_bitmap())
+                .any(|index| requires_release(&*base.add(index as usize)))
+        } else {
+            (0..total).any(|index| requires_release(&*base.add(index)))
+        }
+    }
+}
+
 /// Clone the saved operands of an internal Generator object that has no
 /// release sidecar of its own. Flattening these activations keeps destructor
 /// discovery iterative across arbitrarily deep `yield from` chains.
@@ -323,7 +496,13 @@ fn run_final_object_destructor_tree(
             if eg.find_method_info(&class_name, "__destruct").is_some()
                 && owner.mark_object_destructed()
             {
-                let _ = call_magic_method(eg, &owner, "__destruct", &[])?;
+                let _ = call_magic_method_from_logical_caller(
+                    eg,
+                    logical_caller,
+                    &owner,
+                    "__destruct",
+                    &[],
+                )?;
                 ran_destructor = true;
                 if eg.exception.is_some() {
                     if detach_lazy_state {
@@ -576,6 +755,31 @@ fn run_frame_destructors(
     Ok(())
 }
 
+/// Release every final object owned by a frame that an exception is leaving.
+///
+/// A throwing destructor replaces the exception that triggered the unwind,
+/// and later throwing destructors replace it in turn. Keep invoking the frame
+/// planner until every eligible object has entered its destructor; the
+/// per-object marker makes each pass advance without running one twice.
+#[cold]
+fn run_exception_unwind_destructors(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    mut pending: Value,
+) -> Result<Value, VmError> {
+    if !frame_requires_vm_release(eg, frame, &pending) {
+        return Ok(pending);
+    }
+    loop {
+        run_frame_destructors(eg, frame)?;
+        let Some(replacement) = eg.exception.take() else {
+            return Ok(pending);
+        };
+        append_replaced_exception(&replacement, &pending, eg);
+        pending = replacement;
+    }
+}
+
 pub(crate) struct PreparedValueDestructor {
     owner: Value,
     replaced_references: usize,
@@ -605,38 +809,16 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     replaced_references: usize,
 ) -> Option<PreparedValueDestructor> {
     let value = value.dereferenced();
-    let Some(identity) = value.weak_object_identity() else {
+    if value.weak_object_identity().is_none() {
         return None;
-    };
+    }
     let fiber_owned_references = value
         .object_identity()
         .map_or(0, |identity| eg.fiber_owned_object_references(identity));
     if value.weak_object_strong_count() != Some(replaced_references + fiber_owned_references) {
         return None;
     }
-    let requires_vm_release = eg.has_weak_object_release_work(identity)
-        || eg.lazy_object_state(value).is_some()
-        || value
-            .object_identity()
-            .is_some_and(|identity| eg.has_fiber_context(identity))
-        || value.as_object().is_some_and(|object| {
-            object.generator.is_some()
-                || eg
-                    .find_method_info(&object.class_name, "__destruct")
-                    .is_some()
-        })
-        || {
-            let mut nested_object = false;
-            if let Some(object) = value.as_object() {
-                object.for_each_property(|_, property| {
-                    nested_object |= matches!(
-                        property.dereferenced().value_type(),
-                        ValueType::Object | ValueType::Closure
-                    );
-                });
-            }
-            nested_object
-        };
+    let requires_vm_release = value_requires_vm_release(eg, value);
     requires_vm_release.then(|| PreparedValueDestructor {
         owner: value.clone(),
         replaced_references,
@@ -969,7 +1151,7 @@ unsafe fn cleanup_call_and_throw<'a>(
     frame: *mut ExecuteData,
     call: *mut ExecuteData,
     err: Value,
-) -> ThrowResult<'a> {
+) -> Result<ThrowResult<'a>, VmError> {
     let call_key = call as usize;
     eg.pending_named_variadic.remove(&call_key);
     eg.pending_closure_captures.remove(&call_key);
@@ -1180,6 +1362,36 @@ fn call_magic_method(
     args: &[Value],
 ) -> Result<Option<Value>, VmError> {
     call_magic_method_with_trace_site(eg, obj_val, method_name, args, false)
+}
+
+fn call_magic_method_from_logical_caller(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    obj_val: &Value,
+    method_name: &str,
+    args: &[Value],
+) -> Result<Option<Value>, VmError> {
+    let class_name = {
+        let obj = obj_val.as_object().unwrap();
+        obj.class_name.clone()
+    };
+    let full_name = format!("{}::{}", class_name.to_lowercase(), method_name);
+    let func_ptr = match eg.find_function(&full_name) {
+        Some(ptr) => ptr,
+        None => return Ok(None),
+    };
+
+    let mut call_args = Vec::with_capacity(args.len() + 1);
+    call_args.push(obj_val.clone());
+    call_args.extend_from_slice(args);
+    let result = call_function_iter_from_logical_caller(
+        eg,
+        logical_caller,
+        func_ptr,
+        call_args.len(),
+        call_args.iter(),
+    )?;
+    Ok(Some(result))
 }
 
 /// Engine-dispatched magic operations execute through a detached callback
@@ -1640,7 +1852,8 @@ fn throw_in_frame<'a>(
     eg: &mut ExecutorGlobals,
     mut frame: *mut ExecuteData,
     thrown: Value,
-) -> ThrowResult<'a> {
+) -> Result<ThrowResult<'a>, VmError> {
+    let mut thrown = thrown;
     // A clone-with expression aborts on the first escaping property error,
     // including when a handler in this same frame catches it.
     eg.clone_with_readonly_updates
@@ -1701,6 +1914,12 @@ fn throw_in_frame<'a>(
             .try_entries
             .iter()
             .filter(|entry| current_ip >= entry.try_start && current_ip < entry.try_end)
+            // Re-entering exception dispatch at the instruction immediately
+            // after a completed finally must not select that same finally a
+            // second time.
+            .filter(|entry| {
+                entry.finally_start == u32::MAX || current_ip != entry.finally_end
+            })
             .filter(|entry| {
                 entry.finally_start != 0xFFFFFFFF
                     || entry
@@ -1761,7 +1980,7 @@ fn throw_in_frame<'a>(
                 }
                 unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
                 let new_op_array = unsafe { (*frame).op_array() };
-                return ThrowResult::Handled(frame, new_op_array);
+                return Ok(ThrowResult::Handled(frame, new_op_array));
             } else if entry.finally_start != 0xFFFFFFFF {
                 while frame != search_frame {
                     let prev = unsafe { (*frame).prev_execute_data };
@@ -1796,7 +2015,7 @@ fn throw_in_frame<'a>(
                     .push(thrown.clone());
                 unsafe { (*frame).opline = base_ptr.add(entry.finally_start as usize) };
                 let new_op_array = unsafe { (*frame).op_array() };
-                return ThrowResult::Handled(frame, new_op_array);
+                return Ok(ThrowResult::Handled(frame, new_op_array));
             }
         }
 
@@ -1804,6 +2023,26 @@ fn throw_in_frame<'a>(
         if prev.is_null() {
             break;
         }
+        // No handler in this activation can observe the pending exception.
+        // Retire its object lifetimes before considering the caller because a
+        // throwing destructor replaces the exception and can therefore select
+        // a different catch clause in that caller.
+        thrown = run_exception_unwind_destructors(eg, search_frame, thrown)?;
+        eg.current_execute_data.set(prev);
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        eg.discard_generic_member_call(search_frame as usize);
+        #[cfg(feature = "php-generics-reified")]
+        {
+            eg.discard_active_reified_binding_scope(search_frame as usize);
+        }
+        // SAFETY: `search_frame` is the current live activation; its pending
+        // calls and compiler-sized slots are retired before the frame itself.
+        unsafe {
+            cleanup_pending_calls(eg, search_frame);
+            cleanup_frame_slots(search_frame);
+        }
+        pop_vm_call_frame(eg, search_frame);
+        frame = prev;
         search_frame = prev;
     }
 
@@ -1816,5 +2055,5 @@ fn throw_in_frame<'a>(
             }
         }
     }
-    ThrowResult::Unhandled(thrown)
+    Ok(ThrowResult::Unhandled(thrown))
 }

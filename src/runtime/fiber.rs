@@ -316,12 +316,12 @@ impl FiberRuntime {
                         suspension.frame
                     }
                     FiberInput::Throw(exception) => {
-                        inject_suspended_exception(eg, suspension.frame, exception)
+                        inject_suspended_exception(eg, suspension.frame, exception)?
                             .unwrap_or(suspension.frame)
                     }
                     FiberInput::ForceClose(exit) => {
                         (*context).force_closing = true;
-                        inject_suspended_exception(eg, suspension.frame, exit)
+                        inject_suspended_exception(eg, suspension.frame, exit)?
                             .unwrap_or(suspension.frame)
                     }
                     FiberInput::Start(_) => unreachable!(),

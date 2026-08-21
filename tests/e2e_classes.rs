@@ -663,6 +663,111 @@ try {
 }
 
 #[test]
+fn exception_unwind_runs_final_local_destructors_before_the_callers_catch() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class UnwindDestructor {
+    public function __construct(private string $name) {}
+    public function __destruct() { echo "drop:$this->name|"; }
+}
+function failWithLocals() {
+    $first = new UnwindDestructor('first');
+    $second = new UnwindDestructor('second');
+    throw new Exception('body');
+}
+try {
+    failWithLocals();
+} catch (Throwable $error) {
+    echo 'catch:', $error->getMessage();
+}
+"#,
+        ),
+        "drop:first|drop:second|catch:body"
+    );
+}
+
+#[test]
+fn exception_unwind_chains_replacement_destructor_exceptions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ThrowingUnwindDestructor {
+    public function __construct(private string $name) {}
+    public function __destruct() {
+        echo "drop:$this->name|";
+        throw new Error("destructor:$this->name");
+    }
+}
+function failWithThrowingLocals() {
+    $first = new ThrowingUnwindDestructor('first');
+    $second = new ThrowingUnwindDestructor('second');
+    throw new Exception('body');
+}
+try {
+    failWithThrowingLocals();
+} catch (Exception $error) {
+    echo 'wrong-catch';
+} catch (Error $error) {
+    echo 'catch:', $error->getMessage(),
+        '|previous:', $error->getPrevious()?->getMessage(),
+        '|oldest:', $error->getPrevious()?->getPrevious()?->getMessage();
+}
+"#,
+        ),
+        "drop:first|drop:second|catch:destructor:second|previous:destructor:first|oldest:body"
+    );
+}
+
+#[test]
+fn exception_unwind_keeps_a_local_object_that_still_has_an_outer_owner() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RetainedUnwindDestructor {
+    public function __destruct() { echo 'drop'; }
+}
+function failWithSharedObject($object) {
+    throw new Exception('body');
+}
+$shared = new RetainedUnwindDestructor();
+try {
+    failWithSharedObject($shared);
+} catch (Throwable $error) {
+    echo 'catch|';
+}
+"#,
+        ),
+        "catch|drop"
+    );
+}
+
+#[test]
+fn exception_unwind_releases_destructors_nested_in_plain_object_containers() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class NestedUnwindDestructor {
+    public function __destruct() { echo 'nested|'; }
+}
+class PlainUnwindOwner { public array $items; }
+function failWithNestedObject() {
+    $owner = new PlainUnwindOwner();
+    $owner->items = ['child' => new NestedUnwindDestructor()];
+    throw new Exception('body');
+}
+try {
+    failWithNestedObject();
+} catch (Throwable $error) {
+    echo $error->getMessage();
+}
+"#,
+        ),
+        "nested|body"
+    );
+}
+
+#[test]
 fn destructors_are_not_suppressed_when_allocator_addresses_are_reused() {
     assert_eq!(
         run_php(

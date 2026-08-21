@@ -43,7 +43,7 @@ fn op_nullsafe_check<'a>(
                 .offset_from(op_array.instructions.as_ptr())
                 as usize;
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -77,7 +77,7 @@ fn op_clone_obj<'a>(
             let instruction_index = (opline as *const Instruction)
                 .offset_from(op_array.instructions.as_ptr()) as usize;
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error) {
+            return Ok(match throw_in_frame(eg, frame, error)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -94,7 +94,7 @@ fn op_clone_obj<'a>(
                 .unwrap_or_else(|| source.clone())
         };
         if let Some(exception) = eg.exception.take() {
-            return Ok(match throw_in_frame(eg, frame, exception) {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
                     ColdResult::NewFrame(new_frame, new_op_array)
                 }
@@ -124,7 +124,7 @@ fn op_clone_obj<'a>(
                         ),
                     );
                     drop(obj);
-                    match throw_in_frame(eg, frame, err) {
+                    match throw_in_frame(eg, frame, err)? {
                         ThrowResult::Handled(nf, no) => {
                             return Ok(ColdResult::NewFrame(nf, no));
                         }
@@ -185,7 +185,7 @@ fn op_clone_obj<'a>(
 
     // If __clone threw an exception, propagate it
         if let Some(exc) = eg.exception.take() {
-            match throw_in_frame(eg, frame, exc) {
+            match throw_in_frame(eg, frame, exc)? {
                 ThrowResult::Handled(nf, no) => return Ok(ColdResult::NewFrame(nf, no)),
                 ThrowResult::Unhandled(t) => return Ok(ColdResult::Unhandled(t)),
             }
@@ -236,7 +236,7 @@ fn op_validate_clone_with<'a>(
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
     attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-    Ok(match throw_in_frame(eg, frame, error) {
+    Ok(match throw_in_frame(eg, frame, error)? {
         ThrowResult::Handled(new_frame, new_op_array) => {
             ColdResult::NewFrame(new_frame, new_op_array)
         }

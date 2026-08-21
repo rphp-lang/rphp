@@ -1765,6 +1765,21 @@ fn array_iterator_and_array_object_expose_distinct_traversal_contracts() {
 }
 
 #[test]
+fn array_iterator_and_array_object_count_their_stored_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CountingArrayIterator extends ArrayIterator {}
+$iterator = new CountingArrayIterator(['first' => 1, 'second' => 2]);
+$object = new ArrayObject([10, 20, 30]);
+echo $iterator->count(), '|', $object->count();
+"#,
+        ),
+        "2|3"
+    );
+}
+
+#[test]
 fn error_and_exception_handler_stacks_restore_previous_callbacks() {
     assert_eq!(
         run_php(
