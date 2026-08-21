@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `63f1cffe`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,803 pass, 1,496 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 71.768% and the whole-corpus rate is 67.923%; 4,706 of
+5,299 attempted cases reach runtime (88.809%). Relative to exact base
+`4a1aaebe`, the pass-set delta is +3/-0: every prior pass remains a pass. The
+only other failure-category transition is
+`Zend/tests/attributes/delayed_target_validation/validator_Deprecated.phpt`,
+which advances from the former runtime validation failure to its independent
+Reflection-enum output mismatch and remains a visible failure. Two sequential
+final full runs have byte-identical merged manifests and summaries. Their
+SHA-256 values are
+`50ad4604c8b9b010c44168b1c253618a251e2661f500a6bd802ca407283c3d04`
+and `17bf0d9215c0b1511dea6ef47cbf18a41c551e2080d2a1514aa81f1b5cdbb9c0`.
+
+The built-in `Deprecated` attribute now enforces its PHP 8.5 declaration
+contract during compilation. It accepts functions, methods, constants, class
+constants and traits, but rejects properties, parameters and enum cases with
+the canonical allowed-target diagnostic. Ordinary and anonymous classes,
+interfaces and enums retain their distinct `Cannot apply #[\Deprecated]`
+diagnostics. Namespace and import resolution distinguish the built-in from a
+same-named user attribute. `Deprecated` is non-repeatable;
+`DelayedTargetValidation` defers target and class-form checks while still
+rejecting repetition. Reflection instantiation performs those deferred
+class-form checks against the declaration owner, rejecting delayed classes,
+interfaces and enums while allowing traits.
+
+One original E2E regression covers compile-time targets and repetition, valid
+traits, all delayed forms, local names and delayed Reflection instantiation;
+all 82 Reflection E2E tests pass. The complete 204-case adjacent
+`Zend/tests/attributes` run loses no prior pass, and all 47 existing
+`attributes/deprecated` controls remain green. The three exact full-corpus
+additions are
+`Zend/tests/attributes/constants/constant_listed_as_target-internal.phpt`,
+`constants/not_repeatable-internal.phpt` and
+`delayed_target_validation/with_Deprecated.phpt`. The delayed validator test
+now emits the expected `Deprecated` errors for its class, interface and enum;
+its remaining mismatch is the separately visible Reflection rendering of an
+enum and internal enum cases.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,614 unsafe blocks and 289 unsafe
+functions. On CPU 2 with the performance governor, four warmups per binary and
+32 balanced ABBA/BAAB groups with no removed observations, compilation of
+1,000 ordinary typed function declarations retains output `ok`. The 64
+observations per binary measure baseline p10/median/p90
+0.183092/0.185286/0.187303 seconds and candidate
+0.182780/0.185470/0.188614 seconds: +0.099% independently and +0.177% by the
+paired-group median, whose p10/p90 is -0.863%/+1.785%. Both medians remain
+below the five-percent regression ceiling; no speedup is claimed. The exact
+base and candidate binary SHA-256 values are
+`b29f58f9d5dbd3ddd86e9f35b74d4476462b559964e9113d1b4f07a0661cc814`
+and `094a285dc58b6f7c5d698e6ac942393c2a6b429ab9353f50852dfb203a98c9fc`.
+
+In the preceding Attribute-target checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `4a1aaebe`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,800 pass, 1,499 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
