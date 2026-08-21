@@ -8,6 +8,56 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `3f05d6a8`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,806 pass, 1,493 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 71.825% and the whole-corpus rate is 67.976%; 4,706 of
+5,299 attempted cases reach runtime (88.809%). Relative to exact base
+`def82dfa`, the pass-set delta is +2/-0: every prior pass remains a pass and
+there are no other status or failure-category transitions. Two sequential
+final full runs have byte-identical merged manifests and summaries. Their
+SHA-256 values are
+`8b23b13c1c0544052fe1c2a200ebeafdf7dcf7f63203f098b4ea1c73cc7ef233`
+and `bab95126e974764355d53182cf058b4a2015a76dbbf202f60728ca16bdae0547`.
+
+User-defined enum cases now participate in the existing class-constant
+Reflection surface. `ReflectionClass::getConstants()` lists canonical case
+singletons before ordinary constants, `getConstant()` preserves their object
+identity, and modifier filtering treats cases as public but not final.
+`getReflectionConstants()`, `getReflectionConstant()` and direct
+`ReflectionClassConstant` construction expose the canonical declaring enum and
+case attributes. Reflection reads each singleton from the existing enum static
+storage slot rather than constructing a replacement. Cases remain absent from
+`getDefaultProperties()`, matching their constant rather than property role.
+
+One original E2E regression covers namespaced unbacked and string-backed enums,
+case ordering, an ordinary enum constant, singleton identity, missing lookups,
+public/final filters, reflected objects, case attributes and default-property
+exclusion; all 84 Reflection E2E tests pass. Its PHP 8.5 and RPHP outputs are
+byte-identical with SHA-256
+`fe91346008e49bc476f1f0ac7f6126d974cee115f7ffe2b96bbf2d261e0d206a`.
+The complete 356-case adjacent `Zend/tests/attributes` plus `Zend/tests/enum`
+audit has only the two full-corpus additions:
+`Zend/tests/enum/case-attributes.phpt` and
+`Zend/tests/enum/reflectionclass.phpt`. `ReflectionEnum` and its specialized
+case classes, the broader `ReflectionClassConstant` method inventory, enum
+property-object presentation and refcount debug output remain separate visible
+gaps.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,614 unsafe blocks and 289 unsafe
+functions. No separate performance or layout gate applies: the change is
+confined to explicitly invoked cold Reflection handlers and reuses existing
+enum storage; enum compilation, ordinary case access, dispatch, writes and
+runtime layouts are unchanged. The exact base and candidate binary SHA-256
+values are
+`dd6643ff7c750594aba103d0f9b3c5caa407fec2f1cefb7b988574a51e0be17f`
+and `6b9247121c2fbc9eb04338c59a765ccc928f3eef3f672ffd688d7925104cb58a`.
+
+In the preceding user-enum Reflection-string checkpoint, the measured AMD64
+PHP 8.5 contract was pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `def82dfa`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,804 pass, 1,495 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
