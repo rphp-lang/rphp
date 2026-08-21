@@ -8,6 +8,59 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `81b0aca3`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,863 pass, 1,436 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.901% and the whole-corpus rate is 68.994%; 4,733 of
+5,299 attempted cases reach runtime (89.319%). Relative to exact base
+`639cf6e3`, the pass-set delta is +7/-0:
+`Zend/tests/generators/bug65161.phpt`, `Zend/tests/gh8841.phpt`,
+`Zend/tests/magic_methods/bug70967.phpt`,
+`Zend/tests/namespaces/bug77376.phpt`,
+`Zend/tests/namespaces/ns_092.phpt`,
+`Zend/tests/use_function/no_global_fallback.phpt` and
+`Zend/tests/use_function/no_global_fallback2.phpt` become exact passes. Every
+previous pass remains a pass, and there are no other status or
+failure-category transitions. Two sequential final runs have byte-identical
+merged manifests and summaries. Their manifest and summary SHA-256 values are
+`5f892873e1f16b9f80403f3d23bd6c18184698caff22fc9e7979e9774280fbab`
+and `8bc3412bdae180ea75396bdfc4be0ada88c7f2c23f7c6754d92fda0d1850efad`.
+
+Ordinary direct named calls now attach their source line to `InitFcall`, where
+function resolution can fail before argument evaluation or `DoFcall`. The
+existing exception path therefore records the undefined-function origin in
+the actual function, generator, namespace, shutdown callback or magic-method
+frame, while the established call-site metadata retains each caller in the
+trace. This also completes the direct `echo` `__toString()` trace shape
+exercised by `bug70967.phpt`. Indirect, dynamic and first-class callable gaps
+remain separate contracts; this checkpoint does not claim them.
+
+One original E2E regression covers both an ordinary caught undefined call and
+an undefined call dispatched through `__toString()`, including exact files,
+lines and stored traces. The compiler reuses the existing sparse source map
+and adds no opcode, instruction-layout field, runtime special case,
+dependency or unsafe block. The production unsafe inventory remains 1,613
+blocks, 289 unsafe functions and 312 SAFETY annotations. All five Cargo
+configurations, all-features/all-targets, formatting, PHPT runner self-test,
+unsafe self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3.
+
+Twenty-one alternating CPU-pinned default-release pairs with JIT and quick
+loops disabled exercised five million successful direct calls per run.
+Baseline p10/median/p90/mean was
+0.331634/0.334895/0.360490/0.339787 seconds and candidate
+0.334319/0.336718/0.362870/0.343275 seconds. The independent median ratio is
+1.0054 and paired p10/median/p90 ratios are 0.9661/1.0122/1.0691. A second
+control compiled and evaluated 5,000 distinct direct call sites per run:
+baseline p10/median/p90/mean was
+0.227856/0.229909/0.263390/0.242841 seconds and candidate
+0.227276/0.230299/0.245289/0.236651 seconds, with independent median ratio
+1.0017 and paired p10/median/p90 ratios 0.9313/0.9979/1.0265. Both medians are
+below the +5% gate and every run retained its exact checksum. The exact
+candidate binary SHA-256 is
+`46af8d44f79877f0590c86e68fbb93c236ebb31de6b98e1fc77e143b65e24d15`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `639cf6e3`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,856 pass, 1,443 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
