@@ -2091,16 +2091,79 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::AssignConcat => {
-                report_array_to_string_conversion!(unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                });
-                report_array_to_string_conversion!(unsafe {
-                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
-                });
+                // SAFETY: both named operands are initialized in this live
+                // frame. Checked values are cloned before user-code re-entry;
+                // the ordinary path acquires its own bounded unsafe region.
+                let checked_operands = unsafe {
+                    let left = (&*(*frame).get_op_ptr(
+                        opline.op1 as u32,
+                        opline.op1_type,
+                        op_array,
+                    ))
+                    .dereferenced();
+                    let right = (&*(*frame).get_op_ptr(
+                        opline.op2 as u32,
+                        opline.op2_type,
+                        op_array,
+                    ))
+                    .dereferenced();
+                    let checked = [left, right].into_iter().any(|value| {
+                        matches!(
+                            value.value_type(),
+                            ValueType::Array | ValueType::Object | ValueType::Closure
+                        )
+                    });
+                    checked.then(|| {
+                        let left = left.clone();
+                        let right = if opline.op1_type == opline.op2_type
+                            && opline.op1 == opline.op2
+                        {
+                            left.clone()
+                        } else {
+                            (&*(*frame).get_op_ptr(
+                                opline.op2 as u32,
+                                opline.op2_type,
+                                op_array,
+                            ))
+                            .clone()
+                        };
+                        (left, right)
+                    })
+                };
+                if let Some((left, right)) = checked_operands {
+                    // Object conversion may re-enter user code and mutate a
+                    // source CV. Snapshot both already-evaluated operands before
+                    // invoking it, then commit only after both conversions pass.
+                    let left = prepare_concat_operand_string(
+                        eg, frame, op_array, opline, &left, true,
+                    )?;
+                    resume_pending_exception!();
+                    let Some(left) = left else {
+                        unreachable!("failed concat conversion installs an exception")
+                    };
+                    let right = prepare_concat_operand_string(
+                        eg, frame, op_array, opline, &right, true,
+                    )?;
+                    resume_pending_exception!();
+                    let Some(right) = right else {
+                        unreachable!("failed concat conversion installs an exception")
+                    };
+                    // SAFETY: conversion succeeded with detached strings. The
+                    // destination remains the live compound-assignment slot;
+                    // the constrained write is validated before replacement.
+                    unsafe {
+                        let prepared = prepare_reference_write!(
+                            opline.op1 as u32,
+                            Value::string(left + &right)
+                        );
+                        let destination =
+                            (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                        slot_set(destination, prepared);
+                    }
+                } else {
                 // SAFETY: all operands and the optional reference-owning CV
-                // belong to this live frame. The constrained path computes
-                // and validates a detached result before mutating the target;
-                // the ordinary path preserves its existing COW discipline.
+                // belong to this live frame. The ordinary path performs no
+                // user-code conversion and preserves its existing COW rules.
                 unsafe {
                 if opline.op1_type == OpType::Cv
                     && !{
@@ -2172,6 +2235,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let mut new_s = lhs_str;
                     new_s.push_str(&rhs_str);
                     slot_set(dest, Value::string(new_s));
+                }
                 }
                 }
             }
@@ -3039,13 +3103,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Concat => {
-                report_array_to_string_conversion!(unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                });
-                report_array_to_string_conversion!(unsafe {
-                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
-                });
-                op_concat(eg, frame, op_array, opline)?;
+                let compound = opline._pad & ARITHMETIC_COMPOUND_ASSIGN != 0;
+                op_concat(eg, frame, op_array, opline, compound)?;
+                resume_pending_exception!();
             }
 
             OpCode::Spaceship => {

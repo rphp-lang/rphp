@@ -919,3 +919,190 @@ try { echo [1]; } catch (Exception $error) { echo "\n", $error->getMessage(); }
         "good|good\nObject of class stdClass could not be converted to string\nInvalidOutput::__toString(): Return value must be of type string\nArray to string conversion",
     );
 }
+
+#[test]
+fn concatenation_converts_arrays_and_objects_in_php_85_operator_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo "warn:$level:$message\n";
+    if (($GLOBALS['mutateWarningRight'] ?? false) === true) {
+        $GLOBALS['binaryRight'] = 'mutated-warning';
+    }
+});
+
+class GoodConcat {
+    public function __toString(): string {
+        echo "good-call\n";
+        return 'good';
+    }
+}
+
+class InvalidConcat {
+    public function __toString() { return []; }
+}
+
+class WeakScalarConcat {
+    public function __toString() { return 7; }
+}
+
+class LeftReentrantConcat {
+    public function __toString(): string {
+        global $slot;
+        $slot = 'mutated-left';
+        return 'left-object';
+    }
+}
+
+class RightReentrantConcat {
+    public function __toString(): string {
+        global $slot;
+        $slot = 'mutated-right';
+        return 'right-object';
+    }
+}
+
+function probeConcat(string $label, Closure $operation): void {
+    echo $label, ":\n";
+    try {
+        var_dump($operation());
+    } catch (Throwable $error) {
+        echo get_class($error), ':', $error->getMessage(), "\n";
+    }
+}
+
+$plain = new stdClass;
+$good = new GoodConcat;
+$closure = function () {};
+probeConcat('binary-plain-left-array', fn() => $plain . []);
+probeConcat('binary-array-plain-right', fn() => [] . $plain);
+probeConcat('binary-closure-left-array', fn() => $closure . []);
+probeConcat('binary-good-left-array', fn() => $good . []);
+probeConcat('binary-invalid-left', fn() => new InvalidConcat . '-tail');
+probeConcat('binary-weak-scalar-left', fn() => new WeakScalarConcat . '-tail');
+
+$binaryRight = 'tail';
+$mutateWarningRight = true;
+$result = [] . $binaryRight;
+$mutateWarningRight = false;
+echo "binary-warning-reentrant:$result|after=$binaryRight\n";
+
+$slot = $plain;
+try {
+    $slot .= [];
+} catch (Throwable $error) {
+    echo 'assign-plain-left-array:', get_class($error), ':', $error->getMessage(),
+        '|same=', $slot === $plain ? 'yes' : 'no', "\n";
+}
+
+$slot = [];
+try {
+    $slot .= $plain;
+} catch (Throwable $error) {
+    echo 'assign-array-left-plain:', get_class($error), ':', $error->getMessage(),
+        '|array=', is_array($slot) ? 'yes' : 'no', "\n";
+}
+
+$slot = $good;
+$slot .= [];
+echo 'assign-good-left-array:', $slot, "\n";
+
+$slot = [];
+$slot .= $good;
+echo 'assign-array-left-good:', $slot, "\n";
+
+$slot = $plain;
+try {
+    $result = ($slot .= []);
+} catch (Throwable $error) {
+    echo 'assign-expression-plain-left-array:', get_class($error), ':', $error->getMessage(),
+        '|same=', $slot === $plain ? 'yes' : 'no', "\n";
+}
+
+$slot = new LeftReentrantConcat;
+$slot .= '-tail';
+echo 'assign-left-reentrant:', $slot, "\n";
+
+$slot = 'head-';
+$slot .= new RightReentrantConcat;
+echo 'assign-right-reentrant:', $slot, "\n";
+
+$slot = new LeftReentrantConcat;
+$alias =& $slot;
+$slot .= '-tail';
+echo 'assign-left-reference-reentrant:', $slot, '|', $alias, "\n";
+
+$slot = 'head-';
+$alias =& $slot;
+$slot .= new RightReentrantConcat;
+echo 'assign-right-reference-reentrant:', $slot, '|', $alias, "\n";
+"#,
+        ),
+        concat!(
+            "binary-plain-left-array:\n",
+            "warn:2:Array to string conversion\n",
+            "Error:Object of class stdClass could not be converted to string\n",
+            "binary-array-plain-right:\n",
+            "warn:2:Array to string conversion\n",
+            "Error:Object of class stdClass could not be converted to string\n",
+            "binary-closure-left-array:\n",
+            "warn:2:Array to string conversion\n",
+            "Error:Object of class Closure could not be converted to string\n",
+            "binary-good-left-array:\n",
+            "warn:2:Array to string conversion\n",
+            "good-call\n",
+            "string(9) \"goodArray\"\n",
+            "binary-invalid-left:\n",
+            "TypeError:InvalidConcat::__toString(): Return value must be of type string, array returned\n",
+            "binary-weak-scalar-left:\n",
+            "string(6) \"7-tail\"\n",
+            "warn:2:Array to string conversion\n",
+            "binary-warning-reentrant:Arraymutated-warning|after=mutated-warning\n",
+            "assign-plain-left-array:Error:Object of class stdClass could not be converted to string|same=yes\n",
+            "warn:2:Array to string conversion\n",
+            "assign-array-left-plain:Error:Object of class stdClass could not be converted to string|array=yes\n",
+            "good-call\n",
+            "warn:2:Array to string conversion\n",
+            "assign-good-left-array:goodArray\n",
+            "warn:2:Array to string conversion\n",
+            "good-call\n",
+            "assign-array-left-good:Arraygood\n",
+            "assign-expression-plain-left-array:Error:Object of class stdClass could not be converted to string|same=yes\n",
+            "assign-left-reentrant:left-object-tail\n",
+            "assign-right-reentrant:head-right-object\n",
+            "assign-left-reference-reentrant:left-object-tail|left-object-tail\n",
+            "assign-right-reference-reentrant:head-right-object|head-right-object\n",
+        )
+    );
+}
+
+#[test]
+fn strict_tostring_scalar_return_is_rejected_by_concatenation() {
+    assert_eq!(
+        run_php(
+            r#"<?php declare(strict_types=1);
+class StrictScalarConcat {
+    public function __toString() { return 7; }
+}
+class StrictTrueConcat {
+    public function __toString() { return true; }
+}
+try {
+    echo new StrictScalarConcat . '-tail';
+} catch (Throwable $error) {
+    echo get_class($error), ':', $error->getMessage(), "\n";
+}
+try {
+    echo new StrictTrueConcat . '-tail';
+} catch (Throwable $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+        ),
+        concat!(
+            "TypeError:StrictScalarConcat::__toString(): Return value must be of type string, int returned\n",
+            "TypeError:StrictTrueConcat::__toString(): Return value must be of type string, true returned",
+        ),
+    );
+}
