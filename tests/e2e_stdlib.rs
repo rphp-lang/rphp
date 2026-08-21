@@ -169,6 +169,47 @@ try {
 }
 
 #[test]
+fn assert_source_formats_typed_class_constants_without_running_the_class_body() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface LeftContract {}
+interface RightContract {}
+function printAssertion(Throwable $error) { echo $error->getMessage(), "\n--\n"; }
+
+try {
+    assert(false && new class {
+        final protected const string LABEL = 'value';
+        private const float RATE = 1.5;
+        public const (LeftContract&RightContract)|null VALUE = null;
+    });
+} catch (Throwable $error) { printAssertion($error); }
+
+try {
+    assert(function () {
+        class LocalConstants {
+            const ENABLED = true;
+        }
+    } && false);
+} catch (Throwable $error) { printAssertion($error); }
+"#,
+        ),
+        concat!(
+            "assert(false && new class {\n",
+            "    protected const string LABEL = 'value';\n",
+            "    private const float RATE = 1.5;\n",
+            "    public const LeftContract&RightContract|null VALUE = null;\n",
+            "})\n--\n",
+            "assert(function () {\n",
+            "    class LocalConstants {\n",
+            "        public const ENABLED = true;\n",
+            "    }\n\n",
+            "} && false)\n--\n",
+        )
+    );
+}
+
+#[test]
 fn assert_options_preserve_request_local_state_and_callback_contract() {
     assert_eq!(
         run_php(

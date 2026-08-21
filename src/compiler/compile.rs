@@ -197,6 +197,65 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
         Some(declaration)
     }
 
+    fn render_class_constant(constant: &ClassConstant) -> Option<String> {
+        if !constant.attributes.is_empty() {
+            return None;
+        }
+        let mut declaration = format!("{} const", visibility_source(constant.visibility));
+        if let Some(hint) = &constant.type_hint {
+            declaration.push(' ');
+            declaration.push_str(&render_type_hint(hint)?);
+        }
+        declaration.push(' ');
+        declaration.push_str(&constant.name);
+        declaration.push_str(" = ");
+        declaration.push_str(&render(&constant.value, 0, false)?);
+        declaration.push(';');
+        // PHP's assertion AST printer does not retain the final class-constant
+        // flag even though ordinary declaration metadata does.
+        Some(declaration)
+    }
+
+    fn render_class_body(
+        properties: &[ClassProperty],
+        constants: &[ClassConstant],
+    ) -> Option<String> {
+        // Separate AST vectors do not retain mixed declaration ordering, so
+        // decline synthesis instead of publishing a reordered description.
+        if !properties.is_empty() && !constants.is_empty() {
+            return None;
+        }
+        if constants
+            .windows(2)
+            .any(|pair| pair[0].line == pair[1].line)
+        {
+            // One declaration may contain several comma-separated constants,
+            // but the current AST no longer retains that grouping.
+            return None;
+        }
+        let members = if constants.is_empty() {
+            properties
+                .iter()
+                .map(render_property)
+                .collect::<Option<Vec<_>>>()?
+        } else {
+            constants
+                .iter()
+                .map(render_class_constant)
+                .collect::<Option<Vec<_>>>()?
+        };
+        let body = members
+            .iter()
+            .map(|member| indent_source(member, 4))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(if body.is_empty() {
+            "{\n}".to_string()
+        } else {
+            format!("{{\n{body}\n}}")
+        })
+    }
+
     fn indent_source(source: &str, spaces: usize) -> String {
         let indent = " ".repeat(spaces);
         source
@@ -249,26 +308,12 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 && !*is_final
                 && !*is_readonly
                 && !*allow_dynamic_properties
-                && constants.is_empty()
                 && methods.is_empty()
                 && uses.is_empty()
                 && trait_aliases.is_empty()
                 && generic_params.is_empty() =>
             {
-                let properties = properties
-                    .iter()
-                    .map(render_property)
-                    .collect::<Option<Vec<_>>>()?;
-                let body = properties
-                    .iter()
-                    .map(|property| indent_source(property, 4))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let body = if body.is_empty() {
-                    "{\n}".to_string()
-                } else {
-                    format!("{{\n{body}\n}}")
-                };
+                let body = render_class_body(properties, constants)?;
                 Some(format!("class {name} {body}"))
             }
             _ => None,
@@ -344,7 +389,6 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 trait_aliases,
                 ..
             } if !*allow_dynamic_properties
-                && constants.is_empty()
                 && methods.is_empty()
                 && uses.is_empty()
                 && trait_aliases.is_empty()
@@ -373,21 +417,8 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                             .join(", ")
                     )
                 };
-                let properties = properties
-                    .iter()
-                    .map(render_property)
-                    .collect::<Option<Vec<_>>>()?;
-                let body = properties
-                    .iter()
-                    .map(|property| indent_source(property, 4))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let body = render_class_body(properties, constants)?;
                 let readonly = if *is_readonly { "readonly " } else { "" };
-                let body = if body.is_empty() {
-                    "{\n}".to_string()
-                } else {
-                    format!("{{\n{body}\n}}")
-                };
                 (
                     format!(
                         "new {readonly}class{}{}{} {body}",
