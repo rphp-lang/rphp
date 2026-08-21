@@ -4434,11 +4434,13 @@ fn fn_class_implements(
         return Ok(());
     }
 
+    let mut project_stringable = false;
     let mut result = PhpArray::new();
     let mut classes = vec![class_name];
     let mut interfaces = Vec::new();
     while let Some(class_name) = classes.pop() {
         if let Some(class) = eg.find_class(&class_name) {
+            project_stringable |= !class.is_trait && eg.class_contributes_stringable(class);
             interfaces.extend(class.implements.iter().cloned());
             if let Some(parent) = &class.parent {
                 classes.push(parent.clone());
@@ -4446,13 +4448,21 @@ fn fn_class_implements(
         }
     }
     while let Some(interface_name) = interfaces.pop() {
-        if result.get_str(&interface_name).is_some() {
+        let reported_name = eg
+            .find_class(&interface_name)
+            .filter(|interface| interface.name.eq_ignore_ascii_case("Stringable"))
+            .map_or(interface_name.as_str(), |_| "Stringable");
+        if result.get_str(reported_name).is_some() {
             continue;
         }
-        result.set_str(&interface_name, Value::string(interface_name.clone()));
+        result.set_str(reported_name, Value::string(reported_name));
         if let Some(interface) = eg.find_class(&interface_name) {
+            project_stringable |= eg.class_contributes_stringable(interface);
             interfaces.extend(interface.implements.iter().cloned());
         }
+    }
+    if project_stringable && result.get_str("Stringable").is_none() {
+        result.set_str("Stringable", Value::string("Stringable"));
     }
     ret!(rv, Value::array(result));
 }

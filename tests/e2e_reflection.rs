@@ -52,6 +52,78 @@ fn reflection_class_get_interfaces_and_traits_return_named_reflections() {
 }
 
 #[test]
+fn implicit_stringable_relationship_is_projected_by_reflection_and_class_implements() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface PlainMarker {}
+interface OwnStringInterface { public function __toString(): string; }
+interface ChildStringInterface extends PlainMarker, OwnStringInterface {}
+trait StringTrait { public function __toString(): string { return 'trait'; } }
+abstract class AbstractString { abstract public function __toString(): string; }
+class DirectString implements PlainMarker {
+    public function __toString(): string { return 'direct'; }
+}
+class ParentString { public function __toString(): string { return 'parent'; } }
+class ChildString extends ParentString implements PlainMarker {}
+class ExplicitString implements Stringable, PlainMarker {
+    public function __toString(): string { return 'explicit'; }
+}
+abstract class LowercaseString implements stringable {}
+class_alias(Stringable::class, 'StringableProjectionAlias');
+abstract class AliasedString implements StringableProjectionAlias {}
+class ViaStringInterface implements OwnStringInterface {
+    public function __toString(): string { return 'interface'; }
+}
+class ViaStringTrait { use StringTrait; }
+
+foreach ([
+    PlainMarker::class,
+    OwnStringInterface::class,
+    ChildStringInterface::class,
+    AbstractString::class,
+    DirectString::class,
+    ParentString::class,
+    ChildString::class,
+    ExplicitString::class,
+    LowercaseString::class,
+    AliasedString::class,
+    ViaStringInterface::class,
+    ViaStringTrait::class,
+] as $name) {
+    $reflection = new ReflectionClass($name);
+    $implemented = class_implements($name);
+    echo $name,
+        '|names=', json_encode($reflection->getInterfaceNames()),
+        '|maps=', json_encode(array_keys($reflection->getInterfaces())),
+        '|implements=', (int) isset($implemented['Stringable']), ',', count($implemented),
+        '|is_a=', (int) is_a($name, Stringable::class, true),
+        "\n";
+}
+echo 'trait=', (int) is_a(StringTrait::class, Stringable::class, true), ':',
+    json_encode((new ReflectionClass(StringTrait::class))->getInterfaceNames()), ':',
+    json_encode(class_implements(StringTrait::class));
+"#,
+        ),
+        concat!(
+            "PlainMarker|names=[]|maps=[]|implements=0,0|is_a=0\n",
+            "OwnStringInterface|names=[\"Stringable\"]|maps=[\"Stringable\"]|implements=1,1|is_a=1\n",
+            "ChildStringInterface|names=[\"PlainMarker\",\"OwnStringInterface\",\"Stringable\"]|maps=[\"PlainMarker\",\"OwnStringInterface\",\"Stringable\"]|implements=1,3|is_a=1\n",
+            "AbstractString|names=[\"Stringable\"]|maps=[\"Stringable\"]|implements=1,1|is_a=1\n",
+            "DirectString|names=[\"PlainMarker\",\"Stringable\"]|maps=[\"PlainMarker\",\"Stringable\"]|implements=1,2|is_a=1\n",
+            "ParentString|names=[\"Stringable\"]|maps=[\"Stringable\"]|implements=1,1|is_a=1\n",
+            "ChildString|names=[\"Stringable\",\"PlainMarker\"]|maps=[\"Stringable\",\"PlainMarker\"]|implements=1,2|is_a=1\n",
+            "ExplicitString|names=[\"Stringable\",\"PlainMarker\"]|maps=[\"Stringable\",\"PlainMarker\"]|implements=1,2|is_a=1\n",
+            "LowercaseString|names=[\"Stringable\"]|maps=[\"Stringable\"]|implements=1,1|is_a=1\n",
+            "AliasedString|names=[\"Stringable\"]|maps=[\"Stringable\"]|implements=1,1|is_a=1\n",
+            "ViaStringInterface|names=[\"OwnStringInterface\",\"Stringable\"]|maps=[\"OwnStringInterface\",\"Stringable\"]|implements=1,2|is_a=1\n",
+            "ViaStringTrait|names=[\"Stringable\"]|maps=[\"Stringable\"]|implements=1,1|is_a=1\n",
+            "trait=0:[]:[]",
+        ),
+    );
+}
+
+#[test]
 fn reflection_class_get_constructor_reports_inherited_or_missing_constructor() {
     assert_eq!(
         run_php(

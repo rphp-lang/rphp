@@ -3660,34 +3660,6 @@ fn class_implements_interface(
     )
 }
 
-fn collect_reflected_interface_names(
-    eg: &ExecutorGlobals,
-    owner: &str,
-    names: &mut Vec<String>,
-    seen: &mut HashSet<String>,
-) {
-    let Some(class) = eg.find_class(owner) else {
-        return;
-    };
-    let parent = class.parent.clone();
-    let interfaces = class.implements.clone();
-
-    // PHP reports interfaces inherited from the parent class first, then the
-    // class's own declarations and each interface's extended ancestors.
-    if let Some(parent) = parent {
-        collect_reflected_interface_names(eg, &parent, names, seen);
-    }
-    for interface in interfaces {
-        let canonical = eg
-            .find_class(&interface)
-            .map_or(interface, |class| class.name.clone());
-        if seen.insert(canonical.to_ascii_lowercase()) {
-            names.push(canonical.clone());
-            collect_reflected_interface_names(eg, &canonical, names, seen);
-        }
-    }
-}
-
 fn class_get_interface_names(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -3701,8 +3673,7 @@ fn class_get_interface_names(
     {
         return return_value(rv, Value::array(PhpArray::new()));
     }
-    let mut names = Vec::new();
-    collect_reflected_interface_names(eg, &owner, &mut names, &mut HashSet::new());
+    let names = eg.class_interface_names(&owner);
     let mut result = PhpArray::with_packed_capacity(names.len());
     for name in names {
         result.push(Value::string(name));
@@ -3741,8 +3712,7 @@ fn class_get_interfaces(
     {
         return return_value(rv, Value::array(PhpArray::new()));
     }
-    let mut names = Vec::new();
-    collect_reflected_interface_names(eg, &owner, &mut names, &mut HashSet::new());
+    let names = eg.class_interface_names(&owner);
     return_value(rv, reflected_class_map(names))
 }
 

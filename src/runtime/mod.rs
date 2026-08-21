@@ -5120,7 +5120,8 @@ impl ExecutorGlobals {
             // implementation satisfy the built-in Stringable interface. The
             // relation participates in declaration variance as well as
             // instanceof/is_a checks; it is not copied into source metadata.
-            if canonical_target.eq_ignore_ascii_case("Stringable")
+            if !class_def.is_trait
+                && canonical_target.eq_ignore_ascii_case("Stringable")
                 && self
                     .find_effective_method(class_def, "__toString")
                     .is_some()
@@ -5141,6 +5142,81 @@ impl ExecutorGlobals {
             }
         }
         false
+    }
+
+    /// Whether this declaration itself contributes an effective __toString()
+    /// method. Parent and interface relations are deliberately excluded: the
+    /// ordered interface walkers visit those declarations separately.
+    pub(crate) fn class_contributes_stringable(&self, class: &ClassDef) -> bool {
+        class
+            .methods
+            .iter()
+            .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__toString"))
+            || class.uses.iter().any(|trait_name| {
+                self.find_class(trait_name)
+                    .and_then(|trait_def| self.find_effective_method(trait_def, "__toString"))
+                    .is_some()
+            })
+    }
+
+    fn collect_class_interface_names(
+        &self,
+        owner: &str,
+        names: &mut Vec<String>,
+        seen: &mut std::collections::HashSet<String>,
+    ) {
+        let Some(class) = self.find_class(owner) else {
+            return;
+        };
+        if class.is_trait {
+            return;
+        }
+
+        let canonical_owner = class.name.clone();
+        let parent = class.parent.clone();
+        let interfaces = class.implements.clone();
+        let contributes_stringable = self.class_contributes_stringable(class);
+
+        // PHP exposes interfaces inherited from the parent before this
+        // declaration's own interfaces. An interface's ancestors follow the
+        // interface itself in source order.
+        if let Some(parent) = parent {
+            self.collect_class_interface_names(&parent, names, seen);
+        }
+        for interface in interfaces {
+            let canonical = self
+                .find_class(&interface)
+                .map_or(interface, |class| class.name.clone());
+            if seen.insert(canonical.to_ascii_lowercase()) {
+                names.push(canonical.clone());
+                self.collect_class_interface_names(&canonical, names, seen);
+            }
+        }
+
+        // A class or interface with an effective __toString() implicitly
+        // implements Stringable. Keep this as a projected relationship: the
+        // source declaration metadata remains unchanged, while Reflection and
+        // class_implements() observe the same relation as instanceof/is_a().
+        if !canonical_owner.eq_ignore_ascii_case("Stringable") && contributes_stringable {
+            let canonical = self
+                .find_class("Stringable")
+                .map_or_else(|| "Stringable".to_string(), |class| class.name.clone());
+            if seen.insert(canonical.to_ascii_lowercase()) {
+                names.push(canonical);
+            }
+        }
+    }
+
+    /// Return the canonical, ordered interface projection exposed by PHP's
+    /// Reflection APIs.
+    pub(crate) fn class_interface_names(&self, owner: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        self.collect_class_interface_names(
+            owner,
+            &mut names,
+            &mut std::collections::HashSet::new(),
+        );
+        names
     }
 
     pub(crate) fn seal_internal_class_ids(&mut self) {
