@@ -8,6 +8,67 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `6009daff`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,936 pass, 1,363 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.278% and the whole-corpus rate is 70.298%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`82d5a4ea`, the pass-set delta is +3/-0 with no other status or failure-
+category movement.
+
+The exact additions are `Zend/tests/magic_methods/bug52361.phpt`,
+`Zend/tests/oss_fuzz_456317305.phpt` and
+`Zend/tests/weakrefs/weakmap_dtor_exception.phpt`. Every previous pass remains
+a pass. Two sequential final runs have byte-identical merged manifests and
+summaries. Their manifest and summary SHA-256 values are
+`e904908786e466c6ee3a269d806c6b1d22fc29e2b976e8985848abec9392d677`
+and `77602ab435ffdde063a21d663dae491e796ac734a3b272d6c6e88a0941cfb3b7`.
+
+An exception that leaves a user activation now releases final objects owned by
+that frame before selecting a caller handler. The release planner preserves
+objects with another owner, follows nested object, array, reference and closure
+containers without looping on cycles, and invokes `__destruct()` with the
+retiring frame's caller as its logical trace site. A throwing destructor
+replaces the pending exception, chains the displaced throwable through
+`previous`, and can therefore reselect a different caller catch; later
+throwing destructors repeat that rule. Re-entry after a completed `finally`
+uses the same dispatch path, so it no longer bypasses frame lifetime work.
+
+VM bailouts remain outside PHP catch dispatch. The shared throw boundary now
+returns `Result`, and every cold caller propagates it, so `exit(7)` from a
+destructor after `finally` bypasses `catch`, preserves output ordering and
+returns status 7 exactly like PHP 8.5. Correct propagation exposed an older
+S2-masked gap: `ArrayIterator` and `ArrayObject` declared `Countable` without
+their `count()` method. Both now report the number of values in their internal
+array, including inherited method dispatch, which restores the unmodified
+Symfony environment-loader path.
+
+Original regressions cover destructor order, retained owners, nested
+containers, replacement-exception chains and catch reselection, plus the
+non-catchable `exit()` status and the two SPL count methods. All 228 selected
+PHPTs containing `__destruct` reach 124 passes with exactly the three gains
+above. All five Cargo configurations, all-features/all-targets, formatting,
+PHPT runner self-test and the exact unsafe ratchet pass. The production
+inventory is 1,605 unsafe blocks, 289 unsafe functions and 320 SAFETY
+annotations. Composer S0, all four Symfony S1 gates and exact PHP 8.5.9
+warmed-kernel S2 and cold-build S3 also pass.
+
+A local 21-pair balanced alternating release comparison, with three warmups,
+exact-output validation and no excluded sample, keeps the unaffected 200,000-
+exception control at a 1.014541 independent median ratio and the ordinary
+500,000-frame destructor control at 1.013195, below the +5% gate. The
+intentionally affected 100,000-exception path with an empty local destructor
+moves from a 0.181232-second baseline median to 0.253415 seconds, a 1.398285
+ratio. This is localized compatibility-first performance debt: the baseline
+omitted the destructor that PHP requires. The exact candidate binary SHA-256
+is `fd69d89d77389fae3efb6aac2e75fb59ed35af44e403da9d16530a1175d64d7d`.
+
+Constructor-failure destructor eligibility, request-shutdown fixed-point
+ordering, broader cycle-collector behavior and the rest of the SPL iterator
+API remain separate work. This checkpoint claims ordinary exception-frame
+unwind and only the exercised `count()` contract.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `82d5a4ea`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,933 pass, 1,366 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
