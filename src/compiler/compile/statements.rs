@@ -1947,7 +1947,11 @@ impl Compiler {
                 operation.op2_type = right_type;
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
-                self.instructions.push(operation);
+                if *op == BinOp::Sub {
+                    self.push_instruction_at_line(operation, incdec_target_source_line(target));
+                } else {
+                    self.instructions.push(operation);
+                }
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
                 if let Some(cv) = direct_cv {
                     self.definitely_defined_cvs.insert(cv);
@@ -2267,6 +2271,9 @@ impl Compiler {
                     } else {
                         self.compile_expr(e)
                     };
+                    if matches!(e, Expr::BinaryOp { op: BinOp::Sub, .. }) {
+                        self.record_last_instruction_source_line(*line);
+                    }
                     (o, t, true)
                 } else {
                     let idx = self.add_literal(Value::null());

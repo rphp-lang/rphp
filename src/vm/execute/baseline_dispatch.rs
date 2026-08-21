@@ -967,7 +967,24 @@ fn throw_operator_error<'a>(
     message: &str,
 ) -> ThrowResult<'a> {
     let error = make_error_value(class_name, message);
-    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    // Arithmetic bytecode is commonly emitted before the located statement
+    // consumer (Return, call, echo or constant definition). Use that nearest
+    // source entry while the failing frame is still live; a preceding entry
+    // remains the fallback for a discarded terminal expression.
+    let origin_index = if op_array.source_line(instruction_index).is_some() {
+        instruction_index
+    } else {
+        (instruction_index + 1..op_array.instructions.len())
+            .find(|index| op_array.source_line(*index).is_some())
+            .or_else(|| {
+                (0..instruction_index)
+                    .rev()
+                    .find(|index| op_array.source_line(*index).is_some())
+            })
+            .or_else(|| op_array.declaration_line().map(|_| u32::MAX as usize))
+            .unwrap_or(instruction_index)
+    };
+    attach_throwable_origin(&error, eg, frame, op_array, origin_index);
     throw_in_frame(eg, frame, error)
 }
 
@@ -2268,7 +2285,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for -".into()));
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} - {}",
+                            op1.diagnostic_type_name(),
+                            op2.diagnostic_type_name()
+                        )
+                    );
                 }
             }
 
@@ -2289,7 +2313,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for -".into()));
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} - {}",
+                            op1.diagnostic_type_name(),
+                            op2.diagnostic_type_name()
+                        )
+                    );
                 }
             }
 
@@ -2522,7 +2553,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for -".into()));
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} - {}",
+                            op1.dereferenced().diagnostic_type_name(),
+                            op2.dereferenced().diagnostic_type_name()
+                        )
+                    );
                 }
             }
 

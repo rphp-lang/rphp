@@ -1,5 +1,5 @@
 mod common;
-use common::run_php;
+use common::{run_php, run_php_with_source_context};
 
 #[test]
 fn test_print_returns_1() {
@@ -80,6 +80,51 @@ try {
 "#,
         ),
         "int(0)\nint(1)\n8192:Implicit conversion from float 6.5 to int loses precision\nint(0)\n8192:Implicit conversion from float-string \"9.5\" to int loses precision\nint(1)\n2:A non-numeric value encountered\nint(3)\n8192:Implicit conversion from float 1.5 to int loses precision\nint(3)\n8192:Implicit conversion from float-string \"1.5\" to int loses precision\nint(2)\n2:The float NAN is not representable as an int, cast occurred\n8192:Implicit conversion from float NAN to int loses precision\nint(0)\n2:The float 9.223372036854776E+18 is not representable as an int, cast occurred\nint(-2)\n8192:Implicit conversion from float-string \"1e309\" to int loses precision\nint(0)\n2:A non-numeric value encountered\nint(3)\nUnsupported operand types: array % array\nModulo by zero\n"
+    );
+}
+
+#[test]
+fn unsupported_subtraction_throws_typed_errors_without_committing_assignments() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function reportSubtract(string $label, Closure $operation): void {
+    try {
+        $operation();
+        echo $label, ":no-error\n";
+    } catch (Throwable $error) {
+        echo $label, ':', get_class($error), ':', $error->getMessage(), '|',
+            $error->getFile() === __FILE__ ? 'source' : 'nested', ':',
+            $error->getLine(), '|trace=', count($error->getTrace()), "\n";
+    }
+}
+
+$array = [1];
+reportSubtract('cv-const', fn() => $array - 1);
+reportSubtract('const-cv', fn() => 1 - $array);
+reportSubtract('tmp-tmp', fn() => [1] - [0]);
+
+$slot = [1];
+try {
+    $slot -= 'x';
+} catch (TypeError $error) {
+    echo 'assign:', $error->getMessage(), '|slot=', count($slot), "\n";
+}
+
+reportSubtract('eval-const', fn() => eval('const BrokenSubtract = [1] - [0];'));
+echo 'defined=', defined('BrokenSubtract') ? 'yes' : 'no', "\n";
+"#,
+            "/virtual/subtraction-type-error.php",
+            "/virtual",
+        ),
+        concat!(
+            "cv-const:TypeError:Unsupported operand types: array - int|source:14|trace=2\n",
+            "const-cv:TypeError:Unsupported operand types: int - array|source:15|trace=2\n",
+            "tmp-tmp:TypeError:Unsupported operand types: array - array|source:16|trace=2\n",
+            "assign:Unsupported operand types: array - string|slot=1\n",
+            "eval-const:TypeError:Unsupported operand types: array - array|nested:1|trace=3\n",
+            "defined=no\n",
+        )
     );
 }
 
