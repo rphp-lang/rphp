@@ -96,7 +96,7 @@ impl Parser {
             if first_ancestor_line.is_none() {
                 first_ancestor_line = Some(self.last_primary_line.unwrap_or(use_line));
             }
-            if self.peek() != Token::Comma {
+            if !matches!(self.peek(), Token::Comma(_)) {
                 break;
             }
             self.advance();
@@ -229,7 +229,7 @@ impl Parser {
             });
 
             match self.peek() {
-                Token::Comma => {
+                Token::Comma(_) => {
                     self.advance();
                     if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
                         return Err("A generic parameter list cannot end with a comma".into());
@@ -290,7 +290,7 @@ impl Parser {
             }
             arguments.push(self.parse_generic_type_expression()?);
             match self.peek() {
-                Token::Comma => {
+                Token::Comma(_) => {
                     self.advance();
                     if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
                         return Err("A generic type-argument list cannot end with a comma".into());

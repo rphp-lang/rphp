@@ -369,7 +369,7 @@ impl Parser {
                 | Token::RParen
                 | Token::RBracket
                 | Token::RBrace
-                | Token::Comma
+                | Token::Comma(_)
                 | Token::Star
                 | Token::Eof
         ) {
@@ -839,14 +839,14 @@ impl Parser {
                 let (expr, with_properties) = if matches!(self.peek(), Token::LParen(_)) {
                     self.advance();
                     let mut expr = self.parse_expr()?;
-                    let has_argument_separator = self.peek() == Token::Comma;
+                    let has_argument_separator = matches!(self.peek(), Token::Comma(_));
                     let with_properties = if has_argument_separator {
                         self.advance();
                         if self.peek() == Token::RParen {
                             None
                         } else {
                             let properties = Some(Box::new(self.parse_expr()?));
-                            if self.peek() == Token::Comma {
+                            if matches!(self.peek(), Token::Comma(_)) {
                                 self.advance();
                             }
                             properties
@@ -1131,7 +1131,7 @@ impl Parser {
             Token::Isset => {
                 self.advance();
                 let list_line = self.expect_lparen()?;
-                if self.peek() == Token::Comma {
+                if matches!(self.peek(), Token::Comma(_)) {
                     return Err(self.comma_list_error(list_line, false));
                 }
                 let mut args = Vec::new();
@@ -1473,7 +1473,7 @@ impl Parser {
                                 ReservedStaticRole::Interface,
                                 Some(line),
                             )?);
-                            if self.peek() == Token::Comma {
+                            if matches!(self.peek(), Token::Comma(_)) {
                                 self.advance();
                             } else {
                                 break;
@@ -1617,10 +1617,21 @@ impl Parser {
     /// Parse comma-separated array elements until `end_token`.
     fn parse_array_elements(&mut self, end_token: Token) -> Result<Vec<ArrayElement>, String> {
         let mut elements = Vec::new();
+        let mut separator_line = None;
         if std::mem::discriminant(&self.peek()) == std::mem::discriminant(&end_token) {
             return Ok(elements);
         }
         loop {
+            if let Token::Comma(comma_line) = self.peek() {
+                let diagnostic_line = separator_line.unwrap_or(comma_line);
+                self.compile_error("Cannot use empty array elements in arrays", diagnostic_line);
+                self.advance();
+                separator_line = Some(comma_line);
+                if std::mem::discriminant(&self.peek()) == std::mem::discriminant(&end_token) {
+                    break;
+                }
+                continue;
+            }
             if let Token::DotDotDot(unpack_line) = self.peek() {
                 self.advance();
                 elements.push(ArrayElement {
@@ -1667,12 +1678,13 @@ impl Parser {
                     });
                 }
             }
-            if self.peek() == Token::Comma {
+            if let Token::Comma(comma_line) = self.peek() {
                 self.advance();
                 // Allow trailing comma
                 if std::mem::discriminant(&self.peek()) == std::mem::discriminant(&end_token) {
                     break;
                 }
+                separator_line = Some(comma_line);
             } else {
                 break;
             }

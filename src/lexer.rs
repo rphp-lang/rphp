@@ -142,7 +142,7 @@ pub enum Token {
     RParen,           // )
     LBrace,           // {
     RBrace,           // }
-    Comma,            // ,
+    Comma(usize),     // , with source line
     LBracket(usize),  // [ with source line
     RBracket,         // ]
     DoubleArrow,      // =>
@@ -193,6 +193,8 @@ enum StringPart {
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
+    comma_scan_pos: usize,
+    comma_scan_line: usize,
     deferred_compile_errors: Vec<(String, usize)>,
     deferred_compile_diagnostics: Vec<DeferredCompileDiagnostic>,
 }
@@ -245,6 +247,8 @@ impl<'a> Lexer<'a> {
         Self {
             src: source.as_bytes(),
             pos: 0,
+            comma_scan_pos: 0,
+            comma_scan_line: 1,
             deferred_compile_errors: Vec::new(),
             deferred_compile_diagnostics: Vec::new(),
         }
@@ -556,7 +560,12 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b',' => {
-                    tokens.push(Token::Comma);
+                    self.comma_scan_line += self.src[self.comma_scan_pos..self.pos]
+                        .iter()
+                        .filter(|&&byte| byte == b'\n')
+                        .count();
+                    self.comma_scan_pos = self.pos;
+                    tokens.push(Token::Comma(self.comma_scan_line));
                     self.pos += 1;
                 }
                 b'[' => {
@@ -1202,7 +1211,7 @@ mod tests {
                     name: "__line__".into(),
                     line: 2,
                 },
-                Token::Comma,
+                Token::Comma(2),
                 Token::MagicConstant {
                     name: "__property__".into(),
                     line: 2,
@@ -1380,7 +1389,7 @@ mod tests {
                 Token::Identifier("render".into(), 2),
                 Token::LParen(2),
                 Token::StringLiteral("x".into()),
-                Token::Comma,
+                Token::Comma(2),
                 Token::Integer(2),
                 Token::RParen,
                 Token::RParen,

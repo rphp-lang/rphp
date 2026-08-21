@@ -326,7 +326,7 @@ impl Parser {
                     if self.peek() == Token::RBrace {
                         return Err(self.group_use_missing_item_error(kind, "}", use_line));
                     }
-                    if self.peek() == Token::Comma {
+                    if matches!(self.peek(), Token::Comma(_)) {
                         return Err(self.group_use_missing_item_error(kind, ",", use_line));
                     }
                     loop {
@@ -356,7 +356,7 @@ impl Parser {
                                 item_kind, "}", use_line,
                             ));
                         }
-                        if self.peek() == Token::Comma {
+                        if matches!(self.peek(), Token::Comma(_)) {
                             return Err(self.group_use_missing_item_error(
                                 item_kind, ",", use_line,
                             ));
@@ -389,14 +389,14 @@ impl Parser {
                                 .to_string()
                         };
                         imports.push((item_kind, format!("{first_name}\\{relative_name}"), alias));
-                        if self.peek() != Token::Comma {
+                        if !matches!(self.peek(), Token::Comma(_)) {
                             break;
                         }
                         self.advance();
                         if self.peek() == Token::RBrace {
                             break;
                         }
-                        if self.peek() == Token::Comma {
+                        if matches!(self.peek(), Token::Comma(_)) {
                             return Err(self.source_error(
                                 "syntax error, unexpected token \",\", expecting \"}\"",
                                 use_line,
@@ -421,7 +421,7 @@ impl Parser {
                             fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
                         };
                         imports.push((kind, fqn, alias));
-                        if self.peek() != Token::Comma {
+                        if !matches!(self.peek(), Token::Comma(_)) {
                             break;
                         }
                         self.advance();
@@ -459,7 +459,7 @@ impl Parser {
                     }
                     self.expect(&Token::Assign)?;
                     declarations.push((name, self.parse_expr()?));
-                    if self.peek() != Token::Comma {
+                    if !matches!(self.peek(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
@@ -474,7 +474,7 @@ impl Parser {
             Token::Echo { line } => {
                 self.advance();
                 let mut expressions = vec![self.parse_expr()?];
-                while self.peek() == Token::Comma {
+                while matches!(self.peek(), Token::Comma(_)) {
                     self.advance();
                     expressions.push(self.parse_expr()?);
                 }
@@ -853,7 +853,7 @@ impl Parser {
                 let mut init = Vec::new();
                 while self.peek() != Token::Semicolon {
                     init.push(self.parse_for_init()?);
-                    if self.peek() != Token::Comma {
+                    if !matches!(self.peek(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
@@ -865,7 +865,7 @@ impl Parser {
                 let mut condition = Vec::new();
                 while self.peek() != Token::Semicolon {
                     condition.push(self.parse_expr()?);
-                    if self.peek() != Token::Comma {
+                    if !matches!(self.peek(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
@@ -886,7 +886,7 @@ impl Parser {
                 let mut update = Vec::new();
                 while self.peek() != Token::RParen {
                     update.push(self.parse_expr()?);
-                    if self.peek() != Token::Comma {
+                    if !matches!(self.peek(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
@@ -1039,7 +1039,7 @@ impl Parser {
             Token::Unset => {
                 self.advance();
                 let list_line = self.expect_lparen()?;
-                if self.peek() == Token::Comma {
+                if matches!(self.peek(), Token::Comma(_)) {
                     return Err(self.comma_list_error(list_line, false));
                 }
                 let mut targets = Vec::new();
@@ -1172,7 +1172,7 @@ impl Parser {
                             ));
                         }
                     }
-                    if self.peek() == Token::Comma {
+                    if matches!(self.peek(), Token::Comma(_)) {
                         self.advance();
                     } else {
                         break;
@@ -1212,7 +1212,7 @@ impl Parser {
                         None
                     };
                     vars.push((var_name, default));
-                    if self.peek() == Token::Comma {
+                    if matches!(self.peek(), Token::Comma(_)) {
                         self.advance();
                     } else {
                         break;

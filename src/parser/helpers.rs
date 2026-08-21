@@ -13,6 +13,7 @@ impl Parser {
                 | Token::Fn(line)
                 | Token::Use(line)
                 | Token::Static(line)
+                | Token::Comma(line)
                 | Token::DotDotDot(line)
                 | Token::PipeGreater(line)
                 | Token::Function(line)
@@ -115,14 +116,14 @@ impl Parser {
     /// means another item follows. A second comma is a distinct parser state
     /// that expects the closing parenthesis.
     fn comma_list_has_next(&mut self, line: usize) -> Result<bool, String> {
-        if self.peek() != Token::Comma {
+        if !matches!(self.peek(), Token::Comma(_)) {
             return Ok(false);
         }
         self.advance();
         if self.peek() == Token::RParen {
             return Ok(false);
         }
-        if self.peek() == Token::Comma {
+        if matches!(self.peek(), Token::Comma(_)) {
             return Err(self.comma_list_error(line, true));
         }
         Ok(true)
@@ -212,7 +213,7 @@ impl Parser {
         let mut seen_named = false;
         let mut seen_unpack = false;
         let call_line = self.last_primary_line.unwrap_or(1);
-        if self.peek() == Token::Comma {
+        if matches!(self.peek(), Token::Comma(_)) {
             return Err(self.comma_list_error(call_line, false));
         }
         if self.peek() != Token::RParen {
@@ -300,7 +301,7 @@ impl Parser {
                     );
                 }
                 attributes.push(Attribute { name, args, line });
-                if self.peek() != Token::Comma {
+                if !matches!(self.peek(), Token::Comma(_)) {
                     break;
                 }
                 self.advance();
@@ -430,7 +431,7 @@ impl Parser {
         let mut params = Vec::new();
         if self.is_param_start() {
             params.push(self.parse_one_param()?);
-            while self.peek() == Token::Comma {
+            while matches!(self.peek(), Token::Comma(_)) {
                 self.advance();
                 // Allow trailing comma before closing paren
                 if !self.is_param_start() {
@@ -1508,7 +1509,7 @@ impl Parser {
     ) -> Result<Vec<ListTarget>, String> {
         let mut targets = Vec::new();
         while self.peek() != *end_token && !self.at_eof() {
-            if self.peek() == Token::Comma {
+            if matches!(self.peek(), Token::Comma(_)) {
                 // Skip element (empty slot before comma or between commas)
                 targets.push(ListTarget::Skip);
                 self.advance(); // consume ','
@@ -1712,7 +1713,7 @@ impl Parser {
                 ));
             }
             // Consume comma if present
-            if self.peek() == Token::Comma {
+            if matches!(self.peek(), Token::Comma(_)) {
                 self.advance();
             } else {
                 break;

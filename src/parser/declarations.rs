@@ -251,7 +251,7 @@ impl Parser {
                 has_set_hook: false,
                 has_abstract_set_hook: false,
             });
-            if self.peek() != Token::Comma {
+            if !matches!(self.peek(), Token::Comma(_)) {
                 break;
             }
             self.advance();
@@ -694,7 +694,7 @@ impl Parser {
                     ReservedStaticRole::Interface,
                     Some(line),
                 )?);
-                if self.peek() == Token::Comma {
+                if matches!(self.peek(), Token::Comma(_)) {
                     self.advance();
                 } else {
                     break;
@@ -742,7 +742,7 @@ impl Parser {
                                     ReservedStaticRole::Trait,
                                     Some(adaptation_line),
                                 )?);
-                                if self.peek() == Token::Comma {
+                                if matches!(self.peek(), Token::Comma(_)) {
                                     self.advance();
                                 } else {
                                     break;
@@ -925,7 +925,7 @@ impl Parser {
                                     ReservedStaticRole::Trait,
                                     Some(adaptation_line),
                                 )?);
-                                if self.peek() == Token::Comma {
+                                if matches!(self.peek(), Token::Comma(_)) {
                                     self.advance();
                                 } else {
                                     break;
@@ -1062,7 +1062,7 @@ impl Parser {
                     ReservedStaticRole::Interface,
                     Some(line),
                 )?);
-                if self.peek() == Token::Comma {
+                if matches!(self.peek(), Token::Comma(_)) {
                     self.advance();
                 } else {
                     break;
@@ -1186,7 +1186,7 @@ impl Parser {
                     ReservedStaticRole::Interface,
                     Some(line),
                 )?);
-                if self.peek() != Token::Comma {
+                if !matches!(self.peek(), Token::Comma(_)) {
                     break;
                 }
                 self.advance();
@@ -1518,7 +1518,7 @@ impl Parser {
                 type_hint: type_hint.clone(),
                 is_final: modifiers.is_final,
             });
-            if self.peek() != Token::Comma {
+            if !matches!(self.peek(), Token::Comma(_)) {
                 break;
             }
             self.advance();
@@ -1616,6 +1616,11 @@ impl Parser {
         while self.peek() != Token::RBrace && !self.at_eof() {
             if self.peek() == Token::Default {
                 self.advance();
+                if matches!(self.peek(), Token::Comma(_))
+                    && self.peek_at(1) == Token::DoubleArrow
+                {
+                    self.advance();
+                }
                 self.expect(&Token::DoubleArrow)?;
                 let body = self.parse_expr()?;
                 arms.push(MatchArm {
@@ -1626,10 +1631,10 @@ impl Parser {
                 // One or more comma-separated conditions
                 let mut conditions = Vec::new();
                 conditions.push(self.parse_expr()?);
-                while self.peek() == Token::Comma {
-                    // Peek ahead: if next is => or }, this comma terminates the arm
-                    let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
-                    if next == Token::DoubleArrow || next == Token::RBrace {
+                while matches!(self.peek(), Token::Comma(_)) {
+                    // A comma immediately before => terminates the condition list.
+                    if self.peek_at(1) == Token::DoubleArrow {
+                        self.advance();
                         break;
                     }
                     self.advance(); // consume comma
@@ -1643,7 +1648,7 @@ impl Parser {
                 });
             }
             // Optional trailing comma between arms
-            if self.peek() == Token::Comma {
+            if matches!(self.peek(), Token::Comma(_)) {
                 self.advance();
             }
         }
@@ -1991,7 +1996,7 @@ impl Parser {
                 self.compile_error("Cannot use auto-global as lexical variable", line);
             }
             use_vars.push((v, is_ref, line));
-            while self.peek() == Token::Comma {
+            while matches!(self.peek(), Token::Comma(_)) {
                 self.advance();
                 let is_ref = if self.peek() == Token::Ampersand {
                     self.advance();
