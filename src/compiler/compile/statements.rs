@@ -2107,6 +2107,7 @@ impl Compiler {
                 func_compiler.validate_declared_type_hint(return_type, *line)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 self.validate_attribute_target(attributes, "function")?;
+                self.validate_deprecated_target(attributes, "function")?;
                 self.validate_no_discard_callable(
                     attributes,
                     None,
@@ -3433,6 +3434,7 @@ impl Compiler {
                 declarations,
             } => {
                 self.validate_attribute_target(attributes, "constant")?;
+                self.validate_deprecated_target(attributes, "constant")?;
                 self.validate_override_target(attributes, "constant", false)?;
                 let reflected_attributes = self.compile_attributes(attributes, 64);
                 for (name, value) in declarations {
@@ -3655,14 +3657,13 @@ impl Compiler {
                         &format!("abstract class {resolved_class}"),
                     )?;
                 }
+                self.validate_deprecated_target(attributes, "class")?;
+                self.validate_deprecated_class_form(
+                    attributes,
+                    &format!("class {resolved_class}"),
+                )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
-                if let Some(line) = self.deprecated_attribute_line(attributes) {
-                    return Err(self.goto_error(
-                        &format!("Cannot apply #[\\Deprecated] to class {resolved_class}"),
-                        line,
-                    ));
-                }
                 let resolved_parent = parent.as_ref().map(|p| self.resolve_name(&p.name));
                 if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
                     && (!generic_params.is_empty()
@@ -3962,6 +3963,7 @@ impl Compiler {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
                     self.validate_attribute_target(&method.attributes, "method")?;
+                    self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_class),
@@ -4169,6 +4171,7 @@ impl Compiler {
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
                     self.validate_attribute_target(&prop.attributes, "property")?;
+                    self.validate_deprecated_target(&prop.attributes, "property")?;
                     self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
                         return Err(self.goto_error(
@@ -4590,14 +4593,13 @@ impl Compiler {
                     attributes,
                     &format!("interface {resolved_iface}"),
                 )?;
+                self.validate_deprecated_target(attributes, "class")?;
+                self.validate_deprecated_class_form(
+                    attributes,
+                    &format!("interface {resolved_iface}"),
+                )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
-                if let Some(line) = self.deprecated_attribute_line(attributes) {
-                    return Err(self.goto_error(
-                        &format!("Cannot apply #[\\Deprecated] to interface {resolved_iface}"),
-                        line,
-                    ));
-                }
                 if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
                     && (!generic_params.is_empty()
                         || !extends.is_empty()
@@ -4670,6 +4672,7 @@ impl Compiler {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
                     self.validate_attribute_target(&method.attributes, "method")?;
+                    self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_iface),
@@ -4787,6 +4790,7 @@ impl Compiler {
                 let mut compiled_properties = Vec::new();
                 for property in properties {
                     self.validate_attribute_target(&property.attributes, "property")?;
+                    self.validate_deprecated_target(&property.attributes, "property")?;
                     self.validate_override_target(&property.attributes, "property", true)?;
                     if property.is_abstract {
                         return Err(self.goto_error(
@@ -4854,7 +4858,12 @@ impl Compiler {
                     compiled_properties.push(definition);
                 }
                 self.class_defs.push(ClassDef {
-                    attributes: self.compile_attributes(attributes, 1),
+                    attributes: self.compile_attributes_in_scope(
+                        attributes,
+                        1,
+                        Some(&resolved_iface),
+                        None,
+                    ),
                     name: resolved_iface.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -4915,6 +4924,7 @@ impl Compiler {
                     attributes,
                     &format!("trait {resolved_trait}"),
                 )?;
+                self.validate_deprecated_target(attributes, "class")?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
                 if !generic_params.is_empty()
@@ -4985,6 +4995,7 @@ impl Compiler {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
                     self.validate_attribute_target(&method.attributes, "method")?;
+                    self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_trait),
@@ -5119,6 +5130,7 @@ impl Compiler {
                 );
                 for prop in properties {
                     self.validate_attribute_target(&prop.attributes, "property")?;
+                    self.validate_deprecated_target(&prop.attributes, "property")?;
                     self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
                         return Err(self.goto_error(
@@ -5364,7 +5376,12 @@ impl Compiler {
                     })
                     .collect();
                 self.class_defs.push(ClassDef {
-                    attributes: self.compile_attributes(attributes, 1),
+                    attributes: self.compile_attributes_in_scope(
+                        attributes,
+                        1,
+                        Some(&resolved_trait),
+                        None,
+                    ),
                     name: resolved_trait.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -5442,14 +5459,13 @@ impl Compiler {
                     attributes,
                     &format!("enum {resolved_enum}"),
                 )?;
+                self.validate_deprecated_target(attributes, "class")?;
+                self.validate_deprecated_class_form(
+                    attributes,
+                    &format!("enum {resolved_enum}"),
+                )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
-                if let Some(line) = self.deprecated_attribute_line(attributes) {
-                    return Err(self.goto_error(
-                        &format!("Cannot apply #[\\Deprecated] to enum {resolved_enum}"),
-                        line,
-                    ));
-                }
                 if let Some(backing_type) = backing_type
                     && !matches!(backing_type, TypeHint::Int | TypeHint::String)
                 {
@@ -5885,6 +5901,7 @@ impl Compiler {
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     self.validate_attribute_target(&method.attributes, "method")?;
+                    self.validate_deprecated_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_enum),
@@ -6000,6 +6017,7 @@ impl Compiler {
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 for (case, case_value) in cases.iter().zip(compiled_case_values) {
                     self.validate_attribute_target(&case.attributes, "class constant")?;
+                    self.validate_deprecated_target(&case.attributes, "class constant")?;
                     self.validate_override_target(&case.attributes, "class constant", false)?;
                     let case_name = &case.name;
                     use crate::value::{PhpArray, PhpObject};
@@ -6079,7 +6097,12 @@ impl Compiler {
                     })
                     .collect();
                 self.class_defs.push(ClassDef {
-                    attributes: self.compile_attributes(attributes, 1),
+                    attributes: self.compile_attributes_in_scope(
+                        attributes,
+                        1,
+                        Some(&resolved_enum),
+                        None,
+                    ),
                     name: resolved_enum.clone(),
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
@@ -6156,6 +6179,7 @@ impl Compiler {
         let mut names = std::collections::HashSet::new();
         for constant in constants {
             self.validate_attribute_target(&constant.attributes, "class constant")?;
+            self.validate_deprecated_target(&constant.attributes, "class constant")?;
             self.validate_override_target(&constant.attributes, "class constant", false)?;
             if let Some((message, line)) = forbidden_static_constant_expression(&constant.value) {
                 return Err(self.goto_error(message, line));

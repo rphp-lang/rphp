@@ -4802,6 +4802,51 @@ impl Compiler {
         Err(self.goto_error(&format!("Cannot apply #[\\Attribute] to {target}"), line))
     }
 
+    fn validate_deprecated_target(
+        &self,
+        attributes: &[Attribute],
+        target: &str,
+    ) -> Result<(), String> {
+        let mut lines = attributes.iter().filter_map(|attribute| {
+            self.resolve_name(&attribute.name)
+                .eq_ignore_ascii_case("Deprecated")
+                .then_some(attribute.line)
+        });
+        let Some(first_line) = lines.next() else {
+            return Ok(());
+        };
+        let allowed = matches!(
+            target,
+            "class" | "function" | "method" | "class constant" | "constant"
+        );
+        if !allowed && !self.has_delayed_target_validation(attributes) {
+            return Err(self.goto_error(
+                &format!(
+                    "Attribute \"Deprecated\" cannot target {target} (allowed targets: class, function, method, class constant, constant)"
+                ),
+                first_line,
+            ));
+        }
+        if let Some(line) = lines.next() {
+            return Err(self.goto_error("Attribute \"Deprecated\" must not be repeated", line));
+        }
+        Ok(())
+    }
+
+    fn validate_deprecated_class_form(
+        &self,
+        attributes: &[Attribute],
+        target: &str,
+    ) -> Result<(), String> {
+        let Some(line) = self.deprecated_attribute_line(attributes) else {
+            return Ok(());
+        };
+        if self.has_delayed_target_validation(attributes) {
+            return Ok(());
+        }
+        Err(self.goto_error(&format!("Cannot apply #[\\Deprecated] to {target}"), line))
+    }
+
     /// Return the first NoDiscard declaration after enforcing the built-in's
     /// non-repeatable contract. DelayedTargetValidation suppresses target and
     /// validator checks, but deliberately does not suppress repetition.
@@ -5615,6 +5660,7 @@ impl Compiler {
         let mut param_names = Vec::new();
         for (i, param) in params.iter().enumerate() {
             self.validate_attribute_target(&param.attributes, "parameter")?;
+            self.validate_deprecated_target(&param.attributes, "parameter")?;
             self.validate_override_target(
                 &param.attributes,
                 "parameter",
@@ -8992,6 +9038,9 @@ impl Compiler {
                 }
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 if let Err(error) = self.validate_attribute_target(attributes, "function") {
+                    self.deferred_error = Some(error);
+                }
+                if let Err(error) = self.validate_deprecated_target(attributes, "function") {
                     self.deferred_error = Some(error);
                 }
                 if let Err(error) = self.validate_no_discard_callable(

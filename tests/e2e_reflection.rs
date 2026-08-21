@@ -283,6 +283,94 @@ echo 'ok';
 }
 
 #[test]
+fn deprecated_attribute_validates_declaration_targets_and_repetition_at_compile_time() {
+    let cases = [
+        (
+            "<?php function invalid(#[Deprecated] $value) {}",
+            "Attribute \"Deprecated\" cannot target parameter (allowed targets: class, function, method, class constant, constant)",
+        ),
+        (
+            "<?php class Invalid { #[Deprecated] public string $value; }",
+            "Attribute \"Deprecated\" cannot target property (allowed targets: class, function, method, class constant, constant)",
+        ),
+        (
+            "<?php #[Deprecated] #[Deprecated] function invalid() {}",
+            "Attribute \"Deprecated\" must not be repeated",
+        ),
+        (
+            "<?php #[DelayedTargetValidation] #[Deprecated] #[Deprecated] function invalid() {}",
+            "Attribute \"Deprecated\" must not be repeated",
+        ),
+        (
+            "<?php #[Deprecated] class Invalid {}",
+            "Cannot apply #[\\Deprecated] to class Invalid",
+        ),
+        (
+            "<?php #[Deprecated] interface Invalid {}",
+            "Cannot apply #[\\Deprecated] to interface Invalid",
+        ),
+        (
+            "<?php #[Deprecated] enum Invalid {}",
+            "Cannot apply #[\\Deprecated] to enum Invalid",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = run_php_expect_error(source);
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected Deprecated validation error: {error}"
+        );
+    }
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace {
+#[Deprecated] trait DeprecatedTrait {}
+#[DelayedTargetValidation] #[Deprecated] class DelayedClass {}
+#[DelayedTargetValidation] #[Deprecated] interface DelayedInterface {}
+#[DelayedTargetValidation] #[Deprecated] enum DelayedEnum {}
+class DelayedMembers {
+    #[DelayedTargetValidation] #[Deprecated] public string $value;
+    public function method(#[DelayedTargetValidation] #[Deprecated] $value) {}
+}
+}
+namespace Domain {
+#[\Attribute] class Deprecated {}
+#[Deprecated] class LocalTarget {}
+echo 'ok';
+}
+"#,
+        ),
+        "ok"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+#[DelayedTargetValidation] #[Deprecated] class DelayedClass {}
+#[DelayedTargetValidation] #[Deprecated] interface DelayedInterface {}
+#[DelayedTargetValidation] #[Deprecated] enum DelayedEnum {}
+#[DelayedTargetValidation] #[Deprecated] trait DelayedTrait {}
+foreach ([DelayedClass::class, DelayedInterface::class, DelayedEnum::class] as $class) {
+    try {
+        (new ReflectionClass($class))->getAttributes(Deprecated::class)[0]->newInstance();
+    } catch (Error $error) {
+        echo $error->getMessage(), '|';
+    }
+}
+echo get_class((new ReflectionClass(DelayedTrait::class))->getAttributes(Deprecated::class)[0]->newInstance());
+"#,
+        ),
+        concat!(
+            "Cannot apply #[\\Deprecated] to class DelayedClass|",
+            "Cannot apply #[\\Deprecated] to interface DelayedInterface|",
+            "Cannot apply #[\\Deprecated] to enum DelayedEnum|Deprecated",
+        )
+    );
+}
+
+#[test]
 fn deprecated_attribute_reports_callable_names_messages_and_suppression() {
     assert_eq!(
         run_php(

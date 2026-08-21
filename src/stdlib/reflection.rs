@@ -1705,6 +1705,32 @@ fn instantiate_attribute_definition_at_use(
         ));
         return Ok(());
     }
+    if name.eq_ignore_ascii_case("Deprecated") && public_target == 1 {
+        let invalid_target = definition
+            .evaluation_scope
+            .lexical_class
+            .as_deref()
+            .and_then(|owner| eg.find_class(owner))
+            .and_then(|class| {
+                (!class.is_trait).then(|| {
+                    let kind = if class.is_interface {
+                        "interface"
+                    } else if class.is_enum {
+                        "enum"
+                    } else {
+                        "class"
+                    };
+                    format!("{kind} {}", class.name)
+                })
+            });
+        if let Some(target) = invalid_target {
+            eg.exception = Some(make_error_value(
+                "Error",
+                &format!("Cannot apply #[\\Deprecated] to {target}"),
+            ));
+            return Ok(());
+        }
+    }
     if name.eq_ignore_ascii_case("NoDiscard") && target & ATTRIBUTE_TARGET_PROPERTY_HOOK != 0 {
         eg.exception = Some(make_error_value(
             "Error",
