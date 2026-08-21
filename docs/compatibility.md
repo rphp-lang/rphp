@@ -8,6 +8,79 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `e3e87f4f`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,890 pass, 1,409 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 73.410% and the whole-corpus rate is 69.477%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`e7c108fc`, the pass-set delta is +4/-0:
+`Zend/tests/assign_ref_to_overloaded_prop.phpt`,
+`Zend/tests/bug69732.phpt`, `Zend/tests/bug70083.phpt` and
+`Zend/tests/exceptions/exception_during_by_reference_magic_get.phpt` become
+exact passes. Every previous pass remains a pass.
+
+Two expected non-pass cases advance from output mismatch to their later
+runtime boundary. `Zend/tests/magic_methods/bug32660.phpt` now emits both
+indirect-modification notices and the expected overloaded-object reference
+error before its independent missing object-dump output. The lazy-proxy case
+`Zend/tests/lazy_objects/gh20873.phpt` now reaches that same target error after
+independent lazy initialization, undefined-static-property and source-
+diagnostic differences. There are no other status or failure-category
+transitions. Two sequential final runs have byte-identical merged manifests
+and summaries. Their manifest and summary SHA-256 values are
+`7f22c0ee77535a08b680f4bb24e3a3b9adc4c9a7d556d979216b65258542c8ba`
+and `24224ec208f4e3ff7ac98ae97f748638c7cc0d114914a351ba1abc13e539d36a`.
+
+Reference binding to a missing or ordinarily inaccessible object property now
+resolves `__get()` before rejecting the overloaded target with PHP 8.5's
+`Cannot assign by reference to overloaded object` error. A scalar result from
+a by-value getter first emits the indirect-modification notice; object,
+Closure and reference results do not. Getter exceptions propagate, while an
+exception thrown by the target-side notice handler is replaced by the required
+assignment error after retaining the handler's side effects. Asymmetric set
+visibility and readonly restrictions retain precedence over magic access, and
+an existing dynamic property still binds directly.
+
+The compiler retains a raw call-result operand for an object-property target
+until that target is resolved. An overloaded target therefore suppresses the
+otherwise applicable by-value-call notice, while an ordinary direct property
+emits it before commit and a reference-returning call preserves its alias.
+Source-side acquisition such as `$alias =& $object->missing` now emits the
+indirect-modification notice for a non-reference scalar `__get()` result and
+propagates a throwing notice handler. The change reuses the existing
+`BindObjPropRef` opcode and cold object-property machinery; it adds no opcode,
+instruction-layout field, dependency or unsafe block.
+
+An original E2E regression covers source/getter ordering, by-value and
+reference-returning call sources, scalar/object/reference getter results,
+throwing getters, notice-handler precedence, inaccessible and asymmetric
+properties, direct dynamic-property binding and source-side acquisition. The
+64-case adjacent property-reference slice has 41 passes, 17 failures and six
+unsupported capability cases; the broader 154-case exact `=&` slice has 94
+passes, 38 failures and 22 unsupported cases, with no lost pass in either.
+All five Cargo configurations, all-features/all-targets, formatting, PHPT
+runner self-test, unsafe self-test and the exact unsafe ratchet pass. The
+production inventory remains 1,613 unsafe blocks, 289 unsafe functions and
+312 SAFETY annotations. Composer S0, all four Symfony S1 gates and exact PHP
+8.5.9 warmed-kernel S2 and cold-build S3 also pass.
+
+A local 21-pair alternating release control on an AMD Ryzen 9 7950X pinned to
+CPU 0 with the performance governor, exact-output validation, two additional
+warmups and JIT/quick loops disabled executed five million ordinary declared-
+property reference binds per observation. No sample was excluded and every
+run returned checksum `7500000|1|2`. Baseline median/mean was
+2.801567/2.798900 seconds and candidate median/mean was 2.759919/2.767732
+seconds. The independent median and mean ratios are 0.985134 and 0.988864;
+paired median and mean ratios are 0.995755 and 0.990039, below the +5% gate.
+The host ran x86-64 Linux 7.0.0 with 31 GiB RAM and rustc 1.93.1. The exact
+candidate binary SHA-256 is
+`349cc3f7e6537c430d7767686a300f0f4a82c8daabd667b899259f28ff919f72`.
+
+Nested property/array target paths, lazy-proxy completion and the independent
+object-dump/GC gaps remain outside this checkpoint. Property-hook behavior is
+not broadened beyond its previously tested contract.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `e7c108fc`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,886 pass, 1,413 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
