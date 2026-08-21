@@ -8,6 +8,74 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `f186311e`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,878 pass, 1,421 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 73.184% and the whole-corpus rate is 69.262%; 4,740 of
+5,299 attempted cases reach runtime (89.451%). Relative to exact base
+`074ae14d`, the pass-set delta is +8/-0:
+`Zend/tests/closures/closure_call_bind.phpt`,
+`Zend/tests/first_class_callable/constexpr/error_namespace_no_fallback_002.phpt`,
+`Zend/tests/first_class_callable/constexpr/error_static_call_instance_method.phpt`,
+`Zend/tests/first_class_callable/constexpr/error_unknown_class.phpt`,
+`Zend/tests/first_class_callable/constexpr/error_unknown_method.phpt`,
+`Zend/tests/first_class_callable/first_class_callable_008.phpt`,
+`Zend/tests/first_class_callable/first_class_callable_012.phpt` and
+`Zend/tests/gh20113.phpt` become exact passes. Every previous pass remains a
+pass.
+
+Two expected non-pass cases advance past their former parser boundary.
+`first_class_callable_dynamic.phpt` now produces all six expected callable
+results and remains an output failure only because RPHP diagnoses the final
+unused undefined `$nam` expression that PHP elides. `property_hooks/bug003.phpt`
+now reaches runtime and retains the separate missing compile-time prohibition
+for a parent property-hook callable. There are no other status or failure-
+category transitions. Two sequential final runs have byte-identical merged
+manifests and summaries. Their manifest and summary SHA-256 values are
+`a3ee585777436fd1cf5fd593955400e9122223b51714a383bc28561dbc2af0d4`
+and `bdc62f05f68a9447ced644576db38f7bac5b081e9d63123407083f4477e62365`.
+
+The postfix parser now recognizes first-class callable placeholders after
+dynamic class and method expressions, including braced members, and accepts
+the explicit `namespace\name(...)` function form. Owner and member expressions
+reuse the ordinary two-element callable representation, preserving left-to-
+right, exactly-once evaluation before deferred invocation. Named and dynamic
+`new ...(...)` forms and nullsafe method callable syntax instead record PHP
+8.5's deferred compile fatal, including in non-executed source. General first-
+class callable AST nodes retain their creation line, and the compiler attaches
+it to the existing `CreateFirstClassCallable` instruction through the sparse
+source map so failed class and method resolution keeps the creation origin and
+caller trace.
+
+Original parser regressions cover namespace-relative, dynamic static and
+dynamic instance forms plus named/dynamic `new` and named/braced nullsafe
+rejections. Two original E2E regressions cover successful dispatch, exact
+resolution origin and trace, and owner/member evaluation order and cardinality.
+The change adds no opcode, instruction-layout field, runtime resolver special
+case, dependency or unsafe block. The production unsafe inventory remains
+1,613 blocks, 289 unsafe functions and 312 SAFETY annotations. All five Cargo
+configurations, all-features/all-targets, formatting, PHPT runner self-test,
+unsafe self-test and the exact unsafe ratchet pass, as do all 31 pipe PHPTs,
+Composer S0, all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3.
+
+Twenty-one alternating CPU-pinned default-release pairs with JIT and quick
+loops disabled exercised two million existing dynamic string callable
+creations and calls per run. Baseline p10/median/p90/mean was
+0.648512/0.665015/0.691699/0.670971 seconds and candidate
+0.636141/0.656294/0.682324/0.659312 seconds. The independent median and mean
+ratios are 0.986886 and 0.982624; paired p10/median/p90/mean ratios are
+0.950911/0.988196/1.026965/0.983541. A second control compiled and evaluated
+5,000 existing dynamic string callable sites per run. Baseline
+p10/median/p90/mean was 0.298809/0.302361/0.315235/0.305532 seconds and
+candidate 0.298343/0.301279/0.306368/0.302699 seconds. Its independent median
+and mean ratios are 0.996420 and 0.990726; paired p10/median/p90/mean ratios
+are 0.954550/0.992131/1.021049/0.991714. Both independent medians are below
+the +5% gate and every run retained its exact `7000000` or `3` checksum. The
+exact candidate binary SHA-256 is
+`bf5fe8b6f4bb61f8b0cd7abc55f7cb5464360545d8f65fbba8ee23141a731e51`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `074ae14d`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,870 pass, 1,429 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
