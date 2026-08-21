@@ -289,7 +289,6 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "SEEK_END" => Some(value::Value::long(2)),
         #[cfg(any(feature = "file-write", feature = "file-lines"))]
         "FILE_USE_INCLUDE_PATH" => Some(value::Value::long(1)),
-        #[cfg(feature = "file-write")]
         "FILE_APPEND" => Some(value::Value::long(8)),
         #[cfg(feature = "file-lines")]
         "FILE_IGNORE_NEW_LINES" => Some(value::Value::long(2)),

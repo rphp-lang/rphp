@@ -148,6 +148,27 @@ fn file_put_contents_writes_complete_ascii_files() {
 }
 
 #[test]
+#[cfg(not(feature = "file-write"))]
+fn default_file_put_contents_appends_under_exclusive_lock_during_shutdown() {
+    let path = TemporaryPath::unique("file-contents-shutdown-append-lock");
+    let source = format!(
+        "<?php
+        echo FILE_APPEND, ':', LOCK_EX, '|';
+        register_shutdown_function(function () {{
+            file_put_contents('{}', 'first', FILE_APPEND | LOCK_EX);
+            file_put_contents('{}', ':second', FILE_APPEND | LOCK_EX);
+            echo 'done';
+        }});
+        ",
+        path.php_literal(),
+        path.php_literal()
+    );
+
+    assert_eq!(run_php(&source), "8:2|done");
+    assert_eq!(std::fs::read(&path.0).unwrap(), b"first:second");
+}
+
+#[test]
 fn file_reads_complete_lines_across_stack_sized_boundaries() {
     let path = TemporaryPath::unique("file-lines-default");
     let mut payload = vec![b'x'; 9_000];

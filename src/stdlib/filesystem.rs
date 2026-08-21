@@ -1,10 +1,12 @@
 //! Baseline filesystem builtins and their private path/glob helpers.
 //!
 //! Feature-complete stream-backed file operations remain in `file_contents`.
-//! This module keeps the fallback handlers together without changing their
-//! registration order, signatures or PHP-visible behavior.
+//! This module keeps the smaller default-build handlers together while their
+//! bounded PHP-visible contracts expand independently of the opt-in surfaces.
 
 use std::borrow::Cow;
+#[cfg(not(feature = "file-write"))]
+use std::io::Write;
 
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value, ValueType};
@@ -43,8 +45,9 @@ pub(super) fn php_string_to_bytes(s: &str) -> Vec<u8> {
     s.chars().map(|c| c as u8).collect()
 }
 
-/// file_put_contents($filename, $data): int|false
-/// Writes using Latin-1 byte mapping to preserve binary data round-trip.
+/// Default-build file_put_contents($filename, $data, $flags = 0): int|false.
+/// Writes using Latin-1 byte mapping to preserve binary data round-trip and
+/// supports the ordinary regular-file append/exclusive-lock flag pair.
 #[cfg(not(feature = "file-write"))]
 pub(super) fn fn_file_put_contents(
     ed: *mut ExecuteData,
@@ -53,8 +56,31 @@ pub(super) fn fn_file_put_contents(
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let data = arg_str!(ed, 1);
+    let flags = arg_opt!(ed, 2).map(Value::to_long_val).unwrap_or(0);
     let raw_bytes = php_string_to_bytes(data.as_ref());
-    match std::fs::write(path.as_ref(), &raw_bytes) {
+    let append = flags & 8 != 0;
+    let locked = flags & 2 != 0;
+    let result = if append || locked {
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true);
+        if append {
+            options.append(true);
+        } else {
+            options.truncate(false);
+        }
+        options.open(path.as_ref()).and_then(|mut file| {
+            if locked {
+                file.lock()?;
+                if !append {
+                    file.set_len(0)?;
+                }
+            }
+            file.write_all(&raw_bytes)
+        })
+    } else {
+        std::fs::write(path.as_ref(), &raw_bytes)
+    };
+    match result {
         Ok(()) => ret!(rv, Value::long(raw_bytes.len() as i64)),
         Err(_) => ret!(rv, Value::bool(false)),
     }

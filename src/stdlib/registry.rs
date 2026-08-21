@@ -868,10 +868,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!(
         "file_put_contents",
         fn_file_put_contents,
-        2,
+        3,
         2,
         "filename",
-        "data"
+        "data",
+        "flags"
     );
     #[cfg(feature = "file-write")]
     reg!(
