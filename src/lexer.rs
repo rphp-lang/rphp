@@ -178,7 +178,7 @@ struct DeferredCompileDiagnostic {
 
 enum StringPart {
     Literal(String),
-    Variable(String),
+    Variable(String, usize),
     PropertyAccess(String, String, bool, usize), // var_name, property_name, nullsafe, source line
     ArrayAccess(String, String, usize), // var_name, index (string or integer literal), line
     DynamicArrayAccess(String, String, usize), // var_name, index variable, line
@@ -1313,9 +1313,28 @@ mod tests {
                 Token::LParen(0),
                 Token::StringLiteral("Hello ".into()),
                 Token::Dot,
-                Token::Variable("name".into(), 0),
+                Token::Variable("name".into(), 2),
                 Token::Dot,
                 Token::StringLiteral("!".into()),
+                Token::RParen,
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn simple_string_interpolation_retains_the_variable_source_line() {
+        let tokens = Lexer::new("<?php\necho \"$value\";").tokenize().unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                echo(2),
+                Token::LParen(0),
+                Token::StringLiteral(String::new()),
+                Token::Dot,
+                Token::Variable("value".into(), 2),
                 Token::RParen,
                 Token::Semicolon,
                 Token::Eof,

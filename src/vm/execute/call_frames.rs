@@ -1179,6 +1179,28 @@ fn call_magic_method(
     method_name: &str,
     args: &[Value],
 ) -> Result<Option<Value>, VmError> {
+    call_magic_method_with_trace_site(eg, obj_val, method_name, args, false)
+}
+
+/// Engine-dispatched magic operations execute through a detached callback
+/// frame. Retain the active source instruction as that frame's logical caller
+/// when PHP exposes the operation itself in live or stored traces.
+fn call_magic_method_from_current_site(
+    eg: &mut ExecutorGlobals,
+    obj_val: &Value,
+    method_name: &str,
+    args: &[Value],
+) -> Result<Option<Value>, VmError> {
+    call_magic_method_with_trace_site(eg, obj_val, method_name, args, true)
+}
+
+fn call_magic_method_with_trace_site(
+    eg: &mut ExecutorGlobals,
+    obj_val: &Value,
+    method_name: &str,
+    args: &[Value],
+    trace_current_site: bool,
+) -> Result<Option<Value>, VmError> {
     let class_name = {
         let obj = obj_val.as_object().unwrap();
         obj.class_name.clone()
@@ -1192,7 +1214,12 @@ fn call_magic_method(
     let mut call_args = Vec::with_capacity(args.len() + 1);
     call_args.push(obj_val.clone());
     call_args.extend_from_slice(args);
-    Ok(Some(call_function(eg, func_ptr, &call_args)?))
+    let result = if trace_current_site {
+        call_function_iter_from_current_site(eg, func_ptr, call_args.len(), call_args.iter())?
+    } else {
+        call_function(eg, func_ptr, &call_args)?
+    };
+    Ok(Some(result))
 }
 
 /// Property magic is engine-dispatched from one active source instruction.

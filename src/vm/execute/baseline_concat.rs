@@ -60,7 +60,7 @@ fn prepare_concat_operand_string(
         let conversion = if value.value_type() == ValueType::Closure {
             None
         } else {
-            call_magic_method(eg, value, "__tostring", &[])?
+            call_magic_method_from_current_site(eg, value, "__tostring", &[])?
         };
         if eg.exception.is_some() {
             return Ok(None);

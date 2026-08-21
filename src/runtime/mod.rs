@@ -475,7 +475,7 @@ pub struct ExecutorGlobals {
     /// Logical callers of synchronous engine-created callback frames. Their
     /// physical predecessor stays null so `Return` exits the detached
     /// executor, while live backtraces can still cross the callback boundary.
-    detached_trace_callers: Option<Box<HashMap<usize, (usize, bool)>>>,
+    detached_trace_callers: Option<Box<Vec<(usize, usize, bool)>>>,
     /// Optional synthetic call sites for engine-created callbacks and source
     /// units. Attribute constructors retain their declaration origin; eval
     /// additionally publishes its logical frame name without widening the hot
@@ -1451,9 +1451,14 @@ impl ExecutorGlobals {
     #[cold]
     pub(crate) fn publish_detached_trace_caller(&mut self, frame: usize, caller: usize) {
         if caller != 0 {
-            self.detached_trace_callers
-                .get_or_insert_with(|| Box::new(HashMap::new()))
-                .insert(frame, (caller, false));
+            let callers = self
+                .detached_trace_callers
+                .get_or_insert_with(|| Box::new(Vec::with_capacity(1)));
+            if let Some(entry) = callers.iter_mut().find(|entry| entry.0 == frame) {
+                *entry = (frame, caller, false);
+            } else {
+                callers.push((frame, caller, false));
+            }
         }
     }
 
@@ -1469,9 +1474,14 @@ impl ExecutorGlobals {
         caller: usize,
     ) {
         if caller != 0 {
-            self.detached_trace_callers
-                .get_or_insert_with(|| Box::new(HashMap::new()))
-                .insert(frame, (caller, true));
+            let callers = self
+                .detached_trace_callers
+                .get_or_insert_with(|| Box::new(Vec::with_capacity(1)));
+            if let Some(entry) = callers.iter_mut().find(|entry| entry.0 == frame) {
+                *entry = (frame, caller, true);
+            } else {
+                callers.push((frame, caller, true));
+            }
         }
     }
 
@@ -1516,7 +1526,9 @@ impl ExecutorGlobals {
 
     pub(crate) fn discard_detached_trace_caller(&mut self, frame: usize) {
         if let Some(callers) = self.detached_trace_callers.as_deref_mut() {
-            callers.remove(&frame);
+            if let Some(index) = callers.iter().position(|entry| entry.0 == frame) {
+                callers.swap_remove(index);
+            }
         }
         let origins_empty = self
             .detached_trace_origins
@@ -1541,8 +1553,8 @@ impl ExecutorGlobals {
         }
         self.detached_trace_callers
             .as_deref()
-            .and_then(|callers| callers.get(&frame))
-            .map(|(caller, _)| *caller)
+            .and_then(|callers| callers.iter().find(|entry| entry.0 == frame))
+            .map(|(_, caller, _)| *caller)
             .map_or(std::ptr::null_mut(), |caller| caller as *mut ExecuteData)
     }
 
@@ -1550,8 +1562,8 @@ impl ExecutorGlobals {
     pub(crate) fn detached_trace_caller_is_current_site(&self, frame: usize) -> bool {
         self.detached_trace_callers
             .as_deref()
-            .and_then(|callers| callers.get(&frame))
-            .is_some_and(|(_, current_site)| *current_site)
+            .and_then(|callers| callers.iter().find(|entry| entry.0 == frame))
+            .is_some_and(|(_, _, current_site)| *current_site)
     }
 
     #[cold]

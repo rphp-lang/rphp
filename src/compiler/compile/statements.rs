@@ -1833,17 +1833,25 @@ impl Compiler {
                         left,
                         right,
                     } if matches!(left.as_ref(), Expr::Variable { name, .. } if name == var)
-                        && self.definitely_defined_cvs.contains(&cv_idx) => Some(right.as_ref()),
+                        && self.definitely_defined_cvs.contains(&cv_idx) => {
+                            Some((right.as_ref(), incdec_target_source_line(left)))
+                        }
                     _ => None,
                 };
-                let moved_source = if let Some(right) = compact_concat_rhs {
+                let moved_source = if let Some((right, target_line)) = compact_concat_rhs {
+                    let first_instruction = self.instructions.len();
                     let (rhs_op, rhs_type) = self.compile_expr(right);
+                    let right_line = expression_source_line(right);
+                    let source_line = (right_line != 0)
+                        .then_some(right_line)
+                        .or_else(|| self.latest_source_line_since(first_instruction))
+                        .unwrap_or(target_line);
                     let mut instr = Instruction::new(OpCode::AssignConcat);
                     instr.op1_type = OpType::Cv;
                     instr.op1 = cv_idx;
                     instr.op2_type = rhs_type;
                     instr.op2 = rhs_op;
-                    self.instructions.push(instr);
+                    self.push_instruction_at_line(instr, source_line);
                     None
                 } else {
                     let (operand, op_type) = self.compile_expr(expr);
@@ -1900,7 +1908,7 @@ impl Compiler {
                     append.op1_type = OpType::Cv;
                     append.op2 = right;
                     append.op2_type = right_type;
-                    self.instructions.push(append);
+                    self.push_instruction_at_line(append, incdec_target_source_line(target));
                     self.definitely_defined_cvs.insert(cv);
                     return Ok(());
                 }
@@ -1950,7 +1958,12 @@ impl Compiler {
                 operation._pad |= ARITHMETIC_COMPOUND_ASSIGN;
                 if matches!(
                     op,
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow
+                    BinOp::Add
+                        | BinOp::Sub
+                        | BinOp::Mul
+                        | BinOp::Div
+                        | BinOp::Concat
+                        | BinOp::Pow
                 ) {
                     self.push_instruction_at_line(operation, incdec_target_source_line(target));
                 } else {

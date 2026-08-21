@@ -71,6 +71,78 @@ fn incdec_target_source_line(target: &Expr) -> usize {
     }
 }
 
+fn expression_source_line(expression: &Expr) -> usize {
+    match expression {
+        Expr::Variable { line, .. }
+        | Expr::DynamicVariable { line, .. }
+        | Expr::Globals { line }
+        | Expr::CompileError { line, .. }
+        | Expr::CompileWarning { line, .. }
+        | Expr::CompileDeprecation { line, .. }
+        | Expr::Pipe { line, .. }
+        | Expr::FunctionCall { line, .. }
+        | Expr::Eval { line, .. }
+        | Expr::PostInc { line, .. }
+        | Expr::PostDec { line, .. }
+        | Expr::PreInc { line, .. }
+        | Expr::PreDec { line, .. }
+        | Expr::ArrayAccess { line, .. }
+        | Expr::ArrayAppendArgument { line, .. }
+        | Expr::Cast { line, .. }
+        | Expr::Match { line, .. }
+        | Expr::Closure { line, .. }
+        | Expr::New { line, .. }
+        | Expr::DynamicNew { line, .. }
+        | Expr::AnonymousNew { line, .. }
+        | Expr::PropertyAccess { line, .. }
+        | Expr::DynamicPropertyAccess { line, .. }
+        | Expr::MethodCall { line, .. }
+        | Expr::StaticCall { line, .. }
+        | Expr::StaticProperty { line, .. }
+        | Expr::DynamicNamedStaticProperty { line, .. }
+        | Expr::DynamicStaticProperty { line, .. }
+        | Expr::ClassConstant { line, .. }
+        | Expr::Throw { line, .. }
+        | Expr::ListAssign { line, .. }
+        | Expr::DynamicCall { line, .. }
+        | Expr::DynamicStaticCall { line, .. }
+        | Expr::MagicConstant { line, .. }
+        | Expr::YieldFrom { line, .. }
+        | Expr::Clone { line, .. } => *line,
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => {
+            let right = expression_source_line(right);
+            (right != 0)
+                .then_some(right)
+                .unwrap_or_else(|| expression_source_line(left))
+        }
+        Expr::CoalesceAssign { target, expr }
+        | Expr::CompoundAssignExpression { target, expr, .. }
+        | Expr::AssignTarget { target, expr }
+        | Expr::ArrayAppendAssign { target, expr, .. } => {
+            let expr = expression_source_line(expr);
+            (expr != 0)
+                .then_some(expr)
+                .unwrap_or_else(|| expression_source_line(target))
+        }
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::ErrorSuppress(inner)
+        | Expr::Empty(inner)
+        | Expr::PostIncTarget(inner)
+        | Expr::PostDecTarget(inner)
+        | Expr::PreIncTarget(inner)
+        | Expr::PreDecTarget(inner)
+        | Expr::FirstClassCallable(inner)
+        | Expr::Print(inner)
+        | Expr::BitwiseNot(inner) => expression_source_line(inner),
+        Expr::Include { path, .. } => expression_source_line(path),
+        _ => 0,
+    }
+}
+
 fn assertion_expression_source(expr: &Expr) -> Option<String> {
     fn quote_string(value: &str) -> String {
         format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
@@ -3243,6 +3315,16 @@ impl Compiler {
                 u32::try_from(line).unwrap_or(u32::MAX),
             ));
         }
+    }
+
+    fn latest_source_line_since(&self, instruction_index: usize) -> Option<usize> {
+        self.instruction_source_lines
+            .iter()
+            .rev()
+            .find(|(index, _)| {
+                usize::try_from(*index).is_ok_and(|index| index >= instruction_index)
+            })
+            .map(|(_, line)| *line as usize)
     }
 
     fn mark_last_property_incdec_writeback(&mut self, increment: bool) {
@@ -7309,9 +7391,21 @@ impl Compiler {
             first = left;
         }
 
+        let first_instruction = self.instructions.len();
         let mut accumulated = self.compile_expr(first);
+        let first_line = expression_source_line(first);
+        let mut accumulated_line = (first_line != 0)
+            .then_some(first_line)
+            .or_else(|| self.latest_source_line_since(first_instruction));
         for operand in reversed.into_iter().rev() {
+            let operand_instruction = self.instructions.len();
             let next = self.compile_expr(operand);
+            let operand_line = expression_source_line(operand);
+            let source_line = (operand_line != 0)
+                .then_some(operand_line)
+                .or_else(|| self.latest_source_line_since(operand_instruction))
+                .or(accumulated_line)
+                .unwrap_or(0);
             let result = self.alloc_tmp();
             let mut concat = Instruction::new(OpCode::Concat);
             concat.op1 = accumulated.0;
@@ -7320,8 +7414,9 @@ impl Compiler {
             concat.op2_type = next.1;
             concat.result = result;
             concat.result_type = OpType::Tmp;
-            self.instructions.push(concat);
+            self.push_instruction_at_line(concat, source_line);
             accumulated = (result, OpType::Tmp);
+            accumulated_line = (source_line != 0).then_some(source_line);
         }
         accumulated
     }
@@ -7832,7 +7927,11 @@ impl Compiler {
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
                 operation._pad |= ARITHMETIC_COMPOUND_ASSIGN;
-                self.instructions.push(operation);
+                if *op == BinOp::Concat {
+                    self.push_instruction_at_line(operation, incdec_target_source_line(target));
+                } else {
+                    self.instructions.push(operation);
+                }
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
                 if let Some(cv) = direct_cv {
                     self.definitely_defined_cvs.insert(cv);

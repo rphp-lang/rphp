@@ -667,7 +667,7 @@ impl<'a> Lexer<'a> {
                                 )
                             })?
                             .to_string();
-                        parts.push(StringPart::Variable(name));
+                        parts.push(StringPart::Variable(name, expression_line));
                         diagnostics.push(DeferredCompileDiagnostic {
                             kind: DeferredCompileDiagnosticKind::Deprecation,
                             message: "Using ${var} in strings is deprecated, use {$var} instead"
@@ -797,7 +797,7 @@ impl<'a> Lexer<'a> {
                             interpolation_line,
                         ));
                     } else {
-                        parts.push(StringPart::Variable(name));
+                        parts.push(StringPart::Variable(name, interpolation_line));
                     }
                 } else {
                     current.push('$');
@@ -833,10 +833,10 @@ impl<'a> Lexer<'a> {
                     if content.get(pos) == Some(&b'}') {
                         pos += 1;
                     }
-                    parts.push(StringPart::ArrayAccess(name, index, 0));
+                    parts.push(StringPart::ArrayAccess(name, index, expression_line));
                 } else if content.get(pos) == Some(&b'}') {
                     pos += 1;
-                    parts.push(StringPart::Variable(name));
+                    parts.push(StringPart::Variable(name, expression_line));
                 } else {
                     let expression_end = Self::complex_interpolation_end(content, pos)
                         .map_err(|message| StringLexError::new(message, expression_line))?;
@@ -1008,11 +1008,11 @@ impl<'a> Lexer<'a> {
         if parts.len() == 1 {
             match &parts[0] {
                 StringPart::Literal(value) => tokens.push(Token::StringLiteral(value.clone())),
-                StringPart::Variable(name) => {
+                StringPart::Variable(name, line) => {
                     tokens.push(Token::LParen(0));
                     tokens.push(Token::StringLiteral(String::new()));
                     tokens.push(Token::Dot);
-                    tokens.push(Token::Variable(name.clone(), 0));
+                    tokens.push(Token::Variable(name.clone(), *line));
                     tokens.push(Token::RParen);
                 }
                 StringPart::PropertyAccess(name, property, nullsafe, line) => {
@@ -1063,7 +1063,9 @@ impl<'a> Lexer<'a> {
             }
             match part {
                 StringPart::Literal(value) => tokens.push(Token::StringLiteral(value.clone())),
-                StringPart::Variable(name) => tokens.push(Token::Variable(name.clone(), 0)),
+                StringPart::Variable(name, line) => {
+                    tokens.push(Token::Variable(name.clone(), *line));
+                }
                 StringPart::PropertyAccess(name, property, nullsafe, line) => {
                     Self::emit_property_access_tokens(tokens, name, property, *nullsafe, *line);
                 }

@@ -1106,3 +1106,51 @@ try {
         ),
     );
 }
+
+#[test]
+fn concat_tostring_callbacks_retain_live_and_throwable_call_sites() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class TracedConcat {
+    public function __toString(): string {
+        $frame = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)[0];
+        return $frame['function'] . '@' . $frame['file'] . ':' . $frame['line'];
+    }
+}
+class ThrowingConcat {
+    public function __toString(): string {
+        throw new Exception('conversion failed');
+    }
+}
+$traced = new TracedConcat;
+echo 'explicit=' . $traced, "\n";
+echo "interpolated=$traced\n";
+$compound = 'compound=';
+$compound .= $traced;
+echo $compound, "\n";
+$value = 'value=';
+echo ($value .= $traced), "\n";
+$throwing = new ThrowingConcat;
+try {
+    echo "$throwing";
+} catch (Throwable $error) {
+    $frame = $error->getTrace()[0];
+    echo $error->getFile(), ':', $error->getLine(), '|',
+        $frame['class'], '::', $frame['function'], '@',
+        $frame['file'], ':', $frame['line'];
+}
+"#,
+            "/virtual/concat-tostring-trace.php",
+            "/virtual",
+        ),
+        concat!(
+            "explicit=__toString@/virtual/concat-tostring-trace.php:14\n",
+            "interpolated=__toString@/virtual/concat-tostring-trace.php:15\n",
+            "compound=__toString@/virtual/concat-tostring-trace.php:17\n",
+            "value=__toString@/virtual/concat-tostring-trace.php:20\n",
+            "/virtual/concat-tostring-trace.php:10|",
+            "ThrowingConcat::__toString@/virtual/concat-tostring-trace.php:23",
+        ),
+    );
+}
