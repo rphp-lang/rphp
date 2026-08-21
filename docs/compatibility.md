@@ -8,6 +8,52 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `def82dfa`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,804 pass, 1,495 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 71.787% and the whole-corpus rate is 67.941%; 4,706 of
+5,299 attempted cases reach runtime (88.809%). Relative to exact base
+`63f1cffe`, the pass-set delta is +1/-0: every prior pass remains a pass and
+there are no other status or failure-category transitions. Two sequential
+final full runs have byte-identical merged manifests and summaries. Their
+SHA-256 values are
+`186489973887cf5937a606c5c12968598e16de0d787a8eaa187363f2846219c4`
+and `3bab12800e28bef38f2dbd8d74629c0c78f0d850216246fdb77dc778edeb87e6`.
+
+`ReflectionClass::__toString()` now renders PHP 8.5's implicit metadata for
+user-defined enums. Enum titles omit the implementation-only `final` modifier,
+include backing types and declared plus implicit interfaces, and list cases in
+their own section rather than as static properties. Implicit `cases()`,
+`from()` and `tryFrom()` methods expose their internal `UnitEnum` or
+`BackedEnum` prototypes, canonical parameter and return signatures, and PHP
+ordering. The implicit `name` and backed `value` properties render as public
+`protected(set)` readonly properties. Runtime write metadata is deliberately
+unchanged so PHP's established enum-readonly diagnostics retain precedence.
+
+One original E2E regression covers unbacked and string-backed enums, a custom
+interface, cases, implicit methods, signatures, ordering and both implicit
+properties; all 83 Reflection E2E tests pass. Minimal unbacked and backed
+renderings match PHP 8.5 byte-for-byte. The complete 356-case adjacent
+`Zend/tests/attributes` plus `Zend/tests/enum` audit has exactly one movement:
+`Zend/tests/attributes/delayed_target_validation/validator_Deprecated.phpt`
+becomes the full-corpus addition. In particular, all four enum property-write
+controls remain passes and internal-enum rendering remains unchanged.
+User-declared method source/signature formatting and PHP extension-qualified
+internal-enum rendering remain separate visible gaps.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,614 unsafe blocks and 289 unsafe
+functions. No separate performance or layout gate applies: all added work is
+confined to explicit cold Reflection stringification, while enum compilation,
+storage, dispatch, writes and object layout are unchanged. The exact base and
+candidate binary SHA-256 values are
+`094a285dc58b6f7c5d698e6ac942393c2a6b429ab9353f50852dfb203a98c9fc`
+and `dd6643ff7c750594aba103d0f9b3c5caa407fec2f1cefb7b988574a51e0be17f`.
+
+In the preceding Deprecated-attribute checkpoint, the measured AMD64 PHP 8.5
+contract was pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `63f1cffe`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,803 pass, 1,496 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
