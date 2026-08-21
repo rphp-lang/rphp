@@ -8,7 +8,59 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `8b37e107`. Across all 5,599
+8.5.6 commit `fcc29c8` and candidate commit `4a1aaebe`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,800 pass, 1,499 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 71.712% and the whole-corpus rate is 67.869%; 4,706 of
+5,299 attempted cases reach runtime (88.809%). Relative to exact base
+`8b37e107`, the pass-set delta is +8/-0: every prior pass remains a pass and
+there are no other status or failure-category transitions. Two sequential
+final full runs have byte-identical merged manifests and summaries. Their
+SHA-256 values are
+`dcef4f1eb518f48dbf36e564817d574b9a09f404fbe6918d54283ee292b189b4`
+and `06e1255b8b913f10a802b921e91061382a4df8dbacaf50d274a40d547899478c`.
+
+The built-in `Attribute` meta-attribute now enforces its PHP 8.5 declaration
+contract during compilation. It can target a concrete ordinary, final,
+readonly or anonymous class, but rejects functions, constants, methods,
+properties, parameters, class constants and enum cases. Abstract classes,
+interfaces, traits and enums retain their distinct `Cannot apply
+#[\Attribute]` diagnostics. Namespace and import resolution distinguish the
+built-in from a same-named user attribute. `Attribute` is non-repeatable;
+`DelayedTargetValidation` defers target and class-form validation while still
+rejecting repetition, matching PHP's validation order.
+
+One original E2E regression covers every declaration target, aliased and local
+names, valid class forms, repetition and delayed validation. The complete
+204-case adjacent `Zend/tests/attributes` run has no lost prior pass or
+unrelated transition. The eight exact
+full-corpus additions are `Zend/tests/attributes/008_wrong_attribution.phpt`,
+`024_internal_target_validation.phpt`,
+`025_internal_repeatable_validation.phpt`, the four
+`attributes/Attribute/Attribute_on_*.phpt` cases, and
+`attributes/constants/must_target_const-internal.phpt`. Reflection-time
+validation of user-defined attributes and delayed validator instantiation is
+unchanged and remains outside this compile-time checkpoint.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,614 unsafe blocks and 289 unsafe
+functions. On CPU 2 with the performance governor, four warmups per binary and
+32 balanced ABBA/BAAB groups with no removed observations, compilation of
+1,000 ordinary typed function declarations retains output `ok`. The 64
+observations per binary measure baseline p10/median/p90
+0.182858/0.184534/0.187294 seconds and candidate
+0.183150/0.184973/0.186925 seconds: +0.238% independently and -0.063% by the
+paired-group median, whose p10/p90 is -0.881%/+1.272%. Both medians remain
+below the five-percent regression ceiling; no speedup is claimed. The exact
+base and candidate binary SHA-256 values are
+`8fba18dc89b1e5ba4b17ff13b79efbc7cf4692817ea71fbdf3b046516d81fdaa`
+and `b29f58f9d5dbd3ddd86e9f35b74d4476462b559964e9113d1b4f07a0661cc814`.
+
+In the preceding relative-type-declaration checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`8b37e107`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,792 pass, 1,507 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
 headline pass rate is 71.561% and the whole-corpus rate is 67.726%; 4,706 of
