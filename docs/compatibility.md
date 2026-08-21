@@ -8,6 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `8ec911bb`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,850 pass, 1,449 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.655% and the whole-corpus rate is 68.762%; 4,733 of
+5,299 attempted cases reach runtime (89.319%). Relative to exact base
+`4257b3e0`, the pass-set delta is exactly +10/-0: `Zend/tests/add_006.phpt`,
+`constexpr/constant_expressions.phpt`,
+`constexpr/constant_expressions_dynamic.phpt`, both
+`numeric_strings/invalid_numeric_string*` cases, and the five
+`tests/lang/operators/{add,subtract,multiply,divide,negate}_variationStr.phpt`
+cases become passes. Every prior pass remains a pass, and there are no other
+status or failure-category transitions.
+
+Two sequential final full runs have byte-identical merged manifests and
+summaries. Their SHA-256 values are
+`76db41be2f0596ea31dc3b185dfe6be30c1cdfdacd1a711b71cdc3c1c1d00afc`
+and `1c3d28a4e8404a3aee6d9df0f3324d7ba8be7fa0d8186b24a14fbd018e3887bf`.
+The exact default-release candidate binary SHA-256 is
+`c2d9d31261fb5236415c8f960b6077ad62779723e0bd575c48bfbf0f6c8855ff`.
+
+Ordinary addition, subtraction, multiplication, division and exponentiation
+now accept PHP leading-numeric strings while retaining whether each operand
+requires `E_WARNING: A non-numeric value encountered`. The shared cold
+conversion path reports warnings left-to-right before committing a result;
+an invalid left operand therefore reports no right warning, while a valid
+leading-numeric left operand reports its warning before an invalid right
+operand throws. A throwing error handler interrupts conversion immediately
+and leaves a compound-assignment target unchanged. Unary plus and minus share
+the same rule through their existing multiplication lowering. Complete
+numeric strings retain integer results where PHP does, including exact
+division and power, and constant folding preserves the integer kind only when
+no runtime diagnostic is required.
+
+One original E2E regression covers all five operators, unary forms, all
+specialized addition/subtraction opcode shapes, exact division and power,
+invalid-operand warning order, successful compound assignment and a throwing
+handler. The shared operand converter, warning boundary and cold result
+helpers add no opcode, layout field or dependency. Consolidating the touched
+result writes lowers the production unsafe inventory from 1,616 to 1,615
+blocks while retaining 289 unsafe functions. Integer-only operators remain on
+their existing checked conversion path; resource arithmetic and broader
+operator-output gaps remain separate checkpoints.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe diff ratchet pass, as do
+Composer S0, all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3. Twenty-one alternating CPU-pinned default-release pairs of the
+ten-million-iteration mixed arithmetic control measured baseline
+p10/median/p90 1.216975/1.237354/1.268309 seconds and candidate
+1.267856/1.290534/1.352766 seconds. The independent median ratio is 1.0430 and
+the paired-median ratio is 1.0445, below the +5% gate; paired p10/p90 ratios
+are 1.0172/1.0733, and every run retained checksum `419,729999927,1`. The
+exact base and candidate binary SHA-256 values are
+`e3b9e4152ec62ab37758db34b59674c7a2d06c251ef5bf2b4eccb550bd8af557`
+and `c2d9d31261fb5236415c8f960b6077ad62779723e0bd575c48bfbf0f6c8855ff`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `4257b3e0`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,840 pass, 1,459 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
