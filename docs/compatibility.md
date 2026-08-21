@@ -8,15 +8,77 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `f8e4233d`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,819 pass, 1,480 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `51c111c4`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,821 pass, 1,478 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
-headline pass rate is 72.070% and the whole-corpus rate is 68.209%; 4,706 of
+headline pass rate is 72.108% and the whole-corpus rate is 68.244%; 4,706 of
 5,299 attempted cases reach runtime (88.809%). Relative to exact base
-`3f05d6a8`, the pass-set delta is +13/-0: every prior pass remains a pass and
-there are no other status or failure-category transitions. Two sequential
-final full runs have byte-identical merged manifests and summaries. Their
-SHA-256 values are
+`f8e4233d`, the pass-set delta is +2/-0: every prior pass remains a pass.
+`Zend/tests/constants/gh10709.phpt` and
+`Zend/tests/type_declarations/typed_class_constants_diamond_error1.phpt`
+become exact. Two existing failures, `Zend/tests/constexpr/gh7771_1.phpt` and
+`gh7771_2.phpt`, advance from silent output mismatches to runtime diagnostics;
+they still fail only because their constant-expression source origin and stack
+frame are not yet retained. There are no other status or failure-category
+transitions. Two sequential final full runs have byte-identical merged
+manifests and summaries. Their SHA-256 values are
+`41d96379d8933289cca64b8549d9a7701b2e3bab9d74ea53548c0ab19113c44e`
+and `4fcb5d20f2f42841b366c085ca20c20f9ad8321c3c41662eec130024a9f499c7`.
+
+An ordinary `new` now activates every inherited or locally declared deferred
+class constant before property defaults and object storage are materialized.
+This gives a recursive `define('C', new A())` expression PHP's catchable
+`Undefined constant "C"` ordering, lets autoload publish a dependency during
+reentrant constant evaluation, and validates a newly available value against
+its typed class-constant declaration. Failed activation stays pending, so a
+later definition can make a repeated allocation succeed while an incompatible
+typed value raises the same `TypeError` on every attempt. Interface, abstract
+class and enum instantiability errors retain precedence. Class lookup and
+static method calls remain non-activating, while
+`ReflectionClass::newInstanceWithoutConstructor()` follows the same activation
+rule as ordinary construction.
+
+The implementation registers only classes with deferred constants in an
+optional request-local class-ID sidecar after inheritance, interface and trait
+constant linking. Successful activation changes that sidecar state without
+enlarging class, class-constant or object layouts; requests containing only
+ordinary constants never allocate it. Two original E2E regressions cover the
+recursive `define()` ordering, missing and mistyped retry behavior, inherited
+activation, non-eager boundaries, abstract precedence and Reflection. An older
+class-constant covariance fixture was corrected to remove a recursive object
+construction that PHP 8.5 also rejects under this rule. All 96 class-constant
+E2E tests pass. The complete 496-case `Zend/tests/type_declarations` audit
+rises from 407 to 408 exact passes with no other movement. The 29-case typed-
+class-constant slice rises from 27 to 28 passes; only the separate assertion-
+AST rendering case remains.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe ratchet pass, as do Composer
+S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and cold-build
+S3. The production inventory remains 1,614 unsafe blocks and 289 unsafe
+functions. Thirty-one CPU-pinned alternating AMD64 default-release pairs, with
+no outlier removal, put five million ordinary declared-object allocations at a
+1.0217 candidate/control independent-median ratio and 1.0234 paired-median
+ratio. The same allocation count after successful deferred-constant activation
+measures 1.0244 independently and 1.0245 paired. Paired p90 ratios are 1.0504
+and 1.0513 respectively; both median regression gates remain below the five-
+percent ceiling with exact checksums `85000000` and `85000000:23`. The exact
+base and candidate binary SHA-256 values are
+`012a8b4eb84ce1f06ab9e251a75764e3fe8316c5e8f189b74536279d3d5c8daf`
+and `3d250b83d567944b80ccbf282deb07f86ff0978756794dd804ddb0542f803540`.
+Other object-producing APIs, assertion AST rendering and exact deferred-
+constant expression origin frames remain separate compatibility boundaries.
+
+In the preceding typed class-constant value checkpoint, the measured AMD64 PHP
+8.5 contract was pinned to php-src 8.5.6 commit `fcc29c8` and candidate commit
+`f8e4233d`. Across all 5,599 unmodified `Zend/tests` and `tests/lang` cases,
+3,819 pass, 1,480 fail, 115 skip, none remain XFAIL, 185 are unsupported, and
+none time out or crash. The headline pass rate is 72.070% and the whole-corpus
+rate is 68.209%; 4,706 of 5,299 attempted cases reach runtime (88.809%).
+Relative to exact base `3f05d6a8`, the pass-set delta is +13/-0: every prior
+pass remains a pass and there are no other status or failure-category
+transitions. Two sequential final full runs have byte-identical merged
+manifests and summaries. Their SHA-256 values are
 `f3f8d521430862d54b4cd8b887f35e270ae0989ddfd7c2fe3b496d953ceb047f`
 and `9ccd25053233fe0b455992e7f398c731ea88f37193fe924eda7ba9e2f23a7a8a`.
 
