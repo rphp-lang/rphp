@@ -2219,7 +2219,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for +".into()));
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} + {}",
+                            op1.diagnostic_type_name(),
+                            op2.diagnostic_type_name()
+                        )
+                    );
                 }
             }
 
@@ -2244,7 +2251,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for +".into()));
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} + {}",
+                            op1.diagnostic_type_name(),
+                            op2.diagnostic_type_name()
+                        )
+                    );
                 }
             }
 
@@ -2532,7 +2546,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
                 } else {
-                    return Err(VmError::Fatal("Unsupported operand types for +".into()));
+                    throw_operator!(
+                        "TypeError",
+                        &format!(
+                            "Unsupported operand types: {} + {}",
+                            op1.diagnostic_type_name(),
+                            op2.diagnostic_type_name()
+                        )
+                    );
                 }
             }
 

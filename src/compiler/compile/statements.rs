@@ -1947,7 +1947,7 @@ impl Compiler {
                 operation.op2_type = right_type;
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
-                if *op == BinOp::Sub {
+                if matches!(op, BinOp::Add | BinOp::Sub) {
                     self.push_instruction_at_line(operation, incdec_target_source_line(target));
                 } else {
                     self.instructions.push(operation);

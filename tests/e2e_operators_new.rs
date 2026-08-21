@@ -129,6 +129,55 @@ echo 'defined=', defined('BrokenSubtract') ? 'yes' : 'no', "\n";
 }
 
 #[test]
+fn unsupported_addition_throws_typed_errors_without_committing_assignments() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+function reportAddition(string $label, Closure $operation): void {
+    try {
+        $operation();
+        echo $label, ":no-error\n";
+    } catch (Throwable $error) {
+        echo $label, ':', get_class($error), ':', $error->getMessage(), '|',
+            $error->getFile() === __FILE__ ? 'source' : 'nested', ':',
+            $error->getLine(), '|trace=', count($error->getTrace()), "\n";
+    }
+}
+
+$array = [1];
+reportAddition('cv-const', fn() => $array + 1);
+reportAddition('cv-tmp', fn() => $array + new stdClass());
+reportAddition('tmp-tmp', fn() => new stdClass() + [1]);
+
+$union = [0 => 'left'] + [0 => 'right', 1 => 'new'];
+echo 'union:', implode(',', $union), "\n";
+
+$slot = [1];
+try {
+    $slot += 'x';
+} catch (TypeError $error) {
+    echo 'assign:', $error->getMessage(), '|slot=', count($slot), "\n";
+}
+
+reportAddition('eval-const', fn() => eval('const BrokenAdd = [1] + 1;'));
+echo 'defined=', defined('BrokenAdd') ? 'yes' : 'no', "\n";
+"#,
+            "/virtual/addition-type-error.php",
+            "/virtual",
+        ),
+        concat!(
+            "cv-const:TypeError:Unsupported operand types: array + int|source:14|trace=2\n",
+            "cv-tmp:TypeError:Unsupported operand types: array + stdClass|source:15|trace=2\n",
+            "tmp-tmp:TypeError:Unsupported operand types: stdClass + array|source:16|trace=2\n",
+            "union:left,new\n",
+            "assign:Unsupported operand types: array + string|slot=1\n",
+            "eval-const:TypeError:Unsupported operand types: array + int|nested:1|trace=3\n",
+            "defined=no\n",
+        )
+    );
+}
+
+#[test]
 fn compound_and_cross_type_comparisons_follow_php_85_ordering() {
     assert_eq!(
         run_php(

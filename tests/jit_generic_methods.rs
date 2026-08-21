@@ -837,7 +837,7 @@ genericInvalidJsonPropertyTotal($invalid, '{"value":"bad"}');
     );
     let error = result.unwrap_err();
     assert_eq!(output, "100000|");
-    assert!(format!("{error:?}").contains("Unsupported operand types for +"));
+    assert!(format!("{error:?}").contains("Unsupported operand types: int + string"));
 
     let plan = generic_property_ops_plan(&functions, "genericInvalidJsonPropertyTotal");
     assert!(
