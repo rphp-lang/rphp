@@ -8,6 +8,65 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `1cb5d3b0`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,927 pass, 1,372 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.108% and the whole-corpus rate is 70.138%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`50e34e4c`, the pass-set delta is +2/-0 with no other status or failure-
+category movement.
+
+The exact additions are
+`Zend/tests/magic_methods/interface_with_tostring.phpt` and
+`Zend/tests/magic_methods/stringable_automatic_implementation.phpt`. Every
+previous pass remains a pass. Two sequential final runs have byte-identical
+merged manifests and summaries. Their manifest and summary SHA-256 values are
+`30724b695e068a6e086dac06b09dff8d9332f9dfb7f4a5fdf33fc8aab0b1e048`
+and `a9b13b05a4b284252e0a0a253d6c78f84dafa95d5cab12a95ac96323c9ed701a`.
+
+Classes and interfaces with an effective `__toString()` now project PHP 8.5's
+implicit `Stringable` relation through `ReflectionClass::getInterfaceNames()`,
+`ReflectionClass::getInterfaces()` and `class_implements()`. Reflection keeps
+canonical interface spelling and PHP's parent-first, source-order traversal;
+implicit, explicit, case-insensitive and aliased `Stringable` paths deduplicate
+to the canonical name. Own, abstract, inherited, interface-required and nested
+trait-provided methods participate. A trait declaration itself remains outside
+the interface relation, including `is_a($trait, Stringable::class, true)`.
+Source declaration metadata remains unchanged.
+
+An original E2E regression covers direct and inherited classes, abstract
+methods, parent and interface hierarchies, trait composition, explicit,
+lowercase and aliased declarations, Reflection list/map parity,
+`class_implements()` membership/counts, canonical spelling, deduplication and
+the negative trait boundary. The complete 157-case
+`Zend/tests/magic_methods` directory reaches 115 passes with two gains and no
+regression; the adjacent anonymous-class `class_implements()` control remains
+a pass. The 574 related Reflection, magic, autoload, class, operator, OOP and
+type-hint E2Es pass. All five Cargo configurations, all-features/all-targets,
+formatting, PHPT runner self-test, unsafe self-test and the exact unsafe
+ratchet pass. The production inventory remains 1,613 unsafe blocks, 289 unsafe
+functions and 312 SAFETY annotations. Composer S0, all four Symfony S1 gates
+and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3 also pass. The change
+adds no opcode, runtime layout field, dependency or unsafe block.
+
+A local 21-pair alternating release control on an AMD Ryzen 9 7950X pinned to
+CPU 0 with the performance governor, exact-output validation and two
+additional warmups ran 100,000 unaffected interface-enumeration cycles per
+observation. Each cycle constructed a reflection, queried its interface name
+list and reflection map, called `class_implements()` and checked `is_a()` over
+a parent plus two-interface hierarchy. No sample was excluded and every run
+returned checksum `700000`. Baseline median/mean was 0.422863/0.423829 seconds
+and candidate median/mean was 0.429664/0.437936 seconds. The independent median
+and mean ratios are 1.016084 and 1.033286; paired median and mean ratios are
+1.028383 and 1.033789, below the +5% gate. The exact candidate binary SHA-256
+is `5478267b9266153818e8c6250b9a4e2e546e2b609453fdf87c97e21ae35afb09`.
+
+General inherited magic-method variance, runtime string-conversion behavior
+and the pre-existing key order of multiple non-`Stringable` entries returned
+by `class_implements()` remain separate work. This checkpoint claims exact
+Reflection ordering and canonical `Stringable` membership.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `50e34e4c`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,925 pass, 1,374 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
