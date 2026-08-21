@@ -1360,6 +1360,39 @@ foreach (['abstract', 'backed', 'locked', 'shared', 'implicit', 'uninitialized',
 }
 
 #[test]
+fn reflection_class_stringifies_user_enum_metadata() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface ReflectedEnumMarker {}
+enum ReflectedUnitEnum { case First; }
+enum ReflectedBackedEnum: string implements ReflectedEnumMarker { case Label = 'label'; }
+foreach ([ReflectedUnitEnum::class, ReflectedBackedEnum::class] as $name) {
+    $rendered = (string) new ReflectionClass($name);
+    echo (int) !str_contains($rendered, 'final enum'), ':';
+    if ($name === ReflectedUnitEnum::class) {
+        echo (int) str_contains($rendered, 'enum ReflectedUnitEnum implements UnitEnum'), ':';
+        echo (int) str_contains($rendered, "- Enum cases [1] {\n    Case First\n"), ':';
+        echo (int) str_contains($rendered, '<internal, prototype UnitEnum> static public method cases'), ':';
+        echo (int) str_contains($rendered, 'public protected(set) readonly string $name'), "\n";
+    } else {
+        echo (int) str_contains($rendered, 'enum ReflectedBackedEnum: string implements ReflectedEnumMarker, UnitEnum, BackedEnum'), ':';
+        echo (int) str_contains($rendered, "- Enum cases [1] {\n    Case Label = label\n"), ':';
+        echo (int) (strpos($rendered, 'method cases') < strpos($rendered, 'method from')
+            && strpos($rendered, 'method from') < strpos($rendered, 'method tryFrom')), ':';
+        echo (int) str_contains($rendered, 'Parameter #0 [ <required> string|int $value ]'), ':';
+        echo (int) str_contains($rendered, '- Return [ static ]'), ':';
+        echo (int) str_contains($rendered, '- Return [ ?static ]'), ':';
+        echo (int) str_contains($rendered, 'public protected(set) readonly string $value'), "\n";
+    }
+}
+"#,
+        ),
+        "1:1:1:1:1\n1:1:1:1:1:1:1:1\n"
+    );
+}
+
+#[test]
 fn reflection_object_stringification_preserves_uninitialized_lazy_state() {
     assert_eq!(
         run_php(

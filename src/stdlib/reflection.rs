@@ -2653,7 +2653,14 @@ fn render_reflection_property(
     }
     declaration.push_str(reflection_visibility(property.visibility));
     declaration.push(' ');
-    if let Some(set_visibility) = property.set_visibility {
+    let set_visibility = property.set_visibility.or_else(|| {
+        (!eg.class_is_internal(&property.declaring_class)
+            && eg
+                .find_class(&property.declaring_class)
+                .is_some_and(|class| class.is_enum))
+        .then_some(Visibility::Protected)
+    });
+    if let Some(set_visibility) = set_visibility {
         declaration.push_str(reflection_visibility(set_visibility));
         declaration.push_str("(set) ");
     }
@@ -2911,6 +2918,38 @@ fn render_reflection_method(
     format!("Method [ <user> {declaration} ] {{\n    }}")
 }
 
+fn render_reflection_enum_builtin_method(name: &str) -> Option<String> {
+    let (prototype, parameters, return_type) = if name.eq_ignore_ascii_case("cases") {
+        ("UnitEnum", Vec::new(), "array")
+    } else if name.eq_ignore_ascii_case("from") {
+        (
+            "BackedEnum",
+            vec!["Parameter #0 [ <required> string|int $value ]"],
+            "static",
+        )
+    } else if name.eq_ignore_ascii_case("tryFrom") {
+        (
+            "BackedEnum",
+            vec!["Parameter #0 [ <required> string|int $value ]"],
+            "?static",
+        )
+    } else {
+        return None;
+    };
+    let mut rendered =
+        format!("Method [ <internal, prototype {prototype}> static public method {name} ] {{\n\n");
+    rendered.push_str(&format!("      - Parameters [{}] {{\n", parameters.len()));
+    for parameter in parameters {
+        rendered.push_str("        ");
+        rendered.push_str(parameter);
+        rendered.push('\n');
+    }
+    rendered.push_str("      }\n");
+    rendered.push_str(&format!("      - Return [ {return_type} ]\n"));
+    rendered.push_str("    }");
+    Some(rendered)
+}
+
 fn render_reflection_signature_parameter(
     function: &FunctionCommon,
     index: u32,
@@ -3060,13 +3099,14 @@ fn class_to_string(
     let Some(class) = eg.find_class(&owner) else {
         return return_value(rv, Value::string(""));
     };
+    let is_user_enum = class.is_enum && !eg.class_is_internal(&owner);
     let is_object = with_argument(ed, 0, |value| {
         value
             .as_object()
             .is_some_and(|object| object.class_name.eq_ignore_ascii_case("ReflectionObject"))
     });
     let mut modifiers = String::new();
-    if class.is_final {
+    if class.is_final && !is_user_enum {
         modifiers.push_str("final ");
     }
     if class.is_abstract && !class.is_interface {
@@ -3100,8 +3140,25 @@ fn class_to_string(
     } else {
         "Class"
     };
+    let enum_backing_type = is_user_enum.then(|| {
+        class
+            .properties
+            .iter()
+            .find(|property| property.name == "value")
+            .map(|property| property.type_hint.display_name())
+    });
+    let enum_backing_type = enum_backing_type.flatten();
+    let backing_declaration = enum_backing_type
+        .as_deref()
+        .map(|backing_type| format!(": {backing_type}"))
+        .unwrap_or_default();
+    let implements_declaration = if is_user_enum && !class.implements.is_empty() {
+        format!(" implements {}", class.implements.join(", "))
+    } else {
+        String::new()
+    };
     let mut rendered = format!(
-        "{title} [ <{provenance}> {modifiers}{kind} {} ] {{\n",
+        "{title} [ <{provenance}> {modifiers}{kind} {}{backing_declaration}{implements_declaration} ] {{\n",
         class.name
     );
     if let Some(source_file) = &class.source_file {
@@ -3109,6 +3166,28 @@ fn class_to_string(
             "  @@ {source_file} {}-{}\n\n",
             class.declaration_line, class.declaration_line
         ));
+    }
+
+    if is_user_enum && !class.static_properties.is_empty() {
+        rendered.push_str(&format!(
+            "  - Enum cases [{}] {{\n",
+            class.static_properties.len()
+        ));
+        for case in &class.static_properties {
+            rendered.push_str("    Case ");
+            rendered.push_str(&case.name);
+            if let Some(value) = case
+                .default
+                .as_ref()
+                .and_then(Value::as_object)
+                .and_then(|case| case.get_property("value").cloned())
+            {
+                rendered.push_str(" = ");
+                rendered.push_str(&value.echo_to_string_with_precision(eg.precision));
+            }
+            rendered.push('\n');
+        }
+        rendered.push_str("  }\n\n");
     }
 
     rendered.push_str(&format!("  - Constants [{}] {{\n", class.constants.len()));
@@ -3128,11 +3207,16 @@ fn class_to_string(
     }
     rendered.push_str("  }\n\n");
 
+    let reflected_static_properties = if is_user_enum {
+        &[][..]
+    } else {
+        class.static_properties.as_slice()
+    };
     rendered.push_str(&format!(
         "  - Static properties [{}] {{\n",
-        class.static_properties.len()
+        reflected_static_properties.len()
     ));
-    for property in &class.static_properties {
+    for property in reflected_static_properties {
         rendered.push_str("    ");
         rendered.push_str(&render_reflection_property(property, true, eg));
         rendered.push('\n');
@@ -3141,25 +3225,47 @@ fn class_to_string(
 
     let mut methods = Vec::new();
     collect_reflected_methods(eg, &owner, &mut methods, &mut HashSet::new());
+    if is_user_enum {
+        methods.sort_by_key(|(name, ..)| {
+            if name.eq_ignore_ascii_case("cases") {
+                1
+            } else if name.eq_ignore_ascii_case("from") {
+                2
+            } else if name.eq_ignore_ascii_case("tryFrom") {
+                3
+            } else {
+                0
+            }
+        });
+    }
     let static_method_count = methods
         .iter()
         .filter(|(_, _, is_static, ..)| *is_static)
         .count();
     rendered.push_str(&format!("  - Static methods [{static_method_count}] {{\n"));
+    let mut rendered_static_method = false;
     for (name, visibility, is_static, is_final, _, declaring_class) in &methods {
         if !is_static {
             continue;
         }
+        if is_user_enum && rendered_static_method {
+            rendered.push('\n');
+        }
         rendered.push_str("    ");
-        rendered.push_str(&render_reflection_method(
-            name,
-            *visibility,
-            true,
-            *is_final,
-            eg.find_class(declaring_class)
-                .is_some_and(|class| class.method_is_abstract(name)),
-        ));
+        if is_user_enum && let Some(method) = render_reflection_enum_builtin_method(name) {
+            rendered.push_str(&method);
+        } else {
+            rendered.push_str(&render_reflection_method(
+                name,
+                *visibility,
+                true,
+                *is_final,
+                eg.find_class(declaring_class)
+                    .is_some_and(|class| class.method_is_abstract(name)),
+            ));
+        }
         rendered.push('\n');
+        rendered_static_method = true;
     }
     rendered.push_str("  }\n\n");
 
