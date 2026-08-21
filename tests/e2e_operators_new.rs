@@ -202,6 +202,198 @@ try {
 }
 
 #[test]
+fn resource_operands_are_not_implicitly_numeric_for_operators() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo 'warn:', $level, ':', $message, "\n";
+});
+
+$resource = fopen('php://memory', 'r+');
+
+function dynamicResourceOperand($value) {
+    return $value;
+}
+
+function probeResourceOperator(string $label, Closure $operation): void {
+    echo $label, ":\n";
+    try {
+        var_dump($operation());
+    } catch (Throwable $error) {
+        echo get_class($error), ':', $error->getMessage(), "\n";
+    }
+}
+
+probeResourceOperator('add-cv-tmp', fn() => $resource + dynamicResourceOperand(2));
+probeResourceOperator('add-tmp-tmp', fn() => dynamicResourceOperand($resource) + dynamicResourceOperand(2));
+probeResourceOperator('add-right', fn() => 2 + $resource);
+probeResourceOperator('sub-cv-const', fn() => $resource - 2);
+probeResourceOperator('sub-tmp-tmp', fn() => dynamicResourceOperand($resource) - dynamicResourceOperand(2));
+probeResourceOperator('mul', fn() => $resource * 2);
+probeResourceOperator('mul-right', fn() => 2 * $resource);
+probeResourceOperator('leading-mul-left', fn() => '2 tail' * $resource);
+probeResourceOperator('leading-mul-right', fn() => $resource * '2 tail');
+probeResourceOperator('div', fn() => $resource / 2);
+probeResourceOperator('pow', fn() => $resource ** 2);
+probeResourceOperator('mod', fn() => $resource % 2);
+probeResourceOperator('shift-left', fn() => $resource << 2);
+probeResourceOperator('shift-right', fn() => 2 >> $resource);
+probeResourceOperator('bit-and', fn() => $resource & 2);
+probeResourceOperator('bit-and-right', fn() => 2 & $resource);
+probeResourceOperator('bit-or', fn() => 2 | $resource);
+probeResourceOperator('bit-xor', fn() => $resource ^ $resource);
+probeResourceOperator('bit-xor-right', fn() => 2 ^ $resource);
+probeResourceOperator('leading-bit-and-left', fn() => '2 tail' & $resource);
+probeResourceOperator('leading-bit-and-right', fn() => $resource & '2 tail');
+probeResourceOperator('float-bit-and', fn() => 3.5 & $resource);
+probeResourceOperator('unary-plus', fn() => +$resource);
+probeResourceOperator('unary-minus', fn() => -$resource);
+probeResourceOperator('bit-not', fn() => ~$resource);
+probeResourceOperator('leading-add-left', fn() => '2 tail' + $resource);
+probeResourceOperator('leading-add-right', fn() => $resource + '2 tail');
+probeResourceOperator('leading-mod-left', fn() => '2 tail' % $resource);
+probeResourceOperator('leading-mod-right', fn() => $resource % '2 tail');
+
+$slot = $resource;
+try {
+    $slot += '2 tail';
+} catch (Throwable $error) {
+    echo 'assign-add-left:', get_class($error), ':', $error->getMessage(),
+        '|same=', $slot === $resource ? 'yes' : 'no', "\n";
+}
+
+$slot = '2 tail';
+try {
+    $slot += $resource;
+} catch (Throwable $error) {
+    echo 'assign-add-right:', get_class($error), ':', $error->getMessage(),
+        '|slot=', $slot, "\n";
+}
+
+$slot = $resource;
+try {
+    $slot %= 2;
+} catch (Throwable $error) {
+    echo 'assign-mod:', get_class($error), ':', $error->getMessage(),
+        '|same=', $slot === $resource ? 'yes' : 'no', "\n";
+}
+
+$slot = '2 tail';
+try {
+    $slot *= $resource;
+} catch (Throwable $error) {
+    echo 'assign-mul-right:', get_class($error), ':', $error->getMessage(),
+        '|slot=', $slot, "\n";
+}
+
+$slot = '2 tail';
+try {
+    $result = ($slot *= $resource);
+} catch (Throwable $error) {
+    echo 'assign-expression-mul-right:', get_class($error), ':', $error->getMessage(),
+        '|slot=', $slot, "\n";
+}
+
+$slot = '2 tail';
+try {
+    $slot &= $resource;
+} catch (Throwable $error) {
+    echo 'assign-bit-and-right:', get_class($error), ':', $error->getMessage(),
+        '|slot=', $slot, "\n";
+}
+
+$slot = 3.5;
+try {
+    $slot &= $resource;
+} catch (Throwable $error) {
+    echo 'assign-float-bit-and-right:', get_class($error), ':', $error->getMessage(),
+        '|slot=', $slot, "\n";
+}
+
+echo 'cast=', (int) $resource === get_resource_id($resource) ? 'yes' : 'no',
+    '|compare=', $resource == get_resource_id($resource) ? 'yes' : 'no', "\n";
+"#,
+        ),
+        concat!(
+            "add-cv-tmp:\n",
+            "TypeError:Unsupported operand types: resource + int\n",
+            "add-tmp-tmp:\n",
+            "TypeError:Unsupported operand types: resource + int\n",
+            "add-right:\n",
+            "TypeError:Unsupported operand types: int + resource\n",
+            "sub-cv-const:\n",
+            "TypeError:Unsupported operand types: resource - int\n",
+            "sub-tmp-tmp:\n",
+            "TypeError:Unsupported operand types: resource - int\n",
+            "mul:\n",
+            "TypeError:Unsupported operand types: resource * int\n",
+            "mul-right:\n",
+            "TypeError:Unsupported operand types: resource * int\n",
+            "leading-mul-left:\n",
+            "TypeError:Unsupported operand types: resource * string\n",
+            "leading-mul-right:\n",
+            "TypeError:Unsupported operand types: resource * string\n",
+            "div:\n",
+            "TypeError:Unsupported operand types: resource / int\n",
+            "pow:\n",
+            "TypeError:Unsupported operand types: resource ** int\n",
+            "mod:\n",
+            "TypeError:Unsupported operand types: resource % int\n",
+            "shift-left:\n",
+            "TypeError:Unsupported operand types: resource << int\n",
+            "shift-right:\n",
+            "TypeError:Unsupported operand types: int >> resource\n",
+            "bit-and:\n",
+            "TypeError:Unsupported operand types: resource & int\n",
+            "bit-and-right:\n",
+            "TypeError:Unsupported operand types: resource & int\n",
+            "bit-or:\n",
+            "TypeError:Unsupported operand types: resource | int\n",
+            "bit-xor:\n",
+            "TypeError:Unsupported operand types: resource ^ resource\n",
+            "bit-xor-right:\n",
+            "TypeError:Unsupported operand types: resource ^ int\n",
+            "leading-bit-and-left:\n",
+            "TypeError:Unsupported operand types: resource & string\n",
+            "leading-bit-and-right:\n",
+            "TypeError:Unsupported operand types: resource & string\n",
+            "float-bit-and:\n",
+            "TypeError:Unsupported operand types: resource & float\n",
+            "unary-plus:\n",
+            "TypeError:Unsupported operand types: resource * int\n",
+            "unary-minus:\n",
+            "TypeError:Unsupported operand types: resource * int\n",
+            "bit-not:\n",
+            "TypeError:Cannot perform bitwise not on resource\n",
+            "leading-add-left:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "TypeError:Unsupported operand types: string + resource\n",
+            "leading-add-right:\n",
+            "TypeError:Unsupported operand types: resource + string\n",
+            "leading-mod-left:\n",
+            "warn:2:A non-numeric value encountered\n",
+            "TypeError:Unsupported operand types: string % resource\n",
+            "leading-mod-right:\n",
+            "TypeError:Unsupported operand types: resource % string\n",
+            "assign-add-left:TypeError:Unsupported operand types: resource + string|same=yes\n",
+            "warn:2:A non-numeric value encountered\n",
+            "assign-add-right:TypeError:Unsupported operand types: string + resource|slot=2 tail\n",
+            "assign-mod:TypeError:Unsupported operand types: resource % int|same=yes\n",
+            "warn:2:A non-numeric value encountered\n",
+            "assign-mul-right:TypeError:Unsupported operand types: string * resource|slot=2 tail\n",
+            "warn:2:A non-numeric value encountered\n",
+            "assign-expression-mul-right:TypeError:Unsupported operand types: string * resource|slot=2 tail\n",
+            "warn:2:A non-numeric value encountered\n",
+            "assign-bit-and-right:TypeError:Unsupported operand types: string & resource|slot=2 tail\n",
+            "warn:8192:Implicit conversion from float 3.5 to int loses precision\n",
+            "assign-float-bit-and-right:TypeError:Unsupported operand types: float & resource|slot=3.5\n",
+            "cast=yes|compare=yes\n",
+        )
+    );
+}
+
+#[test]
 fn unsupported_subtraction_throws_typed_errors_without_committing_assignments() {
     assert_eq!(
         run_php_with_source_context(

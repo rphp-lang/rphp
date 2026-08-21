@@ -28,12 +28,12 @@ use crate::value::{
     canonical_decimal_array_key as canonical_string_literal_array_key,
 };
 use crate::vm::instruction::{
-    ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS, ARRAY_INIT_HASH_HINT,
-    ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE, ASSIGN_CV_REBIND,
-    ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE,
-    ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
+    ARITHMETIC_COMPOUND_ASSIGN, ARRAY_ELEMENT_REFERENCE, ARRAY_INIT_DYNAMIC_CALL_CLASS,
+    ARRAY_INIT_HASH_HINT, ARRAY_UNPACK_CONSTANT_EXPRESSION, ASSIGN_CV_MOVE_SOURCE,
+    ASSIGN_CV_REBIND, ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_REFERENCE,
+    ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH, ASSIGN_OBJ_MODIFY,
+    ASSIGN_PROP_MOVE_SOURCE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
+    CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
     CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
     CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
     CLASS_CONST_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS,
@@ -5583,7 +5583,10 @@ impl Compiler {
         right: &Value,
     ) -> Result<Value, String> {
         let integer_pair = || left.to_arithmetic_long().zip(right.to_arithmetic_long());
-        let numeric_pair = || left.to_double().zip(right.to_double());
+        let numeric_pair = || {
+            left.to_arithmetic_double()
+                .zip(right.to_arithmetic_double())
+        };
         let integer_operator_pair = || {
             let left = crate::vm::execute::integer_operator_operand(left).ok()?;
             let right = crate::vm::execute::integer_operator_operand(right).ok()?;
@@ -7828,6 +7831,7 @@ impl Compiler {
                 operation.op2_type = right_type;
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
+                operation._pad |= ARITHMETIC_COMPOUND_ASSIGN;
                 self.instructions.push(operation);
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
                 if let Some(cv) = direct_cv {

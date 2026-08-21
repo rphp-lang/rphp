@@ -832,6 +832,54 @@ fn prepare_integer_operator_operand(
     Ok(Some(operand.value))
 }
 
+#[inline]
+fn commutative_operator_error_operands<'a>(
+    left: &'a Value,
+    right: &'a Value,
+) -> (&'a Value, &'a Value) {
+    let rank = |value: &Value| match value.dereferenced().value_type() {
+        ValueType::Object | ValueType::Closure => 2,
+        ValueType::Resource => 1,
+        _ => 0,
+    };
+    if rank(right) > rank(left) {
+        (right, left)
+    } else {
+        (left, right)
+    }
+}
+
+#[inline]
+fn commutative_operator_uses_canonical_validation(left: &Value, right: &Value) -> bool {
+    [left, right].into_iter().any(|value| {
+        matches!(
+            value.dereferenced().value_type(),
+            ValueType::Object | ValueType::Closure | ValueType::Resource
+        )
+    })
+}
+
+#[cold]
+fn report_arithmetic_operator_diagnostic(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    leading_numeric: bool,
+) -> Result<bool, VmError> {
+    if leading_numeric {
+        report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            "A non-numeric value encountered",
+            false,
+        )?;
+    }
+    Ok(eg.exception.is_some())
+}
+
 #[cold]
 fn prepare_arithmetic_operator_pair(
     eg: &mut ExecutorGlobals,
@@ -844,32 +892,60 @@ fn prepare_arithmetic_operator_pair(
     let Ok(left) = arithmetic_operator_operand(left) else {
         return Ok(None);
     };
-    if left.leading_numeric {
-        report_php_warning(
-            eg,
-            frame,
-            op_array,
-            opline,
-            "A non-numeric value encountered",
-            false,
-        )?;
-        if eg.exception.is_some() {
-            return Ok(None);
-        }
+    if report_arithmetic_operator_diagnostic(
+        eg,
+        frame,
+        op_array,
+        opline,
+        left.leading_numeric,
+    )? {
+        return Ok(None);
     }
 
     let Ok(right) = arithmetic_operator_operand(right) else {
         return Ok(None);
     };
-    if right.leading_numeric {
-        report_php_warning(
-            eg,
-            frame,
-            op_array,
-            opline,
-            "A non-numeric value encountered",
-            false,
-        )?;
+    if report_arithmetic_operator_diagnostic(
+        eg,
+        frame,
+        op_array,
+        opline,
+        right.leading_numeric,
+    )? {
+        return Ok(None);
+    }
+    Ok(Some((left.value, right.value)))
+}
+
+#[cold]
+fn prepare_commutative_arithmetic_operator_pair(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    left: &Value,
+    right: &Value,
+) -> Result<Option<(Value, Value)>, VmError> {
+    let (Ok(left), Ok(right)) = (
+        arithmetic_operator_operand(left),
+        arithmetic_operator_operand(right),
+    ) else {
+        return Ok(None);
+    };
+    if report_arithmetic_operator_diagnostic(
+        eg,
+        frame,
+        op_array,
+        opline,
+        left.leading_numeric,
+    )? || report_arithmetic_operator_diagnostic(
+        eg,
+        frame,
+        op_array,
+        opline,
+        right.leading_numeric,
+    )? {
+        return Ok(None);
     }
     Ok(Some((left.value, right.value)))
 }
@@ -2324,7 +2400,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
                         };
                     }
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
@@ -2372,7 +2450,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
                         },
                     }
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
@@ -2433,7 +2513,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             },
                         }
                     }
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
@@ -2477,7 +2559,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 - l2 as f64))
                         },
                     }
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
                     let pair = prepare_arithmetic_operator_pair(
@@ -2706,7 +2790,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
                         },
                     }
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
                 } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
                     write_array_union_result(frame, opline.result, left, right);
@@ -2744,7 +2830,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         || Err(Value::double(l1 as f64 - l2 as f64)),
                         Ok,
                     )
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     Err(Value::double(d1 - d2))
                 } else {
                     let pair = prepare_arithmetic_operator_pair(
@@ -2787,20 +2875,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 * l2 as f64))
                         },
                     }
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 * d2)) };
                 } else {
-                    let pair = prepare_arithmetic_operator_pair(
-                        eg, frame, op_array, opline, op1, op2,
-                    )?;
+                    let canonical = opline._pad & ARITHMETIC_COMPOUND_ASSIGN == 0
+                        && commutative_operator_uses_canonical_validation(op1, op2);
+                    let pair = if canonical {
+                        prepare_commutative_arithmetic_operator_pair(
+                            eg, frame, op_array, opline, op1, op2,
+                        )?
+                    } else {
+                        prepare_arithmetic_operator_pair(eg, frame, op_array, opline, op1, op2)?
+                    };
                     resume_pending_exception!();
                     let Some((left, right)) = pair else {
+                        let (error_left, error_right) = if canonical {
+                            commutative_operator_error_operands(op1, op2)
+                        } else {
+                            (op1, op2)
+                        };
                         throw_operator!(
                             "TypeError",
                             &format!(
                                 "Unsupported operand types: {} * {}",
-                                op1.dereferenced().diagnostic_type_name(),
-                                op2.dereferenced().diagnostic_type_name()
+                                error_left.dereferenced().diagnostic_type_name(),
+                                error_right.dereferenced().diagnostic_type_name()
                             )
                         );
                     };
@@ -2829,7 +2930,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         Err(Value::double(l1 as f64 / l2 as f64))
                     }
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     if d2 == 0.0 {
                         throw_operator!("DivisionByZeroError", "Division by zero");
                     }
@@ -3002,7 +3105,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         Err(Value::double((l1 as f64).powf(l2 as f64)))
                     }
-                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                } else if let (Some(d1), Some(d2)) =
+                    (op1.to_arithmetic_double(), op2.to_arithmetic_double())
+                {
                     Err(Value::double(d1.powf(d2)))
                 } else {
                     let pair = prepare_arithmetic_operator_pair(
@@ -3059,32 +3164,65 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         OpCode::BitwiseXor => "^",
                         _ => unreachable!(),
                     };
-                    let Some(left) = prepare_integer_operator_operand(
-                        eg, frame, op_array, opline, op1,
-                    )? else {
-                        throw_operator!(
-                            "TypeError",
-                            &format!(
-                                "Unsupported operand types: {} {symbol} {}",
-                                op1.dereferenced().diagnostic_type_name(),
-                                op2.dereferenced().diagnostic_type_name()
-                            )
-                        );
+                    let canonical = opline._pad & ARITHMETIC_COMPOUND_ASSIGN == 0
+                        && commutative_operator_uses_canonical_validation(op1, op2);
+                    let (left, right) = if !canonical {
+                        let Some(left) = prepare_integer_operator_operand(
+                            eg, frame, op_array, opline, op1,
+                        )? else {
+                            throw_operator!(
+                                "TypeError",
+                                &format!(
+                                    "Unsupported operand types: {} {symbol} {}",
+                                    op1.dereferenced().diagnostic_type_name(),
+                                    op2.dereferenced().diagnostic_type_name()
+                                )
+                            );
+                        };
+                        resume_pending_exception!();
+                        let Some(right) = prepare_integer_operator_operand(
+                            eg, frame, op_array, opline, op2,
+                        )? else {
+                            throw_operator!(
+                                "TypeError",
+                                &format!(
+                                    "Unsupported operand types: {} {symbol} {}",
+                                    op1.dereferenced().diagnostic_type_name(),
+                                    op2.dereferenced().diagnostic_type_name()
+                                )
+                            );
+                        };
+                        resume_pending_exception!();
+                        (left, right)
+                    } else {
+                        let (left, right) = match (
+                            integer_operator_operand(op1),
+                            integer_operator_operand(op2),
+                        ) {
+                            (Ok(left), Ok(right)) => (left, right),
+                            _ => {
+                                let (error_left, error_right) =
+                                    commutative_operator_error_operands(op1, op2);
+                                throw_operator!(
+                                    "TypeError",
+                                    &format!(
+                                        "Unsupported operand types: {} {symbol} {}",
+                                        error_left.dereferenced().diagnostic_type_name(),
+                                        error_right.dereferenced().diagnostic_type_name()
+                                    )
+                                );
+                            }
+                        };
+                        report_integer_operator_diagnostics(
+                            eg, frame, op_array, opline, op1, left,
+                        )?;
+                        resume_pending_exception!();
+                        report_integer_operator_diagnostics(
+                            eg, frame, op_array, opline, op2, right,
+                        )?;
+                        resume_pending_exception!();
+                        (left.value, right.value)
                     };
-                    resume_pending_exception!();
-                    let Some(right) = prepare_integer_operator_operand(
-                        eg, frame, op_array, opline, op2,
-                    )? else {
-                        throw_operator!(
-                            "TypeError",
-                            &format!(
-                                "Unsupported operand types: {} {symbol} {}",
-                                op1.dereferenced().diagnostic_type_name(),
-                                op2.dereferenced().diagnostic_type_name()
-                            )
-                        );
-                    };
-                    resume_pending_exception!();
                     let value = match opline.opcode {
                         OpCode::BitwiseAnd => left & right,
                         OpCode::BitwiseOr => left | right,

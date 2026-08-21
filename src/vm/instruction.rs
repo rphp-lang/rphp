@@ -352,6 +352,14 @@ pub const ARRAY_UNPACK_CONSTANT_EXPRESSION: u16 = 1;
 /// AddArrayElement flag: preserve the source l-value's PHP reference identity.
 pub const ARRAY_ELEMENT_REFERENCE: u16 = 1 << 1;
 
+/// Arithmetic/bitwise opcode flag: the operation is the read phase of a
+/// compound assignment. PHP validates commutative binary operands as an
+/// unordered pair, but compound assignment converts them in source order so
+/// diagnostics from the left operand remain observable before a right-side
+/// TypeError. The flag is opcode-local and occupies an otherwise-unused low
+/// padding bit without changing the compact instruction layout.
+pub const ARITHMETIC_COMPOUND_ASSIGN: u16 = 1;
+
 /// Exact scalar representation proven for an instruction result. The fact is
 /// stored in otherwise-unused high padding bits so later compiler tiers and a
 /// future JIT can consume the same declaration-derived contract without

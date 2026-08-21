@@ -5417,8 +5417,9 @@ impl Value {
     }
 
     /// Convert operands whose PHP numeric kind remains integer during
-    /// arithmetic. Unlike `to_double()`, this preserves the result kind for
-    /// null, booleans, resources, and integer numeric strings.
+    /// arithmetic. This preserves the result kind for null, booleans, and
+    /// integer numeric strings while rejecting resources, whose IDs are
+    /// available to explicit casts but are not legal arithmetic operands.
     #[inline]
     pub(crate) fn to_arithmetic_long(&self) -> Option<i64> {
         match self.value_type() {
@@ -5426,8 +5427,19 @@ impl Value {
             ValueType::True => Some(1),
             ValueType::False | ValueType::Null | ValueType::Undef => Some(0),
             ValueType::String => self.as_str()?.trim().parse::<i64>().ok(),
-            ValueType::Resource => self.as_resource_id(),
             _ => None,
+        }
+    }
+
+    /// Convert a complete PHP numeric operand to double without admitting a
+    /// resource through the broader scalar conversion used by casts and
+    /// comparisons.
+    #[inline]
+    pub(crate) fn to_arithmetic_double(&self) -> Option<f64> {
+        if self.value_type() == ValueType::Resource {
+            None
+        } else {
+            self.to_double()
         }
     }
 

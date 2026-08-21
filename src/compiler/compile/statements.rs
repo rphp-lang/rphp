@@ -1947,6 +1947,7 @@ impl Compiler {
                 operation.op2_type = right_type;
                 operation.result = result;
                 operation.result_type = OpType::Tmp;
+                operation._pad |= ARITHMETIC_COMPOUND_ASSIGN;
                 if matches!(
                     op,
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow
