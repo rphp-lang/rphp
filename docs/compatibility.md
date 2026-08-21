@@ -8,6 +8,56 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `b7b97752`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,957 pass, 1,342 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.674% and the whole-corpus rate is 70.673%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`2945750f`, the pass-set delta is +5/-0 with no other status or failure-
+category movement.
+
+The exact additions are `Zend/tests/break_error_003.phpt`,
+`break_error_004.phpt`, `Zend/tests/bug77660.phpt`, `gh13931.phpt` and
+`Zend/tests/try/try_finally_011.phpt`. Every previous pass remains a pass. Two
+sequential final runs have byte-identical merged manifests and summaries.
+Their manifest and summary SHA-256 values are
+`7c98995002131faaea9b84a5213391838d02b963545b6e2a816eaede6a2591b6` and
+`0d31a148cdd586284b79010beb6aa40e3649364faeed2fa44ac2bc621543051d`.
+
+`break` and `continue` tokens now retain their source line through the AST.
+When compilation finds no loop/switch context at level one, it emits PHP
+8.5's context diagnostic; a request beyond the available nesting instead
+names the requested level. Both forms use the ordinary source-aware compiler
+fatal path, including inside functions, `try`/`finally` and `eval`. Valid
+single- and multi-level control flow lowers to the same jumps and VM bytecode
+as before.
+
+One original CLI regression covers implicit and explicit level one, excessive
+`break` and `continue` depths, the AMD64-sized 2,147,483,648 boundary, exact
+file/line diagnostics, exit status and an unaffected valid multi-level jump.
+All five Cargo configurations, all-features/all-targets, formatting, PHPT
+runner self-test, unsafe self-test and the exact unsafe ratchet pass. The
+production inventory remains 1,612 unsafe blocks, 289 unsafe functions and 321
+SAFETY annotations. Composer 2.8.12 S0, all four Symfony S1 gates, and exact
+PHP 8.5.9 warmed-kernel S2 and cold-build S3 also pass.
+
+A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
+pinned to CPU 0 with the performance governor, four warmups, 100 cold requests
+per observation and no excluded sample, keeps both front-end controls below
+the +5% gate. Empty requests measure candidate/baseline ratios of 0.989596 by
+independent medians and 0.982716 by paired medians. A valid nested loop with a
+multi-level `break` measures 1.005497 and 1.020989 respectively, with exact
+output. The candidate binary SHA-256 is
+`391439baa97f0c7df65324f6a1945ae568063d5e73db596aa4c67d749ec7345a` and the
+exact TSV SHA-256 is
+`326e11d6bc5e76b70f0595e9947de35704d4f24b927562545ac29d2a2700c3e6`.
+
+This checkpoint claims only the exercised compile-time loop-control context,
+depth and source-location contract. Non-positive and non-literal operand
+grammar and diagnostics, unrelated control-flow diagnostics and general
+compile-error trace presentation remain separate surfaces.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `2945750f`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,952 pass, 1,347 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
