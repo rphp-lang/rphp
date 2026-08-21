@@ -7031,42 +7031,6 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_static_property_reference_assignment(
-        &mut self,
-        expr: &Expr,
-        source: u16,
-        source_type: OpType,
-        source_is_internal: bool,
-    ) -> Result<(), String> {
-        let (class, class_type, property, property_type, late_static, dynamic_owner, line) = self
-            .compile_static_property_operands(expr)
-            .ok_or_else(|| "Expected static-property reference target".to_string())?;
-        let mut assign = Instruction::new(if late_static {
-            OpCode::AssignLateStaticProp
-        } else {
-            OpCode::AssignStaticProp
-        });
-        assign.op1 = class;
-        assign.op1_type = class_type;
-        assign.op2 = property;
-        assign.op2_type = property_type;
-        assign.result = source;
-        assign.result_type = source_type;
-        assign._pad |= STATIC_PROP_REFERENCE_BIND;
-        assign._pad |= STATIC_PROP_INDIRECT_MODIFY;
-        if source_is_internal {
-            assign._pad |= REFERENCE_RESULT_INTERNAL;
-        }
-        if dynamic_owner {
-            assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
-        }
-        if property_type != OpType::Const {
-            assign._pad |= STATIC_PROP_DYNAMIC_NAME;
-        }
-        self.push_instruction_at_line(assign, line);
-        Ok(())
-    }
-
     fn emit_string_cast(&mut self, operand: u16, operand_type: OpType) -> u16 {
         let result = self.alloc_tmp();
         let mut cast = Instruction::new(OpCode::Cast);
@@ -10623,7 +10587,14 @@ impl Compiler {
                     None
                 };
                 let reference_source = if *by_ref {
-                    match self.compile_array_element_reference_source(expr) {
+                    let source = if Self::is_call_result_reference_source(expr)
+                        && !matches!(target.as_ref(), Expr::Variable { .. })
+                    {
+                        Err("Array reference element must contain a mutable l-value".into())
+                    } else {
+                        self.compile_array_element_reference_source(expr)
+                    };
+                    match source {
                         Ok(source) => Some(source),
                         Err(error) => {
                             self.deferred_error = Some(error);

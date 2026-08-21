@@ -1042,6 +1042,97 @@ echo $calls, '|', $values['fixed'], "\n";
 }
 
 #[test]
+fn reference_call_sources_preserve_target_order_and_returned_aliases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferenceSource {
+    public function &pick(&$slot) {
+        echo 'source>';
+        return $slot;
+    }
+}
+class ReferenceBox { public $item; }
+function choose_reference_key(&$calls) {
+    $calls++;
+    echo 'key>';
+    return 'item';
+}
+function &publish_reference_source(&$array, &$slot) {
+    echo 'publish>';
+    $array['side'] = 9;
+    return $slot;
+}
+
+$calls = 0;
+$value = 1;
+$array = [];
+$source = new ReferenceSource;
+$array[choose_reference_key($calls)] =& $source->pick($value);
+$copy = $array;
+$value = 2;
+$copy['item'] = 3;
+echo $value, ':', $array['item'], ':', $copy['item'], ':', $calls, "\n";
+
+$appended = 6;
+$array[] =& $source->pick($appended);
+$appended = 7;
+echo $array[0], ':', $appended, "\n";
+
+$published = 8;
+$reentrant = [];
+$reentrant[choose_reference_key($calls)] =& publish_reference_source($reentrant, $published);
+$published = 10;
+echo $reentrant['side'], ':', $reentrant['item'], ':', $calls, "\n";
+
+$other = 4;
+$callable = [$source, 'pick'];
+$box = new ReferenceBox;
+$box->item =& $callable($other);
+$other = 5;
+echo $box->item, ':', $other, "\n";
+"#,
+        ),
+        "key>source>3:3:3:1\nsource>7:7\nkey>publish>9:10:2\nsource>5:5\n"
+    );
+}
+
+#[test]
+fn nonreference_call_sources_notice_before_commit_and_remain_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferenceNoticeBox { public $item = 'old'; }
+function notice_target($box) { echo 'target>'; return $box; }
+function notice_key() { echo 'key>'; return 'item'; }
+function ordinary_reference_source() { echo 'source>'; return 7; }
+
+set_error_handler(function($severity, $message) {
+    echo 'notice:', $message, '>';
+    return true;
+});
+$array = [];
+$array[notice_key()] =& ordinary_reference_source();
+restore_error_handler();
+var_dump($array);
+
+$box = new ReferenceNoticeBox;
+set_error_handler(function($severity, $message) {
+    echo 'handler:', $message, '>';
+    throw new Exception('stop');
+});
+try {
+    notice_target($box)->item =& ordinary_reference_source();
+} catch (Exception $error) {
+    echo $error->getMessage(), ':', $box->item, "\n";
+}
+"#,
+        ),
+        "key>source>notice:Only variables should be assigned by reference>array(1) {\n  [\"item\"]=>\n  int(7)\n}\ntarget>source>handler:Only variables should be assigned by reference>stop:old\n"
+    );
+}
+
+#[test]
 fn invalid_reference_call_and_return_diagnostics_use_the_operator_source_line() {
     let file = "/virtual/reference-return-diagnostics.php";
     let source = r#"<?php

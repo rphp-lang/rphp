@@ -312,6 +312,26 @@ impl Compiler {
             return Ok(cv);
         }
 
+        if matches!(
+            source,
+            Expr::FunctionCall { .. }
+                | Expr::MethodCall { .. }
+                | Expr::StaticCall { .. }
+                | Expr::DynamicCall { .. }
+                | Expr::DynamicStaticCall { .. }
+        ) {
+            let (value, value_type) = self.compile_expr(source);
+            let reference = self.resolve_cv(&format!("\0reference_call_{}", self.next_cv));
+            let mut bind = Instruction::new(OpCode::BindCvRef);
+            bind.op1 = value;
+            bind.op1_type = value_type;
+            bind.result = reference;
+            bind.result_type = OpType::Cv;
+            bind._pad |= REFERENCE_RESULT_INTERNAL;
+            self.push_instruction_at_line(bind, expression_source_line(source));
+            return Ok(reference);
+        }
+
         let destination = self.resolve_cv(&format!("\0array_reference_{}", self.next_cv));
         match source {
             Expr::ArrayAccess { array, index, .. } if matches!(array.as_ref(), Expr::Globals { .. }) => {
@@ -1271,83 +1291,55 @@ impl Compiler {
         if let Expr::Globals { line } = source {
             return Err(self.goto_error("Cannot acquire reference to $GLOBALS", *line));
         }
-        if matches!(
-            target,
-            Expr::StaticProperty { .. }
-                | Expr::DynamicNamedStaticProperty { .. }
-                | Expr::DynamicStaticProperty { .. }
-        ) && matches!(
-            source,
-            Expr::FunctionCall { .. }
-                | Expr::MethodCall { .. }
-                | Expr::StaticCall { .. }
-                | Expr::DynamicCall { .. }
-                | Expr::DynamicStaticCall { .. }
-        ) {
-            let (source, source_type) = self.compile_expr(source);
-            self.compile_static_property_reference_assignment(
-                target,
-                source,
-                source_type,
-                false,
-            )?;
-            return Ok((source, source_type));
+        let source_is_call = Self::is_call_result_reference_source(source);
+        if source_is_call && !Self::supports_call_result_reference_target(target) {
+            return Err("Array reference element must contain a mutable l-value".into());
         }
         let source_is_internal = !matches!(source, Expr::Variable { .. });
-        let source = self.compile_array_element_reference_source(source)?;
+        let (write, source) = if source_is_call {
+            // A call source evaluates after the target location. Keep that
+            // prepared location live so re-entrant code cannot duplicate its
+            // side effects or change which slot commits.
+            let write = self.compile_reference_write_target(target)?;
+            let source = self.compile_array_element_reference_source(source)?;
+            (write, source)
+        } else {
+            // Mutable l-value sources bind before the target is resolved. This
+            // order is observable when the source rehashes the target array.
+            let source = self.compile_array_element_reference_source(source)?;
+            let write = self.compile_reference_write_target(target)?;
+            (write, source)
+        };
+        let target_line = expression_source_line(target);
 
-        if let Expr::ArrayAccess { array, index, .. } = target
-            && matches!(array.as_ref(), Expr::Globals { .. })
-        {
-            let (key, key_type) = self.compile_expr(index);
-            let mut assign = Instruction::new(OpCode::AssignGlobalRef);
-            assign.op1 = key;
-            assign.op1_type = key_type;
-            assign.op2 = source;
-            assign.op2_type = OpType::Cv;
-            self.instructions.push(assign);
-            return Ok((source, OpType::Cv));
-        }
-
-        match target {
-            Expr::DynamicVariable { name, line } => {
-                let (key, key_type) = self.compile_expr(name);
+        match write {
+            CoalesceWrite::Variable(_) => return Err("Invalid reference assignment target".into()),
+            CoalesceWrite::DynamicVariable {
+                key,
+                key_type,
+                line,
+            } => {
                 let mut assign = Instruction::new(OpCode::AssignDynamicVarRef);
                 assign.op1 = key;
                 assign.op1_type = key_type;
                 assign.op2 = source;
                 assign.op2_type = OpType::Cv;
-                self.push_instruction_at_line(assign, *line);
+                self.push_instruction_at_line(assign, line);
             }
-            Expr::PropertyAccess {
-                object,
-                property,
-                nullsafe: false,
-                line,
-            } => {
-                let (object, object_type) = self.compile_expr(object);
-                let property = self.add_literal(Value::string(property.clone()));
-                let mut bind = Instruction::new(OpCode::BindObjPropRef);
-                bind.op1 = object;
-                bind.op1_type = object_type;
-                bind.op2 = property;
-                bind.op2_type = OpType::Const;
-                bind.result = source;
-                bind.result_type = OpType::Cv;
-                bind._pad |= OBJ_PROP_REFERENCE_BIND;
-                if source_is_internal {
-                    bind._pad |= REFERENCE_RESULT_INTERNAL;
-                }
-                self.push_instruction_at_line(bind, *line);
+            CoalesceWrite::Global { key, key_type } => {
+                let mut assign = Instruction::new(OpCode::AssignGlobalRef);
+                assign.op1 = key;
+                assign.op1_type = key_type;
+                assign.op2 = source;
+                assign.op2_type = OpType::Cv;
+                self.instructions.push(assign);
             }
-            Expr::DynamicPropertyAccess {
+            CoalesceWrite::ObjectProperty {
                 object,
+                object_type,
                 property,
-                nullsafe: false,
-                line,
+                property_type,
             } => {
-                let (object, object_type) = self.compile_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
                 let mut bind = Instruction::new(OpCode::BindObjPropRef);
                 bind.op1 = object;
                 bind.op1_type = object_type;
@@ -1359,27 +1351,41 @@ impl Compiler {
                 if source_is_internal {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
                 }
-                self.push_instruction_at_line(bind, *line);
+                self.push_instruction_at_line(bind, target_line);
             }
-            static_property @ (Expr::StaticProperty { .. }
-            | Expr::DynamicNamedStaticProperty { .. }
-            | Expr::DynamicStaticProperty { .. }) => {
-                self.compile_static_property_reference_assignment(
-                    static_property,
-                    source,
-                    OpType::Cv,
-                    source_is_internal,
-                )?;
-            }
-            Expr::ArrayAccess { .. } => {
-                let mut root = target;
-                let mut reversed_indices = Vec::new();
-                while let Expr::ArrayAccess { array, index, .. } = root {
-                    reversed_indices.push(index.as_ref().clone());
-                    root = array.as_ref();
+            CoalesceWrite::StaticProperty {
+                class,
+                class_type,
+                property,
+                property_type,
+                late_static,
+                dynamic_owner,
+                line,
+            } => {
+                let mut assign = Instruction::new(if late_static {
+                    OpCode::AssignLateStaticProp
+                } else {
+                    OpCode::AssignStaticProp
+                });
+                assign.op1 = class;
+                assign.op1_type = class_type;
+                assign.op2 = property;
+                assign.op2_type = property_type;
+                assign.result = source;
+                assign.result_type = OpType::Cv;
+                assign._pad |= STATIC_PROP_REFERENCE_BIND | STATIC_PROP_INDIRECT_MODIFY;
+                if source_is_internal {
+                    assign._pad |= REFERENCE_RESULT_INTERNAL;
                 }
-                reversed_indices.reverse();
-                let path = self.compile_mutable_array_path(root, &reversed_indices, true, false)?;
+                if dynamic_owner {
+                    assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    assign._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
+                self.push_instruction_at_line(assign, line);
+            }
+            CoalesceWrite::Array(path) => {
                 let &(container, container_type) = path.containers.last().unwrap();
                 let &(key, key_type) = path.keys.last().unwrap();
 
@@ -1408,10 +1414,129 @@ impl Compiler {
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
             }
-            _ => return Err("Invalid reference assignment target".into()),
         }
 
         Ok((source, OpType::Cv))
+    }
+
+    fn is_call_result_reference_source(source: &Expr) -> bool {
+        matches!(
+            source,
+            Expr::FunctionCall { .. }
+                | Expr::MethodCall { .. }
+                | Expr::StaticCall { .. }
+                | Expr::DynamicCall { .. }
+                | Expr::DynamicStaticCall { .. }
+        )
+    }
+
+    fn supports_call_result_reference_target(target: &Expr) -> bool {
+        match target {
+            Expr::DynamicVariable { .. }
+            | Expr::PropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::DynamicPropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. } => true,
+            Expr::ArrayAccess { array, .. } => matches!(
+                array.as_ref(),
+                Expr::Variable { .. } | Expr::Globals { .. }
+            ),
+            _ => false,
+        }
+    }
+
+    fn compile_reference_write_target(
+        &mut self,
+        target: &Expr,
+    ) -> Result<CoalesceWrite, String> {
+        if let Expr::ArrayAccess { array, index, .. } = target
+            && matches!(array.as_ref(), Expr::Globals { .. })
+        {
+            let (key, key_type) = self.compile_expr(index);
+            return Ok(CoalesceWrite::Global { key, key_type });
+        }
+
+        match target {
+            Expr::DynamicVariable { name, line } => {
+                let (key, key_type) = self.compile_expr(name);
+                Ok(CoalesceWrite::DynamicVariable {
+                    key,
+                    key_type,
+                    line: *line,
+                })
+            }
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line: _,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                Ok(CoalesceWrite::ObjectProperty {
+                    object,
+                    object_type,
+                    property,
+                    property_type: OpType::Const,
+                })
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line: _,
+            } => {
+                let (object, object_type) = self.compile_property_modify_base(object);
+                let (property, property_type) = self.compile_expr(property);
+                Ok(CoalesceWrite::ObjectProperty {
+                    object,
+                    object_type,
+                    property,
+                    property_type,
+                })
+            }
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                let (
+                    class,
+                    class_type,
+                    property,
+                    property_type,
+                    late_static,
+                    dynamic_owner,
+                    line,
+                ) = self
+                    .compile_static_property_operands(static_property)
+                    .ok_or_else(|| "Expected static-property reference target".to_string())?;
+                Ok(CoalesceWrite::StaticProperty {
+                    class,
+                    class_type,
+                    property,
+                    property_type,
+                    late_static,
+                    dynamic_owner,
+                    line,
+                })
+            }
+            Expr::ArrayAccess { .. } => {
+                let mut root = target;
+                let mut reversed_indices = Vec::new();
+                while let Expr::ArrayAccess { array, index, .. } = root {
+                    reversed_indices.push(index.as_ref().clone());
+                    root = array.as_ref();
+                }
+                reversed_indices.reverse();
+                let path = self.compile_mutable_array_path(root, &reversed_indices, true, false)?;
+                Ok(CoalesceWrite::Array(path))
+            }
+            _ => Err("Invalid reference assignment target".into()),
+        }
     }
 
     fn compile_mutable_array_path(
