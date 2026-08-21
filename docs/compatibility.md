@@ -8,6 +8,55 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `a460345c`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,825 pass, 1,474 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.183% and the whole-corpus rate is 68.316%; 4,706 of
+5,299 attempted cases reach runtime (88.809%). Relative to exact base
+`5254b59a`, the pass-set delta is exactly +3/-0:
+`Zend/tests/constants/bug41633_2.phpt`,
+`Zend/tests/constexpr/gh7771_1.phpt` and `gh7771_2.phpt` become passes. Every
+prior pass remains a pass, and there are no other status or failure-category
+transitions. Two sequential final full runs have byte-identical merged
+manifests and summaries. Their SHA-256 values are
+`ddde5b05c3958b85ca859fb7c3df90bb66e85b424c41be901f8146bd4ce1767c`
+and `9f8aec906679e834f7eee1f792c24ef99c0b7c50696db66842f73bf6a1bb260a`.
+
+A failed deferred class-constant expression now retains the exact source unit
+and AST line of its innermost unresolved class-constant reference. The created
+`Error` exposes that declaration location through `getFile()`/`getLine()`,
+while its trace begins at the runtime use site with PHP 8.5's synthetic
+`[constant expression]` frame. Existing live frames follow in order, including
+the native `constant()` or Reflection method frame where applicable, and the
+snapshot honors `zend.exception_ignore_args`. Nested deferred definitions keep
+the innermost already-located failure rather than replacing it with an outer
+dependency line.
+
+The rule is shared by direct class-constant fetches, ordinary object
+construction, `constant()`, `ReflectionClass::getConstant()` and
+`ReflectionClass::newInstanceWithoutConstructor()`. It runs only after a
+deferred evaluation has failed; unlocated and typed-constant errors retain
+their established metadata path. One original E2E regression exercises all
+five entry points, repeated retryable failures, declaration-versus-use lines
+and native frame ordering; all 97 class-constant E2E tests pass. The complete
+38-case `Zend/tests/constexpr` audit rises from 12 to 14 exact passes with no
+other movement. An adjacent audit of every current upstream expectation that
+prints `[constant expression]` finds the additional `bug41633_2.phpt` pass and
+no regression.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe diff ratchet pass, as do
+Composer S0, all four Symfony S1 gates and exact PHP 8.5 warmed-kernel S2 and
+cold-build S3. Two new, documented unsafe blocks snapshot live call frames on
+this cold diagnostic path; the production inventory is 1,616 unsafe blocks
+and 289 unsafe functions, both within the repository ratchet. No runtime
+performance or layout gate applies: ordinary and successful deferred reads do
+not allocate diagnostic metadata, and Throwable origin/trace work begins only
+after an evaluation failure. The exact base and candidate binary SHA-256 values
+are `3dffa5f665c2f1ce9a87560505668950143ce370b411486c83d23010dd47bdb6`
+and `ff91b915572d99b4c2641dde593b86d0ce499070aaedecd05a0ae4a8eaa7b422`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `5254b59a`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,822 pass, 1,477 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
