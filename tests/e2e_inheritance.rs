@@ -936,6 +936,50 @@ class RecursiveResult extends MissingDependency implements RecursiveResult {}
 }
 
 #[test]
+fn method_compatibility_diagnostics_canonicalize_union_iterable_and_dnf_types() {
+    for (source, expected) in [
+        (
+            r#"<?php
+class CanonicalParent {
+    public function transform(string|array|object $value): int {}
+}
+class CanonicalChild extends CanonicalParent {
+    public function transform(string|array $value): int|float {}
+}
+"#,
+            "Fatal(\"Declaration of CanonicalChild::transform(array|string $value): int|float must be compatible with CanonicalParent::transform(object|array|string $value): int\")",
+        ),
+        (
+            r#"<?php
+class IterableParent { public function read(): iterable {} }
+class IterableChild extends IterableParent { public function read(): int {} }
+"#,
+            "Fatal(\"Declaration of IterableChild::read(): int must be compatible with IterableParent::read(): Traversable|array\")",
+        ),
+        (
+            r#"<?php
+interface DiagnosticX {}
+interface DiagnosticY {}
+class DnfParent { public function read(): (DiagnosticX&DiagnosticY)|array|null {} }
+class DnfChild extends DnfParent { public function read(): string {} }
+"#,
+            "Fatal(\"Declaration of DnfChild::read(): string must be compatible with DnfParent::read(): (DiagnosticX&DiagnosticY)|array|null\")",
+        ),
+        (
+            r#"<?php
+class NullableIterableParent { public function accept(int $value) {} }
+class NullableIterableChild extends NullableIterableParent {
+    public function accept(?iterable $value) {}
+}
+"#,
+            "Fatal(\"Declaration of NullableIterableChild::accept(Traversable|array|null $value) must be compatible with NullableIterableParent::accept(int $value)\")",
+        ),
+    ] {
+        assert_eq!(format!("{:?}", run_php_expect_error(source)), expected);
+    }
+}
+
+#[test]
 fn concrete_parent_variance_allows_covariance_contravariance_and_private_reuse() {
     assert_eq!(
         run_php(
@@ -1037,7 +1081,7 @@ class NarrowFirstInput extends OpenInputContract {
     );
     assert_eq!(
         format!("{narrowed_tail:?}"),
-        "Fatal(\"Declaration of NarrowFirstInput::ingest(int $first = 0, int|string ...$rest) must be compatible with OpenInputContract::ingest(int|string ...$items)\")"
+        "Fatal(\"Declaration of NarrowFirstInput::ingest(int $first = 0, string|int ...$rest) must be compatible with OpenInputContract::ingest(string|int ...$items)\")"
     );
 }
 

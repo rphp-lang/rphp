@@ -2667,7 +2667,7 @@ impl ExecutorGlobals {
                 parameter.push_str(
                     &self
                         .resolve_variance_type_hint(hint, declaration.owner, linking_class)
-                        .display_name(),
+                        .diagnostic_display_name(),
                 );
                 parameter.push(' ');
             }
@@ -2718,7 +2718,7 @@ impl ExecutorGlobals {
             rendered.push_str(
                 &self
                     .resolve_variance_type_hint(&return_type, declaration.owner, linking_class)
-                    .display_name(),
+                    .diagnostic_display_name(),
             );
         }
         rendered
