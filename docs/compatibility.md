@@ -8,6 +8,63 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `a47f14fc`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,959 pass, 1,340 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.712% and the whole-corpus rate is 70.709%; 4,750 of
+5,299 attempted cases reach runtime (89.640%). Relative to exact candidate
+`b7b97752`, the pass-set delta is +2/-0 with no other status or failure-
+category movement.
+
+The exact additions are `Zend/tests/break_error_001.phpt` and
+`break_error_002.phpt`. Every previous pass remains a pass. Together with the
+preceding checkpoint, all four `break_error_001` through `break_error_004`
+cases now pass. Two sequential final runs have byte-identical merged manifests
+and summaries. Their manifest and summary SHA-256 values are
+`b6000893425bc1342d688b0e031c83d33ed7f46224124681b1c8b7ae1ade4b2f` and
+`dc202f085528f93b58c269ad639f016cb436159a2ab89d8bbc9f3c7e0d196e2a`.
+
+The parser now consumes PHP's historical expression grammar after `break` and
+`continue`, while admitting only a positive integer literal, optionally
+parenthesized, as the compiled level. Zero and non-integer scalar literals use
+PHP 8.5's positive-integer fatal; variables, unary and compound expressions
+use its removed non-integer-operand fatal. Both are deferred source-unit
+compile errors rather than parser errors, so dead code, functions and ordinary
+source locations retain the required error stage and file/line.
+
+The lexer preserves a leading minus only at this operand boundary, including
+through nested parentheses. Negative integers, floats and signed zero can
+therefore remain distinct from unsigned zero without changing the existing
+compact negative-number tokens elsewhere. Positive explicit levels still
+lower through the unchanged compiler and VM control-flow path.
+
+The original CLI regression now covers both operators, zero, scalar strings,
+negative integers, signed integer and float zero, a variable, a binary
+expression, nested positive parentheses, exact diagnostics, exit status and
+an unaffected valid multi-level jump. All five Cargo configurations,
+all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
+and the exact unsafe ratchet pass. The production inventory remains 1,612
+unsafe blocks, 289 unsafe functions and 321 SAFETY annotations. Composer
+2.8.12 S0, all four Symfony S1 gates, and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 also pass.
+
+A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
+pinned to CPU 0 with the performance governor, four warmups, 100 cold requests
+per observation and no excluded sample, keeps both parser controls below the
++5% gate. Empty requests measure candidate/baseline ratios of 0.987876 by
+independent medians and 1.009541 by paired medians. A valid explicit
+multi-level `break` measures 1.004006 and 0.965585 respectively, with exact
+output. The candidate binary SHA-256 is
+`4effee007d16cfa128225d4b5e2354489980242651abc5ab3f4c4896ed63148c` and the
+exact TSV SHA-256 is
+`3536b730825029e99fa7ca807ca98a3fa88cf072b5e0f233926337c3869eeb6a`.
+
+This checkpoint claims the exercised optional operand grammar, operand-kind
+diagnostics and source locations. Positive nesting levels above 4,294,967,295,
+unrelated malformed statement syntax and other control-flow operators remain
+separate surfaces.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `b7b97752`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,957 pass, 1,342 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
