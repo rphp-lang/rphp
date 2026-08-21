@@ -8,55 +8,59 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
-8.5.6 commit `fcc29c8` and candidate commit `94c4ee01`. Across all 5,599
-unmodified `Zend/tests` and `tests/lang` cases, 3,974 pass, 1,325 fail, 115
+8.5.6 commit `fcc29c8` and candidate commit `9ddfc055`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,978 pass, 1,321 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
-headline pass rate is 74.995% and the whole-corpus rate is 70.977%; 4,763 of
-5,299 attempted cases reach runtime (89.885%). Relative to exact candidate
-`3d28712a`, the pass-set delta is +6/-0 with no other status or failure-
-category movement.
+headline pass rate is 75.071% and the whole-corpus rate is 71.048%; 4,768 of
+5,299 attempted cases reach runtime (89.979%). Relative to exact candidate
+`94c4ee01`, the pass-set delta is +4/-0.
 
-The exact additions are `Zend/tests/bug75426.phpt`,
-`Zend/tests/constexpr/gh9138.phpt`, `gh9138_2.phpt`,
-`Zend/tests/list/list_012.phpt`, `list_013.phpt` and
-`Zend/tests/match/041.phpt`. Every previous pass remains a pass. Two sequential
-final runs have byte-identical merged manifests and summaries. Their manifest
-and summary SHA-256 values are
-`bba78d41417a5a49a2d96f0df9f50290adc152853b6e2fceec969c60e5cdf4f1` and
-`836ab694b84ba69f1e4310557d75c857b63d0596202908a010f3cd02e279c7e9`.
+The exact additions are `Zend/tests/generators/yield_in_parenthesis.phpt`,
+`Zend/tests/grammar/bug45147.phpt`, `tests/lang/008.phpt` and
+`tests/lang/033.phpt`. Every previous pass remains a pass. The only other
+failure-category movement is `tests/lang/028.phpt`, which advances from its
+alternative-`for` parse rejection to the existing unrelated runtime boundary
+in its final `call_user_func()` array callback. Two sequential final runs have
+byte-identical merged manifests and summaries. Their manifest and summary
+SHA-256 values are
+`1bfd774c6dfbc651b78b3e776a93aa5c31236f95aae0a7f46fafde6dc4a5779b` and
+`2d4740f6a0a48088e04decc6a6d42580d1e95998ed7d188c57d40bbc8d496aaa`.
 
-Comma tokens now retain their source line through an incremental monotonic
-counter, so comma-heavy lexing remains linear. An empty element in ordinary
-short or long array syntax is admitted far enough to become PHP's source-unit
-compile fatal, including the preceding separator line PHP reports for a middle
-hole. Short and `list()` destructuring holes remain valid. Match condition
-lists and `default` arms now accept PHP 8.5's trailing comma immediately before
-`=>`; ordinary commas between conditions and arms keep their existing paths.
+The lexer now recognizes the closing keywords for PHP's alternative `if`,
+`while`, `for`, `foreach` and `switch` forms. Their colon-delimited bodies are
+lowered to the same statement AST and baseline VM paths as ordinary braced
+control flow, including nested `elseif`/`else`, break/continue, inline HTML and
+empty bodies. Switch `case` and `default` labels accept either `:` or PHP 8.5's
+deprecated `;`; the latter records the exact separator line and emits the
+source-unit compile deprecation before execution.
 
-One original CLI suite covers leading, middle and tail empty array elements,
-short and long syntax, exact fatal stage/message/file/line/exit behavior,
-condition-list and default-arm commas, ordinary trailing array commas, and both
-destructuring forms. All five Cargo configurations, all-features/all-targets,
-formatting, PHPT runner self-test, unsafe self-test and the exact unsafe ratchet
-pass. The production inventory remains 1,612 unsafe blocks, 289 unsafe
-functions and 321 SAFETY annotations. Composer 2.8.12 S0, all four Symfony S1
-gates, and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3 also pass.
+Semicolon and comma locations share one incremental monotonic line counter, so
+the additional source metadata keeps punctuation-heavy lexing linear. One
+original CLI suite covers all five alternative forms, `elseif`/`else`, both
+switch label separators, a multiline deprecation line, ordinary braced
+controls and reserved-keyword named arguments. All five Cargo configurations,
+all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
+and the exact unsafe ratchet pass. The production inventory remains 1,612
+unsafe blocks, 289 unsafe functions and 321 SAFETY annotations. Composer
+2.8.12 S0, all four Symfony S1 gates, and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 also pass.
 
 A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
 pinned to CPU 0 with the performance governor, four warmups and no excluded
 sample, keeps both front-end controls below the +5% gate. One hundred empty
-cold requests per observation measure candidate/baseline ratios of 0.983319 by
-independent medians and 0.994966 by paired medians. One request independently
-generating and compiling 1,000 valid comma-heavy array and match expressions
-measures 1.005776 and 1.003583 respectively, with exact output. The candidate
-binary SHA-256 is
-`445caffea7acf622bb5c3c855ca7958ce8cca23dbde061cbebf277445d5ad89a` and the
+cold requests per observation measure candidate/baseline ratios of 0.985875 by
+independent medians and 1.009690 by paired medians. One request independently
+generating, compiling and executing 1,000 valid semicolon-heavy braced control
+units measures 0.996417 and 1.001247 respectively, with exact output. The
+candidate binary SHA-256 is
+`9af5894e60ac581fd4ee7bd60e3ee237a31de0bda13bf546e846800560955c56` and the
 exact TSV SHA-256 is
-`cf21166393c1e1399d1e4ca637a2e2fa4e6412cee5335d65e6ba36119cdb6201`.
+`c00fe950791bb034878b2f44d72d2546361a3e32f0ab0d4bb61278c887151bc3`.
 
-This checkpoint claims the exercised ordinary-array empty-element diagnostics
-and match-arm comma grammar. Other comma-specific syntax diagnostics, omitted
-expressions outside arrays, and unrelated match diagnostics remain separate
+This checkpoint claims the exercised alternative forms of the five control
+statements and switch-label semicolon deprecation. Alternative block-mode
+`declare`, mixed-form syntax diagnostics, case-insensitive keyword lexing and
+the remaining `call_user_func()` boundary in `tests/lang/028.phpt` are separate
 surfaces.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
