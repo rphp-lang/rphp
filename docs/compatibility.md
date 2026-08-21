@@ -8,6 +8,56 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `639cf6e3`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,856 pass, 1,443 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.768% and the whole-corpus rate is 68.869%; 4,733 of
+5,299 attempted cases reach runtime (89.319%). Relative to exact base
+`c79a2045`, the pass-set delta is +4/-0:
+`Zend/tests/bug60909_2.phpt`,
+`Zend/tests/exception_in_rope_end.phpt`, `tests/lang/bison1.phpt` and
+`tests/lang/bug25922.phpt` become exact passes. Every previous pass remains a
+pass, and there are no other status or failure-category transitions. Two
+sequential final runs have byte-identical status maps, merged manifests and
+summaries. Their manifest and summary SHA-256 values are
+`25acfdba5f87b4dbeda1aa3094483d092f1078e8710e627a4bb1562f0e3d6989`
+and `4d03e17d7c88de6141ba300591086ff2e832075d4d4812312d9d577a04e56349`.
+
+Simple variable interpolation now retains its source line through lexing and
+expression lowering. The compiler attaches the active operand site to ordinary
+concatenation, compact concatenation assignment and both statement and
+value-producing `.=` forms. Object conversion then links the engine-dispatched
+`__toString()` frame to that currently active instruction, so live
+`debug_backtrace()` frames and stored Throwable origin/trace data expose PHP
+8.5's exact file and line. The rule also lets undefined-variable diagnostics in
+interpolation and exceptions raised while finalizing a rope unwind from the
+correct source boundary.
+
+One original E2E regression covers live traces for explicit concat,
+interpolation, statement `.=` and value-producing `.=` plus the stored trace
+of a throwing interpolated conversion. The change adds no opcode, call-frame
+or instruction-layout field, dependency or unsafe block. Detached logical
+callers use a capacity-reusing small collection instead of paying a hash-table
+insert/remove cost for every successful conversion; nested and suspended
+frames remain keyed by frame identity. The production unsafe inventory remains
+1,613 blocks, 289 unsafe functions and 312 SAFETY annotations. All five Cargo
+configurations, all-features/all-targets, formatting, PHPT runner self-test,
+unsafe self-test and the exact unsafe ratchet pass, as do Composer S0, all four
+Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3.
+
+Twenty-one alternating CPU-pinned default-release pairs with JIT and quick
+loops disabled exercised 1.5 million object `__toString()` concatenations per
+run. Baseline p10/median/p90 was 0.582162/0.589987/0.608089 seconds and
+candidate 0.585155/0.601723/0.624659 seconds. The independent median ratio is
+1.0199; paired p10/median/p90 ratios are 0.9832/1.0218/1.0878, with the paired
+median below the +5% gate, and every run retained `6000000|abcd`. The exact
+candidate binary SHA-256 is
+`c71850021ab1f847b2f90bb7506031f78e13203f04c09f9795b23a466cc7e29f`.
+Direct `echo` failure-origin rendering in
+`Zend/tests/magic_methods/bug70967.phpt` remains a separate trace-shape gap;
+this checkpoint does not claim it.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `c79a2045`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,852 pass, 1,447 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
