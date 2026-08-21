@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `ef6f6385`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,883 pass, 1,416 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 73.278% and the whole-corpus rate is 69.352%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact base
+`f186311e`, the pass-set delta is +5/-0: `Zend/tests/bug69376.phpt`,
+`Zend/tests/bug69376_2.phpt`, `Zend/tests/bug71529.phpt`,
+`Zend/tests/bug73916.phpt` and `Zend/tests/gc/gc_034.phpt` become exact
+passes. Every previous pass remains a pass.
+
+Three expected non-pass cases advance past their former parser boundary.
+`Zend/tests/gc/bug70805.phpt` now reaches its final GC count and retains the
+independent root-accounting divergence (`int(9999)` rather than `int(0)`).
+`Zend/tests/gc/bug80072.phpt` reaches the existing chained reference-assignment
+and comparison-precedence boundary. `Zend/tests/indexing_001.phpt` reaches the
+earlier value-append section and stops at the existing uncatchable scalar-to-
+array error before exercising its reference-append section. There are no other
+status or failure-category transitions. Two sequential final runs have byte-
+identical merged manifests and summaries. Their manifest and summary SHA-256
+values are
+`5e38bbd069c1ba0ce83a57c8fad8017657e3c644dab57c518268efbf76a873d5`
+and `c916ff69892a0daa7f0b3cd00bf699cecd0b40eb56f85b0e1a5af5a9617eff9b`.
+
+A simple-variable `$target[] =& $source` statement now bypasses only the
+ordinary value-push parser fast path and enters the existing general
+`ArrayAppendAssign` reference AST. Its established compiler and VM lowering
+reuse the source reference cell, so source mutation, copy-on-write aliases,
+self-cycles and array-index evaluation match PHP 8.5. Ordinary `$target[] =`
+statements retain `Stmt::ArrayPush`, and the compile-time prohibition on
+appending to `$GLOBALS` is unchanged. No compiler or VM path, opcode,
+instruction layout, dependency or unsafe block changes.
+
+Original parser and E2E regressions cover the reference AST selection without
+displacing ordinary pushes, alias and copy-on-write identity, recursive
+self-reference, exactly-once indexed-source evaluation and the `$GLOBALS`
+diagnostic. The complete 20-case upstream source-form slice rises from two to
+seven passes; its five remaining failures and eight CLI-INI capability cases
+are explicit. All five Cargo configurations,
+all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
+and the exact unsafe ratchet pass. The production inventory remains 1,613
+unsafe blocks, 289 unsafe functions and 312 SAFETY annotations. Composer S0,
+all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and cold-build
+S3 also pass.
+
+A local 21-pair alternating release control on an AMD Ryzen 9 7950X pinned to
+CPU 0 with the performance governor, default features, JIT and quick loops
+disabled, and three warmups compiled and executed 9,000 ordinary append sites
+per observation. No sample was excluded and every run returned checksum
+`9000`. Baseline p10/median/p90/mean was
+0.269393/0.273275/0.293300/0.278394 seconds and candidate
+0.268445/0.271907/0.295673/0.277731 seconds. The independent median and mean
+ratios are 0.994996 and 0.997620; paired p10/median/p90/mean ratios are
+0.939792/0.997561/1.047827/0.998545, below the +5% gate. The host ran x86-64
+Linux 7.0.0 with 31.9 GB RAM and rustc 1.93.1. The exact candidate binary
+SHA-256 is
+`51f0c6aa5df45bf87156d265be813682cb6f2bae2c718542c71e70b797e8e9ec`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `f186311e`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,878 pass, 1,421 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
