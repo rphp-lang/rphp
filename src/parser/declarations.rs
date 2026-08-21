@@ -1789,7 +1789,7 @@ impl Parser {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
-            Expr::FirstClassCallable(callable) => {
+            Expr::FirstClassCallable { callable, .. } => {
                 Self::collect_free_vars(callable, bound, out);
             }
             Expr::Isset(exprs) => {

@@ -895,6 +895,71 @@ fn test_parse_named_first_class_function_callable() {
 }
 
 #[test]
+fn dynamic_and_namespace_relative_first_class_callables_keep_source_lines() {
+    let tokens = Lexer::new(
+        "<?php\nnamespace Fixture;\n$local = namespace\\run(...);\n$class = Target::class;\n$method = 'run';\n$static = $class::$method(...);\n$target = new Target;\n$instance = $target->$method(...);",
+    )
+    .tokenize()
+    .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let Stmt::Namespace { body, .. } = &statements[0] else {
+        panic!("expected namespace statement");
+    };
+
+    assert!(matches!(
+        &body[0],
+        Stmt::Assign {
+            expr: Expr::FirstClassFunctionCallable { name, line: 3 },
+            ..
+        } if name == "namespace\\run"
+    ));
+    assert!(matches!(
+        &body[3],
+        Stmt::Assign {
+            expr: Expr::FirstClassCallable { line: 6, .. },
+            ..
+        }
+    ));
+    assert!(matches!(
+        &body[5],
+        Stmt::Assign {
+            expr: Expr::FirstClassCallable { line: 8, .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn forbidden_new_and_nullsafe_first_class_callables_are_compile_errors() {
+    for (source, expected) in [
+        (
+            "<?php\nnew Example(...);",
+            "Cannot create Closure for new expression",
+        ),
+        (
+            "<?php\n$class = 'Example'; new $class(...);",
+            "Cannot create Closure for new expression",
+        ),
+        (
+            "<?php\n$object?->method(...);",
+            "Cannot combine nullsafe operator with Closure creation",
+        ),
+        (
+            "<?php\n$object?->{$method}(...);",
+            "Cannot combine nullsafe operator with Closure creation",
+        ),
+    ] {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        assert!(matches!(
+            statements.last(),
+            Some(Stmt::ExprStmt(Expr::CompileError { message, line: 2 }))
+                if message == expected
+        ));
+    }
+}
+
+#[test]
 fn catch_types_accept_namespace_relative_names_in_every_union_position() {
     let tokens = Lexer::new(
         "<?php namespace Fixture; try {} catch (namespace\\First|\\RuntimeException|namespace\\Last $error) {} try {} catch (namespace\\Silent) {}",
@@ -1057,7 +1122,7 @@ fn test_parse_static_first_class_callable() {
     assert!(matches!(
         &stmts[0],
         Stmt::Assign {
-            expr: Expr::FirstClassCallable(_),
+            expr: Expr::FirstClassCallable { .. },
             ..
         }
     ));

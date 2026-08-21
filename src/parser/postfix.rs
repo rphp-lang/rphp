@@ -18,6 +18,26 @@ impl Parser {
         ])
     }
 
+    fn consume_first_class_callable_placeholder(&mut self) -> bool {
+        if !matches!(self.peek(), Token::DotDotDot(_)) || self.peek_at(1) != Token::RParen {
+            return false;
+        }
+        self.advance();
+        self.advance();
+        true
+    }
+
+    fn first_class_callable(callable: Expr, line: usize) -> Expr {
+        Expr::FirstClassCallable {
+            callable: Box::new(callable),
+            line,
+        }
+    }
+
+    fn first_class_member_callable(owner: Expr, member: Expr, line: usize) -> Expr {
+        Self::first_class_callable(Self::dynamic_member_callable(owner, member), line)
+    }
+
     /// After `::`, one leading `$` is the static-member indirection marker,
     /// not another ordinary variable-variable layer. Thus `C::$$name` names
     /// the property selected by `$name`, while `C::$$$name` selects it by
@@ -119,6 +139,17 @@ impl Parser {
             self.expect(&Token::RBrace)?;
             if matches!(self.peek(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
+                if self.consume_first_class_callable_placeholder() {
+                    return Ok(Self::first_class_member_callable(
+                        Expr::ClassConstant {
+                            class_name,
+                            constant: "class".to_string(),
+                            line,
+                        },
+                        constant,
+                        line,
+                    ));
+                }
                 let args = self.parse_call_args()?;
                 return Ok(Expr::DynamicCall {
                     callable: Box::new(Self::dynamic_member_callable(
@@ -144,6 +175,20 @@ impl Parser {
             let (property, dollar_line) = self.parse_indirect_static_member_name()?;
             if matches!(self.peek(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
+                if self.consume_first_class_callable_placeholder() {
+                    return Ok(Self::first_class_member_callable(
+                        Expr::ClassConstant {
+                            class_name,
+                            constant: "class".to_string(),
+                            line,
+                        },
+                        Expr::DynamicVariable {
+                            name: Box::new(property),
+                            line: dollar_line,
+                        },
+                        line,
+                    ));
+                }
                 let args = self.parse_call_args()?;
                 return Ok(Expr::DynamicCall {
                     callable: Box::new(Self::dynamic_member_callable(
@@ -176,6 +221,20 @@ impl Parser {
             };
             if matches!(self.peek(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
+                if self.consume_first_class_callable_placeholder() {
+                    return Ok(Self::first_class_member_callable(
+                        Expr::ClassConstant {
+                            class_name,
+                            constant: "class".to_string(),
+                            line,
+                        },
+                        Expr::Variable {
+                            name: property,
+                            line: property_line,
+                        },
+                        line,
+                    ));
+                }
                 let args = self.parse_call_args()?;
                 return Ok(Expr::DynamicCall {
                     callable: Box::new(Self::dynamic_member_callable(
@@ -234,7 +293,7 @@ impl Parser {
             }
             self.advance();
             self.advance();
-            return Ok(Expr::FirstClassCallable(Box::new(Expr::ArrayLiteral(vec![
+            return Ok(Self::first_class_callable(Expr::ArrayLiteral(vec![
                 ArrayElement {
                     key: None,
                     value: Expr::ClassConstant {
@@ -253,7 +312,7 @@ impl Parser {
                     unpack_line: None,
                     by_reference: false,
                 },
-            ]))));
+            ]), line));
         }
         let args = self.parse_call_args()?;
         Ok(Expr::StaticCall {
@@ -311,12 +370,8 @@ impl Parser {
                 }
                 Token::LParen(line) => {
                     self.advance();
-                    if matches!(self.peek(), Token::DotDotDot(_))
-                        && self.peek_at(1) == Token::RParen
-                    {
-                        self.advance();
-                        self.advance();
-                        expr = Expr::FirstClassCallable(Box::new(expr));
+                    if self.consume_first_class_callable_placeholder() {
+                        expr = Self::first_class_callable(expr, line);
                     } else {
                         let args = self.parse_call_args()?;
                         expr = Expr::DynamicCall {
@@ -346,17 +401,22 @@ impl Parser {
                         let (property, dollar_line) = self.parse_indirect_static_member_name()?;
                         if matches!(self.peek(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
-                            let args = self.parse_call_args()?;
-                            expr = Expr::DynamicStaticCall {
-                                class: Box::new(expr),
-                                method: Box::new(Expr::DynamicVariable {
-                                    name: Box::new(property),
-                                    line: dollar_line,
-                                }),
-                                args,
-                                generic_args: Vec::new(),
-                                line,
+                            let method = Expr::DynamicVariable {
+                                name: Box::new(property),
+                                line: dollar_line,
                             };
+                            if self.consume_first_class_callable_placeholder() {
+                                expr = Self::first_class_member_callable(expr, method, line);
+                            } else {
+                                let args = self.parse_call_args()?;
+                                expr = Expr::DynamicStaticCall {
+                                    class: Box::new(expr),
+                                    method: Box::new(method),
+                                    args,
+                                    generic_args: Vec::new(),
+                                    line,
+                                };
+                            }
                         } else {
                             expr = Expr::DynamicStaticProperty {
                                 class: Box::new(expr),
@@ -370,17 +430,22 @@ impl Parser {
                         self.advance();
                         if matches!(self.peek(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
-                            let args = self.parse_call_args()?;
-                            expr = Expr::DynamicStaticCall {
-                                class: Box::new(expr),
-                                method: Box::new(Expr::Variable {
-                                    name: member_name,
-                                    line: member_line,
-                                }),
-                                args,
-                                generic_args: Vec::new(),
-                                line,
+                            let method = Expr::Variable {
+                                name: member_name,
+                                line: member_line,
                             };
+                            if self.consume_first_class_callable_placeholder() {
+                                expr = Self::first_class_member_callable(expr, method, line);
+                            } else {
+                                let args = self.parse_call_args()?;
+                                expr = Expr::DynamicStaticCall {
+                                    class: Box::new(expr),
+                                    method: Box::new(method),
+                                    args,
+                                    generic_args: Vec::new(),
+                                    line,
+                                };
+                            }
                         } else {
                             expr = Expr::DynamicStaticProperty {
                                 class: Box::new(expr),
@@ -405,14 +470,18 @@ impl Parser {
                     };
                     if matches!(self.peek(), Token::LParen(_)) {
                         let line = self.expect_lparen()?;
-                        let args = self.parse_call_args()?;
-                        expr = Expr::DynamicStaticCall {
-                            class: Box::new(expr),
-                            method: Box::new(constant),
-                            args,
-                            generic_args: Vec::new(),
-                            line,
-                        };
+                        if self.consume_first_class_callable_placeholder() {
+                            expr = Self::first_class_member_callable(expr, constant, line);
+                        } else {
+                            let args = self.parse_call_args()?;
+                            expr = Expr::DynamicStaticCall {
+                                class: Box::new(expr),
+                                method: Box::new(constant),
+                                args,
+                                generic_args: Vec::new(),
+                                line,
+                            };
+                        }
                         continue;
                     }
                     expr = Expr::DynamicClassConstant {
@@ -429,35 +498,31 @@ impl Parser {
                         let member = self.parse_expr()?;
                         self.expect(&Token::RBrace)?;
                         if matches!(self.peek(), Token::LParen(_)) {
-                            if nullsafe {
-                                return Err(
-                                    "Dynamic nullsafe method calls are not supported yet".into()
-                                );
-                            }
                             let line = self.expect_lparen()?;
-                            let args = self.parse_call_args()?;
-                            expr = Expr::DynamicCall {
-                                callable: Box::new(Expr::ArrayLiteral(vec![
-                                    ArrayElement {
-                                        key: None,
-                                        value: expr,
-                                        unpack: false,
-                                        unpack_line: None,
-                                        by_reference: false,
-                                    },
-                                    ArrayElement {
-                                        key: None,
-                                        value: member,
-                                        unpack: false,
-                                        unpack_line: None,
-                                        by_reference: false,
-                                    },
-                                ])),
-                                args,
-                                generic_args: Vec::new(),
-                                method_syntax: true,
-                                line,
-                            };
+                            if self.consume_first_class_callable_placeholder() {
+                                expr = if nullsafe {
+                                    self.compile_error(
+                                        "Cannot combine nullsafe operator with Closure creation",
+                                        line,
+                                    )
+                                } else {
+                                    Self::first_class_member_callable(expr, member, line)
+                                };
+                            } else {
+                                if nullsafe {
+                                    return Err(
+                                        "Dynamic nullsafe method calls are not supported yet".into()
+                                    );
+                                }
+                                let args = self.parse_call_args()?;
+                                expr = Expr::DynamicCall {
+                                    callable: Box::new(Self::dynamic_member_callable(expr, member)),
+                                    args,
+                                    generic_args: Vec::new(),
+                                    method_syntax: true,
+                                    line,
+                                };
+                            }
                         } else {
                             expr = Expr::DynamicPropertyAccess {
                                 object: Box::new(expr),
@@ -471,20 +536,31 @@ impl Parser {
                     if matches!(self.peek(), Token::Dollar(_)) {
                         let member = self.parse_primary_atom()?;
                         if matches!(self.peek(), Token::LParen(_)) {
-                            if nullsafe {
-                                return Err(
-                                    "Dynamic nullsafe method calls are not supported yet".into(),
-                                );
-                            }
                             let line = self.expect_lparen()?;
-                            let args = self.parse_call_args()?;
-                            expr = Expr::DynamicCall {
-                                callable: Box::new(Self::dynamic_member_callable(expr, member)),
-                                args,
-                                generic_args: Vec::new(),
-                                method_syntax: true,
-                                line,
-                            };
+                            if self.consume_first_class_callable_placeholder() {
+                                expr = if nullsafe {
+                                    self.compile_error(
+                                        "Cannot combine nullsafe operator with Closure creation",
+                                        line,
+                                    )
+                                } else {
+                                    Self::first_class_member_callable(expr, member, line)
+                                };
+                            } else {
+                                if nullsafe {
+                                    return Err(
+                                        "Dynamic nullsafe method calls are not supported yet".into(),
+                                    );
+                                }
+                                let args = self.parse_call_args()?;
+                                expr = Expr::DynamicCall {
+                                    callable: Box::new(Self::dynamic_member_callable(expr, member)),
+                                    args,
+                                    generic_args: Vec::new(),
+                                    method_syntax: true,
+                                    line,
+                                };
+                            }
                         } else {
                             expr = Expr::DynamicPropertyAccess {
                                 object: Box::new(expr),
@@ -495,42 +571,38 @@ impl Parser {
                         }
                         continue;
                     }
-                    if let Token::Variable(member_name, _) = self.peek() {
+                    if let Token::Variable(member_name, member_line) = self.peek() {
                         self.advance();
                         let member = Expr::Variable {
                             name: member_name,
-                            line: 0,
+                            line: member_line,
                         };
                         if matches!(self.peek(), Token::LParen(_)) {
-                            if nullsafe {
-                                return Err(
-                                    "Dynamic nullsafe method calls are not supported yet".into()
-                                );
-                            }
                             let line = self.expect_lparen()?;
-                            let args = self.parse_call_args()?;
-                            expr = Expr::DynamicCall {
-                                callable: Box::new(Expr::ArrayLiteral(vec![
-                                    ArrayElement {
-                                        key: None,
-                                        value: expr,
-                                        unpack: false,
-                                        unpack_line: None,
-                                        by_reference: false,
-                                    },
-                                    ArrayElement {
-                                        key: None,
-                                        value: member,
-                                        unpack: false,
-                                        unpack_line: None,
-                                        by_reference: false,
-                                    },
-                                ])),
-                                args,
-                                generic_args: Vec::new(),
-                                method_syntax: true,
-                                line,
-                            };
+                            if self.consume_first_class_callable_placeholder() {
+                                expr = if nullsafe {
+                                    self.compile_error(
+                                        "Cannot combine nullsafe operator with Closure creation",
+                                        line,
+                                    )
+                                } else {
+                                    Self::first_class_member_callable(expr, member, line)
+                                };
+                            } else {
+                                if nullsafe {
+                                    return Err(
+                                        "Dynamic nullsafe method calls are not supported yet".into()
+                                    );
+                                }
+                                let args = self.parse_call_args()?;
+                                expr = Expr::DynamicCall {
+                                    callable: Box::new(Self::dynamic_member_callable(expr, member)),
+                                    args,
+                                    generic_args: Vec::new(),
+                                    method_syntax: true,
+                                    line,
+                                };
+                            }
                         } else {
                             expr = Expr::DynamicPropertyAccess {
                                 object: Box::new(expr),
@@ -564,12 +636,6 @@ impl Parser {
                         if matches!(self.peek(), Token::DotDotDot(_))
                             && self.peek_at(1) == Token::RParen
                         {
-                            if nullsafe {
-                                return Err(
-                                    "Cannot create a first-class callable from nullsafe method syntax"
-                                        .into(),
-                                );
-                            }
                             if !generic_args.is_empty() {
                                 return Err(
                                     "Generic first-class method callables are not supported yet"
@@ -578,22 +644,18 @@ impl Parser {
                             }
                             self.advance();
                             self.advance();
-                            expr = Expr::FirstClassCallable(Box::new(Expr::ArrayLiteral(vec![
-                                ArrayElement {
-                                    key: None,
-                                    value: expr,
-                                    unpack: false,
-                                    unpack_line: None,
-                                    by_reference: false,
-                                },
-                                ArrayElement {
-                                    key: None,
-                                    value: Expr::StringLiteral(member),
-                                    unpack: false,
-                                    unpack_line: None,
-                                    by_reference: false,
-                                },
-                            ])));
+                            expr = if nullsafe {
+                                self.compile_error(
+                                    "Cannot combine nullsafe operator with Closure creation",
+                                    line,
+                                )
+                            } else {
+                                Self::first_class_member_callable(
+                                    expr,
+                                    Expr::StringLiteral(member),
+                                    line,
+                                )
+                            };
                             continue;
                         }
                         let args = self.parse_call_args()?;

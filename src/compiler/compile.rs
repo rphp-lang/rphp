@@ -136,7 +136,9 @@ fn expression_source_line(expression: &Expr) -> usize {
         | Expr::PostDecTarget(inner)
         | Expr::PreIncTarget(inner)
         | Expr::PreDecTarget(inner)
-        | Expr::FirstClassCallable(inner)
+        | Expr::FirstClassCallable {
+            callable: inner, ..
+        }
         | Expr::Print(inner)
         | Expr::BitwiseNot(inner) => expression_source_line(inner),
         Expr::Include { path, .. } => expression_source_line(path),
@@ -429,7 +431,7 @@ fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 expr,
                 ..
             } => (format!("(void){}", render(expr, 80, false)?), 80),
-            Expr::FirstClassCallable(callable) => {
+            Expr::FirstClassCallable { callable, .. } => {
                 let callable = render(callable, 100, false)?;
                 (format!("{callable}(...)"), 100)
             }
@@ -2485,7 +2487,7 @@ fn relative_static_expression_line(expression: &Expr) -> Option<usize> {
 
 fn forbidden_static_constant_expression(expression: &Expr) -> Option<(&'static str, usize)> {
     match expression {
-        Expr::FirstClassCallable(callable) => relative_static_expression_line(callable)
+        Expr::FirstClassCallable { callable, .. } => relative_static_expression_line(callable)
             .map(|line| ("\"static\" is not allowed in compile-time constants", line)),
         Expr::ClassConstant {
             class_name,
@@ -10716,7 +10718,7 @@ impl Compiler {
                 }
                 (retained, retained_type)
             }
-            Expr::FirstClassCallable(callable) => {
+            Expr::FirstClassCallable { callable, line } => {
                 let (callable, callable_type) = self.compile_expr(callable);
                 let result = self.alloc_tmp();
                 let mut create = Instruction::new(OpCode::CreateFirstClassCallable);
@@ -10724,7 +10726,7 @@ impl Compiler {
                 create.op1_type = callable_type;
                 create.result = result;
                 create.result_type = OpType::Tmp;
-                self.instructions.push(create);
+                self.push_instruction_at_line(create, *line);
                 (result, OpType::Tmp)
             }
             Expr::FirstClassFunctionCallable { name, line } => {

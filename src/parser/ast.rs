@@ -435,7 +435,10 @@ pub enum Expr {
         name: String,
         line: usize,
     },
-    FirstClassCallable(Box<Expr>),
+    FirstClassCallable {
+        callable: Box<Expr>,
+        line: usize,
+    },
     Instanceof {
         // $obj instanceof ClassName
         expr: Box<Expr>,
@@ -596,7 +599,7 @@ impl Expr {
                     || method.contains_yield()
                     || args.iter().any(CallArg::contains_yield)
             }
-            Expr::FirstClassCallable(callable) => callable.contains_yield(),
+            Expr::FirstClassCallable { callable, .. } => callable.contains_yield(),
             // A closure has its own suspension context; declaring it does not
             // suspend the surrounding expression.
             Expr::Closure { .. }

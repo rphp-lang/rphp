@@ -540,6 +540,28 @@ fn named_first_class_callable_errors_keep_the_creation_origin_and_trace() {
 }
 
 #[test]
+fn dynamic_first_class_callables_execute_and_keep_resolution_origins() {
+    assert_eq!(
+        run_php_with_source_context(
+            "<?php\nnamespace DynamicFcc;\nclass Target {\n    public static function twice($value) { return $value * 2; }\n    public function plus($value) { return $value + 1; }\n}\nfunction local($value) { return $value . '!'; }\n$class = Target::class;\n$staticMethod = 'twice';\n$static = $class::$staticMethod(...);\n$target = new Target;\n$instanceMethod = 'plus';\n$instance = $target->$instanceMethod(...);\n$local = namespace\\local(...);\necho $static(4), '|', $instance(4), '|', $local('ok'), \"\\n\";\nfunction capture() {\n    $class = Target::class;\n    $missing = 'missing';\n    try {\n        $class::$missing(...);\n    } catch (\\Throwable $error) {\n        echo $error->getMessage(), '|', $error->getFile(), ':', $error->getLine(), \"\\n\";\n        echo $error->getTraceAsString();\n    }\n}\ncapture();",
+            "/fixture/dynamic-fcc.php",
+            "/fixture",
+        ),
+        "8|5|ok!\nCall to undefined method DynamicFcc\\Target::missing()|/fixture/dynamic-fcc.php:20\n#0 /fixture/dynamic-fcc.php(26): DynamicFcc\\capture()\n#1 {main}"
+    );
+}
+
+#[test]
+fn dynamic_first_class_callable_evaluates_owner_and_member_once_in_order() {
+    assert_eq!(
+        run_php(
+            "<?php class OrderedFcc { public static function twice($value) { echo 'call>'; return $value * 2; } public function plus($value) { echo 'invoke>'; return $value + 1; } } function fccOwner() { echo 'owner>'; return OrderedFcc::class; } function fccReceiver() { echo 'receiver>'; return new OrderedFcc; } function staticFccName() { echo 'static-name>'; return 'twice'; } function instanceFccName() { echo 'instance-name>'; return 'plus'; } $static = (fccOwner())::{staticFccName()}(...); echo $static(3), '|'; $instance = fccReceiver()->{instanceFccName()}(...); echo $instance(3);"
+        ),
+        "owner>static-name>call>6|receiver>instance-name>invoke>4"
+    );
+}
+
+#[test]
 fn first_class_callable_keeps_existing_closure_identity() {
     let out = run_php(
         r#"<?php

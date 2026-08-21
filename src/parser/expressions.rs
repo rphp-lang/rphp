@@ -1222,6 +1222,9 @@ impl Parser {
                 if matches!(self.peek(), Token::LParen(_)) {
                     let paren_line = self.expect_lparen()?;
                     let line = named_line.unwrap_or(paren_line);
+                    if self.consume_first_class_callable_placeholder() {
+                        return Ok(Expr::FirstClassFunctionCallable { name, line });
+                    }
                     let args = self.parse_call_args()?;
                     Ok(Expr::FunctionCall {
                         name,
@@ -1513,7 +1516,12 @@ impl Parser {
                     let class = self.parse_dynamic_new_class_expression(class)?;
                     let args = if matches!(self.peek(), Token::LParen(_)) {
                         self.expect_lparen()?;
-                        self.parse_call_args()?
+                        if self.consume_first_class_callable_placeholder() {
+                            self.compile_error("Cannot create Closure for new expression", line);
+                            Vec::new()
+                        } else {
+                            self.parse_call_args()?
+                        }
                     } else {
                         Vec::new()
                     };
@@ -1544,7 +1552,12 @@ impl Parser {
                 let generic_args = self.parse_optional_turbofish()?;
                 let args = if matches!(self.peek(), Token::LParen(_)) {
                     self.expect_lparen()?;
-                    self.parse_call_args()?
+                    if self.consume_first_class_callable_placeholder() {
+                        self.compile_error("Cannot create Closure for new expression", line);
+                        Vec::new()
+                    } else {
+                        self.parse_call_args()?
+                    }
                 } else {
                     Vec::new()
                 };
