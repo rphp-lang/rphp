@@ -8,6 +8,61 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `ed43af85`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,897 pass, 1,402 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 73.542% and the whole-corpus rate is 69.602%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`e3e87f4f`, the pass-set delta is +7/-0: all seven
+`Zend/tests/magic_methods/magic_by_ref_001.phpt` through
+`magic_by_ref_007.phpt` cases become exact passes. Every previous pass remains
+a pass, and there are no other status or failure-category transitions.
+
+PHP 8.5's canonical `__get`, `__set`, `__isset`, `__unset`, `__call`,
+`__callStatic`, `__unserialize` and `__set_state` signatures now reject any
+by-reference parameter during compilation with the declaration's resolved
+class and original method spelling. The rule applies consistently to classes,
+abstract methods, interfaces, traits and the magic methods admitted on enums;
+it precedes magic return-type validation. It is restricted to the canonical
+non-variadic parameter count so a malformed arity retains its separate PHP
+diagnostic boundary. Constructors, `__invoke` and ordinary methods continue to
+permit reference parameters. The validation reuses existing method metadata
+and adds no runtime bytecode, opcode, layout field, dependency or unsafe block.
+
+An original source-aware E2E regression covers namespace-qualified class
+names, trait/interface/abstract/enum declarations, case-preserving
+`__callStatic`, serialization methods, reference-before-return-error priority
+and the allowed constructor/`__invoke`/ordinary-method boundary. The complete
+157-case `Zend/tests/magic_methods` directory rises from 85 to 92 passes with
+no other movement. All five Cargo configurations, all-features/all-targets,
+formatting, PHPT runner self-test, unsafe self-test and the exact unsafe ratchet
+pass. The production inventory remains 1,613 unsafe blocks, 289 unsafe
+functions and 312 SAFETY annotations. Composer S0, all four Symfony S1 gates
+and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3 also pass. Two
+sequential final runs have byte-identical merged manifests and summaries. Their
+manifest and summary SHA-256 values are
+`b68afb9a597ca2831a85e1f36f817730f4d0e88093c106e4fad914b7f2f62a83`
+and `c458c26b0aee2aa52aeb006fc37784e0b1caedf3b5917f9d4bb945165776144f`.
+
+A local 21-pair alternating release control on an AMD Ryzen 9 7950X pinned to
+CPU 0 with the performance governor, exact-output validation, two additional
+warmups and JIT/quick loops disabled compiled 10,000 unique classes and 40,000
+successful method declarations per observation through `eval()`. The mix
+includes ordinary methods, ordinary reference parameters and the allowed
+constructor/`__invoke` reference forms, exercising the new validator's
+worst-case successful path. No sample was excluded and every run returned
+checksum `198890`. Baseline median/mean was 2.199734/2.201690 seconds and
+candidate median/mean was 2.191118/2.193328 seconds. The independent median
+and mean ratios are 0.996083 and 0.996202; paired median and mean ratios are
+0.996351 and 0.996216, below the +5% gate. The exact candidate binary SHA-256
+is `f41027dc022db2255cec1693a45a54e96aacb1a1a0e698d14800bf8466bdce99`.
+
+General magic-method argument-count/type/staticness diagnostics remain
+separate work. The runtime propagation of an alias through a valid
+`__invoke(&$argument)` call is also not claimed by this compile-time
+checkpoint.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `e3e87f4f`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,890 pass, 1,409 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
