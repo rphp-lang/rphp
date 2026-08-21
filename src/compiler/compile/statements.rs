@@ -2106,6 +2106,7 @@ impl Compiler {
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
                 func_compiler.validate_declared_type_hint(return_type, *line)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
+                self.validate_attribute_target(attributes, "function")?;
                 self.validate_no_discard_callable(
                     attributes,
                     None,
@@ -3431,6 +3432,7 @@ impl Compiler {
                 attributes,
                 declarations,
             } => {
+                self.validate_attribute_target(attributes, "constant")?;
                 self.validate_override_target(attributes, "constant", false)?;
                 let reflected_attributes = self.compile_attributes(attributes, 64);
                 for (name, value) in declarations {
@@ -3644,6 +3646,13 @@ impl Compiler {
                         name,
                         &resolved_class,
                         *class_line,
+                    )?;
+                }
+                self.validate_attribute_target(attributes, "class")?;
+                if *is_abstract {
+                    self.validate_attribute_class_form(
+                        attributes,
+                        &format!("abstract class {resolved_class}"),
                     )?;
                 }
                 self.validate_no_discard_target(attributes, "class")?;
@@ -3952,6 +3961,7 @@ impl Compiler {
                         // link diagnostics instead of runtime return checking.
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
+                    self.validate_attribute_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_class),
@@ -4158,6 +4168,7 @@ impl Compiler {
                 let mut deferred_instance_defaults = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
+                    self.validate_attribute_target(&prop.attributes, "property")?;
                     self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
                         return Err(self.goto_error(
@@ -4574,6 +4585,11 @@ impl Compiler {
                     &resolved_iface,
                     *interface_line,
                 )?;
+                self.validate_attribute_target(attributes, "class")?;
+                self.validate_attribute_class_form(
+                    attributes,
+                    &format!("interface {resolved_iface}"),
+                )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
                 if let Some(line) = self.deprecated_attribute_line(attributes) {
@@ -4653,6 +4669,7 @@ impl Compiler {
                     if method.name.starts_with('$') && method.name.ends_with("::set") {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
+                    self.validate_attribute_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_iface),
@@ -4769,6 +4786,7 @@ impl Compiler {
                     self.compile_class_constants(&resolved_iface, None, constants)?;
                 let mut compiled_properties = Vec::new();
                 for property in properties {
+                    self.validate_attribute_target(&property.attributes, "property")?;
                     self.validate_override_target(&property.attributes, "property", true)?;
                     if property.is_abstract {
                         return Err(self.goto_error(
@@ -4892,6 +4910,11 @@ impl Compiler {
                     &resolved_trait,
                     *trait_line,
                 )?;
+                self.validate_attribute_target(attributes, "class")?;
+                self.validate_attribute_class_form(
+                    attributes,
+                    &format!("trait {resolved_trait}"),
+                )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
                 if !generic_params.is_empty()
@@ -4961,6 +4984,7 @@ impl Compiler {
                     if method.name.starts_with('$') && method.name.ends_with("::set") {
                         cp.return_type_hint = crate::vm::function::ParamTypeHint::Void;
                     }
+                    self.validate_attribute_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_trait),
@@ -5094,6 +5118,7 @@ impl Compiler {
                     Value::string(resolved_trait.clone()),
                 );
                 for prop in properties {
+                    self.validate_attribute_target(&prop.attributes, "property")?;
                     self.validate_override_target(&prop.attributes, "property", true)?;
                     if prop.is_abstract && prop.is_final {
                         return Err(self.goto_error(
@@ -5411,6 +5436,11 @@ impl Compiler {
                     name,
                     &resolved_enum,
                     *enum_line,
+                )?;
+                self.validate_attribute_target(attributes, "class")?;
+                self.validate_attribute_class_form(
+                    attributes,
+                    &format!("enum {resolved_enum}"),
                 )?;
                 self.validate_no_discard_target(attributes, "class")?;
                 self.validate_override_target(attributes, "class", false)?;
@@ -5854,6 +5884,7 @@ impl Compiler {
                         self.compile_params(&mut func_compiler, &method.params, &context)?;
                     func_compiler.validate_declared_type_hint(&method.return_type, method.line)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    self.validate_attribute_target(&method.attributes, "method")?;
                     self.validate_no_discard_callable(
                         &method.attributes,
                         Some(&resolved_enum),
@@ -5968,6 +5999,7 @@ impl Compiler {
                 // Static properties (cases) are stored as class properties with is_enum_case flag.
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 for (case, case_value) in cases.iter().zip(compiled_case_values) {
+                    self.validate_attribute_target(&case.attributes, "class constant")?;
                     self.validate_override_target(&case.attributes, "class constant", false)?;
                     let case_name = &case.name;
                     use crate::value::{PhpArray, PhpObject};
@@ -6123,6 +6155,7 @@ impl Compiler {
     ) -> Result<Vec<ClassConstantDefinition>, String> {
         let mut names = std::collections::HashSet::new();
         for constant in constants {
+            self.validate_attribute_target(&constant.attributes, "class constant")?;
             self.validate_override_target(&constant.attributes, "class constant", false)?;
             if let Some((message, line)) = forbidden_static_constant_expression(&constant.value) {
                 return Err(self.goto_error(message, line));

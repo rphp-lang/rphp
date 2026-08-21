@@ -194,6 +194,95 @@ fn attribute_marker_constructs_flags_and_validates_reflected_declarations() {
 }
 
 #[test]
+fn attribute_marker_validates_declaration_targets_and_repetition_at_compile_time() {
+    let cases = [
+        (
+            "<?php #[Attribute] abstract class Invalid {}",
+            "Cannot apply #[\\Attribute] to abstract class Invalid",
+        ),
+        (
+            "<?php namespace Domain; use Attribute as Marker; #[Marker] abstract class Invalid {}",
+            "Cannot apply #[\\Attribute] to abstract class Domain\\Invalid",
+        ),
+        (
+            "<?php #[Attribute] interface Invalid {}",
+            "Cannot apply #[\\Attribute] to interface Invalid",
+        ),
+        (
+            "<?php #[Attribute] trait Invalid {}",
+            "Cannot apply #[\\Attribute] to trait Invalid",
+        ),
+        (
+            "<?php #[Attribute] enum Invalid {}",
+            "Cannot apply #[\\Attribute] to enum Invalid",
+        ),
+        (
+            "<?php #[Attribute] function invalid() {}",
+            "Attribute \"Attribute\" cannot target function (allowed targets: class)",
+        ),
+        (
+            "<?php #[Attribute] const INVALID = 1;",
+            "Attribute \"Attribute\" cannot target constant (allowed targets: class)",
+        ),
+        (
+            "<?php class Invalid { #[Attribute] public const VALUE = 1; }",
+            "Attribute \"Attribute\" cannot target class constant (allowed targets: class)",
+        ),
+        (
+            "<?php class Invalid { #[Attribute] public int $value; }",
+            "Attribute \"Attribute\" cannot target property (allowed targets: class)",
+        ),
+        (
+            "<?php class Invalid { #[Attribute] public function method() {} }",
+            "Attribute \"Attribute\" cannot target method (allowed targets: class)",
+        ),
+        (
+            "<?php function invalid(#[Attribute] $value) {}",
+            "Attribute \"Attribute\" cannot target parameter (allowed targets: class)",
+        ),
+        (
+            "<?php $closure = #[Attribute] function () {};",
+            "Attribute \"Attribute\" cannot target function (allowed targets: class)",
+        ),
+        (
+            "<?php #[Attribute] #[Attribute] class Invalid {}",
+            "Attribute \"Attribute\" must not be repeated",
+        ),
+        (
+            "<?php #[DelayedTargetValidation] #[Attribute] #[Attribute] function invalid() {}",
+            "Attribute \"Attribute\" must not be repeated",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = run_php_expect_error(source);
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected Attribute validation error: {error}"
+        );
+    }
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace {
+#[Attribute] class PlainAttribute {}
+#[Attribute] final class FinalAttribute {}
+#[Attribute] readonly class ReadonlyAttribute {}
+$anonymous = new #[Attribute] class {};
+}
+namespace Domain {
+#[Attribute] abstract class LocalAttribute {}
+#[\DelayedTargetValidation] #[\Attribute] trait DelayedTrait {}
+#[\DelayedTargetValidation] #[\Attribute] function delayed() {}
+echo 'ok';
+}
+"#,
+        ),
+        "ok"
+    );
+}
+
+#[test]
 fn deprecated_attribute_reports_callable_names_messages_and_suppression() {
     assert_eq!(
         run_php(
