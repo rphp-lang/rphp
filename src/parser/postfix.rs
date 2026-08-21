@@ -335,7 +335,10 @@ impl Parser {
                     // it for the statement parser instead of trying to parse
                     // `]` as an index expression.
                     if self.peek_at(1) == Token::RBracket {
-                        if matches!(self.peek_at(2), Token::LBracket(_)) {
+                        if matches!(
+                            self.peek_at(2),
+                            Token::LBracket(_) | Token::Arrow | Token::NullSafe
+                        ) {
                             self.advance();
                             self.advance();
                             expr = Expr::ArrayAppendArgument {

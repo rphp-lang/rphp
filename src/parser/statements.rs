@@ -1354,31 +1354,29 @@ impl Parser {
     }
 
     fn finish_array_append_statement(&mut self, target: Expr) -> Result<Stmt, String> {
-        if !matches!(
-            &target,
-            Expr::Variable { .. }
-                | Expr::DynamicVariable { .. }
-                | Expr::Globals { .. }
-                | Expr::ArrayAccess { .. }
-                | Expr::PropertyAccess {
-                    nullsafe: false,
-                    ..
-                }
-                | Expr::DynamicPropertyAccess {
-                    nullsafe: false,
-                    ..
-                }
-                | Expr::StaticProperty { .. }
-                | Expr::DynamicNamedStaticProperty { .. }
-                | Expr::DynamicStaticProperty { .. }
-        ) {
-            return Err("Invalid array append target".into());
-        }
+        let nullsafe_line = Self::nullsafe_chain_line(&target);
+        let invalid_temporary_line = (!Self::is_array_append_write_target(&target)
+            && nullsafe_line.is_none())
+        .then(|| {
+            self.last_primary_line.unwrap_or_else(|| match self.peek() {
+                Token::LBracket(line) => line,
+                _ => 0,
+            })
+        });
         self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon(0))?;
+        if let Some(line) = nullsafe_line {
+            return Ok(Stmt::ExprStmt(self.nullsafe_write_error(line)));
+        }
+        if let Some(line) = invalid_temporary_line {
+            return Ok(Stmt::ExprStmt(self.compile_error(
+                "Cannot use temporary expression in write context",
+                line,
+            )));
+        }
         if let Expr::Globals { line } = target {
             return Ok(Stmt::ExprStmt(
                 self.compile_error("Cannot append to $GLOBALS", line),

@@ -1301,6 +1301,45 @@ impl Parser {
         ))
     }
 
+    /// PHP permits an ordinary call result to be used as the temporary array
+    /// container in `call()[] = value`. Whether the result is detached or
+    /// aliases caller-visible storage is decided by the callee's return mode
+    /// at runtime, not by the parser.
+    fn is_call_result(target: &Expr) -> bool {
+        match target {
+            // `list(...)` is a contextual language construct that can still
+            // reach expression parsing in malformed assignment positions.
+            Expr::FunctionCall { name, .. } => !name.eq_ignore_ascii_case("list"),
+            Expr::DynamicCall { .. }
+            | Expr::MethodCall { .. }
+            | Expr::StaticCall { .. }
+            | Expr::DynamicStaticCall { .. } => true,
+            _ => false,
+        }
+    }
+
+    fn is_array_append_write_target(target: &Expr) -> bool {
+        matches!(
+            target,
+            Expr::Variable { .. }
+                | Expr::DynamicVariable { .. }
+                | Expr::Globals { .. }
+                | Expr::ArrayAccess { .. }
+                | Expr::ArrayAppendArgument { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::DynamicPropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::StaticProperty { .. }
+                | Expr::DynamicNamedStaticProperty { .. }
+                | Expr::DynamicStaticProperty { .. }
+        ) || Self::is_call_result(target)
+    }
+
     fn nullsafe_reference_error(&mut self, line: usize) -> Expr {
         self.compile_error("Cannot take reference of a nullsafe chain", line)
     }

@@ -4287,21 +4287,18 @@ impl Compiler {
         builtin_ref_args(name)
     }
 
-    /// PHP permits the result of a user function to be used as a temporary
-    /// array write target, while results of internal functions and arbitrary
-    /// temporary expressions remain invalid write contexts.
-    fn is_known_user_function_call(&self, expression: &Expr) -> bool {
-        let Expr::FunctionCall { name, .. } = expression else {
-            return false;
-        };
-        let resolved = self.resolve_function_name(name);
-        self.functions
-            .iter()
-            .any(|(function_name, _)| function_name.eq_ignore_ascii_case(&resolved))
-            || self
-                .known_ref_args
-                .keys()
-                .any(|function_name| function_name.eq_ignore_ascii_case(&resolved))
+    /// PHP permits function and method results to serve as temporary array
+    /// write roots. Arbitrary temporary expressions such as literals, `new`
+    /// and `clone` remain invalid write contexts.
+    fn is_array_write_call_result(expression: &Expr) -> bool {
+        matches!(
+            expression,
+            Expr::FunctionCall { .. }
+                | Expr::MethodCall { .. }
+                | Expr::StaticCall { .. }
+                | Expr::DynamicCall { .. }
+                | Expr::DynamicStaticCall { .. }
+        )
     }
 
     fn mark_trailing_mutable_dimension_fetches(&mut self) {
@@ -7151,6 +7148,16 @@ impl Compiler {
     /// when any receiver in the chain is null or scalar.
     fn compile_property_modify_base(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
+            Expr::ArrayAppendArgument { target, .. } => {
+                match self.compile_array_append_argument_reference(target, &[]) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        self.deferred_error = Some(error);
+                        let null = self.add_literal(Value::null());
+                        (null, OpType::Const)
+                    }
+                }
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -7204,6 +7211,16 @@ impl Compiler {
         expr: &Expr,
     ) -> (u16, OpType, Vec<(Instruction, usize)>) {
         match expr {
+            Expr::ArrayAppendArgument { target, .. } => {
+                match self.compile_array_append_argument_reference(target, &[]) {
+                    Ok((operand, operand_type)) => (operand, operand_type, Vec::new()),
+                    Err(error) => {
+                        self.deferred_error = Some(error);
+                        let null = self.add_literal(Value::null());
+                        (null, OpType::Const, Vec::new())
+                    }
+                }
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -7935,7 +7952,7 @@ impl Compiler {
                                 root = array;
                             }
                             let defer_temporary_array_fetches =
-                                self.is_known_user_function_call(root);
+                                Self::is_array_write_call_result(root);
                             let (left, left_type, writeback) =
                                 match self.compile_foreach_reference_source(target, false, true) {
                                     Ok(source) => source,
@@ -10678,7 +10695,7 @@ impl Compiler {
                     None
                 };
                 let mutable_source = if direct_cv.is_none() {
-                    match self.compile_foreach_reference_source(target, true, false) {
+                    match self.compile_array_append_source(target, true, false) {
                         Ok(source) => Some(source),
                         Err(error) => {
                             self.deferred_error = Some(error);

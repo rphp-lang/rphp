@@ -106,26 +106,15 @@ impl Parser {
         &mut self,
         target: Expr,
     ) -> Result<Expr, String> {
-        if !matches!(
-            &target,
-            Expr::Variable { .. }
-                | Expr::DynamicVariable { .. }
-                | Expr::Globals { .. }
-                | Expr::ArrayAccess { .. }
-                | Expr::PropertyAccess {
-                    nullsafe: false,
-                    ..
-                }
-                | Expr::DynamicPropertyAccess {
-                    nullsafe: false,
-                    ..
-                }
-                | Expr::StaticProperty { .. }
-                | Expr::DynamicNamedStaticProperty { .. }
-                | Expr::DynamicStaticProperty { .. }
-        ) {
-            return Err("Invalid array append target".into());
-        }
+        let nullsafe_line = Self::nullsafe_chain_line(&target);
+        let invalid_temporary_line = (!Self::is_array_append_write_target(&target)
+            && nullsafe_line.is_none())
+        .then(|| {
+            self.last_primary_line.unwrap_or_else(|| match self.peek() {
+                Token::LBracket(line) => line,
+                _ => 0,
+            })
+        });
         self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
@@ -136,6 +125,15 @@ impl Parser {
             false
         };
         let expr = self.parse_assignment_or_yield()?;
+        if let Some(line) = nullsafe_line {
+            return Ok(self.nullsafe_write_error(line));
+        }
+        if let Some(line) = invalid_temporary_line {
+            return Ok(self.compile_error(
+                "Cannot use temporary expression in write context",
+                line,
+            ));
+        }
         if let Expr::Globals { line } = target {
             return Ok(self.compile_error("Cannot append to $GLOBALS", line));
         }
@@ -1600,6 +1598,7 @@ impl Parser {
                 self.advance(); // consume '['
                 let elements = self.parse_array_elements(Token::RBracket)?;
                 self.expect(&Token::RBracket)?;
+                self.last_primary_line = Some(line);
                 Ok(Expr::ArrayLiteral(elements))
             }
             Token::ArrayKw => {

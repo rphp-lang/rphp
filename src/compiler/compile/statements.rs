@@ -267,7 +267,7 @@ impl Compiler {
         indices: &[Expr],
     ) -> Result<(u16, OpType), String> {
         let (array, array_type, writeback) =
-            self.compile_foreach_reference_source(target, true, false)?;
+            self.compile_array_append_source(target, true, false)?;
         let keys: Vec<(u16, OpType)> = indices
             .iter()
             .map(|index| self.compile_expr(index))
@@ -405,6 +405,43 @@ impl Compiler {
             _ => return Err("Array reference element must contain a mutable l-value".into()),
         }
         Ok(destination)
+    }
+
+    /// Resolve the container for `target[] = value` without widening the
+    /// stricter by-reference `foreach` source contract. Calls retain their
+    /// returned reference cell when present and otherwise mutate a discarded
+    /// temporary; nested anonymous dimensions publish an internal reference
+    /// cell before the outer append continues.
+    pub(super) fn compile_array_append_source(
+        &mut self,
+        source: &Expr,
+        silent_fetch: bool,
+        warn_undefined_root: bool,
+    ) -> Result<(u16, OpType, ForeachArrayWriteback), String> {
+        match source {
+            Expr::ArrayAppendArgument { target, .. } => {
+                let (current, current_type) =
+                    self.compile_array_append_argument_reference(target, &[])?;
+                Ok((
+                    current,
+                    current_type,
+                    ForeachArrayWriteback::Variable(current),
+                ))
+            }
+            Expr::FunctionCall { .. }
+            | Expr::MethodCall { .. }
+            | Expr::StaticCall { .. }
+            | Expr::DynamicCall { .. }
+            | Expr::DynamicStaticCall { .. } => {
+                let (value, value_type) = self.compile_expr(source);
+                Ok((value, value_type, ForeachArrayWriteback::Discard))
+            }
+            _ => self.compile_foreach_reference_source(
+                source,
+                silent_fetch,
+                warn_undefined_root,
+            ),
+        }
     }
 
     pub(super) fn compile_foreach_reference_source(
@@ -1740,7 +1777,7 @@ impl Compiler {
                     indices,
                 )
             }
-            expression if self.is_known_user_function_call(expression) => (
+            expression if Self::is_array_write_call_result(expression) => (
                 self.compile_expr(expression),
                 ArrayRootWriteback::None,
                 indices,
@@ -2414,6 +2451,9 @@ impl Compiler {
                                     nullsafe: false,
                                     ..
                                 }
+                                | Expr::StaticProperty { .. }
+                                | Expr::DynamicNamedStaticProperty { .. }
+                                | Expr::DynamicStaticProperty { .. }
                                 | Expr::ArrayAccess { .. }
                         )
                     {
@@ -2858,7 +2898,7 @@ impl Compiler {
             }
             Stmt::ArrayAppend { target, expr } => {
                 let (array, array_type, writeback) =
-                    self.compile_foreach_reference_source(target, true, false)?;
+                    self.compile_array_append_source(target, true, false)?;
                 let (value, value_type) = self.compile_expr(expr);
                 let mut append = Instruction::new(OpCode::ArrayPushOp);
                 append.op1 = array;
@@ -2870,7 +2910,7 @@ impl Compiler {
             }
             Stmt::BindArrayAppendReference { var, target } => {
                 let (array, array_type, writeback) =
-                    self.compile_foreach_reference_source(target, true, false)?;
+                    self.compile_array_append_source(target, true, false)?;
                 let cv = self.resolve_cv(var);
                 let mut bind = Instruction::new(OpCode::BindArrayAppendRef);
                 bind.op1 = array;
