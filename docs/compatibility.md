@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `555a7f6a`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,836 pass, 1,463 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.391% and the whole-corpus rate is 68.512%; 4,724 of
+5,299 attempted cases reach runtime (89.149%). Relative to exact base
+`b0682a74`, the pass-set delta is exactly +5/-0: `Zend/tests/add_002.phpt`,
+`add_003.phpt`, `add_004.phpt`, `add_007.phpt` and `throw/001.phpt` become
+passes. Every prior pass remains a pass.
+
+Nine remaining failures advance past the old internal addition fatal without
+becoming compatibility passes. `add_006.phpt`, `bug74084.phpt`, both
+`numeric_strings/invalid_numeric_string*` cases,
+`readonly_props/readonly_containing_object.phpt` and `try/bug73337.phpt` move
+from compile to runtime failures; `constexpr/new.phpt`,
+`tests/lang/bug28800.phpt` and `tests/lang/operators/add_variationStr.phpt`
+move from compile to output mismatches. These transitions expose independent
+numeric-string warning/coercion, dynamic-variable/reference, readonly,
+constant-expression and later-operator gaps. Two sequential final full runs
+have byte-identical merged manifests and summaries. Their SHA-256 values are
+`e57cb25c742e301281a1f8e7570293594df6fe5fc6c5c71787764ed207860188`
+and `0cbacd8d55471c36c4c8b48980bb819ecad0d2ba8bbddeeab6b016f9f25fdeda`.
+
+Unsupported binary addition now throws a catchable `TypeError` through the
+ordinary PHP unwind path in all three emitted addition opcode shapes. The
+message is PHP's `Unsupported operand types: <left> + <right>` with concrete
+diagnostic types in operand order. Source file, line and live trace are
+attached before unwinding, and a failing compound assignment does not commit
+its result. Successful numeric addition and array union retain their existing
+paths and semantics; the latter remains a negative control for the error
+branch. This also closes the throw-expression case whose operand expression is
+`new Exception() + 1`.
+
+The compiler records source provenance for addition compound assignments just
+as it already does for subtraction. The baseline error arms reuse the existing
+cold operator throw helper and add no opcode, layout field or unsafe block. One
+original E2E regression covers CV/constant, CV/temporary and
+temporary/temporary forms, concrete type order, origin and trace, legal array
+union, unchanged compound state and an eval-time constant declaration; all 21
+operator E2E tests pass. The generics/JIT replay regression now checks the same
+canonical PHP diagnostic while retaining its pre-mutation side-exit invariant.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe diff ratchet pass, as do
+Composer S0, all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3. The production inventory remains 1,616 unsafe blocks and 289
+unsafe functions. Twenty-one alternating CPU-pinned default-release pairs of
+the ten-million-iteration mixed arithmetic control measured baseline
+p10/median/p90 1.197174/1.206874/1.248260 seconds and candidate
+1.205292/1.230594/1.298811 seconds. The independent median ratio is 1.0197 and
+the paired-median ratio is 1.0203, below the +5% gate; paired p10/p90 ratios are
+0.9833/1.0746, and every run retained checksum `419,729999927,1`. The exact
+base and candidate binary SHA-256 values are
+`3866194031f3afeeef53e8932b8b696b0e8e961fa56af6dd0ec402372373689a`
+and `aae1523214c7dc649c9c0a59a79e23573c2f4e191896b202a4ddc39ff5540b7f`.
+Partial numeric-string arithmetic and unsupported multiplication, division,
+exponentiation and the broader operator audit remain separate work.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `b0682a74`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,831 pass, 1,468 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
