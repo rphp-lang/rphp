@@ -2652,13 +2652,21 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             ),
         ));
     }
-    if let Some(message) = &definition.evaluation_error {
-        return Ok(static_property_throw(
-            eg,
-            frame,
-            "Error",
-            message.clone(),
-        ));
+    if let Some(error) =
+        crate::stdlib::reflection::class_constant_evaluation_error_value(&definition)
+    {
+        let instruction_index = op_array
+            .instructions
+            .iter()
+            .position(|instruction| std::ptr::eq(instruction, opline))
+            .expect("class-constant opcode belongs to the active op-array");
+        attach_constant_expression_trace(&error, eg, frame, op_array, instruction_index);
+        return Ok(match throw_in_frame(eg, frame, error) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+        });
     }
     if !definition.requires_deprecated_use_check() {
         let value = definition.value.clone();

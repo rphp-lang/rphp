@@ -146,6 +146,69 @@ try {
 }
 
 #[test]
+fn self_referencing_class_constants_keep_declaration_and_use_trace_origins() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php
+class DirectCycle {
+    public const A = self::B;
+    public const B = self::A;
+    public static function ping(): string { return 'linked'; }
+}
+class ArrayCycle {
+    public const A = [
+        self::B,
+    ];
+    public const B = [
+        self::A,
+    ];
+}
+class SeedCycle { public const B = 0; }
+class MixedCycle {
+    public const A = SeedCycle::B
+        + self::B;
+    public const B = self::A;
+}
+
+function inspectCycle(string $label, Closure $operation): void {
+    try {
+        $operation();
+    } catch (Throwable $error) {
+        $trace = $error->getTrace();
+        $first = $trace[0];
+        $second = $trace[1] ?? [];
+        $next = ($second['class'] ?? '') . ($second['type'] ?? '') . ($second['function'] ?? '');
+        $next = str_starts_with($next, '{closure:') ? '{closure}' : strtolower($next);
+        echo $label, ':', $error->getMessage(), '|',
+            $error->getFile() === __FILE__ ? 'definition' : 'wrong-file', ':', $error->getLine(), '|',
+            $first['file'] === __FILE__ ? 'use' : 'wrong-use', ':', $first['line'],
+            ':', $first['function'], '|', $next, "\n";
+    }
+}
+
+echo DirectCycle::ping(), "\n";
+inspectCycle('direct-1', fn() => DirectCycle::A);
+inspectCycle('direct-2', fn() => DirectCycle::A);
+inspectCycle('array', fn() => ArrayCycle::A);
+inspectCycle('mixed', fn() => MixedCycle::A);
+$reflection = new ReflectionClass(DirectCycle::class);
+inspectCycle('reflection', fn() => $reflection->getConstant('A'));
+"#,
+            "/virtual/self-referencing-constant-origin.php",
+            "/virtual",
+        ),
+        concat!(
+            "linked\n",
+            "direct-1:Cannot declare self-referencing constant self::B|definition:3|use:39:[constant expression]|{closure}\n",
+            "direct-2:Cannot declare self-referencing constant self::B|definition:3|use:40:[constant expression]|{closure}\n",
+            "array:Cannot declare self-referencing constant self::B|definition:9|use:41:[constant expression]|{closure}\n",
+            "mixed:Cannot declare self-referencing constant self::B|definition:18|use:42:[constant expression]|{closure}\n",
+            "reflection:Cannot declare self-referencing constant self::B|definition:3|use:44:[constant expression]|reflectionclass->getconstant\n",
+        )
+    );
+}
+
+#[test]
 fn deferred_constant_expression_unpack_does_not_accept_traversable_objects() {
     assert_eq!(
         run_php(

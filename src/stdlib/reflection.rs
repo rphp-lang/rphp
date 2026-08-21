@@ -1090,6 +1090,21 @@ pub(crate) fn evaluate_deferred_class_constant_value(
     }
 }
 
+pub(crate) fn class_constant_evaluation_error_value(
+    definition: &ClassConstantDefinition,
+) -> Option<Value> {
+    let message = definition.evaluation_error.as_deref()?;
+    let error = make_error_value("Error", message);
+    if let Some(line) = definition.evaluation_error_line()
+        && !definition.source_file.is_empty()
+        && let Some(mut object) = error.as_object_mut()
+    {
+        object.set_property("file", Value::string(definition.source_file.clone()));
+        object.set_property("line", Value::long(line as i64));
+    }
+    Some(error)
+}
+
 pub(crate) fn activate_deferred_class_constants(
     class_id: u32,
     eg: &mut ExecutorGlobals,
@@ -3882,8 +3897,9 @@ fn class_get_constant(
     let Some(definition) = definition else {
         return return_value(rv, Value::bool(false));
     };
-    if let Some(error) = &definition.evaluation_error {
-        eg.exception = Some(make_error_value("Error", error));
+    if let Some(error) = class_constant_evaluation_error_value(&definition) {
+        crate::vm::execute::attach_internal_constant_expression_trace(&error, ed, eg);
+        eg.exception = Some(error);
         return return_value(rv, Value::null());
     }
     if definition.value_is_deferred {

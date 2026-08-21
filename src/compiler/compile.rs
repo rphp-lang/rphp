@@ -2258,6 +2258,71 @@ fn constant_expression_references_symbol(expression: &Expr) -> bool {
     }
 }
 
+fn local_class_constant_reference_line(
+    expression: &Expr,
+    expected_scope: &str,
+    expected_constant: &str,
+    declaring_class: &str,
+) -> Option<usize> {
+    let recurse = |expression: &Expr| {
+        local_class_constant_reference_line(
+            expression,
+            expected_scope,
+            expected_constant,
+            declaring_class,
+        )
+    };
+    match expression {
+        Expr::ClassConstant {
+            class_name,
+            constant,
+            line,
+        } if constant.eq_ignore_ascii_case(expected_constant)
+            && (class_name.eq_ignore_ascii_case(expected_scope)
+                || (expected_scope.eq_ignore_ascii_case(declaring_class)
+                    && (class_name.eq_ignore_ascii_case("self")
+                        || class_name
+                            .rsplit('\\')
+                            .next()
+                            .zip(declaring_class.rsplit('\\').next())
+                            .is_some_and(|(source, declared)| {
+                                source.eq_ignore_ascii_case(declared)
+                            })))) =>
+        {
+            Some(*line)
+        }
+        Expr::BinaryOp { left, right, .. }
+        | Expr::NullCoalesce { left, right }
+        | Expr::Elvis { left, right } => recurse(left).or_else(|| recurse(right)),
+        Expr::Not(inner)
+        | Expr::UnaryPlus(inner)
+        | Expr::UnaryMinus(inner)
+        | Expr::BitwiseNot(inner)
+        | Expr::ErrorSuppress(inner)
+        | Expr::Cast { expr: inner, .. } => recurse(inner),
+        Expr::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => recurse(condition)
+            .or_else(|| recurse(then_expr))
+            .or_else(|| recurse(else_expr)),
+        Expr::ArrayLiteral(elements) => elements.iter().find_map(|element| {
+            element
+                .key
+                .as_ref()
+                .and_then(&recurse)
+                .or_else(|| recurse(&element.value))
+        }),
+        Expr::ArrayAccess { array, index, .. } => recurse(array).or_else(|| recurse(index)),
+        Expr::DynamicNamedClassConstant { constant, .. } => recurse(constant),
+        Expr::DynamicClassConstant {
+            class, constant, ..
+        } => recurse(class).or_else(|| recurse(constant)),
+        _ => None,
+    }
+}
+
 /// Runtime materialization is reserved for PHP constant-expression forms that
 /// this evaluator can reproduce after a define() or external class becomes
 /// available. An unavailable symbol must not postpone an otherwise invalid
@@ -2554,6 +2619,23 @@ impl ClassConstantDefinition {
                 .attributes
                 .iter()
                 .any(|attribute| attribute.name.eq_ignore_ascii_case("Deprecated"))
+    }
+
+    /// Lazy cycle errors already retain the declaration expression for
+    /// dependency diagnostics. Recover the exact local reference line from
+    /// that AST instead of adding a location field to every constant record.
+    pub(crate) fn evaluation_error_line(&self) -> Option<usize> {
+        let reference = self
+            .evaluation_error
+            .as_deref()?
+            .strip_prefix("Cannot declare self-referencing constant ")?;
+        let (scope, constant) = reference.split_once("::")?;
+        local_class_constant_reference_line(
+            self.source_expression.as_deref()?,
+            scope,
+            constant,
+            &self.declaring_class,
+        )
     }
 }
 
