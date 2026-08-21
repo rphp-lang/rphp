@@ -1296,19 +1296,27 @@ impl Compiler {
             return Err("Array reference element must contain a mutable l-value".into());
         }
         let source_is_internal = !matches!(source, Expr::Variable { .. });
-        let (write, source) = if source_is_call {
+        let (write, source, source_type) = if source_is_call {
             // A call source evaluates after the target location. Keep that
             // prepared location live so re-entrant code cannot duplicate its
             // side effects or change which slot commits.
             let write = self.compile_reference_write_target(target)?;
-            let source = self.compile_array_element_reference_source(source)?;
-            (write, source)
+            if matches!(&write, CoalesceWrite::ObjectProperty { .. }) {
+                // Object reference binding resolves overloaded targets before
+                // it diagnoses a by-value call result. Keep the raw call
+                // operand until that target-side decision has completed.
+                let (source, source_type) = self.compile_expr(source);
+                (write, source, source_type)
+            } else {
+                let source = self.compile_array_element_reference_source(source)?;
+                (write, source, OpType::Cv)
+            }
         } else {
             // Mutable l-value sources bind before the target is resolved. This
             // order is observable when the source rehashes the target array.
             let source = self.compile_array_element_reference_source(source)?;
             let write = self.compile_reference_write_target(target)?;
-            (write, source)
+            (write, source, OpType::Cv)
         };
         let target_line = expression_source_line(target);
 
@@ -1346,7 +1354,7 @@ impl Compiler {
                 bind.op2 = property;
                 bind.op2_type = property_type;
                 bind.result = source;
-                bind.result_type = OpType::Cv;
+                bind.result_type = source_type;
                 bind._pad |= OBJ_PROP_REFERENCE_BIND;
                 if source_is_internal {
                     bind._pad |= REFERENCE_RESULT_INTERNAL;
@@ -1416,7 +1424,7 @@ impl Compiler {
             }
         }
 
-        Ok((source, OpType::Cv))
+        Ok((source, source_type))
     }
 
     fn is_call_result_reference_source(source: &Expr) -> bool {

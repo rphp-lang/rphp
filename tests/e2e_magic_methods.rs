@@ -373,6 +373,139 @@ var_dump($object->hidden);
 }
 
 #[test]
+fn overloaded_properties_reject_reference_binding_after_magic_get_resolution() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ScalarOverload {
+    private $hidden = 'private-value';
+    public function __get($name) {
+        echo "get:$name>";
+        if ($name === 'hidden') {
+            throw new Exception('blocked');
+        }
+        if ($name === 'object') {
+            return new stdClass;
+        }
+        return 17;
+    }
+    public function __set($name, $value) {
+        echo "set:$name>";
+    }
+}
+class ReferenceOverload {
+    private $slot = 4;
+    public function &__get($name) {
+        echo "ref-get:$name>";
+        return $this->slot;
+    }
+}
+class AsymmetricOverload {
+    public private(set) int $guarded = 1;
+    public function __get($name) {
+        echo "unexpected-asymmetric-get>";
+        return null;
+    }
+}
+#[AllowDynamicProperties]
+class ExistingDynamic {
+    public function __get($name) {
+        echo "unexpected-get:$name>";
+        return null;
+    }
+}
+function &reference_source(&$slot, $label) {
+    echo "source:$label>";
+    return $slot;
+}
+function value_source() {
+    echo "value-source>";
+    return 5;
+}
+
+set_error_handler(function($severity, $message) {
+    echo "notice:$severity:$message>";
+    return true;
+});
+$slot = 2;
+$target = new ScalarOverload;
+try {
+    $target->valueCall =& value_source();
+} catch (Error $error) {
+    echo "error:", $error->getMessage(), "\n";
+}
+foreach (['scalar', 'object'] as $name) {
+    try {
+        $target->$name =& reference_source($slot, $name);
+    } catch (Error $error) {
+        echo "error:", $error->getMessage(), "\n";
+    }
+}
+try {
+    $target->hidden =& reference_source($slot, 'hidden');
+} catch (Exception $error) {
+    echo "exception:", $error->getMessage(), "\n";
+}
+$referenceTarget = new ReferenceOverload;
+try {
+    $referenceTarget->missing =& $slot;
+} catch (Error $error) {
+    echo "error:", $error->getMessage(), "\n";
+}
+$asymmetric = new AsymmetricOverload;
+try {
+    $asymmetric->guarded =& $slot;
+} catch (Error $error) {
+    echo "asymmetric:", $error->getMessage(), "\n";
+}
+$existing = new ExistingDynamic;
+$existing->ready = 1;
+$existing->ready =& $slot;
+$slot = 9;
+echo "existing:", $existing->ready, "\n";
+$detached =& $target->source;
+$detached = 21;
+echo "detached:", $detached, "\n";
+
+set_error_handler(function() {
+    echo "throwing-notice>";
+    throw new RuntimeException('ignored');
+});
+try {
+    $target->handler =& $slot;
+} catch (Error $error) {
+    echo "error:", $error->getMessage(), "\n";
+}
+"#,
+        ),
+        concat!(
+            "value-source>get:valueCall>",
+            "notice:8:Indirect modification of overloaded property ",
+            "ScalarOverload::$valueCall has no effect>",
+            "error:Cannot assign by reference to overloaded object\n",
+            "source:scalar>get:scalar>",
+            "notice:8:Indirect modification of overloaded property ",
+            "ScalarOverload::$scalar has no effect>",
+            "error:Cannot assign by reference to overloaded object\n",
+            "source:object>get:object>",
+            "error:Cannot assign by reference to overloaded object\n",
+            "source:hidden>get:hidden>exception:blocked\n",
+            "ref-get:missing>",
+            "error:Cannot assign by reference to overloaded object\n",
+            "asymmetric:Cannot indirectly modify private(set) property ",
+            "AsymmetricOverload::$guarded from global scope\n",
+            "existing:9\n",
+            "get:source>",
+            "notice:8:Indirect modification of overloaded property ",
+            "ScalarOverload::$source has no effect>",
+            "detached:21\n",
+            "get:handler>throwing-notice>",
+            "error:Cannot assign by reference to overloaded object\n",
+        )
+    );
+}
+
+#[test]
 fn recursive_magic_access_to_nul_property_throws_catchable_error() {
     assert_eq!(
         run_php(

@@ -2090,6 +2090,7 @@ fn op_bind_obj_prop_ref<'a>(
             .then_some(caller_class.as_deref())
             .flatten();
         let mut force_dynamic = false;
+        let mut property_accessible = true;
         if let Some((visibility, defining_class)) =
             eg.find_property_set_visibility(&class_name, &name)
             && visibility != Visibility::Public
@@ -2107,29 +2108,39 @@ fn op_bind_obj_prop_ref<'a>(
             {
                 force_dynamic = true;
             } else {
-                let visibility = match visibility {
-                    Visibility::Protected => "protected",
-                    Visibility::Private => "private",
-                    Visibility::Public => "public",
-                };
-                let message = if eg.property_has_asymmetric_set_visibility(&class_name, &name) {
-                    format!(
-                        "Cannot indirectly modify {visibility}(set) property {defining_class}::${name} from {}",
-                        caller_class
-                            .as_deref()
-                            .map_or_else(|| "global scope".to_string(), |scope| format!("scope {scope}")),
-                    )
+                let has_magic_get = eg
+                    .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
+                    .is_some();
+                if !eg.property_has_asymmetric_set_visibility(&class_name, &name)
+                    && has_magic_get
+                    && !property_guard_active(eg, &receiver, &name, PROPERTY_GUARD_GET)
+                {
+                    property_accessible = false;
                 } else {
-                    format!("Cannot access {visibility} property {defining_class}::${name}")
-                };
-                return Ok(object_property_throw_at(
-                    eg,
-                    frame,
-                    op_array,
-                    instruction_index,
-                    "Error",
-                    message,
-                ));
+                    let visibility = match visibility {
+                        Visibility::Protected => "protected",
+                        Visibility::Private => "private",
+                        Visibility::Public => "public",
+                    };
+                    let message = if eg.property_has_asymmetric_set_visibility(&class_name, &name) {
+                        format!(
+                            "Cannot indirectly modify {visibility}(set) property {defining_class}::${name} from {}",
+                            caller_class
+                                .as_deref()
+                                .map_or_else(|| "global scope".to_string(), |scope| format!("scope {scope}")),
+                        )
+                    } else {
+                        format!("Cannot access {visibility} property {defining_class}::${name}")
+                    };
+                    return Ok(object_property_throw_at(
+                        eg,
+                        frame,
+                        op_array,
+                        instruction_index,
+                        "Error",
+                        message,
+                    ));
+                }
             }
         }
         let key = if force_dynamic {
@@ -2159,7 +2170,7 @@ fn op_bind_obj_prop_ref<'a>(
             .as_object()
             .map(|object| {
                 (
-                    object.property_slot(&key).is_some(),
+                    property_accessible && object.property_slot(&key).is_some(),
                     object.get_dynamic_property_with_position(&key).is_some(),
                 )
             })
@@ -2192,7 +2203,9 @@ fn op_bind_obj_prop_ref<'a>(
         }
         let (declared_slot, definition, owner) = {
             let object = receiver.as_object().unwrap();
-            let slot = (!force_dynamic).then(|| object.property_slot(&key)).flatten();
+            let slot = (!force_dynamic && property_accessible)
+                .then(|| object.property_slot(&key))
+                .flatten();
             let definition = slot
                 .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
                 .map(|definition| definition as *const crate::compiler::compile::PropertyDefinition);
@@ -2302,6 +2315,56 @@ fn op_bind_obj_prop_ref<'a>(
                 return Ok(result);
             }
             if let Some(returned) = returned {
+                if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
+                    if !returned.is_reference()
+                        && !matches!(
+                            returned.dereferenced().value_type(),
+                            ValueType::Object | ValueType::Closure
+                        )
+                    {
+                        report_php_notice(
+                            eg,
+                            frame,
+                            op_array,
+                            opline,
+                            &format!(
+                                "Indirect modification of overloaded property {class_name}::${name} has no effect"
+                            ),
+                        )?;
+                        // Zend's target-side reference error takes precedence
+                        // even when a user notice handler throws. The handler
+                        // side effects remain visible, but its pending
+                        // Throwable is replaced by the assignment Error below.
+                        let _ = eg.exception.take();
+                    }
+                    return Ok(object_property_throw_at(
+                        eg,
+                        frame,
+                        op_array,
+                        instruction_index,
+                        "Error",
+                        "Cannot assign by reference to overloaded object".to_string(),
+                    ));
+                }
+                if !returned.is_reference()
+                    && !matches!(
+                        returned.dereferenced().value_type(),
+                        ValueType::Object | ValueType::Closure
+                    )
+                {
+                    report_php_notice(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        &format!(
+                            "Indirect modification of overloaded property {class_name}::${name} has no effect"
+                        ),
+                    )?;
+                    if let Some(result) = take_magic_exception(eg, frame) {
+                        return Ok(result);
+                    }
+                }
                 let mut binding = if returned.is_owned_reference() {
                     returned.clone_owned_reference_alias()
                 } else if returned.is_reference() {
@@ -2402,8 +2465,29 @@ fn op_bind_obj_prop_ref<'a>(
         }
 
         if opline._pad & OBJ_PROP_REFERENCE_BIND != 0 {
-            let source = (*frame).cv_mut(opline.result as u32) as *mut Value;
+            let source = if opline.result_type == OpType::Cv {
+                (*frame).cv_mut(opline.result as u32) as *mut Value
+            } else {
+                (*frame).get_op_mut(opline.result as u32, opline.result_type)
+            };
+            if opline.result_type != OpType::Cv && !(&*source).is_reference() {
+                report_php_notice(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    "Only variables should be assigned by reference",
+                )?;
+                if let Some(result) = take_magic_exception(eg, frame) {
+                    return Ok(result);
+                }
+            }
             let binding = materialize_reference_alias(frame, source);
+            if opline._pad & REFERENCE_RESULT_INTERNAL != 0
+                && (&*source).is_owned_reference()
+            {
+                (&mut *source).mark_internal_reference_alias();
+            }
             let constraints = binding.reference_property_constraints();
             let current = (&*binding.as_ref_ptr()).clone();
             let prepared = if let Some(definition) = definition {
