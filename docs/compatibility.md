@@ -8,6 +8,59 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `b0682a74`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,831 pass, 1,468 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.297% and the whole-corpus rate is 68.423%; 4,710 of
+5,299 attempted cases reach runtime (88.885%). Relative to exact base
+`d85d0528`, the pass-set delta is exactly +4/-0:
+`Zend/tests/constexpr/constant_expressions_exceptions_001.phpt`,
+`constant_expressions_exceptions_002.phpt`, `Zend/tests/not_002.phpt` and
+`Zend/tests/sub_001.phpt` become passes. Every prior pass remains a pass.
+`tests/lang/operators/subtract_variationStr.phpt` advances from a compile
+failure to a later output mismatch; there are no other status or failure-
+category transitions. Two sequential final full runs have byte-identical
+merged manifests and summaries. Their SHA-256 values are
+`ad7a759279f4e5b038e855bb15bc8892edf754522834ae907b9494c9a66dc21a`
+and `741f14fa80d8018ea2115ada9b3d7277b946069068be4124dc9f9cdc1e047545`.
+
+Unsupported binary subtraction now throws a catchable `TypeError` through the
+ordinary PHP unwind path instead of terminating with an internal compile-style
+fatal. All three emitted subtraction opcode shapes report PHP's
+`Unsupported operand types: <left> - <right>` message with concrete diagnostic
+types. The operation attaches its source file, line and live trace before
+unwinding; compound assignment commits no write when subtraction fails. A
+failing global constant expression is consequently catchable across `require`
+or `eval`, and the constant remains undefined for a later attempt.
+
+The compiler adds source provenance only to subtraction compound assignments
+and explicit returned subtraction expressions. The shared cold operator throw
+helper otherwise reuses the nearest located consumer, preceding expression or
+callable declaration without enlarging instructions or `OpArray`; this also
+supplies the previously missing uncaught origin for bitwise-not's existing
+`TypeError`, producing the adjacent `not_002.phpt` pass. One original E2E
+regression covers CV/constant, constant/CV and temporary/temporary forms,
+exact type order, origin and trace, unchanged compound state and an eval-time
+constant declaration; all 20 operator E2E tests pass.
+
+All five Cargo configurations, all-feature/all-target, formatting, PHPT runner
+self-test, unsafe self-test and the exact unsafe diff ratchet pass, as do
+Composer S0, all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and
+cold-build S3. The production inventory remains 1,616 unsafe blocks and 289
+unsafe functions. Twenty-one alternating CPU-pinned default-release pairs of
+the ten-million-iteration mixed arithmetic control measured baseline
+p10/median/p90 1.124888/1.158695/1.238128 seconds and candidate
+1.192392/1.203181/1.224889 seconds. The independent median ratio is 1.0384 and
+the paired-median ratio is 1.0377, both below the +5% gate, with identical
+`419,729999927,1` checksums. The success branches and runtime layouts are
+unchanged; new formatting, trace collection and source lookup occur only after
+an unsupported operation. The exact base and candidate binary SHA-256 values
+are `7ac4b4e070d721f12115d36473f806633de08a6bdef8b5d1dd9478556cb2746a`
+and `3866194031f3afeeef53e8932b8b696b0e8e961fa56af6dd0ec402372373689a`.
+Unsupported addition, multiplication, division, exponentiation and the
+remaining numeric-string warning/coercion differences are separate work.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `3e787cfe`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,827 pass, 1,472 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
