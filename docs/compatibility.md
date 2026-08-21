@@ -8,6 +8,74 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `73364c32`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,949 pass, 1,350 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.523% and the whole-corpus rate is 70.530%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`a0e309b0`, the pass-set delta is +5/-0 with no other status or failure-
+category movement.
+
+The exact additions are `Zend/tests/bug32322.phpt`, `bug62763.phpt`,
+`Zend/tests/fibers/destructors_008.phpt`,
+`Zend/tests/magic_methods/bug51822.phpt` and `bug74053.phpt`. Every previous
+pass remains a pass. Two sequential final runs have byte-identical merged
+manifests and summaries. Their manifest and summary SHA-256 values are
+`444da2bb3bc0fbd638341772606d0f0029649ea3bd4be31d50aad20bad4454fd`
+and `db9f3146da0201cc084bf213d04f0f5c2afdb514ac41648d06b55c639659fbad`.
+
+Request shutdown now retains resolved callback receivers, closure captures and
+arguments through the complete FIFO callback phase. Successful completion
+releases those owners in registration order after every callback has run. An
+`exit` or unhandled callback failure still stops the remaining callbacks, but
+owners retained by both executed and pending callbacks receive their required
+destructors before the original status or failure leaves the request.
+
+After the callback and main-scope phases, class-static values and then named-
+function-static values enter a fixed-point destructor pass. Canonical static
+cells remain readable while their destructor runs, and an object published
+into either storage family by another shutdown destructor is observed on the
+next pass. A shutdown destructor exception reaches the active exception
+handler, and an unhandled engine-invoked destructor appears through PHP's
+`[internal function]` trace boundary. Objects shared by main and static storage
+are destructed once.
+
+The fixed-point planner reuses the existing iterative destructor tree and
+grouped reference-count checks. A request-local boolean records only runtime
+static storage that may retain an object; ordinary requests therefore skip the
+cold storage snapshots and allocations. `Value`, `PhpObject` and
+`ExecuteData` layouts are unchanged. The final root-frame teardown lives in a
+non-inlined cold helper so the new shutdown code does not perturb the ordinary
+executor entry layout.
+
+Eight original regressions cover successful, exiting and throwing callback
+queues; main/class/function storage order; static-cell visibility; cross-
+storage fixed-point publication; handled and unhandled destructor exceptions;
+the internal trace boundary; and a main/static shared owner. The adjacent
+constructor, frame-cleanup, magic-method, weak-object, cycle-collection and
+Fiber suites pass. All five Cargo configurations, all-features/all-targets,
+formatting, PHPT runner self-test and the exact unsafe ratchet pass. The
+production inventory remains 1,612 unsafe blocks, 289 unsafe functions and
+321 SAFETY annotations. Composer S0, all four Symfony S1 gates, and exact PHP
+8.5.9 warmed-kernel S2 and cold-build S3 also pass.
+
+A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
+pinned to CPU 0 with the performance governor, four warmups, 100 cold requests
+per observation and no excluded sample, keeps all controls below the +5% gate.
+The order-balanced candidate/baseline median ratios are 0.999570 for an empty
+request, 1.002151 for one owner-free shutdown callback, 1.007585 for a callback
+owner with an empty destructor and 1.009815 for a class-static object with an
+empty destructor. The corresponding independent median ratios are 0.999219,
+1.001302, 1.006802 and 1.009673. The exact candidate binary SHA-256 is
+`dc9eee89587b680d9c20771b1bf291fa25aeee7fb7b4ce55a1d8ee6a4dda4d53`.
+
+General cycle reclamation, forced Fiber/generator close combinations, ordering
+within multiple unrelated named-function-static maps, and SAPI-specific
+shutdown remain separate work. This checkpoint claims the exercised CLI
+request-shutdown callback ownership, storage tiers, fixed point, exception and
+trace contracts only.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `a0e309b0`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,944 pass, 1,355 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
