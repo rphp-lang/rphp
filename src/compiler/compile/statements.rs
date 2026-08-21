@@ -4126,17 +4126,13 @@ impl Compiler {
                         &resolved_class,
                         &method.name,
                         &method.params,
+                        &cp.type_hints,
                         method.is_static,
+                        method.visibility,
                         method.return_type.is_some(),
                         &cp.return_type_hint,
                         method.line,
                     )?;
-                    self.record_magic_method_visibility_warning(
-                        &resolved_class,
-                        &method.name,
-                        method.visibility,
-                        method.line,
-                    );
                     func_compiler.return_type_context = cp.return_type_hint.clone();
                     self.validate_generator_return_type(
                         func_compiler.contains_yield,
@@ -4843,7 +4839,9 @@ impl Compiler {
                         &resolved_iface,
                         &method.name,
                         &method.params,
+                        &cp.type_hints,
                         method.is_static,
+                        method.visibility,
                         method.return_type.is_some(),
                         &cp.return_type_hint,
                         method.line,
@@ -5162,17 +5160,13 @@ impl Compiler {
                         &resolved_trait,
                         &method.name,
                         &method.params,
+                        &cp.type_hints,
                         method.is_static,
+                        method.visibility,
                         method.return_type.is_some(),
                         &cp.return_type_hint,
                         method.line,
                     )?;
-                    self.record_magic_method_visibility_warning(
-                        &resolved_trait,
-                        &method.name,
-                        method.visibility,
-                        method.line,
-                    );
                     func_compiler.return_type_context = cp.return_type_hint.clone();
                     self.validate_generator_return_type(
                         func_compiler.contains_yield,
@@ -6076,7 +6070,9 @@ impl Compiler {
                         &resolved_enum,
                         &method.name,
                         &method.params,
+                        &cp.type_hints,
                         method.is_static,
+                        method.visibility,
                         method.return_type.is_some(),
                         &cp.return_type_hint,
                         method.line,

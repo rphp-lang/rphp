@@ -189,6 +189,87 @@ echo "ok";
 }
 
 #[test]
+fn magic_parameter_types_accept_supertypes_and_reject_narrowing() {
+    for (source, file, expected) in [
+        (
+            "<?php\nnamespace App;\nclass GetterType { public function __get(int $property) {} }",
+            "/virtual/magic-getter-type.php",
+            "App\\GetterType::__get(): Parameter #1 ($property) must be of type string when declared in /virtual/magic-getter-type.php on line 3",
+        ),
+        (
+            "<?php\ntrait SetterType {\n    public function __set(Countable $property, $value) {}\n}",
+            "/virtual/magic-setter-type.php",
+            "SetterType::__set(): Parameter #1 ($property) must be of type string when declared in /virtual/magic-setter-type.php on line 3",
+        ),
+        (
+            "<?php\ninterface CallType {\n    public function __call(string $method, object $arguments);\n}",
+            "/virtual/magic-call-type.php",
+            "CallType::__call(): Parameter #2 ($arguments) must be of type array when declared in /virtual/magic-call-type.php on line 3",
+        ),
+        (
+            "<?php\nabstract class StaticCallType {\n    abstract public static function __callStatic(bool $method, array $arguments);\n}",
+            "/virtual/magic-callstatic-type.php",
+            "StaticCallType::__callStatic(): Parameter #1 ($method) must be of type string when declared in /virtual/magic-callstatic-type.php on line 3",
+        ),
+        (
+            "<?php\nenum EnumCallType {\n    case Value;\n    public function __call(string $method, Traversable $arguments) {}\n}",
+            "/virtual/magic-enum-type.php",
+            "EnumCallType::__call(): Parameter #2 ($arguments) must be of type array when declared in /virtual/magic-enum-type.php on line 4",
+        ),
+        (
+            "<?php\nclass UnserializeType {\n    public function __unserialize(string $payload) {}\n}",
+            "/virtual/magic-unserialize-type.php",
+            "UnserializeType::__unserialize(): Parameter #1 ($payload) must be of type array when declared in /virtual/magic-unserialize-type.php on line 3",
+        ),
+        (
+            "<?php\nclass StateType {\n    public static function __set_state(object $properties) {}\n}",
+            "/virtual/magic-state-type.php",
+            "StateType::__set_state(): Parameter #1 ($properties) must be of type array when declared in /virtual/magic-state-type.php on line 3",
+        ),
+        (
+            "<?php\nclass PureNullType {\n    public function __get(null $property) {}\n}",
+            "/virtual/magic-null-type.php",
+            "PureNullType::__get(): Parameter #1 ($property) must be of type string when declared in /virtual/magic-null-type.php on line 3",
+        ),
+        (
+            "<?php\nclass ReferenceBeforeType {\n    public function __get(int &$property) {}\n}",
+            "/virtual/magic-reference-type.php",
+            "Method ReferenceBeforeType::__get() cannot take arguments by reference in /virtual/magic-reference-type.php on line 3",
+        ),
+        (
+            "<?php\nclass TypeBeforeReturn {\n    public function __isset(int $property): int {}\n}",
+            "/virtual/magic-type-return.php",
+            "TypeBeforeReturn::__isset(): Parameter #1 ($property) must be of type string when declared in /virtual/magic-type-return.php on line 3",
+        ),
+    ] {
+        assert_eq!(
+            run_php_expect_error_with_source_context(source, file, "/virtual").to_string(),
+            expected,
+        );
+    }
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+class WideMagicParameters {
+    public function __get(string|int|null $property) { return null; }
+    public function __isset(?string $property): bool { return false; }
+    public function __set(string|bool $property, int $value): void {}
+    public function __call(string $method, iterable $arguments) {}
+    public static function __callStatic(mixed $method, array|Traversable $arguments) {}
+    public function __unserialize(?iterable $payload): void {}
+    public static function __set_state(array|Traversable $properties): object {
+        return new self;
+    }
+}
+echo "ok";
+"#,
+        ),
+        "ok",
+    );
+}
+
+#[test]
 fn test_tostring_echo() {
     assert_eq!(
         run_php(

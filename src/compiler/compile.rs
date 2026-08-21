@@ -4625,6 +4625,29 @@ fn magic_return_is_object(hint: &ParamTypeHint) -> bool {
     }
 }
 
+fn magic_parameter_accepts_string(hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::String => true,
+        ParamTypeHint::Nullable(inner) => {
+            !matches!(inner.as_ref(), ParamTypeHint::None) && magic_parameter_accepts_string(inner)
+        }
+        ParamTypeHint::Union(parts) => parts.iter().any(magic_parameter_accepts_string),
+        _ => false,
+    }
+}
+
+fn magic_parameter_accepts_array(hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Array => true,
+        ParamTypeHint::ClassName(name) => name.eq_ignore_ascii_case("iterable"),
+        ParamTypeHint::Nullable(inner) => {
+            !matches!(inner.as_ref(), ParamTypeHint::None) && magic_parameter_accepts_array(inner)
+        }
+        ParamTypeHint::Union(parts) => parts.iter().any(magic_parameter_accepts_array),
+        _ => false,
+    }
+}
+
 pub(crate) fn enum_magic_method_is_forbidden(method: &str) -> bool {
     [
         "__construct",
@@ -4781,7 +4804,9 @@ impl Compiler {
         class: &str,
         method: &str,
         parameters: &[Param],
+        parameter_hints: &[ParamTypeHint],
         is_static: bool,
+        visibility: Visibility,
         return_type_declared: bool,
         return_hint: &ParamTypeHint,
         line: usize,
@@ -4840,6 +4865,38 @@ impl Compiler {
                 ),
                 line,
             ));
+        }
+        self.record_magic_method_visibility_warning(class, method, visibility, line);
+
+        let validate_parameter = |index: usize,
+                                  requirement: &str,
+                                  compatible: fn(&ParamTypeHint) -> bool|
+         -> Result<(), String> {
+            let hint = &parameter_hints[index];
+            if compatible(hint) {
+                return Ok(());
+            }
+            Err(self.goto_error(
+                    &format!(
+                        "{class}::{method}(): Parameter #{} (${}) must be of type {requirement} when declared",
+                        index + 1,
+                        parameters[index].name,
+                    ),
+                    line,
+                ))
+        };
+        match normalized.as_str() {
+            "__get" | "__isset" | "__unset" | "__set" => {
+                validate_parameter(0, "string", magic_parameter_accepts_string)?;
+            }
+            "__call" | "__callstatic" => {
+                validate_parameter(0, "string", magic_parameter_accepts_string)?;
+                validate_parameter(1, "array", magic_parameter_accepts_array)?;
+            }
+            "__unserialize" | "__set_state" => {
+                validate_parameter(0, "array", magic_parameter_accepts_array)?;
+            }
+            _ => {}
         }
         if !return_type_declared {
             return Ok(());
