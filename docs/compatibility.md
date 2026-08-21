@@ -8,6 +8,52 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `9e7dc700`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,868 pass, 1,431 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 72.995% and the whole-corpus rate is 69.084%; 4,733 of
+5,299 attempted cases reach runtime (89.319%). Relative to exact base
+`81b0aca3`, the pass-set delta is +5/-0: `Zend/tests/bug43651.phpt`,
+`Zend/tests/dynamic_call/dynamic_fully_qualified_call.phpt`,
+`Zend/tests/namespaces/ns_019.phpt`, `Zend/tests/namespaces/ns_032.phpt` and
+`Zend/tests/varSyntax/indirectFcall.phpt` become exact passes. Every previous
+pass remains a pass, and there are no other status or failure-category
+transitions. Two sequential final runs have byte-identical merged manifests
+and summaries. Their manifest and summary SHA-256 values are
+`905fcdc6bf914d0508713da452e2fc4a5c6ed65e44a7697b419943527eb92171`
+and `199ba39697985e3012ac443ace6faeb16a1f6177d251cc2dc1b24c0a5338c48a`.
+
+String function callables now use one shared PHP 8.5 lookup view that removes
+exactly one leading namespace separator when it precedes a name. Direct
+dynamic calls, `is_callable()`, `call_user_func()` and
+`Closure::fromCallable()` therefore resolve global built-ins, namespaced user
+functions and static methods consistently. Empty function names and function
+names beginning with multiple separators remain invalid. A constant literal
+call reports the normalized missing-function name, while a runtime-built
+invalid string keeps its original spelling, matching the oracle at both
+diagnostic boundaries.
+
+One original E2E regression covers all four callback consumers, built-in,
+namespaced and static-method success, literal and runtime missing functions,
+and the empty and double-separator boundaries. The lookup returns a borrowed
+slice and adds no allocation, opcode, instruction-layout field, dependency or
+unsafe block. The production unsafe inventory remains 1,613 blocks, 289 unsafe
+functions and 312 SAFETY annotations. All five Cargo configurations,
+all-features/all-targets, formatting, PHPT runner self-test, unsafe self-test
+and the exact unsafe ratchet pass, as do Composer S0, all four Symfony S1 gates
+and exact PHP 8.5.9 warmed-kernel S2 and cold-build S3.
+
+Twenty-one alternating CPU-pinned default-release pairs with JIT and quick
+loops disabled exercised five million ordinary dynamic string calls per run.
+Baseline p10/median/p90/mean was
+0.900758/0.910348/1.024937/0.931098 seconds and candidate
+0.889305/0.899474/0.933861/0.905416 seconds. The independent median and mean
+ratios are 0.9881 and 0.9724; paired p10/median/p90/mean ratios are
+0.9185/0.9861/1.0214/0.9756. The median is below the +5% gate and every run
+retained `17500000`. The exact candidate binary SHA-256 is
+`9cec1e714bf5f030561dfa8c2bbd3d700ceac94b976a35af7ea05d077f470a6d`.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `81b0aca3`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,863 pass, 1,436 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
