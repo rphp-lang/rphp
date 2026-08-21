@@ -8,6 +8,74 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `a0e309b0`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 3,944 pass, 1,355 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 74.429% and the whole-corpus rate is 70.441%; 4,748 of
+5,299 attempted cases reach runtime (89.602%). Relative to exact candidate
+`6009daff`, the pass-set delta is +8/-0 with no other status or failure-
+category movement.
+
+The exact additions are `Zend/tests/bug49893.phpt`,
+`Zend/tests/exceptions/bug73338.phpt`,
+`Zend/tests/magic_methods/bug29368.phpt`, `bug29368_3.phpt`,
+`Zend/tests/try/bug73337.phpt`, `catch_002.phpt`, `catch_003.phpt` and
+`catch_004.phpt`. Every previous pass remains a pass. Two sequential final
+runs have byte-identical merged manifests and summaries. Their manifest and
+summary SHA-256 values are
+`f5626bf6b5d994cadc104ec32dc211ac3ffdc4419ca30a70508cd52c6cef5444`
+and `d9c477f9c20f114fcbfa9fb8b74b6cced72dee42a1e2e570811a886313b26483`.
+
+A fresh object whose resolved class has both a constructor and destructor now
+starts with its own destructor ineligible. Only successful completion of the
+exact constructor activation entered by `new` enables it, after frame-local
+destructor cleanup has also completed without an exception. Constructor
+argument validation, a thrown constructor, a destructor exception at the
+constructor return boundary, an escaped `$this`, and a later manual successful
+`->__construct()` call therefore cannot make a failed allocation eligible.
+Constructorless allocation, successful property-initializer and unpacked
+constructor paths, and Reflection construction without invoking the
+constructor preserve their PHP 8.5 behavior.
+
+The original-construction marker shares the existing per-frame call-kind byte,
+so `ExecuteData` remains four value slots and Fiber suspension needs no sparse
+sidecar. The object lifecycle marker suppresses only the failed owner's own
+destructor; destructor-bearing properties still retire normally. When a local
+handler abandons an interrupted expression, the baseline VM now releases that
+statement's bounded TMP/VAR range before matching a catch. A throwing
+temporary destructor replaces the pending constructor exception, chains it as
+`previous`, and can select a different catch. Ranges with no remaining VM
+release work take an allocation-free cleanup path.
+
+Seven original constructor regressions cover escaped and retried `$this`,
+completed and failed argument temporaries, constructor-frame cleanup failure,
+successful/no-constructor/Reflection boundaries, property-tree release,
+replacement-exception catch reselection, argument validation, inheritance and
+unpacking. The adjacent constructor, exception, frame-cleanup, magic-method,
+type, weak-object, cycle-collection, Fiber and hot-tier suites pass. All five
+Cargo configurations, all-features/all-targets, formatting, PHPT runner
+self-test and the exact unsafe ratchet pass. The production inventory is 1,612
+unsafe blocks, 289 unsafe functions and 321 SAFETY annotations. Composer S0,
+all four Symfony S1 gates and exact PHP 8.5.9 warmed-kernel S2 and cold-build
+S3 also pass.
+
+A local 32-pair balanced alternating AMD Ryzen 9 7950X release comparison,
+pinned to CPU 0 with the performance governor, four warmups and no excluded
+sample, keeps every affected and unaffected control below the +5% gate. The
+order-balanced candidate/baseline median ratios are 0.981968 for the ordinary
+constructor control, 0.986547 for successful constructors with an empty
+destructor, 0.997011 for caught ordinary calls and 1.004452 for failed
+constructors with an empty destructor. The corresponding independent median
+ratios are 0.987017, 0.989664, 0.996239 and 1.003543. The exact candidate
+binary SHA-256 is
+`29547a62c0ab592fb73abda7e466ba2f6463f479355e65e44587843e5e909d1b`.
+
+Request-shutdown fixed-point ordering, broader cycle-collector and Fiber
+lifetime behavior, and the remaining object-lifecycle corpus stay separate
+work. This checkpoint claims constructor-failure destructor eligibility and
+the exercised interrupted-statement temporary cleanup only.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `6009daff`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 3,936 pass, 1,363 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
