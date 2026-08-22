@@ -8,6 +8,68 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `863e3234`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,023 pass, 1,276 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 75.920% and the whole-corpus rate is 71.852%; 4,811 of
+5,299 attempted cases reach runtime (90.791%). Relative to exact integration
+baseline `5b4142ac`, the pass-set delta is +20/-0.
+
+The exact additions are `Zend/tests/bug72441.phpt`,
+`foreach/foreach_list_004.phpt`, `list/bug73663.phpt`, `bug73663_2.phpt`,
+all three `gh11320` cases, `list_008.phpt`, `list_010.phpt`, `list_011.phpt`,
+`list_014.phpt`, `list_empty_error.phpt`, `list_empty_error_keyed.phpt`,
+`list_keyed_conversions.phpt`, all four `list_keyed_evaluation_order` cases,
+`list_keyed_leading_comma.phpt`, and `list_mixed_keyed_unkeyed.phpt`. Twelve
+move from parse failure, six from output mismatch and two from runtime failure;
+every previous pass remains a pass. `list_keyed_ArrayAccess.phpt` advances from
+parse failure to the independent `ArrayObject` mutation runtime boundary, and
+`list_keyed_non_literals.phpt` advances from parse failure to the independent
+`data:` stream-key output boundary. No other status or category moves. Two
+sequential final candidate runs have byte-identical manifests and summaries.
+Their SHA-256 values are
+`b920f1eb8c6c94c7b67f07bc7d26180b7f4f8ed2cc3351711b6f2efd923e7031`
+and `2d86ed267ed0f445b6afa5916b4c9b6abe019b28b06dbbe42ce0aed31cb948ce`.
+
+Legacy `list()` is now value-producing expression grammar, including uppercase
+spelling and direct or named call arguments. Keyed destructuring accepts
+compile-time, magic and arbitrary runtime key expressions plus reference,
+nested, append, array-dimension, object-property and static-property writable
+targets. The source is evaluated first; each key, source fetch and destination
+then executes in left-to-right PHP 8.5 order. Integer and numeric-string keys
+remain distinct for `ArrayAccess`, arrow functions capture free variables from
+keys, sources and member targets, and only a pattern containing a reference can
+be passed to a by-reference parameter. Empty patterns, empty keyed entries,
+mixed keyed/unkeyed entries, mixed `[]`/`list()` nesting and invalid writable
+targets produce PHP's compile-time diagnostics before the source can execute.
+
+The 39-case original list/global/static suite and the focused 21-case upstream
+cluster pass at 39/39 and 19/21; the latter has only the two independent
+boundaries above. All five Cargo feature configurations, all-feature/all-target,
+formatting, PHPT-runner and unsafe-policy self-tests, the exact unsafe ratchet,
+Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2
+and cold-build S3 pass. The production inventory remains 1,618 unsafe blocks,
+289 unsafe functions and 330 SAFETY annotations.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used CPU 0 with the performance governor, four warmups and no
+excluded samples. Batches of 100 empty requests measured baseline
+p10/median/p90 0.231270/0.233732/0.241504 seconds and candidate
+0.230754/0.232903/0.238323 seconds, -0.355% by independent medians and -0.248%
+by the paired median. One request parsing, compiling and executing two million
+positional-plus-keyed literal destructuring iterations measured baseline
+0.467177/0.477029/0.485620 seconds and candidate
+0.462147/0.468815/0.473345 seconds, -1.722% independently and -1.857% paired.
+Both remain below the +5% gate with exact output. The baseline and candidate
+binary SHA-256 values are
+`a696ea142435a42d35369f874ff28c78562ced8fc8cc9bdaf10cf91b6b5af212`
+and `2746ec72ac2ab87c642493cca2de82b0a3baa6ca0d1ade9e4ef809b4beb19884`.
+
+This checkpoint does not claim the remaining `ArrayObject` write or `data:`
+stream-wrapper behavior above, other independent SPL/stream gaps, or broader
+PHP compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `9450ecb8`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,003 pass, 1,296 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

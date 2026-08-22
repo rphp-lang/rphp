@@ -1285,6 +1285,26 @@ for 100 empty requests and +0.978%/+0.801% for 50,000 ordinary integer
 expressions, below the +5% gate. Malformed explicit-prefix diagnostics, 32-bit
 boundaries and the two later blockers remain separate checkpoints.
 
+The `keyed-destructuring-expressions` checkpoint reaches 4,023 exact passes
+with 1,276 failures, 115 skips, no XFAIL, 185 unsupported cases and zero
+timeouts or crashes. Legacy `list()` is now a value-producing expression;
+keyed patterns accept arbitrary key expressions and writable reference,
+nested, append, dimension, object-property and static-property targets while
+preserving PHP 8.5 source/key/fetch/destination order. Arrow capture,
+referenceability and compile-time empty/mixed/style/writable-target diagnostics
+are covered by original regressions. The exact full-corpus delta from
+`5b4142ac` is +20/-0: twelve parse, six output and two runtime failures become
+exact with every prior pass preserved. Two remaining list cases advance to
+independent `ArrayObject` mutation and `data:` stream-wrapper boundaries; no
+other status or category moves, and two final manifests/summaries are
+byte-identical. All five feature configurations, all-feature/all-target,
+formatting, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP
+8.5.9 S2/S3 pass. CPU-pinned 32-pair release controls put independent/paired
+median changes at -0.355%/-0.248% for 100 empty requests and
+-1.722%/-1.857% for two million positional-plus-keyed literal destructuring
+iterations, below the +5% gate. The two later SPL/stream blockers and broader
+compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
