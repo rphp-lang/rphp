@@ -1305,6 +1305,26 @@ median changes at -0.355%/-0.248% for 100 empty requests and
 iterations, below the +5% gate. The two later SPL/stream blockers and broader
 compatibility remain separate checkpoints.
 
+The `compiler-halt-directive` checkpoint reaches 4,041 exact passes with 1,258
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. A case-insensitive outermost `__halt_compiler();` now terminates
+lexing at the exact post-semicolon byte; direct, absolute and dynamic
+`__COMPILER_HALT_OFFSET__` behavior follows PHP 8.5 across main, include and
+eval source units, including repeated eval source names. Reserved-name,
+namespace, nested-scope fatal and catchable undefined-constant behavior are
+covered by original regressions. The exact full-corpus delta from `ae447c20` is
++18/-0: all fifteen targeted halt/compiler-offset cases and three adjacent
+undefined-constant cases become exact with every prior pass preserved. One
+closure case advances to its independent `print_r()` formatting gap; no other
+non-pass status or category moves, and two final manifests/summaries are
+byte-identical. All five feature configurations, all-feature/all-target,
+formatting, PHPT runner, unsafe, Composer S0, four Symfony S1 gates and PHP
+8.5.9 S2/S3 pass. CPU-pinned 32-pair release controls put independent/paired
+median changes at -1.450%/-1.462% for 100 empty requests, -0.745%/-0.681% for
+1,000 ordinary variable writes and +0.440%/+0.565% for 1,000 named constant
+identifiers, below the +5% gate. Legacy invalid-byte offsets, closure
+formatting and broader compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

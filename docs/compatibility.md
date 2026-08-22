@@ -8,6 +8,66 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `4a6fb864`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,041 pass, 1,258 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.260% and the whole-corpus rate is 72.174%; 4,819 of
+5,299 attempted cases reach runtime (90.942%). Relative to exact integration
+baseline `ae447c20`, the pass-set delta is +18/-0.
+
+The exact additions are `Zend/tests/constants/gh18850.phpt`, all thirteen
+cases under `Zend/tests/constants/halt_compiler`,
+`Zend/tests/namespaces/ns_080.phpt`, and the three adjacent undefined-constant
+cases `Zend/tests/errmsg/bug43344_1.phpt`, `Zend/tests/match/045.phpt` and
+`Zend/tests/namespaces/ns_076.phpt`. Seven compile, two parse, two output and
+seven runtime failures become exact, with every previous pass preserved.
+`Zend/tests/closures/bug79778.phpt` advances from its undefined-constant
+runtime failure to an independent closure `print_r()` output-formatting gap;
+no other non-pass status or category moves. Two sequential final candidate
+runs have byte-identical manifests and summaries. Their SHA-256 values are
+`8376d22753e9a26eabc49c5e8c574a470cc3e897de92e6ce2a08ae6dd68c9414`
+and `397ae0ae18e4fa12d9aa877290250af7c2781d83b52280229afb78e46744ea62`.
+
+Case-insensitive unqualified `__halt_compiler();` is now restricted to the
+outermost source scope, records the exact byte immediately after its semicolon
+and makes the remaining source opaque. Direct and absolute
+`__COMPILER_HALT_OFFSET__` reads, constant declarations, functions and dynamic
+`constant()` lookup observe PHP 8.5's source-unit behavior across main files,
+includes and eval strings. Repeated eval units retain the first dynamically
+registered offset for their shared Zend source name while direct reads remain
+local to each compilation. The exact uppercase global name remains reserved,
+namespaced names remain ordinary constants, nested directives produce the
+compile fatal, and an undefined constant now throws a catchable, source-aware
+`Error` through the normal VM trace path.
+
+The focused 15-case upstream cluster and six original end-to-end regressions
+pass at 15/15 and 6/6. The adjacent constants/namespaces/grammar slice has 151
+passes, 56 failures, two skips and three unsupported cases, an exact +16/-0
+delta from the retained baseline. All five Cargo feature configurations,
+all-feature/all-target, formatting, PHPT-runner and unsafe-policy self-tests,
+the exact unsafe ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.9 warmed-kernel S2 and cold-build S3 pass. The production inventory remains
+1,618 unsafe blocks, 289 unsafe functions and 330 SAFETY annotations. No
+opcode, frame or value layout changes; `ExecutorGlobals` gains one lazy map
+pointer.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used CPU 2 with the performance governor, four warmups and no
+excluded samples. Batches of 100 empty requests measured baseline/candidate
+medians 0.139821/0.137793 seconds, -1.450% independently and -1.462% paired.
+Batches of 12 requests compiling 1,000 ordinary variable writes measured
+0.052470/0.052080 seconds, -0.745% independently and -0.681% paired. Batches of
+eight requests compiling 1,000 named constant identifiers measured
+1.054920/1.059558 seconds, +0.440% independently and +0.565% paired. All remain
+below the +5% gate with exact output. The baseline and candidate binary SHA-256
+values are `2746ec72ac2ab87c642493cca2de82b0a3baa6ca0d1ade9e4ef809b4beb19884`
+and `bc912b3e0bb41a12ccbb9496938f993804ac69d6f7eb9406a57a26e8c0758d7b`.
+
+This checkpoint does not claim PHP's legacy invalid-byte offset behavior,
+because the current string frontend remaps those bytes, the independent
+closure formatting boundary above, or broader PHP compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `863e3234`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,023 pass, 1,276 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
