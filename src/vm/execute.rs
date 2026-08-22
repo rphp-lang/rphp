@@ -823,6 +823,13 @@ fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString> {
     complete.then_some(parsed)
 }
 
+/// Parse the complete numeric-string grammar accepted at a weak internal
+/// float parameter. Keep Rust's textual `NaN`/`inf` spellings outside the PHP
+/// grammar while still admitting decimal overflow as an infinity.
+pub(crate) fn php_numeric_string_to_float(value: &str) -> Option<f64> {
+    parse_php_numeric_string(value).map(|parsed| parsed.number)
+}
+
 pub(crate) struct ArithmeticOperatorOperand {
     pub(crate) value: Value,
     pub(crate) leading_numeric: bool,

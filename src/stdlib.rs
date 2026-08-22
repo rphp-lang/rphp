@@ -31,8 +31,8 @@ use crate::vm::execute::{
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
     call_function_owned_iter_with_context_and_named, check_type_hint, explicit_float_conversion,
-    explicit_long_conversion, explicit_numeric_cast_warning, prepare_scalar_long_callback,
-    try_execute_scalar_long_callback, values_identical,
+    explicit_long_conversion, explicit_numeric_cast_warning, php_numeric_string_to_float,
+    prepare_scalar_long_callback, try_execute_scalar_long_callback, values_identical,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -4716,6 +4716,86 @@ fn fn_log2(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 
 fn fn_pi(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(std::f64::consts::PI));
+}
+
+/// Convert the shared `float $num` contract used by PHP's floating-point
+/// classifiers. Integers always widen exactly as call-boundary float hints do;
+/// the other scalar conversions are available only to weak callers.
+fn floating_classification_argument(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<Option<f64>, VmError> {
+    let argument = arg!(ed, 0).dereferenced();
+    let strict = internal_call_is_strict(ed);
+    let number = match argument.value_type() {
+        ValueType::Double => argument.as_double(),
+        ValueType::Long => argument.as_long().map(|number| number as f64),
+        ValueType::String if !strict => argument.as_str().and_then(php_numeric_string_to_float),
+        ValueType::True | ValueType::False if !strict => Some(f64::from(argument.is_truthy())),
+        ValueType::Null if !strict => {
+            report_internal_deprecation(
+                eg,
+                ed,
+                &format!(
+                    "{function}(): Passing null to parameter #1 ($num) of type float is deprecated"
+                ),
+            )?;
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+            Some(0.0)
+        }
+        _ => None,
+    };
+    if number.is_none() {
+        let actual = match argument.value_type() {
+            ValueType::True => Cow::Borrowed("true"),
+            ValueType::False => Cow::Borrowed("false"),
+            _ => argument.diagnostic_type_name(),
+        };
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "{function}(): Argument #1 ($num) must be of type float, {} given",
+                actual
+            ),
+        ));
+    }
+    Ok(number)
+}
+
+fn fn_is_nan(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(number) = floating_classification_argument(ed, eg, "is_nan")? else {
+        return Ok(());
+    };
+    ret!(rv, Value::bool(number.is_nan()));
+}
+
+fn fn_is_finite(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(number) = floating_classification_argument(ed, eg, "is_finite")? else {
+        return Ok(());
+    };
+    ret!(rv, Value::bool(number.is_finite()));
+}
+
+fn fn_is_infinite(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(number) = floating_classification_argument(ed, eg, "is_infinite")? else {
+        return Ok(());
+    };
+    ret!(rv, Value::bool(number.is_infinite()));
 }
 
 fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {

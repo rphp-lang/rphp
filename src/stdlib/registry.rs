@@ -668,6 +668,9 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("log10", fn_log10, 1, 1, "num");
     reg!("log2", fn_log2, 1, 1, "num");
     reg!("pi", fn_pi, 0, 0);
+    reg!("is_nan", fn_is_nan, 1, 1, "num");
+    reg!("is_finite", fn_is_finite, 1, 1, "num");
+    reg!("is_infinite", fn_is_infinite, 1, 1, "num");
     reg!("rand", fn_rand, 2, 0, "min", "max");
     reg!("mt_rand", fn_rand, 2, 0, "min", "max");
     reg!("random_int", fn_random_int, 2, 2, "min", "max");

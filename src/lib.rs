@@ -90,6 +90,7 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "PHP_FLOAT_NAN" => Some(value::Value::double(f64::NAN)),
         "INF" => Some(value::Value::double(f64::INFINITY)),
         "NAN" => Some(value::Value::double(f64::NAN)),
+        "M_PI" => Some(value::Value::double(std::f64::consts::PI)),
 
         // Public PHP compatibility contract.
         "PHP_MAJOR_VERSION" => Some(value::Value::long(PHP_COMPAT_MAJOR_VERSION)),
