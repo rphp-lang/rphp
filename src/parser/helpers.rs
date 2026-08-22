@@ -249,6 +249,14 @@ impl Parser {
                         let name = Self::token_as_named_arg_label(&self.advance()).unwrap();
                         self.advance(); // consume ':'
                         let value = self.parse_expr()?;
+                        if let Expr::FunctionCall { name, line, .. } = &value
+                            && name.eq_ignore_ascii_case("list")
+                        {
+                            return Err(self.source_error(
+                                "syntax error, unexpected token \")\", expecting \"=\"",
+                                *line,
+                            ));
+                        }
                         args.push(CallArg::Named { name, value });
                         seen_named = true;
                         if self.comma_list_has_next(call_line)? {
@@ -267,6 +275,14 @@ impl Parser {
                     }
                     self.advance();
                     let expr = self.parse_expr()?;
+                    if let Expr::FunctionCall { name, line, .. } = &expr
+                        && name.eq_ignore_ascii_case("list")
+                    {
+                        return Err(self.source_error(
+                            "syntax error, unexpected token \")\", expecting \"=\"",
+                            *line,
+                        ));
+                    }
                     args.push(CallArg::Unpack(expr));
                     seen_unpack = true;
                     if self.comma_list_has_next(call_line)? {
@@ -287,6 +303,14 @@ impl Parser {
                     );
                 }
                 let expr = self.parse_positional_call_argument()?;
+                if let Expr::FunctionCall { name, line, .. } = &expr
+                    && name.eq_ignore_ascii_case("list")
+                {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \")\", expecting \"=\"",
+                        *line,
+                    ));
+                }
                 args.push(CallArg::Positional(expr));
                 if self.comma_list_has_next(call_line)? {
                     continue;
@@ -1536,6 +1560,34 @@ impl Parser {
         false
     }
 
+    /// Check whether the `(` at the current position closes immediately
+    /// before the assignment in a value-producing `list(...) = expression`.
+    fn is_legacy_list_assign(&self) -> bool {
+        if !matches!(self.peek(), Token::LParen(_)) {
+            return false;
+        }
+        let mut i = self.pos + 1;
+        let mut paren_depth = 1usize;
+        let mut bracket_depth = 0usize;
+        while i < self.tokens.len() {
+            match &self.tokens[i] {
+                Token::LParen(_) => paren_depth += 1,
+                Token::RParen => {
+                    paren_depth -= 1;
+                    if paren_depth == 0 {
+                        return bracket_depth == 0
+                            && self.tokens.get(i + 1) == Some(&Token::Assign);
+                    }
+                }
+                Token::LBracket(_) => bracket_depth += 1,
+                Token::RBracket if bracket_depth != 0 => bracket_depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     /// Parse `list($a, $b, ...) = expr;`
     fn parse_list_assign(&mut self) -> Result<Stmt, String> {
         let line = match self.peek() {
@@ -1614,221 +1666,221 @@ impl Parser {
         }
     }
 
+    fn normalize_list_target(
+        &mut self,
+        target: Expr,
+        fallback_line: usize,
+    ) -> Result<ListTarget, String> {
+        let nullsafe_line = Self::nullsafe_chain_line(&target);
+        if self.is_empty_array_dimension_suffix() {
+            self.expect_lbracket()?;
+            self.expect(&Token::RBracket)?;
+            if let Some(line) = nullsafe_line {
+                return Ok(ListTarget::Target(self.compile_error(
+                    "Assignments can only happen to writable values",
+                    line,
+                )));
+            }
+            if !matches!(
+                &target,
+                Expr::Variable { .. }
+                    | Expr::ArrayAccess { .. }
+                    | Expr::PropertyAccess {
+                        nullsafe: false,
+                        ..
+                    }
+                    | Expr::DynamicPropertyAccess {
+                        nullsafe: false,
+                        ..
+                    }
+                    | Expr::StaticProperty { .. }
+                    | Expr::DynamicNamedStaticProperty { .. }
+                    | Expr::DynamicStaticProperty { .. }
+            ) {
+                return Ok(ListTarget::Target(self.compile_error(
+                    "Assignments can only happen to writable values",
+                    fallback_line,
+                )));
+            }
+            return Ok(ListTarget::AppendTarget(target));
+        }
+
+        if let Some(line) = nullsafe_line {
+            return Ok(ListTarget::Target(self.compile_error(
+                "Assignments can only happen to writable values",
+                line,
+            )));
+        }
+        if let Expr::Pipe { line, .. } = &target {
+            return Ok(ListTarget::Target(self.compile_error(
+                "Can't use function return value in write context",
+                *line,
+            )));
+        }
+        if let Some(error) = self.call_write_error(&target) {
+            return Ok(ListTarget::Target(error));
+        }
+        Ok(match target {
+            Expr::Variable { name, line } if name == "this" => ListTarget::Target(
+                self.compile_error("Cannot re-assign $this", line),
+            ),
+            Expr::Variable { name, .. } => ListTarget::Variable(name),
+            target @ Expr::DynamicVariable { .. } => ListTarget::Target(target),
+            Expr::Globals { line } => {
+                ListTarget::Target(self.globals_modification_error(line))
+            }
+            target @ (Expr::ArrayAccess { .. }
+            | Expr::PropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::DynamicPropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }
+            | Expr::CompileError { .. }) => ListTarget::Target(target),
+            Expr::ArrayLiteral(_) => ListTarget::Target(
+                self.compile_error("Cannot assign to array(), use [] instead", fallback_line),
+            ),
+            _ => ListTarget::Target(self.compile_error(
+                "Assignments can only happen to writable values",
+                fallback_line,
+            )),
+        })
+    }
+
+    fn key_list_target(&mut self, key: Expr, target: ListTarget) -> ListTarget {
+        match target {
+            ListTarget::Variable(var) => ListTarget::KeyedVariable { key, var },
+            ListTarget::Reference(target) => ListTarget::KeyedReference { key, target },
+            ListTarget::Target(target) => ListTarget::KeyedTarget { key, target },
+            ListTarget::AppendTarget(target) => {
+                ListTarget::KeyedAppendTarget { key, target }
+            }
+            ListTarget::Nested(targets) => ListTarget::KeyedNested { key, targets },
+            ListTarget::Skip
+            | ListTarget::KeyedVariable { .. }
+            | ListTarget::KeyedReference { .. }
+            | ListTarget::KeyedTarget { .. }
+            | ListTarget::KeyedAppendTarget { .. }
+            | ListTarget::KeyedNested { .. } => unreachable!("one list entry has one key"),
+        }
+    }
+
+    fn list_target_is_keyed(target: &ListTarget) -> bool {
+        matches!(
+            target,
+            ListTarget::KeyedVariable { .. }
+                | ListTarget::KeyedReference { .. }
+                | ListTarget::KeyedTarget { .. }
+                | ListTarget::KeyedAppendTarget { .. }
+                | ListTarget::KeyedNested { .. }
+        )
+    }
+
+    fn parse_one_list_target(&mut self, end_token: &Token) -> Result<ListTarget, String> {
+        if let Token::DotDotDot(line) = self.peek() {
+            self.advance();
+            if !matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+                return Err(
+                    "Expected assignment target after spread operator in destructuring".into(),
+                );
+            }
+            let _ = self.parse_empty_dimension_target_prefix()?;
+            return Ok(ListTarget::Target(self.compile_error(
+                "Spread operator is not supported in assignments",
+                line,
+            )));
+        }
+        if self.peek() == Token::Ampersand {
+            self.advance();
+            return Ok(ListTarget::Reference(self.parse_list_reference_target()?));
+        }
+        if let Token::LBracket(line) = self.peek() {
+            if *end_token == Token::RParen {
+                self.compile_error("Cannot mix [] and list()", line);
+            }
+            self.advance();
+            let nested = self.parse_list_targets(&Token::RBracket)?;
+            self.expect(&Token::RBracket)?;
+            return Ok(ListTarget::Nested(nested));
+        }
+        if let Token::Identifier(ref name, line) = self.peek()
+            && name.eq_ignore_ascii_case("list")
+            && matches!(self.peek_at(1), Token::LParen(_))
+        {
+            if *end_token == Token::RBracket {
+                self.compile_error("Cannot mix [] and list()", line);
+            }
+            self.advance();
+            self.expect_lparen()?;
+            let nested = self.parse_list_targets(&Token::RParen)?;
+            self.expect(&Token::RParen)?;
+            return Ok(ListTarget::Nested(nested));
+        }
+
+        let fallback_line = match self.peek() {
+            Token::Variable(_, line)
+            | Token::This(line)
+            | Token::Dollar(line)
+            | Token::Identifier(_, line)
+            | Token::MagicConstant { line, .. }
+            | Token::LParen(line) => line,
+            _ => self.closest_token_source_line(),
+        };
+        let expression = self.parse_empty_dimension_target_prefix()?;
+        if self.peek() == Token::DoubleArrow {
+            self.advance();
+            let target = self.parse_one_list_target(end_token)?;
+            return Ok(self.key_list_target(expression, target));
+        }
+        self.normalize_list_target(expression, fallback_line)
+    }
+
     pub(super) fn parse_list_targets(
         &mut self,
         end_token: &Token,
     ) -> Result<Vec<ListTarget>, String> {
         let mut targets = Vec::new();
+        let list_line = self.closest_token_source_line();
+        let mut keyed = None;
+        let mut saw_skip = false;
         while self.peek() != *end_token && !self.at_eof() {
             if matches!(self.peek(), Token::Comma(_)) {
                 // Skip element (empty slot before comma or between commas)
                 targets.push(ListTarget::Skip);
+                saw_skip = true;
                 self.advance(); // consume ','
                 continue;
             }
-            if let Token::DotDotDot(line) = self.peek() {
-                self.advance(); // consume the unsupported spread marker
-                if !matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
-                    return Err(
-                        "Expected assignment target after spread operator in destructuring".into(),
+            let target = self.parse_one_list_target(end_token)?;
+            let target_keyed = Self::list_target_is_keyed(&target);
+            if let Some(previous_keyed) = keyed {
+                if previous_keyed != target_keyed {
+                    self.compile_error(
+                        "Cannot mix keyed and unkeyed array entries in assignments",
+                        list_line,
                     );
                 }
-                // Consume the complete l-value so the parser can finish the
-                // source unit. PHP accepts this grammar shape and rejects it
-                // during compilation, before any right-hand side can run.
-                let _ = self.parse_empty_dimension_target_prefix()?;
-                let error = self.compile_error(
-                    "Spread operator is not supported in assignments",
-                    line,
-                );
-                targets.push(ListTarget::Target(error));
-            }
-            else if self.peek() == Token::Ampersand {
-                self.advance();
-                let target = self.parse_list_reference_target()?;
-                targets.push(ListTarget::Reference(target));
-            }
-            // Check for nested: list(...) or [...]
-            else if matches!(self.peek(), Token::LBracket(_)) {
-                self.advance(); // consume '['
-                let nested = self.parse_list_targets(&Token::RBracket)?;
-                self.expect(&Token::RBracket)?;
-                targets.push(ListTarget::Nested(nested));
-            } else if let Token::Identifier(ref name, line) = self.peek() {
-                if name == "list" && matches!(self.peek_at(1), Token::LParen(_)) {
-                    self.advance(); // consume 'list'
-                    self.expect_lparen()?;
-                    let nested = self.parse_list_targets(&Token::RParen)?;
-                    self.expect(&Token::RParen)?;
-                    targets.push(ListTarget::Nested(nested));
-                } else if matches!(self.peek_at(1), Token::PipeGreater(_) | Token::LParen(_)) {
-                    // Calls and pipes are valid expression grammar here, but
-                    // their results cannot become destructuring write targets.
-                    // Consume the complete expression so PHP's compile-time
-                    // diagnostic survives dead-code elimination.
-                    let line = line;
-                    let _ = self.parse_expr()?;
-                    targets.push(ListTarget::Target(self.compile_error(
-                        "Can't use function return value in write context",
-                        line,
-                    )));
-                } else if self.peek_at(1) == Token::DoubleColon {
-                    let target = self.parse_expr()?;
-                    let error = self
-                        .call_write_error(&target)
-                        .ok_or_else(|| "Invalid destructuring assignment target".to_string())?;
-                    targets.push(ListTarget::Target(error));
-                } else {
-                    return Err(format!(
-                        "Expected variable in list/destructuring, got identifier '{}'",
-                        name
-                    ));
-                }
-            } else if matches!(
-                self.peek(),
-                Token::Variable(_, _) | Token::This(_) | Token::Dollar(_)
-            ) {
-                let target = self.parse_empty_dimension_target_prefix()?;
-                let nullsafe_line = Self::nullsafe_chain_line(&target);
-                if matches!(self.peek(), Token::LBracket(_))
-                    && self.peek_at(1) == Token::RBracket
-                {
-                    if let Some(line) = nullsafe_line {
-                        self.advance();
-                        self.advance();
-                        targets.push(ListTarget::Target(self.compile_error(
-                            "Assignments can only happen to writable values",
-                            line,
-                        )));
-                    } else {
-                        if !matches!(
-                            &target,
-                            Expr::Variable { .. }
-                                | Expr::ArrayAccess { .. }
-                                | Expr::PropertyAccess {
-                                    nullsafe: false,
-                                    ..
-                                }
-                                | Expr::DynamicPropertyAccess {
-                                    nullsafe: false,
-                                    ..
-                                }
-                                | Expr::StaticProperty { .. }
-                                | Expr::DynamicNamedStaticProperty { .. }
-                                | Expr::DynamicStaticProperty { .. }
-                        ) {
-                            return Err("Invalid array append destructuring target".into());
-                        }
-                        self.advance();
-                        self.advance();
-                        targets.push(ListTarget::AppendTarget(target));
-                    }
-                } else if let Some(line) = nullsafe_line {
-                    targets.push(ListTarget::Target(self.compile_error(
-                        "Assignments can only happen to writable values",
-                        line,
-                    )));
-                } else if let Some(error) = self.call_write_error(&target) {
-                    targets.push(ListTarget::Target(error));
-                } else {
-                    match target {
-                        Expr::Variable {
-                            name: var,
-                            line,
-                        } if var == "this" => targets.push(ListTarget::Target(
-                            self.compile_error("Cannot re-assign $this", line),
-                        )),
-                        Expr::Variable { name: var, .. } => {
-                            targets.push(ListTarget::Variable(var))
-                        }
-                        target @ Expr::DynamicVariable { .. } => {
-                            targets.push(ListTarget::Target(target))
-                        }
-                        Expr::Globals { line } => targets.push(ListTarget::Target(
-                            self.globals_modification_error(line),
-                        )),
-                        target @ (Expr::ArrayAccess { .. }
-                        | Expr::PropertyAccess {
-                            nullsafe: false, ..
-                        }
-                        | Expr::DynamicPropertyAccess {
-                            nullsafe: false, ..
-                        }
-                        | Expr::StaticProperty { .. }
-                        | Expr::DynamicNamedStaticProperty { .. }
-                        | Expr::DynamicStaticProperty { .. }) => {
-                            targets.push(ListTarget::Target(target))
-                        }
-                        _ => return Err("Invalid destructuring assignment target".into()),
-                    }
-                }
-            } else if matches!(
-                self.peek(),
-                Token::Integer(_) | Token::StringLiteral(_) | Token::LParen(_)
-            ) {
-                // Explicit key: constants and parenthesized expressions such
-                // as `($array['marker'] = 1) => &$target` are evaluated in
-                // source order before the referenced dimension is selected.
-                let key_expr = self.parse_expr()?;
-                self.expect(&Token::DoubleArrow)?;
-                if self.peek() == Token::Ampersand {
-                    self.advance();
-                    let target = self.parse_list_reference_target()?;
-                    targets.push(ListTarget::KeyedReference {
-                        key: key_expr,
-                        target,
-                    });
-                } else if matches!(self.peek(), Token::LBracket(_)) {
-                    self.advance();
-                    let nested = self.parse_list_targets(&Token::RBracket)?;
-                    self.expect(&Token::RBracket)?;
-                    targets.push(ListTarget::KeyedNested {
-                        key: key_expr,
-                        targets: nested,
-                    });
-                } else if matches!(self.peek(), Token::Identifier(name, _) if name == "list")
-                    && matches!(self.peek_at(1), Token::LParen(_))
-                {
-                    self.advance();
-                    self.expect_lparen()?;
-                    let nested = self.parse_list_targets(&Token::RParen)?;
-                    self.expect(&Token::RParen)?;
-                    targets.push(ListTarget::KeyedNested {
-                        key: key_expr,
-                        targets: nested,
-                    });
-                } else {
-                    let (var_name, line) = match self.advance() {
-                        Token::Variable(n, line) => (n, line),
-                        other => {
-                            return Err(format!(
-                                "Expected variable after '=>' in list, got {:?}",
-                                other
-                            ));
-                        }
-                    };
-                    if var_name == "GLOBALS" {
-                        let error = self.globals_modification_error(line);
-                        targets.push(ListTarget::Target(error));
-                    } else {
-                        targets.push(ListTarget::KeyedVariable {
-                            key: key_expr,
-                            var: var_name,
-                        });
-                    }
-                }
             } else {
-                return Err(format!(
-                    "Unexpected token in list/destructuring: {:?}",
-                    self.peek()
-                ));
+                keyed = Some(target_keyed);
             }
+            targets.push(target);
             // Consume comma if present
             if matches!(self.peek(), Token::Comma(_)) {
                 self.advance();
             } else {
                 break;
             }
+        }
+        if keyed.is_none() {
+            self.compile_error("Cannot use empty list", list_line);
+        } else if keyed == Some(true) && saw_skip {
+            self.compile_error(
+                "Cannot use empty array entries in keyed array assignment",
+                list_line,
+            );
         }
         Ok(targets)
     }

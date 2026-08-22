@@ -11,7 +11,7 @@ impl Parser {
         let end = if matches!(self.peek(), Token::LBracket(_)) {
             self.advance();
             Token::RBracket
-        } else if matches!(self.peek(), Token::Identifier(ref name, _) if name == "list")
+        } else if matches!(self.peek(), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("list"))
             && matches!(self.peek_at(1), Token::LParen(_))
         {
             self.advance();
@@ -22,9 +22,6 @@ impl Parser {
         };
         let targets = self.parse_list_targets(&end)?;
         self.expect(&end)?;
-        if targets.is_empty() {
-            return Err("Cannot use empty list".to_string());
-        }
         Ok(Some(targets))
     }
 
@@ -1156,7 +1153,9 @@ impl Parser {
             Token::Identifier(_, _) | Token::Backslash | Token::From => {
                 // Check for list() destructuring: list($a, $b) = expr;
                 if let Token::Identifier(ref name, _) = self.peek() {
-                    if name == "list" && matches!(self.peek_at(1), Token::LParen(_)) {
+                    if name.eq_ignore_ascii_case("list")
+                        && matches!(self.peek_at(1), Token::LParen(_))
+                    {
                         return self.parse_list_assign();
                     }
                 }

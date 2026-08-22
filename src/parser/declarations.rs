@@ -1765,7 +1765,12 @@ impl Parser {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);
             }
-            Expr::ListAssign { expr, .. } => Self::collect_free_vars(expr, bound, out),
+            Expr::ListAssign { targets, expr, .. } => {
+                for target in targets {
+                    Self::collect_list_target_free_vars(target, bound, out);
+                }
+                Self::collect_free_vars(expr, bound, out);
+            }
             Expr::CompoundAssignExpression { target, expr, .. } => {
                 Self::collect_free_vars(target, bound, out);
                 Self::collect_free_vars(expr, bound, out);
@@ -1956,6 +1961,47 @@ impl Parser {
             }
             Expr::Clone { expr: inner, .. } => {
                 Self::collect_free_vars(inner, bound, out);
+            }
+        }
+    }
+
+    fn collect_list_target_free_vars(
+        target: &ListTarget,
+        bound: &std::collections::HashSet<&str>,
+        out: &mut Vec<String>,
+    ) {
+        match target {
+            ListTarget::Variable(name) => {
+                if !bound.contains(name.as_str()) && !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+            ListTarget::Reference(target)
+            | ListTarget::Target(target)
+            | ListTarget::AppendTarget(target) => Self::collect_free_vars(target, bound, out),
+            ListTarget::Skip => {}
+            ListTarget::Nested(targets) => {
+                for target in targets {
+                    Self::collect_list_target_free_vars(target, bound, out);
+                }
+            }
+            ListTarget::KeyedVariable { key, var } => {
+                Self::collect_free_vars(key, bound, out);
+                if !bound.contains(var.as_str()) && !out.contains(var) {
+                    out.push(var.clone());
+                }
+            }
+            ListTarget::KeyedReference { key, target }
+            | ListTarget::KeyedTarget { key, target }
+            | ListTarget::KeyedAppendTarget { key, target } => {
+                Self::collect_free_vars(key, bound, out);
+                Self::collect_free_vars(target, bound, out);
+            }
+            ListTarget::KeyedNested { key, targets } => {
+                Self::collect_free_vars(key, bound, out);
+                for target in targets {
+                    Self::collect_list_target_free_vars(target, bound, out);
+                }
             }
         }
     }

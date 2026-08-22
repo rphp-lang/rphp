@@ -1329,6 +1329,22 @@ impl Parser {
                 }
                 // Check if this is a function call (followed by `(`)
                 if matches!(self.peek(), Token::LParen(_)) {
+                    if name.eq_ignore_ascii_case("list") && self.is_legacy_list_assign() {
+                        let line = named_line.unwrap_or_else(|| match self.peek() {
+                            Token::LParen(line) => line,
+                            _ => 0,
+                        });
+                        self.expect_lparen()?;
+                        let targets = self.parse_list_targets(&Token::RParen)?;
+                        self.expect(&Token::RParen)?;
+                        self.expect(&Token::Assign)?;
+                        let expr = self.parse_expr()?;
+                        return Ok(Expr::ListAssign {
+                            targets,
+                            expr: Box::new(expr),
+                            line,
+                        });
+                    }
                     let paren_line = self.expect_lparen()?;
                     let line = named_line.unwrap_or(paren_line);
                     if matches!(self.peek(), Token::DotDotDot(_))
@@ -1668,6 +1684,16 @@ impl Parser {
     }
 
     /// Parse comma-separated array elements until `end_token`.
+    fn normalize_array_element_value(&mut self, value: Expr) -> Expr {
+        if let Expr::FunctionCall { name, line, .. } = &value
+            && name.eq_ignore_ascii_case("list")
+        {
+            self.compile_error("Cannot use list() as standalone expression", *line)
+        } else {
+            value
+        }
+    }
+
     fn parse_array_elements(&mut self, end_token: Token) -> Result<Vec<ArrayElement>, String> {
         let mut elements = Vec::new();
         let mut separator_line = None;
@@ -1702,6 +1728,7 @@ impl Parser {
                     false
                 };
                 let value = self.parse_expr()?;
+                let value = self.normalize_array_element_value(value);
                 if self.peek() == Token::DoubleArrow {
                     if leading_reference {
                         return Err("Array keys cannot be references".into());
@@ -1714,6 +1741,7 @@ impl Parser {
                         false
                     };
                     let actual_value = self.parse_expr()?;
+                    let actual_value = self.normalize_array_element_value(actual_value);
                     elements.push(ArrayElement {
                         key: Some(value),
                         value: actual_value,

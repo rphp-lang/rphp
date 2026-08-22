@@ -53,6 +53,153 @@ echo "$a $b";
 }
 
 #[test]
+fn keyed_destructuring_evaluates_the_source_then_each_key_and_writable_target() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DestructureSink { public $slot; }
+function keyedSource(&$trace) {
+    $trace .= 'S';
+    return ['left' => 10, 'right' => 20];
+}
+function keyedOffset(&$trace, $name) {
+    $trace .= 'K' . $name;
+    return $name;
+}
+$trace = '';
+$sink = new DestructureSink();
+$values = [];
+list(
+    keyedOffset($trace, 'left') => $values[],
+    keyedOffset($trace, 'right') => $sink->slot,
+) = keyedSource($trace);
+echo $trace, ':', $values[0], ':', $sink->slot;
+"#
+        ),
+        "SKleftKright:10:20"
+    );
+}
+
+#[test]
+fn keyed_destructuring_accepts_magic_compile_time_and_runtime_keys() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+const FIRST_DESTRUCTURE_KEY = 'first';
+define('SECOND_DESTRUCTURE_KEY', 'second');
+$thirdKey = 'third';
+list(
+    FIRST_DESTRUCTURE_KEY => $first,
+    SECOND_DESTRUCTURE_KEY => $second,
+    $thirdKey => $third,
+) = ['first' => 1, 'second' => 2, 'third' => 3];
+list(__FILE__ => $fileValue) = [__FILE__ => 4];
+echo $first, $second, $third, $fileValue;
+"#
+        ),
+        "1234"
+    );
+}
+
+#[test]
+fn keyed_destructuring_preserves_integer_and_numeric_string_array_access_keys() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DestructureKeyProbe implements ArrayAccess {
+    public function offsetGet($offset): mixed {
+        echo gettype($offset), ':';
+        return $offset;
+    }
+    public function offsetSet($offset, $value): void {}
+    public function offsetExists($offset): bool { return true; }
+    public function offsetUnset($offset): void {}
+}
+$source = new DestructureKeyProbe();
+list(123 => $integer, '123' => $string) = $source;
+var_dump($integer, $string);
+"#
+        ),
+        "integer:string:int(123)\nstring(3) \"123\"\n"
+    );
+}
+
+#[test]
+fn list_assignment_expressions_capture_keys_sources_and_member_targets_in_arrows() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ArrowDestructureSink { public $slot; }
+$key = 'selected';
+$source = ['selected' => 42];
+$sink = new ArrowDestructureSink();
+$assign = fn() => list($key => $sink->slot) = $source;
+$returned = $assign();
+echo $sink->slot, ':', $returned['selected'];
+"#
+        ),
+        "42:42"
+    );
+}
+
+#[test]
+fn legacy_list_assignment_is_a_value_and_only_reference_lists_are_referenceable() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function replaceListValue(&$value) { $value = ['changed']; }
+$source = [7];
+$returned = LIST($item) = $source;
+echo $returned[0], ':', $item, '|';
+try {
+    replaceListValue(list($item) = $source);
+} catch (Error $error) {
+    echo $error->getMessage(), '|';
+}
+$replace = 'replaceListValue';
+try {
+    $replace(value: list($item) = $source);
+} catch (Error $error) {
+    echo $error->getMessage(), '|';
+}
+replaceListValue(list(&$item) = $source);
+echo $source[0];
+"#
+        ),
+        "7:7|replaceListValue(): Argument #1 ($value) could not be passed by reference|replaceListValue(): Argument #1 ($value) could not be passed by reference|changed"
+    );
+}
+
+#[test]
+fn destructuring_pattern_errors_are_compile_time_and_do_not_run_the_source() {
+    for (pattern, message) in [
+        (
+            "[42]",
+            "Assignments can only happen to writable values on line 1",
+        ),
+        (
+            "[array($value)]",
+            "Cannot assign to array(), use [] instead on line 1",
+        ),
+        (
+            "list($first, 1 => $second)",
+            "Cannot mix keyed and unkeyed array entries in assignments on line 1",
+        ),
+        ("list([$value])", "Cannot mix [] and list() on line 1"),
+        ("list(,,,,)", "Cannot use empty list on line 1"),
+        (
+            "['key' => $value, ,]",
+            "Cannot use empty array entries in keyed array assignment on line 1",
+        ),
+    ] {
+        let source = format!(
+            "<?php function destructureMustNotRun() {{ echo 'ran'; return []; }} {pattern} = destructureMustNotRun();"
+        );
+        assert_eq!(run_php_expect_error(&source).to_string(), message);
+    }
+}
+
+#[test]
 fn destructuring_null_yields_null_elements_without_offset_warnings() {
     assert_eq!(
         run_php(
@@ -623,7 +770,7 @@ fn reference_destructuring_aliases_positional_keyed_and_nested_elements() {
         run_php(
             r#"<?php
 $source = [10, 'inner' => [20]];
-[&$first, 'inner' => [&$second]] = $source;
+[0 => &$first, 'inner' => [&$second]] = $source;
 $first = 11;
 $source['inner'][0] = 21;
 echo $source[0], ':', $second;

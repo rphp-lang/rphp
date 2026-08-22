@@ -3107,6 +3107,17 @@ impl Compiler {
         }
     }
 
+    fn nonreferenceable_call_argument_line(expr: &Expr) -> Option<usize> {
+        Self::nullsafe_chain_line(expr).or_else(|| match expr {
+            Expr::ListAssign { targets, line, .. }
+                if !targets.iter().any(ListTarget::contains_reference) =>
+            {
+                Some(*line)
+            }
+            _ => None,
+        })
+    }
+
     /// PHP treats a braced name produced by a constant expression differently
     /// from a runtime string equal to `class`: the former remains an ordinary
     /// case-sensitive constant lookup, while the latter resolves `::class`.
@@ -11579,7 +11590,8 @@ impl Compiler {
                 }
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
-                    let nonreferenceable = Self::nullsafe_chain_line(expr).is_some();
+                    let nonreferenceable_line = Self::nonreferenceable_call_argument_line(expr);
+                    let nonreferenceable = nonreferenceable_line.is_some();
                     let opcode = if nonreferenceable {
                         OpCode::SendVal
                     } else {
@@ -11600,7 +11612,11 @@ impl Compiler {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = i as u32;
                     }
-                    self.instructions.push(send);
+                    if let Some(line) = nonreferenceable_line {
+                        self.push_instruction_at_line(send, line);
+                    } else {
+                        self.instructions.push(send);
+                    }
                 }
                 CallArg::Named {
                     name,
@@ -11638,10 +11654,15 @@ impl Compiler {
                     // initialize only the argument slots that no preceding
                     // positional send could have written.
                     send.extended_value = i as u32;
-                    if Self::nullsafe_chain_line(value).is_some() {
+                    let nonreferenceable_line = Self::nonreferenceable_call_argument_line(value);
+                    if nonreferenceable_line.is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                     }
-                    self.instructions.push(send);
+                    if let Some(line) = nonreferenceable_line {
+                        self.push_instruction_at_line(send, line);
+                    } else {
+                        self.instructions.push(send);
+                    }
                 }
             }
         }
@@ -12004,7 +12025,8 @@ impl Compiler {
         {
             match arg {
                 CallArg::Positional(expr) | CallArg::Unpack(expr) => {
-                    let nonreferenceable = Self::nullsafe_chain_line(expr).is_some();
+                    let nonreferenceable_line = Self::nonreferenceable_call_argument_line(expr);
+                    let nonreferenceable = nonreferenceable_line.is_some();
                     let yield_snapshot = use_var_ex && source_cv.is_some();
                     let opcode = if nonreferenceable {
                         OpCode::SendVal
@@ -12036,7 +12058,11 @@ impl Compiler {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                         send.extended_value = index as u32;
                     }
-                    self.instructions.push(send);
+                    if let Some(line) = nonreferenceable_line {
+                        self.push_instruction_at_line(send, line);
+                    } else {
+                        self.instructions.push(send);
+                    }
                 }
                 CallArg::Named { .. } => {
                     let mut send = Instruction::new(OpCode::SendNamed);
@@ -12050,10 +12076,16 @@ impl Compiler {
                         send.result_type = OpType::Unused;
                         send._pad |= SEND_FLAG_YIELD_SNAPSHOT;
                     }
-                    if Self::nullsafe_chain_line(arg.expr()).is_some() {
+                    let nonreferenceable_line =
+                        Self::nonreferenceable_call_argument_line(arg.expr());
+                    if nonreferenceable_line.is_some() {
                         send._pad |= SEND_FLAG_NONREFERENCEABLE;
                     }
-                    self.instructions.push(send);
+                    if let Some(line) = nonreferenceable_line {
+                        self.push_instruction_at_line(send, line);
+                    } else {
+                        self.instructions.push(send);
+                    }
                 }
             }
         }
@@ -12114,6 +12146,137 @@ impl Compiler {
                 line: 0,
             };
             self.compile_target_reference_assignment(target, &source_expr)?;
+        }
+        Ok(())
+    }
+
+    fn compile_list_value_target(&mut self, target: &Expr, value: u16) -> Result<(), String> {
+        match target {
+            Expr::CompileError { message, line } => Err(self.goto_error(message, *line)),
+            Expr::DynamicVariable { name, line } => {
+                let (key, key_type) = self.compile_expr(name);
+                let mut assign = Instruction::new(OpCode::AssignDynamicVar);
+                assign.op1 = key;
+                assign.op1_type = key_type;
+                assign.op2 = value;
+                assign.op2_type = OpType::Tmp;
+                self.push_instruction_at_line(assign, *line);
+                Ok(())
+            }
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                ..
+            } => {
+                let (object, object_type) = self.compile_property_modify_base(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let mut assign = Instruction::new(OpCode::AssignObjProp);
+                assign.op1 = object;
+                assign.op1_type = object_type;
+                assign.op2 = property;
+                assign.op2_type = OpType::Const;
+                assign.result = value;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+                Ok(())
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                ..
+            } => {
+                let (object, object_type) = self.compile_property_modify_base(object);
+                let (property, property_type) = self.compile_expr(property);
+                let mut assign = Instruction::new(OpCode::AssignObjProp);
+                assign.op1 = object;
+                assign.op1_type = object_type;
+                assign.op2 = property;
+                assign.op2_type = property_type;
+                assign.result = value;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+                Ok(())
+            }
+            static_property @ (Expr::StaticProperty { .. }
+            | Expr::DynamicNamedStaticProperty { .. }
+            | Expr::DynamicStaticProperty { .. }) => {
+                let (class, class_type, property, property_type, late_static, dynamic_owner, line) =
+                    self.compile_static_property_operands(static_property)
+                        .expect("matched static-property form");
+                let mut assign = Instruction::new(if late_static {
+                    OpCode::AssignLateStaticProp
+                } else {
+                    OpCode::AssignStaticProp
+                });
+                assign.op1 = class;
+                assign.op1_type = class_type;
+                assign.op2 = property;
+                assign.op2_type = property_type;
+                assign.result = value;
+                assign.result_type = OpType::Tmp;
+                if dynamic_owner {
+                    assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
+                }
+                if property_type != OpType::Const {
+                    assign._pad |= STATIC_PROP_DYNAMIC_NAME;
+                }
+                self.push_instruction_at_line(assign, line);
+                Ok(())
+            }
+            Expr::ArrayAccess { .. } => {
+                let mut root = target;
+                let mut reversed_indices = Vec::new();
+                while let Expr::ArrayAccess { array, index, .. } = root {
+                    reversed_indices.push(index.as_ref().clone());
+                    root = array.as_ref();
+                }
+                reversed_indices.reverse();
+                let path =
+                    self.compile_mutable_array_path(root, &reversed_indices, false, false)?;
+                let &(container, container_type) = path.containers.last().unwrap();
+                let &(key, key_type) = path.keys.last().unwrap();
+                let mut assign = Instruction::new(OpCode::AssignDim);
+                assign.op1 = container;
+                assign.op1_type = container_type;
+                assign.op2 = key;
+                assign.op2_type = key_type;
+                assign.result = value;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+                self.rebuild_mutable_array_path(&path);
+                self.write_back_mutable_array_root(&path);
+                if let Expr::Variable { name, .. } = root {
+                    let cv = self.resolve_cv(name);
+                    self.definitely_defined_cvs.insert(cv);
+                }
+                Ok(())
+            }
+            _ => Err("Invalid destructuring assignment target".into()),
+        }
+    }
+
+    fn compile_list_append_target(&mut self, target: &Expr, value: u16) -> Result<(), String> {
+        if let Expr::Variable { name, .. } = target {
+            let cv = self.resolve_cv(name);
+            let mut append = Instruction::new(OpCode::ArrayPushOp);
+            append.op1 = cv;
+            append.op1_type = OpType::Cv;
+            append.op2 = value;
+            append.op2_type = OpType::Tmp;
+            self.instructions.push(append);
+            self.definitely_defined_cvs.insert(cv);
+        } else {
+            let (target, target_type, writeback) =
+                self.compile_foreach_reference_source(target, true, false)?;
+            let mut append = Instruction::new(OpCode::ArrayPushOp);
+            append.op1 = target;
+            append.op1_type = target_type;
+            append.op2 = value;
+            append.op2_type = OpType::Tmp;
+            self.instructions.push(append);
+            self.emit_foreach_reference_source_writeback(writeback, target, target_type);
         }
         Ok(())
     }
@@ -12180,119 +12343,7 @@ impl Compiler {
                     fetch._pad |= FETCH_DIM_DESTRUCTURE;
                     self.push_instruction_at_line(fetch, source_line);
 
-                    match target {
-                        Expr::CompileError { message, line } => {
-                            return Err(self.goto_error(message, *line));
-                        }
-                        Expr::DynamicVariable { name, line } => {
-                            let (key, key_type) = self.compile_expr(name);
-                            let mut assign = Instruction::new(OpCode::AssignDynamicVar);
-                            assign.op1 = key;
-                            assign.op1_type = key_type;
-                            assign.op2 = fetch_tmp;
-                            assign.op2_type = OpType::Tmp;
-                            self.push_instruction_at_line(assign, *line);
-                        }
-                        Expr::PropertyAccess {
-                            object,
-                            property,
-                            nullsafe: false,
-                            ..
-                        } => {
-                            let (object, object_type) = self.compile_property_modify_base(object);
-                            let property = self.add_literal(Value::string(property.clone()));
-                            let mut assign = Instruction::new(OpCode::AssignObjProp);
-                            assign.op1 = object;
-                            assign.op1_type = object_type;
-                            assign.op2 = property;
-                            assign.op2_type = OpType::Const;
-                            assign.result = fetch_tmp;
-                            assign.result_type = OpType::Tmp;
-                            self.instructions.push(assign);
-                        }
-                        Expr::DynamicPropertyAccess {
-                            object,
-                            property,
-                            nullsafe: false,
-                            ..
-                        } => {
-                            let (object, object_type) = self.compile_property_modify_base(object);
-                            let (property, property_type) = self.compile_expr(property);
-                            let mut assign = Instruction::new(OpCode::AssignObjProp);
-                            assign.op1 = object;
-                            assign.op1_type = object_type;
-                            assign.op2 = property;
-                            assign.op2_type = property_type;
-                            assign.result = fetch_tmp;
-                            assign.result_type = OpType::Tmp;
-                            self.instructions.push(assign);
-                        }
-                        static_property @ (Expr::StaticProperty { .. }
-                        | Expr::DynamicNamedStaticProperty { .. }
-                        | Expr::DynamicStaticProperty { .. }) => {
-                            let (
-                                class,
-                                class_type,
-                                property,
-                                property_type,
-                                late_static,
-                                dynamic_owner,
-                                line,
-                            ) = self
-                                .compile_static_property_operands(static_property)
-                                .expect("matched static-property form");
-                            let mut assign = Instruction::new(if late_static {
-                                OpCode::AssignLateStaticProp
-                            } else {
-                                OpCode::AssignStaticProp
-                            });
-                            assign.op1 = class;
-                            assign.op1_type = class_type;
-                            assign.op2 = property;
-                            assign.op2_type = property_type;
-                            assign.result = fetch_tmp;
-                            assign.result_type = OpType::Tmp;
-                            if dynamic_owner {
-                                assign._pad |= STATIC_PROP_DYNAMIC_OWNER;
-                            }
-                            if property_type != OpType::Const {
-                                assign._pad |= STATIC_PROP_DYNAMIC_NAME;
-                            }
-                            self.push_instruction_at_line(assign, line);
-                        }
-                        Expr::ArrayAccess { .. } => {
-                            let mut root = target;
-                            let mut reversed_indices = Vec::new();
-                            while let Expr::ArrayAccess { array, index, .. } = root {
-                                reversed_indices.push(index.as_ref().clone());
-                                root = array.as_ref();
-                            }
-                            reversed_indices.reverse();
-                            let path = self.compile_mutable_array_path(
-                                root,
-                                &reversed_indices,
-                                false,
-                                false,
-                            )?;
-                            let &(container, container_type) = path.containers.last().unwrap();
-                            let &(key, key_type) = path.keys.last().unwrap();
-                            let mut assign = Instruction::new(OpCode::AssignDim);
-                            assign.op1 = container;
-                            assign.op1_type = container_type;
-                            assign.op2 = key;
-                            assign.op2_type = key_type;
-                            assign.result = fetch_tmp;
-                            assign.result_type = OpType::Tmp;
-                            self.instructions.push(assign);
-                            self.rebuild_mutable_array_path(&path);
-                            self.write_back_mutable_array_root(&path);
-                            if let Expr::Variable { name, .. } = root {
-                                let cv = self.resolve_cv(name);
-                                self.definitely_defined_cvs.insert(cv);
-                            }
-                        }
-                        _ => return Err("Invalid destructuring assignment target".into()),
-                    }
+                    self.compile_list_value_target(target, fetch_tmp)?;
                     idx += 1;
                 }
                 ListTarget::AppendTarget(target) => {
@@ -12308,30 +12359,7 @@ impl Compiler {
                     fetch._pad |= FETCH_DIM_DESTRUCTURE;
                     self.instructions.push(fetch);
 
-                    if let Expr::Variable { name, .. } = target {
-                        let cv = self.resolve_cv(name);
-                        let mut append = Instruction::new(OpCode::ArrayPushOp);
-                        append.op1 = cv;
-                        append.op1_type = OpType::Cv;
-                        append.op2 = fetch_tmp;
-                        append.op2_type = OpType::Tmp;
-                        self.instructions.push(append);
-                        self.definitely_defined_cvs.insert(cv);
-                    } else {
-                        let (target, target_type, writeback) =
-                            self.compile_foreach_reference_source(target, true, false)?;
-                        let mut append = Instruction::new(OpCode::ArrayPushOp);
-                        append.op1 = target;
-                        append.op1_type = target_type;
-                        append.op2 = fetch_tmp;
-                        append.op2_type = OpType::Tmp;
-                        self.instructions.push(append);
-                        self.emit_foreach_reference_source_writeback(
-                            writeback,
-                            target,
-                            target_type,
-                        );
-                    }
+                    self.compile_list_append_target(target, fetch_tmp)?;
                     idx += 1;
                 }
                 ListTarget::Skip => {
@@ -12421,6 +12449,34 @@ impl Compiler {
                         key_type,
                         diagnose_nonreferenceable,
                     )?;
+                }
+                ListTarget::KeyedTarget { key, target } => {
+                    let (key_op, key_type) = self.compile_expr(key);
+                    let fetch_tmp = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1_type = array_type;
+                    fetch.op1 = array;
+                    fetch.op2_type = key_type;
+                    fetch.op2 = key_op;
+                    fetch.result_type = OpType::Tmp;
+                    fetch.result = fetch_tmp;
+                    fetch._pad |= FETCH_DIM_DESTRUCTURE;
+                    self.push_instruction_at_line(fetch, source_line);
+                    self.compile_list_value_target(target, fetch_tmp)?;
+                }
+                ListTarget::KeyedAppendTarget { key, target } => {
+                    let (key_op, key_type) = self.compile_expr(key);
+                    let fetch_tmp = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1_type = array_type;
+                    fetch.op1 = array;
+                    fetch.op2_type = key_type;
+                    fetch.op2 = key_op;
+                    fetch.result_type = OpType::Tmp;
+                    fetch.result = fetch_tmp;
+                    fetch._pad |= FETCH_DIM_DESTRUCTURE;
+                    self.push_instruction_at_line(fetch, source_line);
+                    self.compile_list_append_target(target, fetch_tmp)?;
                 }
                 ListTarget::KeyedNested { key, targets } => {
                     let (key, key_type) = self.compile_expr(key);

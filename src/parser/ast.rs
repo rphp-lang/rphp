@@ -9,6 +9,8 @@ pub enum ListTarget {
     Nested(Vec<ListTarget>),                  // nested destructuring
     KeyedVariable { key: Expr, var: String }, // explicit key: [0 => $a, 2 => $c]
     KeyedReference { key: Expr, target: Expr },
+    KeyedTarget { key: Expr, target: Expr },
+    KeyedAppendTarget { key: Expr, target: Expr },
     KeyedNested { key: Expr, targets: Vec<ListTarget> },
 }
 
@@ -40,7 +42,9 @@ impl ListTarget {
                 .find(|line| *line != 0)
                 .unwrap_or(0),
             ListTarget::KeyedVariable { key, .. } => expression_line(key),
-            ListTarget::KeyedReference { key, target } => {
+            ListTarget::KeyedReference { key, target }
+            | ListTarget::KeyedTarget { key, target }
+            | ListTarget::KeyedAppendTarget { key, target } => {
                 let target_line = expression_line(target);
                 if target_line != 0 {
                     target_line
@@ -61,7 +65,9 @@ impl ListTarget {
             }
             ListTarget::Nested(targets) => targets.iter().any(ListTarget::contains_yield),
             ListTarget::KeyedVariable { key, .. } => key.contains_yield(),
-            ListTarget::KeyedReference { key, target } => {
+            ListTarget::KeyedReference { key, target }
+            | ListTarget::KeyedTarget { key, target }
+            | ListTarget::KeyedAppendTarget { key, target } => {
                 key.contains_yield() || target.contains_yield()
             }
             ListTarget::KeyedNested { key, targets } => {
