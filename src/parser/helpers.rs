@@ -1318,13 +1318,26 @@ impl Parser {
         }
     }
 
-    fn is_array_append_write_target(target: &Expr) -> bool {
-        matches!(
-            target,
+    /// PHP permits mutable variables/properties and ordinary call results as
+    /// array-write roots. Other expression results are non-writeable
+    /// temporaries; `clone` is the one non-call shape that uses PHP's
+    /// built-in-result diagnostic instead of the generic temporary wording.
+    fn array_write_root_error(&self, target: &Expr) -> Option<(&'static str, usize)> {
+        let fallback_line = match target {
+            Expr::ArrayAccess { line, .. } | Expr::ArrayAppendArgument { line, .. } => *line,
+            _ => 0,
+        };
+        let mut root = target;
+        while let Expr::ArrayAccess { array, .. } = root {
+            root = array;
+        }
+
+        if matches!(
+            root,
             Expr::Variable { .. }
                 | Expr::DynamicVariable { .. }
                 | Expr::Globals { .. }
-                | Expr::ArrayAccess { .. }
+                | Expr::CompileError { .. }
                 | Expr::ArrayAppendArgument { .. }
                 | Expr::PropertyAccess {
                     nullsafe: false,
@@ -1337,7 +1350,26 @@ impl Parser {
                 | Expr::StaticProperty { .. }
                 | Expr::DynamicNamedStaticProperty { .. }
                 | Expr::DynamicStaticProperty { .. }
-        ) || Self::is_call_result(target)
+        ) || Self::is_call_result(root)
+        {
+            return None;
+        }
+
+        let line = match root {
+            Expr::Clone { line, .. }
+            | Expr::New { line, .. }
+            | Expr::DynamicNew { line, .. }
+            | Expr::ClassConstant { line, .. }
+            | Expr::MagicConstant { line, .. }
+            | Expr::Match { line, .. } => *line,
+            _ => self.last_primary_line.unwrap_or(fallback_line),
+        };
+        let message = if matches!(root, Expr::Clone { .. }) {
+            "Cannot use result of built-in function in write context"
+        } else {
+            "Cannot use temporary expression in write context"
+        };
+        Some((message, line))
     }
 
     fn nullsafe_reference_error(&mut self, line: usize) -> Expr {
@@ -1371,6 +1403,11 @@ impl Parser {
         if let Some(error) = self.call_write_error(&expr) {
             return Ok(error);
         }
+        if matches!(expr, Expr::ArrayAccess { .. })
+            && let Some((message, line)) = self.array_write_root_error(&expr)
+        {
+            return Ok(self.compile_error(message, line));
+        }
         if !Self::is_variable_like(&expr) {
             return Err("Cannot use unset() on the result of an expression".into());
         }
@@ -1383,6 +1420,11 @@ impl Parser {
         }
         if let Some(error) = self.call_write_error(&expr) {
             return Ok(ForeachTarget::Target(error));
+        }
+        if matches!(expr, Expr::ArrayAccess { .. })
+            && let Some((message, line)) = self.array_write_root_error(&expr)
+        {
+            return Ok(ForeachTarget::Target(self.compile_error(message, line)));
         }
         match expr {
             Expr::Variable { ref name, line } if name == "this" => Ok(

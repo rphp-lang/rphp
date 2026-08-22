@@ -686,6 +686,12 @@ impl Parser {
                         expr = self.nullsafe_write_error(line);
                         continue;
                     }
+                    if matches!(&expr, Expr::ArrayAccess { .. })
+                        && let Some((message, line)) = self.array_write_root_error(&expr)
+                    {
+                        expr = self.compile_error(message, line);
+                        continue;
+                    }
                     expr = match expr {
                         Expr::Variable { name, line } if increment => {
                             Expr::PostInc { name, line }

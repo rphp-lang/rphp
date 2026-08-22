@@ -4373,6 +4373,12 @@ impl Compiler {
     /// even though ordinary call results remain valid discarded temporaries
     /// (or preserve a returned reference cell).
     fn is_zend_special_builtin_write_result(&self, expression: &Expr) -> bool {
+        // Zend lowers `clone` through a dedicated opcode and diagnoses its
+        // discarded result like compiler-special built-in calls when a later
+        // dimension needs a mutable root.
+        if matches!(expression, Expr::Clone { .. }) {
+            return true;
+        }
         let Expr::FunctionCall {
             name,
             args,

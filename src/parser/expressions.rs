@@ -107,14 +107,10 @@ impl Parser {
         target: Expr,
     ) -> Result<Expr, String> {
         let nullsafe_line = Self::nullsafe_chain_line(&target);
-        let invalid_temporary_line = (!Self::is_array_append_write_target(&target)
-            && nullsafe_line.is_none())
-        .then(|| {
-            self.last_primary_line.unwrap_or_else(|| match self.peek() {
-                Token::LBracket(line) => line,
-                _ => 0,
-            })
-        });
+        let write_root_error = nullsafe_line
+            .is_none()
+            .then(|| self.array_write_root_error(&target))
+            .flatten();
         self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
@@ -128,11 +124,8 @@ impl Parser {
         if let Some(line) = nullsafe_line {
             return Ok(self.nullsafe_write_error(line));
         }
-        if let Some(line) = invalid_temporary_line {
-            return Ok(self.compile_error(
-                "Cannot use temporary expression in write context",
-                line,
-            ));
+        if let Some((message, line)) = write_root_error {
+            return Ok(self.compile_error(message, line));
         }
         if let Expr::Globals { line } = target {
             return Ok(self.compile_error("Cannot append to $GLOBALS", line));
@@ -148,6 +141,13 @@ impl Parser {
         let nullsafe_line = Self::nullsafe_chain_line(&target);
         let call_write_error = if nullsafe_line.is_none() {
             self.call_write_error(&target)
+        } else {
+            None
+        };
+        let write_root_error = if nullsafe_line.is_none()
+            && matches!(target, Expr::ArrayAccess { .. })
+        {
+            self.array_write_root_error(&target)
         } else {
             None
         };
@@ -182,6 +182,9 @@ impl Parser {
         if let Some(error) = call_write_error {
             return Ok(error);
         }
+        if let Some((message, line)) = write_root_error {
+            return Ok(self.compile_error(message, line));
+        }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
         }
@@ -206,6 +209,13 @@ impl Parser {
         } else {
             None
         };
+        let write_root_error = if nullsafe_line.is_none()
+            && matches!(target, Expr::ArrayAccess { .. })
+        {
+            self.array_write_root_error(&target)
+        } else {
+            None
+        };
         let this_reassignment = match &target {
             Expr::Variable { name, line } if name == "this" => {
                 Some(self.compile_error("Cannot re-assign $this", *line))
@@ -213,6 +223,13 @@ impl Parser {
             _ => None,
         };
         let expr = Box::new(self.parse_assignment_or_yield()?);
+        let reference_write_root_error = if by_reference
+            && matches!(expr.as_ref(), Expr::ArrayAccess { .. })
+        {
+            self.array_write_root_error(expr.as_ref())
+        } else {
+            None
+        };
         if let Expr::Cast {
             cast_type: CastType::Void,
             line,
@@ -233,6 +250,9 @@ impl Parser {
         if let Some(error) = call_write_error {
             return Ok(error);
         }
+        if let Some((message, line)) = write_root_error {
+            return Ok(self.compile_error(message, line));
+        }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
         }
@@ -241,6 +261,9 @@ impl Parser {
         }
         if by_reference && let Some(line) = Self::nullsafe_chain_line(expr.as_ref()) {
             return Ok(self.nullsafe_reference_error(line));
+        }
+        if let Some((message, line)) = reference_write_root_error {
+            return Ok(self.compile_error(message, line));
         }
         if by_reference
             && matches!(
@@ -296,6 +319,13 @@ impl Parser {
         } else {
             None
         };
+        let write_root_error = if nullsafe_line.is_none()
+            && matches!(target, Expr::ArrayAccess { .. })
+        {
+            self.array_write_root_error(&target)
+        } else {
+            None
+        };
         if !matches!(
             &target,
             Expr::Variable { .. }
@@ -334,6 +364,9 @@ impl Parser {
         }
         if let Some(error) = call_write_error {
             return Ok(error);
+        }
+        if let Some((message, line)) = write_root_error {
+            return Ok(self.compile_error(message, line));
         }
         if let Expr::Globals { line } = target {
             return Ok(self.globals_modification_error(line));
@@ -1052,6 +1085,11 @@ impl Parser {
                 if let Some(line) = Self::nullsafe_chain_line(&target) {
                     return Ok(self.nullsafe_write_error(line));
                 }
+                if matches!(&target, Expr::ArrayAccess { .. })
+                    && let Some((message, line)) = self.array_write_root_error(&target)
+                {
+                    return Ok(self.compile_error(message, line));
+                }
                 match target {
                     Expr::Variable { name, line } => Ok(Expr::PreInc { name, line }),
                     Expr::DynamicVariable { .. } => Ok(Expr::PreIncTarget(Box::new(target))),
@@ -1076,6 +1114,11 @@ impl Parser {
                 let target = self.parse_power()?;
                 if let Some(line) = Self::nullsafe_chain_line(&target) {
                     return Ok(self.nullsafe_write_error(line));
+                }
+                if matches!(&target, Expr::ArrayAccess { .. })
+                    && let Some((message, line)) = self.array_write_root_error(&target)
+                {
+                    return Ok(self.compile_error(message, line));
                 }
                 match target {
                     Expr::Variable { name, line } => Ok(Expr::PreDec { name, line }),

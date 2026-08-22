@@ -602,6 +602,12 @@ impl Parser {
                             if let Some(line) = Self::nullsafe_chain_line(&target) {
                                 return Ok(Stmt::ExprStmt(self.nullsafe_reference_error(line)));
                             }
+                            if matches!(&target, Expr::ArrayAccess { .. })
+                                && let Some((message, line)) =
+                                    self.array_write_root_error(&target)
+                            {
+                                return Ok(Stmt::ExprStmt(self.compile_error(message, line)));
+                            }
                             return Ok(Stmt::ExprStmt(Expr::AssignReference {
                                 var: var_name,
                                 target: Box::new(target),
@@ -1355,14 +1361,10 @@ impl Parser {
 
     fn finish_array_append_statement(&mut self, target: Expr) -> Result<Stmt, String> {
         let nullsafe_line = Self::nullsafe_chain_line(&target);
-        let invalid_temporary_line = (!Self::is_array_append_write_target(&target)
-            && nullsafe_line.is_none())
-        .then(|| {
-            self.last_primary_line.unwrap_or_else(|| match self.peek() {
-                Token::LBracket(line) => line,
-                _ => 0,
-            })
-        });
+        let write_root_error = nullsafe_line
+            .is_none()
+            .then(|| self.array_write_root_error(&target))
+            .flatten();
         self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
@@ -1371,11 +1373,8 @@ impl Parser {
         if let Some(line) = nullsafe_line {
             return Ok(Stmt::ExprStmt(self.nullsafe_write_error(line)));
         }
-        if let Some(line) = invalid_temporary_line {
-            return Ok(Stmt::ExprStmt(self.compile_error(
-                "Cannot use temporary expression in write context",
-                line,
-            )));
+        if let Some((message, line)) = write_root_error {
+            return Ok(Stmt::ExprStmt(self.compile_error(message, line)));
         }
         if let Expr::Globals { line } = target {
             return Ok(Stmt::ExprStmt(
@@ -1386,6 +1385,13 @@ impl Parser {
     }
 
     fn finish_coalesce_assign_statement(&mut self, target: Expr) -> Result<Stmt, String> {
+        let write_root_error = if Self::nullsafe_chain_line(&target).is_none()
+            && matches!(&target, Expr::ArrayAccess { .. })
+        {
+            self.array_write_root_error(&target)
+        } else {
+            None
+        };
         let valid_target = matches!(
             &target,
             Expr::Variable { .. }
@@ -1410,6 +1416,9 @@ impl Parser {
         self.expect(&Token::QuestionQuestionAssign)?;
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon(0))?;
+        if let Some((message, line)) = write_root_error {
+            return Ok(Stmt::ExprStmt(self.compile_error(message, line)));
+        }
         if let Expr::Globals { line } = target {
             return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
         }
@@ -1417,6 +1426,13 @@ impl Parser {
     }
 
     fn finish_compound_assign_statement(&mut self, target: Expr) -> Result<Stmt, String> {
+        let write_root_error = if Self::nullsafe_chain_line(&target).is_none()
+            && matches!(&target, Expr::ArrayAccess { .. })
+        {
+            self.array_write_root_error(&target)
+        } else {
+            None
+        };
         if !matches!(
             &target,
             Expr::Variable { .. }
@@ -1441,6 +1457,9 @@ impl Parser {
             .ok_or_else(|| "Expected compound assignment operator".to_string())?;
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon(0))?;
+        if let Some((message, line)) = write_root_error {
+            return Ok(Stmt::ExprStmt(self.compile_error(message, line)));
+        }
         if let Expr::Globals { line } = target {
             return Ok(Stmt::ExprStmt(self.globals_modification_error(line)));
         }
