@@ -8,6 +8,64 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `c8539999`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,075 pass, 1,224 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.901% and the whole-corpus rate is 72.781%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `cb107ee1`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/bug45877.phpt`, which moves from a missing-
+function runtime failure to pass. Every previous pass is preserved and there
+is no other status or category movement. Two sequential final candidate runs
+have byte-identical manifests and summaries. Their SHA-256 values are
+`025e0d504cc024ce87172814a8b088eeaab362c61fee03e219e2536599d87df1`
+and `70145291793e472b9e7874acd3b12f083dea3323b7d4a08b2f3bb05d85e8f4af`.
+
+`array_fill_keys()` now snapshots an input array's values as output keys and
+fills every unique key with the supplied mixed value. Integer and canonical
+decimal-string keys retain integer identity across the full AMD64 range;
+other scalar, resource, array and Stringable keys follow PHP's string
+conversion, precision and diagnostic path. Duplicate keys replace the value
+without moving their first position. Key references are dereferenced while
+filled scalar/array values detach through ordinary COW and filled objects keep
+identity. NAN and array-conversion warnings, throwing handlers, Stringable
+side effects/exceptions and exact first-argument TypeErrors retain PHP 8.5
+ordering.
+
+One original E2E regression is byte-identical to PHP 8.5.9. The unmodified
+Zend regression plus all five adjacent `ext/standard` `array_fill_keys` PHPTs
+also pass, covering empty, keyed, mixed, reference, object, resource, null,
+boolean and float cases. All five Cargo feature configurations,
+all-feature/all-target, formatting, PHPT-runner and unsafe-policy self-tests,
+the exact unsafe ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.9 warmed-kernel S2 and cold-build S3 pass. The production inventory remains
+1,619 unsafe blocks, 289 unsafe functions and 331 SAFETY annotations. No
+opcode, executor/value/array layout, dependency, production-unsafe or hot
+array-path change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty `-r` requests measured baseline/candidate p10/
+median/p90 0.205837/0.207089/0.209550 and
+0.206117/0.208036/0.209578 seconds, +0.457% independently and +0.382% paired.
+One request executing 500,000 existing `array_fill()` calls measured
+0.111736/0.112429/0.124068 and 0.107457/0.108540/0.112891 seconds, -3.459%
+independently and -3.857% paired, with exact checksum `374999250000`. Both
+controls remain below the +5% gate; paired p10/p90 changes are
+-0.643%/+1.084% and -10.761%/-2.148%. As an absolute changed-path sanity
+check, fifteen candidate runs of 500,000 `array_fill_keys()` calls measured
+p10/median/p90 0.159549/0.164354/0.167286 seconds with the same checksum; no
+A/B claim is possible because the baseline lacks the function. The baseline
+and candidate binary SHA-256 values are
+`0cd4895c48fda348b3312eb32525452747c8a144a318886d059d7ecbb320e72a`
+and `748582e77b31863261a82aec96956a17bb78310b00f443b177174a74d22a713e`.
+
+This checkpoint does not claim memory-exhaustion behavior for impractically
+large key sets, the complete `ext/standard` array suite, companion array
+functions or broader PHP compatibility.
+
+The preceding `defined-function-inventory` checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `aa65a255`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,074 pass, 1,225 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

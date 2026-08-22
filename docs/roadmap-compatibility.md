@@ -1459,6 +1459,25 @@ million existing `is_float()` calls, below the +5% gate. Disabled-function
 configuration, exact extension inventory, `chunk_split()` and broader
 compatibility remain separate checkpoints.
 
+The `array-fill-keys-contract` checkpoint reaches 4,075 exact passes with
+1,224 failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts
+or crashes. `array_fill_keys()` implements PHP 8.5 integer/canonical-string
+key identity, scalar/resource/array/Stringable conversions, duplicate order,
+mixed-value object identity and array COW, reference detachment, diagnostics
+and throwing conversion paths. The exact full-corpus delta from `cb107ee1` is
++1/-0: `bug45877.phpt` becomes exact with every prior pass preserved and no
+other status or category movement; two final manifests and summaries are
+byte-identical. The supplying Zend case and all five adjacent unmodified
+`ext/standard` PHPTs pass. All five feature configurations,
+all-feature/all-target, formatting, PHPT runner, unsafe, Composer S0, four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. No unsafe, opcode, layout,
+dependency or hot array-path change is made. CPU-pinned 32-pair release
+controls put independent/paired median changes at +0.457%/+0.382% for 100
+empty requests and -3.459%/-3.857% for 500,000 existing `array_fill()` calls,
+below the +5% gate. Huge-allocation failures, the complete standard array
+suite, companion array functions and broader compatibility remain separate
+checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
