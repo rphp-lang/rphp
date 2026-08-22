@@ -23,6 +23,30 @@ echo $a;
 }
 
 #[test]
+fn assignment_result_is_evaluated_but_cannot_be_passed_by_reference() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function receive(&$value) { echo "unexpected\n"; }
+try { receive($assigned = 7); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+var_dump($assigned);
+
+try { sort($array = []); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+var_dump($array);
+"#,
+        ),
+        concat!(
+            "receive(): Argument #1 ($value) could not be passed by reference\n",
+            "int(7)\n",
+            "sort(): Argument #1 ($array) could not be passed by reference\n",
+            "array(0) {\n}\n",
+        )
+    );
+}
+
+#[test]
 fn test_user_ref_string() {
     let out = run_php(
         r#"<?php

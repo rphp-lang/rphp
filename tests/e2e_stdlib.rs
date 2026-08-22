@@ -159,6 +159,137 @@ catch (TypeError $error) { echo $error->getMessage(), "\n"; }
 }
 
 #[test]
+fn similar_text_matches_php_85_bytes_percent_reference_and_typed_boundaries() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach ([
+    ["abcdefgh", "efg"],
+    ["abcdefgh", "mno"],
+    ["abcdefghcc", "c"],
+    ["abcdefghabcdef", "zzzzabcdefggg"],
+    ["bafoobar", "barfoo"],
+    ["barfoo", "bafoobar"],
+    ["a\0bc", "\0b"],
+    ["\xC4", "\xE4"],
+    ["", ""],
+] as [$first, $second]) {
+    $percent = "old";
+    var_dump(similar_text($first, $second, $percent));
+    var_dump($percent);
+}
+
+$alias = "old";
+$percent =& $alias;
+var_dump(similar_text("abc", "bc", $percent), $alias, $percent);
+$percent = null;
+var_dump(similar_text(string2: "bc", percent: $percent, string1: "abc"), $percent);
+$percent = null;
+var_dump(SIMILAR_TEXT("abc", "bc", $percent), $percent);
+try { similar_text("a", "a", $assigned = 123); }
+catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+var_dump($assigned);
+"#,
+        ),
+        concat!(
+            "int(3)\nfloat(54.54545454545455)\n",
+            "int(0)\nfloat(0)\n",
+            "int(1)\nfloat(18.181818181818183)\n",
+            "int(7)\nfloat(51.851851851851855)\n",
+            "int(5)\nfloat(71.42857142857143)\n",
+            "int(3)\nfloat(42.857142857142854)\n",
+            "int(2)\nfloat(66.66666666666667)\n",
+            "int(0)\nfloat(0)\n",
+            "int(0)\nfloat(0)\n",
+            "int(2)\nfloat(80)\nfloat(80)\n",
+            "int(2)\nfloat(80)\n",
+            "int(2)\nfloat(80)\n",
+            "similar_text(): Argument #3 ($percent) could not be passed by reference\n",
+            "int(123)\n",
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(function ($level, $message) {
+    echo "diag:$level:$message\n";
+    return true;
+});
+class SimilarTextText {
+    public function __toString(): string { echo "toString\n"; return "abc"; }
+}
+class SimilarTextScalar {
+    public function __toString() { return 123; }
+}
+class SimilarTextBad {
+    public function __toString() { return []; }
+}
+
+$percent = null;
+var_dump(similar_text(123, 23, $percent), $percent);
+var_dump(similar_text(null, "", $percent), $percent);
+var_dump(similar_text(NAN, "AN", $percent), $percent);
+var_dump(similar_text(new SimilarTextText, "bc", $percent), $percent);
+var_dump(similar_text(new SimilarTextScalar, "23", $percent), $percent);
+try { similar_text(new SimilarTextBad, "x", $percent); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+
+foreach ([[], new stdClass, static fn() => null] as $value) {
+    try { similar_text($value, "x", $percent); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+try { similar_text("x", [], $percent); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+
+$percent = "unchanged";
+set_error_handler(function ($level, $message) {
+    throw new RuntimeException("stop:$message");
+});
+try { similar_text(null, "", $percent); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+var_dump($percent);
+"#,
+        ),
+        concat!(
+            "int(2)\nfloat(80)\n",
+            "diag:8192:similar_text(): Passing null to parameter #1 ($string1) of type string is deprecated\n",
+            "int(0)\nfloat(0)\n",
+            "diag:2:unexpected NAN value was coerced to string\n",
+            "int(2)\nfloat(80)\n",
+            "toString\n",
+            "int(2)\nfloat(80)\n",
+            "int(2)\nfloat(80)\n",
+            "SimilarTextBad::__toString(): Return value must be of type string, array returned\n",
+            "similar_text(): Argument #1 ($string1) must be of type string, array given\n",
+            "similar_text(): Argument #1 ($string1) must be of type string, stdClass given\n",
+            "similar_text(): Argument #1 ($string1) must be of type string, Closure given\n",
+            "similar_text(): Argument #2 ($string2) must be of type string, array given\n",
+            "stop:similar_text(): Passing null to parameter #1 ($string1) of type string is deprecated\n",
+            "string(9) \"unchanged\"\n",
+        )
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php declare(strict_types=1);
+$percent = null;
+var_dump(similar_text("abc", "bc", $percent), $percent);
+try { similar_text(123, "23", $percent); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { similar_text("123", 23, $percent); }
+catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "int(2)\nfloat(80)\n",
+            "similar_text(): Argument #1 ($string1) must be of type string, int given\n",
+            "similar_text(): Argument #2 ($string2) must be of type string, int given\n",
+        )
+    );
+}
+
+#[test]
 fn stristr_matches_php_85_ascii_bytes_and_typed_call_boundaries() {
     assert_eq!(
         run_php(

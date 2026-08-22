@@ -404,6 +404,16 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "replacement_cost",
         "deletion_cost"
     );
+    reg_ref!(
+        "similar_text",
+        fn_similar_text,
+        3,
+        2,
+        0b100,
+        "string1",
+        "string2",
+        "percent"
+    );
     reg!(
         "wordwrap",
         fn_wordwrap,

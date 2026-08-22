@@ -3042,6 +3042,13 @@ pub struct Compiler {
 /// Get ref_args bitmask for built-in stdlib functions.
 /// Returns 0 for unknown/non-ref functions.
 fn builtin_ref_args(name: &str) -> u64 {
+    let lower_name;
+    let name = if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        lower_name = name.to_ascii_lowercase();
+        lower_name.as_str()
+    } else {
+        name
+    };
     match name {
         "array_multisort" => u64::MAX,
         "sort"
@@ -3063,6 +3070,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "preg_match" | "preg_match_all" => 0b100, // arg 2 (&$matches)
         "preg_replace" | "preg_replace_callback" => 0b1_0000, // arg 4 (&$count)
         "str_replace" => 0b1000,                  // arg 3 (&$count)
+        "similar_text" => 0b100,                  // arg 2 (&$percent)
         "parse_str" => 0b10,                      // arg 1 (&$result)
         "extract" => 0b1,                         // arg 0 (&$array for EXTR_REFS)
         _ => 0,
@@ -3117,6 +3125,7 @@ impl Compiler {
 
     fn nonreferenceable_call_argument_line(expr: &Expr) -> Option<usize> {
         Self::nullsafe_chain_line(expr).or_else(|| match expr {
+            Expr::Assign { .. } => Some(expression_source_line(expr)),
             Expr::ListAssign { targets, line, .. }
                 if !targets.iter().any(ListTarget::contains_reference) =>
             {

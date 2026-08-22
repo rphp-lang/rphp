@@ -3445,6 +3445,96 @@ fn fn_levenshtein(
     ret!(rv, Value::long(previous[second.len()]));
 }
 
+fn similar_text_score(first: &[u8], second: &[u8]) -> usize {
+    let mut score = 0usize;
+    let mut pending = vec![(0usize, first.len(), 0usize, second.len())];
+    while let Some((first_start, first_end, second_start, second_end)) = pending.pop() {
+        let mut longest = 0usize;
+        let mut longest_first = first_start;
+        let mut longest_second = second_start;
+        for first_position in first_start..first_end {
+            for second_position in second_start..second_end {
+                let mut length = 0usize;
+                while first_position + length < first_end
+                    && second_position + length < second_end
+                    && first[first_position + length] == second[second_position + length]
+                {
+                    length += 1;
+                }
+                if length > longest {
+                    longest = length;
+                    longest_first = first_position;
+                    longest_second = second_position;
+                }
+            }
+        }
+        if longest == 0 {
+            continue;
+        }
+
+        score += longest;
+        if longest_first > first_start && longest_second > second_start {
+            pending.push((first_start, longest_first, second_start, longest_second));
+        }
+        let first_after = longest_first + longest;
+        let second_after = longest_second + longest;
+        if first_after < first_end && second_after < second_end {
+            pending.push((first_after, first_end, second_after, second_end));
+        }
+    }
+    score
+}
+
+fn fn_similar_text(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(first) = typed_internal_string_argument(ed, eg, "similar_text", 0, "string1")? else {
+        return Ok(());
+    };
+    let Some(second) = typed_internal_string_argument(ed, eg, "similar_text", 1, "string2")? else {
+        return Ok(());
+    };
+    let first = php_string_to_bytes(&first);
+    let second = php_string_to_bytes(&second);
+    let score = similar_text_score(&first, &second);
+
+    if arg_opt!(ed, 2).is_some() {
+        let total_length = first.len().saturating_add(second.len());
+        let percent = if total_length == 0 {
+            0.0
+        } else {
+            score as f64 * 200.0 / total_length as f64
+        };
+        arg_mut!(ed, 2, Value::double(percent));
+    }
+    ret!(rv, Value::long(score as i64));
+}
+
+#[cfg(test)]
+mod similar_text_tests {
+    use super::similar_text_score;
+
+    #[test]
+    fn matches_public_examples_and_first_match_tie_breaking() {
+        assert_eq!(similar_text_score(b"abcdefgh", b"efg"), 3);
+        assert_eq!(similar_text_score(b"abcdefgh", b"mno"), 0);
+        assert_eq!(similar_text_score(b"abcdefghcc", b"c"), 1);
+        assert_eq!(similar_text_score(b"abcdefghabcdef", b"zzzzabcdefggg"), 7);
+        assert_eq!(similar_text_score(b"bafoobar", b"barfoo"), 5);
+        assert_eq!(similar_text_score(b"barfoo", b"bafoobar"), 3);
+    }
+
+    #[test]
+    fn treats_inputs_as_bytes_and_handles_empty_regions() {
+        assert_eq!(similar_text_score(b"a\0bc", b"\0b"), 2);
+        assert_eq!(similar_text_score(&[0xc4], &[0xe4]), 0);
+        assert_eq!(similar_text_score(b"", b""), 0);
+        assert_eq!(similar_text_score(b"same", b"same"), 4);
+    }
+}
+
 fn fn_str_word_count(
     ed: *mut ExecuteData,
     rv: *mut Value,
