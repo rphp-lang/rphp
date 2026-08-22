@@ -1416,15 +1416,25 @@ fn fn_array_column(
     }
 }
 
-fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
-        let mut entries: Vec<Value> = a.values().cloned().collect();
-        entries.sort_by(|a, b| sort_value_cmp(a, b, flags));
+        let mut entries = a
+            .values()
+            .map(array_sort_snapshot_value)
+            .collect::<Vec<_>>();
+        if !sort_direct_long_entries(&mut entries, flags, false, |value| value) {
+            stable_sort_checked(&mut entries, |left, right| {
+                sort_value_order_runtime(ed, eg, left, right, flags)
+            })?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
         let mut new = PhpArray::new();
-        for v in entries {
-            new.push(v);
+        for value in entries {
+            new.push(array_projection_value(&value));
         }
         *arr = Value::array(new);
         ret!(rv, Value::bool(true));
@@ -1433,19 +1443,26 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     }
 }
 
-fn fn_rsort(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
+fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
-        let mut entries: Vec<Value> = a.values().cloned().collect();
-        entries.sort_by(|a, b| sort_value_cmp(b, a, flags));
+        let mut entries = a
+            .values()
+            .map(array_sort_snapshot_value)
+            .collect::<Vec<_>>();
+        if !sort_direct_long_entries(&mut entries, flags, true, |value| value) {
+            stable_sort_checked(&mut entries, |left, right| {
+                sort_value_order_runtime(ed, eg, left, right, flags)
+                    .map(std::cmp::Ordering::reverse)
+            })?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
         let mut new = PhpArray::new();
-        for v in entries {
-            new.push(v);
+        for value in entries {
+            new.push(array_projection_value(&value));
         }
         *arr = Value::array(new);
         ret!(rv, Value::bool(true));
@@ -1464,39 +1481,17 @@ const SORT_LOCALE_STRING: i64 = 5;
 struct MultisortColumn {
     entries: Vec<(ArrayKey, Value)>,
     direction: i64,
+    direction_set: bool,
     flags: i64,
+    flags_set: bool,
     destination: *mut Value,
-}
-
-fn multisort_value_cmp(left: &Value, right: &Value, flags: i64) -> std::cmp::Ordering {
-    match flags & !SORT_FLAG_CASE {
-        SORT_NUMERIC => left
-            .to_double()
-            .partial_cmp(&right.to_double())
-            .unwrap_or(std::cmp::Ordering::Equal),
-        SORT_STRING | SORT_LOCALE_STRING => {
-            let left = left.echo_to_string();
-            let right = right.echo_to_string();
-            if flags & SORT_FLAG_CASE != 0 {
-                left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
-            } else {
-                left.cmp(&right)
-            }
-        }
-        SORT_NATURAL => natural_string_cmp(
-            &left.echo_to_string(),
-            &right.echo_to_string(),
-            flags & SORT_FLAG_CASE != 0,
-        ),
-        _ => cmp_val(compare_values(left, right)),
-    }
 }
 
 fn multisort_array_value(value: &Value) -> Option<Vec<(ArrayKey, Value)>> {
     value.as_array().map(|array| {
         array
             .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
+            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect()
     })
 }
@@ -1506,8 +1501,12 @@ fn multisort_rebuild(entries: &[(ArrayKey, Value)], order: &[usize]) -> Value {
     for &index in order {
         let (key, value) = &entries[index];
         match key {
-            ArrayKey::Int(_) => result.push(value.clone()),
-            ArrayKey::String(key) => result.set_str(key, value.clone()),
+            ArrayKey::Int(_) => {
+                result.push(array_projection_value(value));
+            }
+            ArrayKey::String(key) => {
+                result.set_str(key, array_projection_value(value));
+            }
         }
     }
     Value::array(result)
@@ -1557,7 +1556,9 @@ fn fn_array_multisort(
     let mut columns = vec![MultisortColumn {
         entries: first_entries,
         direction: SORT_ASC,
+        direction_set: false,
         flags: SORT_REGULAR,
+        flags_set: false,
         destination: first_destination,
     }];
     let expected_len = columns[0].entries.len();
@@ -1583,7 +1584,9 @@ fn fn_array_multisort(
                 columns.push(MultisortColumn {
                     entries,
                     direction: SORT_ASC,
+                    direction_set: false,
                     flags: SORT_REGULAR,
+                    flags_set: false,
                     destination,
                 });
                 continue;
@@ -1601,12 +1604,34 @@ fn fn_array_multisort(
             };
             let column = columns.last_mut().expect("the first sort column exists");
             if matches!(flag, SORT_ASC | SORT_DESC) {
+                if column.direction_set {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        &format!(
+                            "array_multisort(): Argument #{} must be an array or a sort flag that has not already been specified",
+                            offset + 2
+                        ),
+                    ));
+                    return Ok(());
+                }
                 column.direction = flag;
+                column.direction_set = true;
             } else if matches!(
                 flag & !SORT_FLAG_CASE,
                 SORT_REGULAR | SORT_NUMERIC | SORT_STRING | SORT_LOCALE_STRING | SORT_NATURAL
             ) {
+                if column.flags_set {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        &format!(
+                            "array_multisort(): Argument #{} must be an array or a sort flag that has not already been specified",
+                            offset + 2
+                        ),
+                    ));
+                    return Ok(());
+                }
                 column.flags = flag;
+                column.flags_set = true;
             } else {
                 eg.exception = Some(crate::value::make_error_value(
                     "ValueError",
@@ -1621,24 +1646,29 @@ fn fn_array_multisort(
     }
 
     let mut order: Vec<usize> = (0..expected_len).collect();
-    order.sort_by(|left, right| {
+    stable_sort_checked(&mut order, |left, right| {
         for column in &columns {
-            let ordering = multisort_value_cmp(
+            let ordering = sort_value_order_runtime(
+                ed,
+                eg,
                 &column.entries[*left].1,
                 &column.entries[*right].1,
                 column.flags,
-            );
+            )?;
             let ordering = if column.direction == SORT_DESC {
                 ordering.reverse()
             } else {
                 ordering
             };
             if ordering != std::cmp::Ordering::Equal {
-                return ordering;
+                return Ok(ordering);
             }
         }
-        std::cmp::Ordering::Equal
-    });
+        Ok(std::cmp::Ordering::Equal)
+    })?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
 
     for column in columns {
         let sorted = multisort_rebuild(&column.entries, &order);
@@ -8058,37 +8088,327 @@ fn fn_natcasesort(
     fn_natural_key_preserving_sort(ed, rv, eg, "natcasesort", true)
 }
 
-fn sort_value_cmp(left: &Value, right: &Value, flags: i64) -> std::cmp::Ordering {
-    if flags & !SORT_FLAG_CASE == SORT_NATURAL {
-        natural_string_cmp(
-            &left.echo_to_string(),
-            &right.echo_to_string(),
+fn ascii_case_insensitive_order(left: &str, right: &str) -> std::cmp::Ordering {
+    left.bytes()
+        .map(|byte| byte.to_ascii_lowercase())
+        .cmp(right.bytes().map(|byte| byte.to_ascii_lowercase()))
+}
+
+fn sort_value_order(
+    left: &Value,
+    right: &Value,
+    flags: i64,
+    precision: i32,
+) -> Result<std::cmp::Ordering, ()> {
+    Ok(match flags & !SORT_FLAG_CASE {
+        SORT_NUMERIC => explicit_float_conversion(left)
+            .partial_cmp(&explicit_float_conversion(right))
+            .unwrap_or(std::cmp::Ordering::Equal),
+        SORT_STRING | SORT_LOCALE_STRING => {
+            let left = left.echo_to_string_with_precision(precision);
+            let right = right.echo_to_string_with_precision(precision);
+            if flags & SORT_FLAG_CASE != 0 {
+                ascii_case_insensitive_order(&left, &right)
+            } else {
+                left.cmp(&right)
+            }
+        }
+        SORT_NATURAL => natural_string_cmp(
+            &left.echo_to_string_with_precision(precision),
+            &right.echo_to_string_with_precision(precision),
             flags & SORT_FLAG_CASE != 0,
-        )
-    } else {
-        cmp_val(compare_values(left, right))
+        ),
+        _ => cmp_val(crate::vm::execute::values_compare_checked_with_precision(
+            left, right, precision,
+        )?),
+    })
+}
+
+fn sort_value_order_runtime(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    left: &Value,
+    right: &Value,
+    flags: i64,
+) -> Result<std::cmp::Ordering, VmError> {
+    if eg.exception.is_some() {
+        return Ok(std::cmp::Ordering::Equal);
+    }
+
+    let ordering = match flags & !SORT_FLAG_CASE {
+        SORT_NUMERIC => {
+            for value in [left, right] {
+                if let Some(message) =
+                    explicit_numeric_cast_warning(value, ExplicitNumericCastTarget::Float)
+                {
+                    report_internal_diagnostic(eg, ed, 2, "Warning", &message)?;
+                    if eg.exception.is_some() {
+                        return Ok(std::cmp::Ordering::Equal);
+                    }
+                }
+            }
+            explicit_float_conversion(left)
+                .partial_cmp(&explicit_float_conversion(right))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+        SORT_STRING | SORT_LOCALE_STRING => {
+            let Some(left) = internal_value_to_string(ed, eg, left)? else {
+                return Ok(std::cmp::Ordering::Equal);
+            };
+            if eg.exception.is_some() {
+                return Ok(std::cmp::Ordering::Equal);
+            }
+            let Some(right) = internal_value_to_string(ed, eg, right)? else {
+                return Ok(std::cmp::Ordering::Equal);
+            };
+            if eg.exception.is_some() {
+                return Ok(std::cmp::Ordering::Equal);
+            }
+            if flags & SORT_FLAG_CASE != 0 {
+                ascii_case_insensitive_order(&left, &right)
+            } else {
+                left.cmp(&right)
+            }
+        }
+        SORT_NATURAL => {
+            let Some(left) = internal_value_to_string(ed, eg, left)? else {
+                return Ok(std::cmp::Ordering::Equal);
+            };
+            if eg.exception.is_some() {
+                return Ok(std::cmp::Ordering::Equal);
+            }
+            let Some(right) = internal_value_to_string(ed, eg, right)? else {
+                return Ok(std::cmp::Ordering::Equal);
+            };
+            if eg.exception.is_some() {
+                return Ok(std::cmp::Ordering::Equal);
+            }
+            natural_string_cmp(&left, &right, flags & SORT_FLAG_CASE != 0)
+        }
+        _ => sort_regular_value_order_runtime(eg, left, right)?,
+    };
+    Ok(ordering)
+}
+
+fn sort_comparison_object_string_conversion(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+) -> Result<Option<Value>, VmError> {
+    let class_name = object.diagnostic_type_name();
+    let rendered = crate::vm::execute::call_object_string_conversion(eg, object)?;
+    if eg.exception.is_none()
+        && let Some(rendered) = rendered.as_ref()
+        && rendered.as_str().is_none()
+    {
+        let outcome = if rendered.value_type() == ValueType::Null {
+            "none returned".to_string()
+        } else {
+            format!("{} returned", rendered.diagnostic_type_name())
+        };
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!("{class_name}::__toString(): Return value must be of type string, {outcome}"),
+        ));
+    }
+    Ok(rendered)
+}
+
+fn sort_regular_value_order_runtime(
+    eg: &mut ExecutorGlobals,
+    left: &Value,
+    right: &Value,
+) -> Result<std::cmp::Ordering, VmError> {
+    let left_value = left.dereferenced();
+    let right_value = right.dereferenced();
+    let prepared = match (left_value.value_type(), right_value.value_type()) {
+        (ValueType::Null | ValueType::Undef, ValueType::String) => {
+            return Ok("".cmp(right_value.as_str().unwrap()));
+        }
+        (ValueType::String, ValueType::Null | ValueType::Undef) => {
+            return Ok(left_value.as_str().unwrap().cmp(""));
+        }
+        (ValueType::Object, ValueType::String) => {
+            match sort_comparison_object_string_conversion(eg, left_value)? {
+                Some(rendered) => Some((rendered, right_value.clone())),
+                None => return Ok(std::cmp::Ordering::Greater),
+            }
+        }
+        (ValueType::String, ValueType::Object) => {
+            match sort_comparison_object_string_conversion(eg, right_value)? {
+                Some(rendered) => Some((left_value.clone(), rendered)),
+                None => return Ok(std::cmp::Ordering::Less),
+            }
+        }
+        _ => None,
+    };
+    if eg.exception.is_some() {
+        return Ok(std::cmp::Ordering::Equal);
+    }
+    let (left, right) = prepared
+        .as_ref()
+        .map_or((left_value, right_value), |(left, right)| (left, right));
+    match sort_value_order(left, right, SORT_REGULAR, eg.precision) {
+        Ok(ordering) => Ok(ordering),
+        Err(()) => {
+            report_recursive_sort_comparison(eg);
+            Ok(std::cmp::Ordering::Equal)
+        }
     }
 }
 
-fn sort_key_cmp(left: &ArrayKey, right: &ArrayKey, flags: i64) -> std::cmp::Ordering {
-    if flags & !SORT_FLAG_CASE == SORT_NATURAL {
-        let left = match left {
-            ArrayKey::Int(value) => value.to_string(),
-            ArrayKey::String(value) => value.clone(),
-        };
-        let right = match right {
-            ArrayKey::Int(value) => value.to_string(),
-            ArrayKey::String(value) => value.clone(),
-        };
-        natural_string_cmp(&left, &right, flags & SORT_FLAG_CASE != 0)
-    } else {
-        match (left, right) {
+fn sort_key_string(key: &ArrayKey) -> Cow<'_, str> {
+    match key {
+        ArrayKey::Int(value) => Cow::Owned(value.to_string()),
+        ArrayKey::String(value) => Cow::Borrowed(value),
+    }
+}
+
+fn sort_key_order(
+    left: &ArrayKey,
+    right: &ArrayKey,
+    flags: i64,
+    precision: i32,
+) -> Result<std::cmp::Ordering, ()> {
+    match flags & !SORT_FLAG_CASE {
+        SORT_NUMERIC => Ok(match (left, right) {
             (ArrayKey::Int(left), ArrayKey::Int(right)) => left.cmp(right),
-            (ArrayKey::String(left), ArrayKey::String(right)) => left.cmp(right),
-            (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
-            (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
+            _ => {
+                let left = php_numeric_string_to_float(&sort_key_string(left)).unwrap_or(0.0);
+                let right = php_numeric_string_to_float(&sort_key_string(right)).unwrap_or(0.0);
+                left.partial_cmp(&right)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+        }),
+        SORT_STRING | SORT_LOCALE_STRING => {
+            let left = sort_key_string(left);
+            let right = sort_key_string(right);
+            Ok(if flags & SORT_FLAG_CASE != 0 {
+                ascii_case_insensitive_order(&left, &right)
+            } else {
+                left.cmp(&right)
+            })
+        }
+        SORT_NATURAL => {
+            let left = sort_key_string(left);
+            let right = sort_key_string(right);
+            Ok(natural_string_cmp(
+                &left,
+                &right,
+                flags & SORT_FLAG_CASE != 0,
+            ))
+        }
+        _ => {
+            let left = match left {
+                ArrayKey::Int(value) => Value::long(*value),
+                ArrayKey::String(value) => Value::string(value.clone()),
+            };
+            let right = match right {
+                ArrayKey::Int(value) => Value::long(*value),
+                ArrayKey::String(value) => Value::string(value.clone()),
+            };
+            sort_value_order(&left, &right, SORT_REGULAR, precision)
         }
     }
+}
+
+fn sort_direct_long_entries<T>(
+    entries: &mut [T],
+    flags: i64,
+    reverse: bool,
+    value: impl for<'a> Fn(&'a T) -> &'a Value,
+) -> bool {
+    let mode = flags & !SORT_FLAG_CASE;
+    if !matches!(mode, SORT_REGULAR | SORT_NUMERIC)
+        || !entries
+            .iter()
+            .all(|entry| value(entry).value_type() == ValueType::Long)
+    {
+        return false;
+    }
+    entries.sort_by(|left, right| {
+        let left = value(left).as_long().unwrap();
+        let right = value(right).as_long().unwrap();
+        let ordering = if mode == SORT_NUMERIC {
+            (left as f64)
+                .partial_cmp(&(right as f64))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            left.cmp(&right)
+        };
+        if reverse {
+            ordering.reverse()
+        } else {
+            ordering
+        }
+    });
+    true
+}
+
+fn stable_sort_checked<T, E>(
+    entries: &mut Vec<T>,
+    mut compare: impl FnMut(&T, &T) -> Result<std::cmp::Ordering, E>,
+) -> Result<(), E> {
+    let length = entries.len();
+    if length < 2 {
+        return Ok(());
+    }
+
+    // Sort indices so comparison failures leave the structural snapshot
+    // available to the caller. Equal entries always come from the left run,
+    // which supplies PHP's stable-order contract independently of host `Ord`.
+    let mut order = (0..length).collect::<Vec<_>>();
+    let mut merged = order.clone();
+    let mut width = 1usize;
+    while width < length {
+        let mut start = 0usize;
+        while start < length {
+            let middle = (start + width).min(length);
+            let end = (middle + width).min(length);
+            let (mut left, mut right, mut output) = (start, middle, start);
+            while left < middle && right < end {
+                if compare(&entries[order[left]], &entries[order[right]])?.is_gt() {
+                    merged[output] = order[right];
+                    right += 1;
+                } else {
+                    merged[output] = order[left];
+                    left += 1;
+                }
+                output += 1;
+            }
+            while left < middle {
+                merged[output] = order[left];
+                left += 1;
+                output += 1;
+            }
+            while right < end {
+                merged[output] = order[right];
+                right += 1;
+                output += 1;
+            }
+            start = end;
+        }
+        std::mem::swap(&mut order, &mut merged);
+        width = width.saturating_mul(2);
+    }
+
+    let original = std::mem::take(entries);
+    let mut slots = original.into_iter().map(Some).collect::<Vec<_>>();
+    entries.reserve(length);
+    for index in order {
+        entries.push(
+            slots[index]
+                .take()
+                .expect("stable-sort permutation consumes each entry once"),
+        );
+    }
+    Ok(())
+}
+
+fn report_recursive_sort_comparison(eg: &mut ExecutorGlobals) {
+    eg.exception = Some(crate::value::make_error_value(
+        "Error",
+        "Nesting level too deep - recursive dependency?",
+    ));
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
@@ -13113,25 +13433,25 @@ fn fn_array_walk_recursive(
 }
 
 /// asort(&$array): bool — sort by value, preserve keys
-fn fn_asort(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
+fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect();
-        pairs.sort_by(|(_, a), (_, b)| sort_value_cmp(a, b, flags));
-        let mut new_arr = PhpArray::new();
-        for (k, v) in pairs {
-            match k {
-                ArrayKey::Int(i) => new_arr.set_int(i, v),
-                ArrayKey::String(s) => new_arr.set_str(&s, v),
+        if !sort_direct_long_entries(&mut pairs, flags, false, |(_, value)| value) {
+            stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
+                sort_value_order_runtime(ed, eg, left, right, flags)
+            })?;
+            if eg.exception.is_some() {
+                return Ok(());
             }
+        }
+        let mut new_arr = PhpArray::new();
+        for (key, value) in pairs {
+            new_arr.set(key, array_projection_value(&value));
         }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
@@ -13143,22 +13463,27 @@ fn fn_asort(
 fn fn_arsort(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect();
-        pairs.sort_by(|(_, a), (_, b)| sort_value_cmp(b, a, flags));
-        let mut new_arr = PhpArray::new();
-        for (k, v) in pairs {
-            match k {
-                ArrayKey::Int(i) => new_arr.set_int(i, v),
-                ArrayKey::String(s) => new_arr.set_str(&s, v),
+        if !sort_direct_long_entries(&mut pairs, flags, true, |(_, value)| value) {
+            stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
+                sort_value_order_runtime(ed, eg, left, right, flags)
+                    .map(std::cmp::Ordering::reverse)
+            })?;
+            if eg.exception.is_some() {
+                return Ok(());
             }
+        }
+        let mut new_arr = PhpArray::new();
+        for (key, value) in pairs {
+            new_arr.set(key, array_projection_value(&value));
         }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
@@ -13167,25 +13492,20 @@ fn fn_arsort(
 }
 
 /// ksort(&$array): bool — sort by key
-fn fn_ksort(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
+fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect();
-        pairs.sort_by(|(a, _), (b, _)| sort_key_cmp(a, b, flags));
+        pairs.sort_by(|(left, _), (right, _)| {
+            sort_key_order(left, right, flags, eg.precision).unwrap_or(std::cmp::Ordering::Equal)
+        });
         let mut new_arr = PhpArray::new();
-        for (k, v) in pairs {
-            match k {
-                ArrayKey::Int(i) => new_arr.set_int(i, v),
-                ArrayKey::String(s) => new_arr.set_str(&s, v),
-            }
+        for (key, value) in pairs {
+            new_arr.set(key, array_projection_value(&value));
         }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
@@ -13197,22 +13517,23 @@ fn fn_ksort(
 fn fn_krsort(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let flags = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
         let mut pairs: Vec<(ArrayKey, Value)> = php_arr
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(key, value)| (key, array_sort_snapshot_value(value)))
             .collect();
-        pairs.sort_by(|(a, _), (b, _)| sort_key_cmp(b, a, flags));
+        pairs.sort_by(|(left, _), (right, _)| {
+            sort_key_order(left, right, flags, eg.precision)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .reverse()
+        });
         let mut new_arr = PhpArray::new();
-        for (k, v) in pairs {
-            match k {
-                ArrayKey::Int(i) => new_arr.set_int(i, v),
-                ArrayKey::String(s) => new_arr.set_str(&s, v),
-            }
+        for (key, value) in pairs {
+            new_arr.set(key, array_projection_value(&value));
         }
         *arr = Value::array(new_arr);
         ret!(rv, Value::bool(true));
