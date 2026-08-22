@@ -1642,6 +1642,26 @@ remote/custom wrappers, broader path diagnostics, every historical malformed
 `strip_tags()` state, sanitizer suitability, the `eval()` blocker and broader
 compatibility remain separate checkpoints.
 
+The `recursive-array-combiner-batch` checkpoint reaches 4,098 exact passes
+with 1,205 failures, 115 skips, no XFAIL, 181 unsupported cases and zero
+timeouts or crashes. `array_merge_recursive()` and
+`array_replace_recursive()` implement the exercised PHP 8.5 key, scalar,
+object, copy-on-write, reference, recursion and next-index-overflow contracts
+without changing the existing non-recursive array functions. The exact
+full-corpus delta from `bfcc6bd1` is +1/-0: the Zend next-key-overflow case
+becomes exact with every previous pass preserved and no other status or
+category movement; two final manifests and summaries are byte-identical.
+Twenty-one of 28 focused upstream PHPTs pass, and a 260-case clean-room matrix
+is byte-identical to PHP 8.5.9. All five feature configurations, all-feature/
+all-target, formatting, PHPT runner, the unchanged 1,620/289/332 unsafe
+ratchet, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. CPU-
+pinned 32-pair release controls put independent/paired median changes at
++0.559%/+0.419% for 100 empty requests, -0.873%/-1.160% for 500,000 existing
+`array_replace()` calls and -0.322%/-0.460% for 500,000 adjacent
+`array_merge()` calls, below the +5% gate. The independent parser and string-
+escape blockers, missing array-intersection family, adversarial recursion,
+the complete array suite and broader compatibility remain separate work.
+
 ## Measurement system
 
 ### Contract baseline

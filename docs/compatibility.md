@@ -8,6 +8,75 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is the
+`recursive-array-combiner-batch`, pinned to php-src 8.5 commit `fcc29c8` and
+candidate commit `ad8e4b12`. Across all 5,599 unmodified `Zend/tests` and
+`tests/lang` cases, 4,098 pass, 1,205 fail, 115 skip, none remain XFAIL, 181
+are unsupported, and none time out or crash. The headline pass rate is
+77.277% and the whole-corpus rate is 73.192%; 4,809 of 5,303 attempted cases
+reach runtime (90.685%). Relative to exact integration baseline `bfcc6bd1`,
+the pass-set delta is +1/-0.
+
+The sole full-corpus addition is
+`Zend/tests/array_merge_recursive_next_key_overflow.phpt`, which moves from an
+output failure to an exact pass. Every previous pass is preserved and there
+is no other status or category movement. Two independently executed final
+candidate runs have byte-identical manifests and, after recording the final
+commit provenance, byte-identical summaries. Their SHA-256 values are
+`dff002f63754267cbc2969e38fd8d60f691d5ede1dc2b7aea14209ce352d3224`
+and `ba3ba44935341976427d9d1131cb2c4baad6a4510b5fec624bcebc5f289ded8b`.
+
+`array_merge_recursive()` and `array_replace_recursive()` now implement the
+exercised PHP 8.5 numeric- and string-key rules, scalar singleton projection,
+object-property projection, nested array copy-on-write, live reference aliases
+and lone-reference unwrapping. Merge collisions append numeric values and
+recursively combine string collisions; replacement preserves keys and recurses
+only when both sides are arrays. Both functions detect actual re-entry on an
+active left or right branch, report `Recursion detected`, preserve non-conflicting
+cycles as aliases, and reproduce the next-index-occupied error at `PHP_INT_MAX`.
+Their variadic array TypeErrors include the exercised function, argument and
+first-parameter names.
+
+Twenty-one of 28 unmodified focused Zend and `ext/standard` array PHPTs pass in
+both debug and release builds. Three remaining cases stop at independent parser
+gaps, three differ only because RPHP does not yet decode `\v` and `\f` string
+escapes as PHP bytes, and `rcn_in_place.phpt` validates the new functions before
+reaching the independent missing `array_intersect_ukey()` family. A 260-case
+clean-room differential matrix across scalars, arrays, objects, key layouts and
+index overflow is byte-identical to PHP 8.5.9, with aggregate digest
+`81784358f6d5cc9eba03702a9e4bd2e9320f88bdf0a5ca193429d1249bacab68`.
+Original E2E regressions cover merge-versus-replace key behavior, reference
+lifetime and detachment, exact type errors, recursion and index overflow.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the unchanged 1,620/289/332 unsafe
+ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-
+kernel S2 and cold-build S3 pass. The implementation is a cold independent
+stdlib module and does not change opcodes, compiler metadata, call frames, the
+PHP Value/object layout, dependencies or production unsafe code. The original
+non-recursive `array_merge()` and `array_replace()` implementations remain
+unchanged.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmup pairs and no
+excluded samples. Batches of 100 empty `-r` requests measured baseline/
+candidate p10/median/p90 0.145646/0.146752/0.149106 and
+0.145853/0.147573/0.149583 seconds, +0.559% independently and +0.419% paired.
+One request executing 500,000 existing `array_replace()` calls measured
+0.309599/0.311160/0.320734 and 0.302672/0.308442/0.324607 seconds, -0.873%
+independently and -1.160% paired, with checksum `7500000`. The adjacent
+500,000-call `array_merge()` control measured 0.316315/0.317978/0.324594 and
+0.309435/0.316956/0.324803 seconds, -0.322% independently and -0.460% paired,
+with checksum `9500000`. All controls remain below the +5% gate. The baseline
+and candidate binary SHA-256 values are
+`49d7ebd4b7ea837271a13a148c1259ba3b8365d6dd417e51a5df5460d336d880`
+and `bf71f266c625fad48f9bcc08cc5ee854b00eeca33c37e02d516ba60c1cc0e7aa`.
+
+This checkpoint does not claim the three independent parser forms, the `\v`/
+`\f` escape correction, the missing array-intersection family, complete
+`ext/standard` array compatibility, large or adversarial recursion suitability,
+or broader PHP compatibility.
+
+The preceding measured AMD64 PHP 8.5 contract checkpoint is the
 `source-text-filter-batch`, pinned to php-src 8.5 commit `fcc29c8` and
 candidate commit `475182f3`. Across all 5,599 unmodified `Zend/tests` and
 `tests/lang` cases, 4,097 pass, 1,206 fail, 115 skip, none remain XFAIL, 181
