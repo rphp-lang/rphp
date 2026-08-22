@@ -186,6 +186,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "count",
         "value"
     );
+    reg!("array_fill_keys", fn_array_fill_keys, 2, 2, "keys", "value");
     reg!("array_pad", fn_array_pad, 3, 3, "array", "length", "value");
     reg!("array_chunk", fn_array_chunk, 2, 2, "array", "length");
     reg!("array_column", fn_array_column, 2, 2, "array", "column_key");

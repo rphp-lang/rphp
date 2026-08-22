@@ -311,6 +311,86 @@ fn array_search_supports_strict_identity_matching() {
 }
 
 #[test]
+fn array_fill_keys_matches_php_85_keys_values_diagnostics_and_detachment() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FillKey {
+    public function __construct(public string $key) {}
+    public function __toString(): string { echo "K:$this->key\n"; return $this->key; }
+}
+set_error_handler(function ($level, $message) {
+    echo "$level:$message\n";
+    return true;
+});
+
+$seed = ['seed'];
+$alias = &$seed;
+$result = array_fill_keys([
+    1, '1', '01', -2, '-2', '-0', true, false, null, 1.25, NAN, [1],
+    new FillKey('8'), new FillKey('08'),
+], $alias);
+var_dump(array_keys($result));
+$seed[] = 'outside';
+$result['01'][] = 'inside';
+echo count($result['01']), '|', count($result[1]), '|', count($seed), "\n";
+
+$object = new stdClass();
+$objects = array_fill_keys(['left', 'right'], $object);
+var_dump($objects['left'] === $objects['right']);
+
+$key = 'first';
+$keys = [&$key];
+$detached = array_fill_keys($keys, 'value');
+$key = 'changed';
+var_dump(isset($detached['first']), isset($detached['changed']));
+
+foreach ([null, true, new stdClass()] as $invalid) {
+    try { array_fill_keys($invalid, 0); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+
+set_error_handler(function ($level, $message) {
+    echo "throw:$message\n";
+    throw new Exception('stopped');
+});
+try { array_fill_keys([[1], new FillKey('later')], 0); }
+catch (Exception $error) { echo $error->getMessage(), "\n"; }
+try { array_fill_keys([new stdClass()], 0); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+"#,
+        ),
+        concat!(
+            "2:unexpected NAN value was coerced to string\n",
+            "2:Array to string conversion\n",
+            "K:8\nK:08\n",
+            "array(10) {\n",
+            "  [0]=>\n  int(1)\n",
+            "  [1]=>\n  string(2) \"01\"\n",
+            "  [2]=>\n  int(-2)\n",
+            "  [3]=>\n  string(2) \"-0\"\n",
+            "  [4]=>\n  string(0) \"\"\n",
+            "  [5]=>\n  string(4) \"1.25\"\n",
+            "  [6]=>\n  string(3) \"NAN\"\n",
+            "  [7]=>\n  string(5) \"Array\"\n",
+            "  [8]=>\n  int(8)\n",
+            "  [9]=>\n  string(2) \"08\"\n",
+            "}\n",
+            "2|1|2\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "array_fill_keys(): Argument #1 ($keys) must be of type array, null given\n",
+            "array_fill_keys(): Argument #1 ($keys) must be of type array, true given\n",
+            "array_fill_keys(): Argument #1 ($keys) must be of type array, stdClass given\n",
+            "throw:Array to string conversion\n",
+            "stopped\n",
+            "Object of class stdClass could not be converted to string\n",
+        )
+    );
+}
+
+#[test]
 fn debug_backtrace_reports_callers_arguments_limits_and_method_receivers() {
     assert_eq!(
         run_php(

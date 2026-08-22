@@ -1018,6 +1018,73 @@ fn fn_array_count_values(
     }
 }
 
+fn array_fill_key(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<ArrayKey>, VmError> {
+    let value = value.dereferenced();
+    if let Some(key) = value.as_long() {
+        return Ok(Some(ArrayKey::Int(key)));
+    }
+    if value.as_double().is_some_and(f64::is_nan) {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            "unexpected NAN value was coerced to string",
+        )?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
+    }
+    let Some(key) = internal_value_to_string(ed, eg, value)? else {
+        return Ok(None);
+    };
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(
+        crate::value::canonical_decimal_array_key(&key)
+            .map_or_else(|| ArrayKey::String(key), ArrayKey::Int),
+    ))
+}
+
+fn fn_array_fill_keys(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let keys_argument = arg!(ed, 0);
+    let Some(keys) = keys_argument
+        .as_array()
+        .map(|keys| keys.values().cloned().collect::<Vec<_>>())
+    else {
+        let actual = match keys_argument.value_type() {
+            ValueType::True => "true".to_string(),
+            ValueType::False => "false".to_string(),
+            _ => keys_argument.diagnostic_type_name().into_owned(),
+        };
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "array_fill_keys(): Argument #1 ($keys) must be of type array, {actual} given"
+            ),
+        ));
+        return Ok(());
+    };
+    let value = arg!(ed, 1).clone();
+    let mut result = PhpArray::new();
+    for source_key in &keys {
+        let Some(key) = array_fill_key(ed, eg, source_key)? else {
+            return Ok(());
+        };
+        result.set(key, value.clone());
+    }
+    ret!(rv, Value::array(result));
+}
+
 fn fn_array_fill(
     ed: *mut ExecuteData,
     rv: *mut Value,
