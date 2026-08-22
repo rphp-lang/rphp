@@ -8,6 +8,65 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `185f06bd`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,053 pass, 1,246 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.486% and the whole-corpus rate is 72.388%; 4,817 of
+5,299 attempted cases reach runtime (90.904%). Relative to exact integration
+baseline `cee13fc9`, the pass-set delta is +12/-0.
+
+The exact additions are `Zend/tests/constexpr/new_dynamic_class_name.phpt`,
+all ten previously failing cases under `Zend/tests/new_without_parentheses`,
+and `Zend/tests/varSyntax/newVariable.phpt`. Five parse, six output and one
+runtime failure become exact, with every previous pass preserved and no other
+non-pass status or category movement. The runtime-reach count falls by two
+because four invalid forms now stop at PHP's required parse error instead of
+executing before an output mismatch; valid cases advancing to runtime partly
+offset that correction. Two sequential final candidate runs have
+byte-identical manifests and summaries. Their SHA-256 values are
+`181cbfec43b450df1770f20bbb2787652e219e8a18f2bcea6718a604ea315f05`
+and `16f50a0c60f04a11bcbb630e30955506c812699758086939b5ed3214e6c3c496`.
+
+Dynamic `new (expression)` and named or dynamic static-property class operands
+now follow PHP 8.5 grammar. Constructor parentheses enable result postfixes;
+without them, named and grouped forms produce the context-sensitive parse
+diagnostic required by echo, calls, returns and standalone statements. Bare
+new results also reject assignment and `unset()` with PHP's exact diagnostic.
+The dynamic class operand is evaluated before constructor arguments and stays
+live across argument unpacking and generator suspension, so side effects and
+exceptions occur once and in source order.
+
+The focused 12-case upstream cluster and four original CLI regressions pass at
+12/12 and 4/4. The adjacent new/grammar/dynamic-call/class-name/object slice has
+132 passes, 57 failures, four skips and one unsupported case, an exact +10/-0
+delta from the retained baseline. All five Cargo feature configurations,
+all-feature/all-target, formatting, PHPT-runner and unsafe-policy self-tests,
+the exact unsafe ratchet, Composer 2.8.12 S0, all four Symfony S1 gates and PHP
+8.5.9 warmed-kernel S2 and cold-build S3 pass. The production inventory remains
+1,618 unsafe blocks, 289 unsafe functions and 330 SAFETY annotations. No
+opcode, frame, value layout, dependency or production-unsafe change is made;
+the parser gains one optional diagnostic-context field.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used CPU 2 with the performance governor, four warmups and no
+excluded samples. Batches of 100 empty requests measured baseline/candidate
+p10/median/p90 0.201642/0.204214/0.209993 and
+0.202835/0.205406/0.209492 seconds, +0.584% independently and +0.655% paired.
+One request compiling 25,000 named `new` expressions measured
+0.204661/0.206236/0.208442 and 0.205893/0.208462/0.210263 seconds, +1.079%
+independently and +0.778% paired. Batches of three requests executing 100,000
+dynamic property class constructions each measured 0.115278/0.116888/0.118412
+and 0.112185/0.112973/0.114151 seconds, -3.349% independently and -3.305%
+paired. All remain below the +5% gate with exact output. The baseline and
+candidate binary SHA-256 values are
+`bc912b3e0bb41a12ccbb9496938f993804ac69d6f7eb9406a57a26e8c0758d7b`
+and `2a6e48b145cbc6cc64326ffefdb08c2a3724620e82cccf03c0c3c32b74a488b7`.
+
+This checkpoint does not claim broader SPL or `ArrayObject` behavior,
+independent diagnostics outside the covered new-expression forms, or broader
+PHP compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `4a6fb864`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,041 pass, 1,258 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

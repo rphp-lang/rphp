@@ -1325,6 +1325,25 @@ median changes at -1.450%/-1.462% for 100 empty requests, -0.745%/-0.681% for
 identifiers, below the +5% gate. Legacy invalid-byte offsets, closure
 formatting and broader compatibility remain separate checkpoints.
 
+The `new-expression-grammar` checkpoint reaches 4,053 exact passes with 1,246
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. PHP 8.5 dynamic grouped and static-property class operands now bind
+inside `new`; constructor parentheses control result postfix availability, and
+invalid bare assignment, unset and unparenthesized postfix forms produce exact
+context-sensitive diagnostics. Dynamic class operands execute before arguments
+and survive unpacking or suspension without duplicated effects. The exact
+full-corpus delta from `cee13fc9` is +12/-0: five parse, six output and one
+runtime failure become exact with every prior pass preserved and no other
+non-pass movement. Two final manifests/summaries are byte-identical. All five
+feature configurations, all-feature/all-target, formatting, PHPT runner,
+unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. CPU-pinned
+32-pair release controls put independent/paired median changes at
++0.584%/+0.655% for 100 empty requests, +1.079%/+0.778% for compiling 25,000
+named new expressions and -3.349%/-3.305% for dynamic property class
+construction, below the +5% gate. Broader SPL/`ArrayObject` behavior,
+independent diagnostics outside the covered forms and broader compatibility
+remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
