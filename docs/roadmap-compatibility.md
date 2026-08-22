@@ -1402,6 +1402,25 @@ comparisons, +0.022%/-0.033% for one million changed-path comparisons and
 the +5% gate. String offsets, `base_convert()`, deferred Reflection snapshots
 and broader compatibility remain separate checkpoints.
 
+The `ini-quantity-contract` checkpoint reaches 4,072 exact passes with 1,227
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. `ini_parse_quantity()` implements PHP 8.5's signed decimal, octal,
+binary and hexadecimal grammar, K/M/G multipliers, historical overflow result,
+warning taxonomy and byte-oriented diagnostic text. Its strict and weak
+`string $shorthand` boundary covers scalar coercion, null deprecation,
+stringable objects, concrete invalid types and exceptions from diagnostics or
+conversion. The exact full-corpus delta from `a2491a71` is +2/-0:
+`gh16886.phpt` and `gh16892.phpt` become exact with every prior pass preserved,
+no other non-pass movement, and two byte-identical final manifests/summaries.
+All five feature configurations, all-feature/all-target, formatting, PHPT
+runner, unsafe, Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. A
+5,832-input clean-room ASCII sweep is byte-identical to PHP 8.5.9. CPU-pinned
+32-pair release controls put independent/paired median changes at
++0.212%/+0.239% for 100 empty requests and +2.362%/+2.462% for 200,000
+existing `parse_ini_string()` calls, below the +5% gate. CLI/INI setting
+integration, unavailable `zend_test` helpers, ordinary Reflection snapshots
+and broader compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

@@ -8,6 +8,75 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `7a1e2af7`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,072 pass, 1,227 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.845% and the whole-corpus rate is 72.727%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `a2491a71`, the pass-set delta is +2/-0.
+
+The exact additions are `Zend/tests/zend_ini/gh16886.phpt` and
+`Zend/tests/zend_ini/gh16892.phpt`, both previously runtime failures caused by
+the missing public function. Every previous pass is preserved, there is no
+other non-pass status or category movement, and two sequential final candidate
+runs have byte-identical manifests and summaries. Their SHA-256 values are
+`b36258fec1d72b0375de4271070c32ecad2458662c248c1f920e11d4921a4d96`
+and `db41b2075330d9ad7fec1d1ba4d3a7ee132fa65615c6cc7995e40309cf4a9dbd`.
+
+`ini_parse_quantity()` now parses signed decimal, legacy or explicit octal,
+binary and hexadecimal quantities plus case-insensitive K/M/G powers of 1024.
+It preserves PHP 8.5's signed-range boundary and historical wrapping result,
+including unsigned-parser saturation, while emitting the distinct invalid-
+prefix, missing-prefix-digit, missing-leading-digit, unknown-multiplier,
+partial-parse and overflow warnings. Diagnostic rendering retains PHP's byte
+escapes and interpreted-prefix text. Weak callers accept scalar string
+coercions, deprecate null and invoke stringable objects; strict callers accept
+only strings. Invalid arrays, resources, closures and non-stringable objects
+produce the parameter-specific `TypeError`, and exceptions from error handlers
+or `__toString()` stop the call before publishing a return value.
+
+The complete pinned `Zend/tests/zend_ini` slice moves from one pass, two
+failures, ten extension skips and one unsupported CLI-INI case to three passes,
+zero failures, the same ten skips and the same unsupported case. Its final
+manifest/summary hashes are
+`b610908469c5215b3190e266397f79e3097564ea564ae359a99a4c42bfde273a`
+and `2d795c835b255386aa8f30b7bd27ac0e9702af1c3b5ba7fa772cc2d0a484fe4d`.
+Three original parser tests and one E2E regression cover bases, multipliers,
+signed boundaries, saturation, warning escaping, weak/strict calls, null,
+stringable objects and invalid types. An additional deterministic clean-room
+sweep of 5,832 three-byte ASCII inputs is byte-identical to PHP 8.5.9; both
+outputs have SHA-256
+`7db5293ac71e062a7368c2e2cee0d8a6e6f8b081d93f6710cdea06eca6183165`.
+
+All five Cargo feature configurations, all-feature/all-target, formatting,
+PHPT-runner and unsafe-policy self-tests, the exact unsafe ratchet, Composer
+2.8.12 S0, all four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and
+cold-build S3 pass. The production inventory remains 1,618 unsafe blocks, 289
+unsafe functions and 330 SAFETY annotations. No opcode, frame, value/object,
+executor-globals, dependency or production-unsafe change is made; one cold
+stdlib registry entry is added.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty requests measured baseline/candidate p10/median/
+p90 0.156831/0.157646/0.158806 and 0.157320/0.157980/0.160204 seconds,
++0.212% independently and +0.239% paired. One request executing 200,000
+existing `parse_ini_string()` calls measured 0.119520/0.122135/0.125626 and
+0.122494/0.125020/0.127595 seconds, +2.362% independently and +2.462% paired,
+with exact checksum `4200000`. Both controls remain below the +5% gate. As an
+absolute changed-path sanity check, fifteen candidate runs of one million
+mixed valid quantity calls had a 0.158522-second median and checksum
+`1056768000000`; no A/B claim is possible because the baseline lacks the
+function. The baseline and candidate binary SHA-256 values are
+`a2b1a032f970a747ca4e7ad484546b7d5a6f29c93c4989b2026bc5704effc8fd`
+and `8df8e168b3aa69623c4612464b99276c3e6dc434be5ce63282baf7659b24cffd`.
+
+This checkpoint does not claim quantity parsing for arbitrary CLI/INI setting
+storage, the unavailable `zend_test` helpers, the remaining unsupported CLI-
+INI case, ordinary Reflection signature snapshots or broader PHP
+compatibility.
+
+The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `b1c3757b`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,070 pass, 1,229 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
