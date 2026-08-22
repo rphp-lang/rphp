@@ -1538,6 +1538,31 @@ the +5% gate. Password/security suitability, file/HMAC/streaming hashing,
 broader binary-string consumers, detached-call strict metadata, the complete
 hash extension and broader compatibility remain separate checkpoints.
 
+The `similar-text-contract` checkpoint reaches 4,079 exact passes with 1,220
+failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts or
+crashes. PHP's byte-oriented Oliver algorithm supplies the first longest
+common contiguous substring in each recursively partitioned region, including
+its order-sensitive tie behavior, while an explicit work stack avoids native
+recursion. The optional output reference receives the PHP percentage; weak and
+strict typed strings, binary inputs, diagnostics, Stringable conversion and
+exact TypeErrors are covered. The compiler also treats internal by-reference
+metadata case-insensitively without an allocation for ordinary lower-case
+names, and evaluates then rejects a simple assignment result supplied to any
+by-reference parameter. The exact full-corpus delta from `8395f772` is +1/-0:
+`bug78154.phpt` becomes exact with every prior pass preserved and no other
+status or category movement; two final manifests and summaries are byte-
+identical. An independent upstream `similar_text` PHPT and an exhaustive
+14,641-pair clean-room PHP 8.5.9 differential sweep pass. All five feature
+configurations, all-feature/all-target, formatting, PHPT runner, unsafe,
+Composer S0, four Symfony S1 gates and PHP 8.5.9 S2/S3 pass. No opcode,
+ABI/value layout, dependency or unsafe change is made. CPU-pinned 32-pair
+release controls put independent/paired median changes at +1.177%/+0.826% for
+100 empty requests and +3.110%/+3.042% for two million existing
+`levenshtein()` calls, below the +5% gate. Faster or Unicode-aware similarity,
+large/untrusted-input suitability, every complex by-reference expression form,
+detached-call strict metadata, the complete string suite and broader
+compatibility remain separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline

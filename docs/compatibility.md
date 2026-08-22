@@ -8,6 +8,80 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `bb5a80a4`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,079 pass, 1,220 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.977% and the whole-corpus rate is 72.852%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `8395f772`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/bug78154.phpt`, which moves from a missing-
+function runtime failure to pass. Every previous pass is preserved and there
+is no other status or category movement. Two sequential final candidate runs
+have byte-identical manifests and summaries. Their SHA-256 values are
+`c24b469e696ded67318857d42c8e108f6f3eb27677a7322cc57be88470a51bff`
+and `d8583c3f2dbe595235dee264c842a5033883335522ebb4a51ac1808d8d37af42`.
+
+`similar_text()` now implements PHP's byte-oriented, case-sensitive Oliver
+algorithm: each region contributes its first longest common contiguous
+substring and is partitioned on both sides until no match remains. An explicit
+work stack preserves the recursive score and first-match tie behavior without
+using the native call stack. The optional third output reference receives
+`score * 200 / (len1 + len2)`, or zero for two empty strings. Embedded NULs,
+non-ASCII byte identity and PHP's order-sensitive results are retained.
+
+The weak `string $string1, string $string2, &$percent = null` boundary converts
+scalars and Stringable objects with request precision, null deprecations and
+NAN warnings. Invalid `__toString()` returns retain their concrete returned
+type; arrays, resources, closures and non-stringable objects receive parameter-
+specific TypeErrors. Strict direct calls reject non-exact string arguments,
+and exceptions from diagnostics or conversion stop the call. The compiler's
+existing internal-reference metadata is now resolved case-insensitively
+without allocating for ordinary lower-case names. A simple assignment supplied
+to any by-reference parameter is evaluated and then rejected with PHP's
+`could not be passed by reference` Error instead of silently passing its
+result; this is covered for both user and internal functions.
+
+Two clean-room unit tests and two original E2E regressions cover public and
+tie-sensitive vectors, binary strings, percent output, weak and strict
+arguments, Stringable side effects and invalid returns, diagnostics, throwing
+handlers, concrete TypeErrors and the assignment-result reference boundary.
+An exhaustive 14,641-pair sweep over all strings of length zero through four
+from the alphabet `a`, `b`, NUL has identical scores and percentages under
+RPHP and PHP 8.5.9. The supplying Zend regression and the unmodified
+`ext/standard/tests/strings/similar_text_basic.phpt` both pass. All five Cargo
+feature configurations, all-feature/all-target, formatting, PHPT-runner and
+unsafe-policy self-tests, the exact unsafe ratchet, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production inventory remains 1,619 unsafe blocks, 289 unsafe functions and
+331 SAFETY annotations. No opcode, ABI/value layout, dependency or production-
+unsafe change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty `-r` requests measured baseline/candidate p10/
+median/p90 0.157031/0.158967/0.161213 and
+0.158013/0.160838/0.162559 seconds, +1.177% independently and +0.826% paired.
+One request executing two million existing `levenshtein()` calls measured
+0.332443/0.333756/0.361267 and 0.342472/0.344134/0.355879 seconds, +3.110%
+independently and +3.042% paired, with exact checksum `10000000`. Both controls
+remain below the +5% gate; paired p10/p90 changes are -0.654%/+2.237% and
+-4.728%/+4.455%. As an absolute changed-path sanity check, fifteen candidate
+runs of one million `similar_text()` calls with a percent output reference
+measured p10/median/p90 0.306610/0.308695/0.310317 seconds with exact result
+`5000000:71.428571428571`; no A/B claim is possible because the baseline lacks
+the function. The baseline and candidate binary SHA-256 values are
+`9ad19edefc3b75f50c9ee6a465dac210574b3fd0cb00bdd7991f45ef94558fa5`
+and `01a2fe37623774866648f00c6c83a450e711f5b144c61652cf4178ac69838dd5`.
+
+This checkpoint does not claim a faster similarity metric or suitability for
+large or untrusted strings: it intentionally retains the documented cubic
+worst-case algorithm. It also does not claim Unicode/grapheme-aware semantic
+similarity, every complex expression form at a by-reference boundary, strict-
+caller propagation through source unpack or other detached internal-call
+paths, the complete string suite or broader PHP compatibility.
+
+The preceding `md5-contract` checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `b59539d2`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,078 pass, 1,221 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
