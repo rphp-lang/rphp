@@ -8,6 +8,62 @@ drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
 The latest measured AMD64 PHP 8.5 contract checkpoint is pinned to php-src
+8.5.6 commit `fcc29c8` and candidate commit `dc4d6449`. Across all 5,599
+unmodified `Zend/tests` and `tests/lang` cases, 4,076 pass, 1,223 fail, 115
+skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The
+headline pass rate is 76.920% and the whole-corpus rate is 72.799%; 4,805 of
+5,299 attempted cases reach runtime (90.677%). Relative to exact integration
+baseline `53ffec3b`, the pass-set delta is +1/-0.
+
+The exact addition is `Zend/tests/bug60598.phpt`, which moves from a missing-
+function runtime failure to pass. Every previous pass is preserved and there
+is no other status or category movement. Two sequential final candidate runs
+have byte-identical manifests and summaries. Their SHA-256 values are
+`0740bfde700499dc08f6de40aef20dc2b92506b4faf3a35ad5d9f7162e53a7eb`
+and `6918cc27b965b98b72a16b519bf83e2c360c82c553c34a276a28552569dad463`.
+
+`spl_object_hash()` now returns the PHP 8.5 32-character lower-case hexadecimal
+form of an object's request-local handle. Repeated calls are stable while the
+object is live, simultaneously live objects and closures remain distinct, and
+the encoded handle agrees with `spl_object_id()`. Both functions dereference
+an argument reference and share the exact object-only boundary; the adjacent
+`spl_object_id()` path now also renders boolean TypeErrors as `true` or `false`
+rather than the generic `bool` spelling. The implementation reuses the existing
+object handle and recycling lifecycle without changing object representation.
+
+One original E2E regression is byte-identical to PHP 8.5.9 and covers ordinary
+objects, closures, clones, repeated/live identity and exact null, boolean and
+array TypeErrors. The unmodified Zend regression constructs and destroys
+10,000 objects and passes under the three-second corpus timeout. All five Cargo
+feature configurations, all-feature/all-target, formatting, PHPT-runner and
+unsafe-policy self-tests, the exact unsafe ratchet, Composer 2.8.12 S0, all
+four Symfony S1 gates and PHP 8.5.9 warmed-kernel S2 and cold-build S3 pass.
+The production inventory remains 1,619 unsafe blocks, 289 unsafe functions and
+331 SAFETY annotations. No opcode, object/value layout, lifecycle, dependency
+or production-unsafe change is made.
+
+A local CPU-pinned 32-pair balanced alternating AMD64 release comparison on an
+AMD Ryzen 9 7950X used performance-governor CPU 2, four warmups and no excluded
+samples. Batches of 100 empty `-r` requests measured baseline/candidate p10/
+median/p90 0.146190/0.147299/0.148260 and
+0.145950/0.146665/0.147382 seconds, -0.430% independently and -0.450% paired.
+One request executing two million existing `spl_object_id()` calls measured
+0.229602/0.230164/0.232320 and 0.232789/0.233588/0.235860 seconds, +1.488%
+independently and +1.524% paired, with exact checksum `2000000`. Both controls
+remain below the +5% gate; paired p10/p90 changes are -0.760%/+0.174% and
++0.936%/+2.243%. As an absolute changed-path sanity check, fifteen candidate
+runs of two million `spl_object_hash()` calls measured p10/median/p90
+0.345880/0.346853/0.347415 seconds with checksum `64000000`; no A/B claim is
+possible because the baseline lacks the function. The baseline and candidate
+binary SHA-256 values are
+`748582e77b31863261a82aec96956a17bb78310b00f443b177174a74d22a713e`
+and `05e2415920cdb8c8851568dc655bcfdf570d4bd75a207ea8f4d4b3f5657c26ff`.
+
+This checkpoint does not claim a content or cryptographic hash, cross-request
+or global uniqueness, a mandated handle-reuse time after destruction, the
+complete SPL object suite or broader PHP compatibility.
+
+The preceding `array-fill-keys-contract` checkpoint is pinned to php-src
 8.5.6 commit `fcc29c8` and candidate commit `c8539999`. Across all 5,599
 unmodified `Zend/tests` and `tests/lang` cases, 4,075 pass, 1,224 fail, 115
 skip, none remain XFAIL, 185 are unsupported, and none time out or crash. The

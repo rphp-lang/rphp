@@ -1478,6 +1478,26 @@ below the +5% gate. Huge-allocation failures, the complete standard array
 suite, companion array functions and broader compatibility remain separate
 checkpoints.
 
+The `spl-object-hash-contract` checkpoint reaches 4,076 exact passes with
+1,223 failures, 115 skips, no XFAIL, 185 unsupported cases and zero timeouts
+or crashes. `spl_object_hash()` exposes PHP 8.5's stable 32-character
+lower-case hexadecimal encoding of the existing request-local object handle
+for ordinary objects and closures; live identities remain distinct and the
+encoded handle agrees with `spl_object_id()`. Both functions share the exact
+object-only argument boundary, including boolean diagnostic spelling, without
+changing object representation or lifecycle. The exact full-corpus delta from
+`53ffec3b` is +1/-0: `bug60598.phpt` becomes exact with every prior pass
+preserved and no other status or category movement; two final manifests and
+summaries are byte-identical. All five feature configurations,
+all-feature/all-target, formatting, PHPT runner, unsafe, Composer S0, four
+Symfony S1 gates and PHP 8.5.9 S2/S3 pass. No unsafe, opcode, layout,
+dependency or object-lifecycle change is made. CPU-pinned 32-pair release
+controls put independent/paired median changes at -0.430%/-0.450% for 100
+empty requests and +1.488%/+1.524% for two million existing `spl_object_id()`
+calls, below the +5% gate. Cross-request uniqueness, mandated handle-reuse
+timing, the complete SPL object suite and broader compatibility remain
+separate checkpoints.
+
 ## Measurement system
 
 ### Contract baseline
